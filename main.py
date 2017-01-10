@@ -1,7 +1,11 @@
 import pdb
 import argparse
 
-from opts import Opts
+from opts           import Opts
+from load_data      import load_data
+from load_model     import load_model
+from train          import train
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='rnn tracking - main script')
@@ -17,5 +21,16 @@ def parse_arguments():
 if __name__ == "__main__":
     args = parse_arguments()
     o = Opts()
-    o.update_sysarg(args=args)
+    o.update_by_sysarg(args=args)
 
+    data_tr, data_va, data_te = load_data(o) # if able to load the whole dataset 
+
+    model = load_model(o)
+
+    '''
+    net = train(model, data_tr, data_va, o)
+
+    test(model, data_tr, data_va, o)
+    '''
+
+    pdb.set_trace()
