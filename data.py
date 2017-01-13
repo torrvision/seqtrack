@@ -3,6 +3,8 @@ import numpy as np
 import cPickle as pickle
 import gzip
 
+import draw
+
 
 class Data_moving_mnist(object):
     def __init__(self, o):
@@ -24,6 +26,8 @@ class Data_moving_mnist(object):
         self.nte = self.data_te['images'].shape[0]
 
         self.idx_shuffle_tr = np.random.permutation(self.ntr)
+        self.idx_shuffle_va = np.random.permutation(self.nva)
+        self.idx_shuffle_te = np.random.permutation(self.nte)
 
     def _load_data(self):
         with gzip.open(self.datafile, 'rb') as f:
@@ -49,10 +53,13 @@ class Data_moving_mnist(object):
         '''
         if data_ == 'train':
             data = self.data_tr
-        elif data == 'val':
+            idx_shuffle = self.idx_shuffle_tr
+        elif data_ == 'val':
             data = self.data_va
-        elif data == 'test':
+            idx_shuffle = self.idx_shuffle_va
+        elif data_ == 'test':
             data = self.data_te
+            idx_shuffle = self.idx_shuffle_te
         else:
             raise ValueError('wrong data')
 
@@ -65,7 +72,7 @@ class Data_moving_mnist(object):
         posmax = self.frmsz-29
 
         d = np.random.randint(low=-15, high=15, size=(o.batchsz,2))
-        idx = self.idx_shuffle_tr[ib*o.batchsz:(ib+1)*o.batchsz]
+        idx = idx_shuffle[ib*o.batchsz:(ib+1)*o.batchsz]
 
         for t in range(o.ntimesteps):
             dtm1 = d
@@ -98,11 +105,11 @@ class Data_moving_mnist(object):
                 'labels': pos,
                 'digits': data['targets'][idx]
                 }
-        return batch
+        return batch, idx
 
     def run_sanitycheck(self, batch):
-        from draw import show_moving_mnist
-        show_moving_mnist(batch)
+        draw.show_moving_mnist(batch)
+
 
 class Data_another_dataset(object):
     def __init__(self, o):
@@ -114,6 +121,15 @@ class Data_another_dataset(object):
     def load_batch(self):
         print 'loading batch'
 
+
+def load_data(o):
+    if o.dataset == 'moving_mnist':
+        loader = Data_moving_mnist(o)
+    elif o.dataset == 'another_dataset':
+        raise ValueError('dataset not implemented yet')
+    else:
+        raise ValueError('wrong dataset')
+    return loader
 
 if __name__ == '__main__':
     print 'test dataset classes'

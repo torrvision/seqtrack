@@ -3,19 +3,56 @@ import argparse
 
 from opts           import Opts
 #from load_data      import load_data
-from data           import Data_moving_mnist
+#from data           import Data_moving_mnist
+from data           import load_data
 from load_model     import load_model
 from train          import train
+from test           import test
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='rnn tracking - main script')
-    parser.add_argument('--verbose', help='print arguments', 
+
+    parser.add_argument(
+            '--verbose', help='print arguments', 
             action='store_true')
-    parser.add_argument('--mode', help='experiment mode (train, test)', 
-            type=str, default='train' )
-    parser.add_argument('--dropout_rnn', help='set dropout for rnn', 
+    parser.add_argument(
+            '--mode', help='mode (train, test)', 
+            type=str, default='train')
+    parser.add_argument(
+            '--debugmode', help='used for debugging', 
             action='store_true')
+
+    parser.add_argument(
+            '--nosave', help='no need to save results?', 
+            action='store_true') 
+    parser.add_argument(
+            '--restore', help='to restore a pretrained', 
+            action='store_true')
+    parser.add_argument(
+            '--restore_model', help='model to restore', 
+            type=str) 
+    parser.add_argument(
+            '--resume', help='to resume training',
+            action='store_true')
+    parser.add_argument(
+            '--resume_model', help='model to resume',
+            type=str)
+
+    parser.add_argument(
+            '--dropout_rnn', help='set dropout for rnn', 
+            action='store_true')
+    parser.add_argument(
+            '--nepoch', help='number of epochs', 
+            type=int, default=1)
+
+    parser.add_argument(
+            '--gpu_manctrl', help='control gpu memory manual', 
+            action='store_true')
+    parser.add_argument(
+            '--gpu_frac', help='fraction of gpu memory', 
+            type=float, default=0.5)
+
     args = parser.parse_args()
 
     # print help and args
@@ -27,23 +64,17 @@ if __name__ == "__main__":
     args = parse_arguments()
     o = Opts()
     o.update_by_sysarg(args=args)
+    o.initialize()
+    
+    loader = load_data(o)
 
-    #TODO: load_data deprecated
-    #data_tr, data_va, data_te = load_data(o) # if able to load the whole dataset 
+    m = load_model(o, loader, is_training=True if o.mode=='train' else False)
 
-    # Note that depending on the dataset the loading approach can be different
-    if o.dataset == 'moving_mnist': 
-        loader = Data_moving_mnist(o)
-    elif o.dataset =='another_dataset': 
-        raise ValueError('dataset not implemented yet')
-    else: 
-        raise ValueError('wrong dataset')
-
-    model = load_model(o, loader, is_training=True if o.mode=='train' else False)
-
-    train(model, loader, o)
-
-    #TODO: write test model routine; name scope or op scope might be required
-    #test(model, data_tr, data_va, o)
+    if o.mode == 'train':
+        train(m, loader, o)
+    elif o.mode == 'test':
+        test(m, loader, o)
 
     pdb.set_trace()
+
+

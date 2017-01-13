@@ -2,3 +2,5 @@
 *.pyc
 data
 tmp
+model
+save
