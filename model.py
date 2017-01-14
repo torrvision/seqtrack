@@ -23,7 +23,7 @@ class Model_rnn_basic(object):
         inputs_length = tf.placeholder(o.dtype, shape=[o.batchsz])
         labels = tf.placeholder(o.dtype, shape=[o.batchsz,o.ntimesteps,outdim])
 
-        cell = get_rnncell(o, is_training=self._is_training)
+        cell = _get_rnncell(o, is_training=self._is_training)
 
         cell_outputs, cell_states = tf.nn.dynamic_rnn(
                 cell=cell,
@@ -57,7 +57,7 @@ class Model_someothermodel(object):
         print 'not implemented yet'
 
 
-def get_rnncell(o, is_training=False):
+def _get_rnncell(o, is_training=False):
     # basic cell
     if o.cell_type == 'LSTM':
         '''
