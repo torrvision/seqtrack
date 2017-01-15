@@ -5,3 +5,9 @@ Namhoon Lee | Torr Vision Group, the University of Oxford
 
 # USE:
 
+To train a model,
+> python --mode=train
+
+To test a model,
+> python --mode=test
+
