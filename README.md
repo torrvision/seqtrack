@@ -5,9 +5,9 @@ Namhoon Lee | Torr Vision Group, the University of Oxford
 
 # USE:
 
-To train a model,
-> python --mode=train
+Specify train or test. For example, to train a model,
+> $ python --mode=train
 
-To test a model,
-> python --mode=test
+To test (if you have a trained model),
+> $ python --mode=test
 
