@@ -83,7 +83,7 @@ def _get_rnncell(o, is_training=False):
 
 def load_model(o, loader):
     is_training = True if o.mode == 'train' else False
-    # TODO: check by logging device placement!
+    # TODO: check by actually logging device placement!
     with tf.device('/{}:{}'.format(o.device, o.device_number)):
         if o.model == 'rnn_basic':
             model = Model_rnn_basic(o, loader, is_training=is_training) 

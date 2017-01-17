@@ -22,12 +22,13 @@ def show_moving_mnist(batch):
         for i in range(vids.shape[0]): # batch
             plt.subplot(5,5,i+1)
             #plt.imshow(vids[i,t])
-            plt.imshow(vids[i,t].reshape(100, 100100100100100100100100100100))
+            plt.imshow(vids[i,t].reshape(100, 100))
             plt.title(digits[i])
             ax = plt.gca()
             ax.add_patch(
                     Rectangle(
-                        pos[i,t][::-1], 28, 28, 
+                        #pos[i,t][::-1], 28, 28, 
+                        pos[i,t,0:2][::-1], pos[i,t,3]-pos[i,t,1], pos[i,t,2]-pos[i,t,0],
                         facecolor='r', edgecolor='r', fill=False))
             plt.draw()
             plt.axis('off')
@@ -113,7 +114,7 @@ def plot_losses(losses, o): # after trainingj
     ax2.set_title('epoch losses')
 
     if o.nosave:
-        outfile = os.path.join(o.path_base, 'tmp/losses.jpg')   
+        outfile = os.path.join(o.path_save_tmp, o.exectime+'_losses.jpg')   
     else:
         outfile = os.path.join(o.path_save, 'losses.jpg')
     plt.savefig(outfile)

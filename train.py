@@ -5,6 +5,7 @@ import tensorflow as tf
 import time
 
 import draw
+from evaluate import evaluate
 
 
 def get_optimizer(m, o):
@@ -79,31 +80,36 @@ def train(m, loader, o):
                                     ib+1, loader.ntr/o.batchsz, 
                                     loss, time.time()-t_batch))
                 sys.stdout.flush()
-
                 losses['batch'] = np.append(losses['batch'], loss)
                 loss_curr_ep = np.append(loss_curr_ep, loss) 
             print ' '
 
-            # after every epoch
-            # 1. save the model
-            # 2. save the loss
-            # 3. print results
+            # after every epoch, perform the followings
+            # - save the model
+            # - record the loss
+            # - evaluate on train/test/val set
+            # - print results (loss, time, etc.)
             if not o.nosave:
                 save_path = saver.save(sess, 
                         o.path_model+'/ep{}.ckpt'.format(ie))
             losses['epoch'] = np.append(losses['epoch'], np.mean(loss_curr_ep))
-            print 'ep {0:d}/{1:d} (EPOCH) |loss:{2:.3f} |time:{3:.2f}'\
-                    .format(ie+1, o.nepoch, 
-                            losses['epoch'][-1], time.time()-t_epoch)
+            eval_results = {
+                    'train': evaluate(sess, m, loader, o, 'train', 0.2),
+                    'test': evaluate(sess, m, loader, o, 'test', 0.2)
+                    }
+            print 'ep {0:d}/{1:d} (EPOCH) |loss:{2:.3f} |IOU (train/test): '\
+            '{3:.3f}/{4:.3f} |time:{5:.2f}'.format(
+                    ie+1, o.nepoch, losses['epoch'][-1], 
+                    eval_results['train']['IOU'], eval_results['test']['IOU'], 
+                    time.time()-t_epoch)
 
-        # print after all epoches
-        print 'total time elapsed:{.2f}'.format(time.time()-t_total)
-            
+        # training finished
+        print 'training finished! ---------------------------------------------'
+        print 'total time elapsed: {0:.2f}'.format(time.time()-t_total)
 
-        # plot losses
         pdb.set_trace()
         draw.plot_losses(losses, o)
-        m.update_network(m.net) # TODO: verify if this step is necessary
+        #m.update_network(m.net) # TODO: verify if this step is necessary
 
 
 

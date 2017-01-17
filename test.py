@@ -16,7 +16,6 @@ def test(m, loader, o):
     with tf.Session(config=o.tfconfig) as sess:
         saver.restore(sess, o.restore_model)
 
-        # TODO: need to have a separate evaluation routine
-        evaluate(sess, m, loader, o, data_='test')
+        _ = evaluate(sess, m, loader, o, 'test')
 
 

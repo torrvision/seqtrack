@@ -16,6 +16,7 @@ class Opts(object):
         self.debugmode          = False # True or False
         self.seed_global        = 9
         self.dtype              = tf.float32
+        self.exectime           = helpers.get_time()
 
         #----------------------------------------------------------------------
         # data set 
@@ -23,7 +24,7 @@ class Opts(object):
         self.moving_mnist       = {
                                     'frmsz': 100,
                                     'featdim': 100*100,
-                                    'outdim': 2 
+                                    'outdim': 4 
                                     }
         # TODO: if a param doesn't need to change, 
         # let's just fix it with a default, instead of making it optional
@@ -76,8 +77,9 @@ class Opts(object):
         self.path_data          = os.path.join(self.path_base, 'data')
         self.nosave             = False
         self.path_save          = os.path.join(
-                                    self.path_base, 
-                                    'save/'+self.mode+'/'+helpers.get_time())
+                                    self.path_base, 'save/'+self.exectime)
+        self.path_save_tmp      = os.path.join(
+                                    self.path_base, 'tmp/'+self.exectime)
         self.path_model         = os.path.join(self.path_save, 'models')
         self.path_eval          = os.path.join(self.path_save, 'evals')
         self.restore            = False 
@@ -143,9 +145,7 @@ class Opts(object):
                     and not self.restore and self.restore_model is None))
 
     def _create_save_directories(self):
-        if self.nosave:
-            print 'No results will be saved in \'save\' directory!'
-        else:
+        if not self.nosave:
             #os.makedirs(self.path_save)
             helpers.mkdir_p(self.path_save)
             if self.mode == 'train':

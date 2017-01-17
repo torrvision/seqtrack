@@ -105,6 +105,9 @@ class Data_moving_mnist(object):
         # TODO: feature might not need to be flattened. change accordingly.
         vids = vids.reshape((vids.shape[0],vids.shape[1],self.featdim))
 
+        # Add fixed sized window for addtional label; [only moving_mnist]
+        pos = np.concatenate((pos, pos+28), axis=2)
+
         batch = {
                 'inputs': vids,
                 'inputs_length': inputs_length, 
