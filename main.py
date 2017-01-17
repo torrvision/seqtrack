@@ -2,12 +2,11 @@ import pdb
 import argparse
 
 from opts           import Opts
-#from load_data      import load_data
-#from data           import Data_moving_mnist
-from data           import load_data
-from load_model     import load_model
+import data
+import model
 from train          import train
 from test           import test
+
 
 
 def parse_arguments():
@@ -17,11 +16,15 @@ def parse_arguments():
             '--verbose', help='print arguments', 
             action='store_true')
     parser.add_argument(
-            '--mode', help='mode (train, test)', 
-            type=str, default='train')
+            '--mode', help='choose mode (train, test)', 
+            type=str, default='')
     parser.add_argument(
             '--debugmode', help='used for debugging', 
             action='store_true')
+
+    parser.add_argument(
+            '--dataset', help='specify the name of dataset',
+            type=str, default='moving_mnist')
 
     parser.add_argument(
             '--nosave', help='no need to save results?', 
@@ -40,18 +43,27 @@ def parse_arguments():
             type=str)
 
     parser.add_argument(
+            '--ntimesteps', help='number of time steps for rnn',
+            type=int, default=30)
+    parser.add_argument(
             '--dropout_rnn', help='set dropout for rnn', 
             action='store_true')
     parser.add_argument(
             '--nepoch', help='number of epochs', 
             type=int, default=1)
+    parser.add_argument(
+            '--batchsz', help='batch size', 
+            type=int, default=1)
 
+    parser.add_argument(
+            '--device_number', help='gpu number for manual assignment', 
+            type=int, default=0)
     parser.add_argument(
             '--gpu_manctrl', help='control gpu memory manual', 
             action='store_true')
     parser.add_argument(
             '--gpu_frac', help='fraction of gpu memory', 
-            type=float, default=0.5)
+            type=float, default=0.4)
 
     args = parser.parse_args()
 
@@ -65,16 +77,15 @@ if __name__ == "__main__":
     o = Opts()
     o.update_by_sysarg(args=args)
     o.initialize()
-    
-    loader = load_data(o)
 
-    m = load_model(o, loader, is_training=True if o.mode=='train' else False)
+    loader = data.load_data(o)
+
+    m = model.load_model(o, loader)
 
     if o.mode == 'train':
         train(m, loader, o)
     elif o.mode == 'test':
         test(m, loader, o)
-
-    pdb.set_trace()
-
+    else:
+        raise ValueError('Currently, only either train or test mode supported')
 

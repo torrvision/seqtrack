@@ -18,7 +18,8 @@ def evaluate(sess, m, loader, o, data_=None):
 
     results = {'idx': [], 'inputs': [], 'labels': [], 'outputs': []}
     for ib in range(datasz/o.batchsz if not o.debugmode else 100):
-        batch, idx = loader.load_batch(ib, o, data_=data_)
+        print 'evaluating {} batch..'.format(ib)
+        batch, idx = loader.get_batch(ib, o, data_=data_)
 
         fdict = {
                 m.net['inputs']: batch['inputs'],
@@ -35,6 +36,6 @@ def evaluate(sess, m, loader, o, data_=None):
     # TODO: add more evalutation criteria (eg., IOU)
     # TODO: maybe separate eval wrapper, considering change of dataset
     # TODO: saving option
-    draw.show_tracking_results_moving_mnist(results, o) 
+    draw.show_tracking_results_moving_mnist(results, o, save_=True) 
 
 

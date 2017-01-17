@@ -81,14 +81,17 @@ def _get_rnncell(o, is_training=False):
 
     return cell
 
-def load_model(o, loader, is_training=False):
-    if o.model == 'rnn_basic':
-        model = Model_rnn_basic(o, loader, is_training=is_training) 
-    elif o.model == 'rnn_bidirectional_attention':
-        raise ValueError('model not implemeted yet')
-    else:
-        raise ValueError('model not implemented yet or simply wrong..')
-    return model 
+def load_model(o, loader):
+    is_training = True if o.mode == 'train' else False
+    # TODO: check by logging device placement!
+    with tf.device('/{}:{}'.format(o.device, o.device_number)):
+        if o.model == 'rnn_basic':
+            model = Model_rnn_basic(o, loader, is_training=is_training) 
+        elif o.model == 'rnn_bidirectional_attention':
+            raise ValueError('model not implemeted yet')
+        else:
+            raise ValueError('model not implemented yet or simply wrong..')
+        return model 
 
 if __name__ == '__main__':
     '''

@@ -13,10 +13,7 @@ def test(m, loader, o):
 
     saver = tf.train.Saver()
 
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=o.gpu_frac)
-    with tf.Session(
-            config=tf.ConfigProto(gpu_options=gpu_options)
-            if o.gpu_manctrl else None) as sess:
+    with tf.Session(config=o.tfconfig) as sess:
         saver.restore(sess, o.restore_model)
 
         # TODO: need to have a separate evaluation routine

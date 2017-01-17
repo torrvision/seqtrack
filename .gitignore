@@ -2,5 +2,5 @@
 *.pyc
 data
 tmp
-model
 save
+logs

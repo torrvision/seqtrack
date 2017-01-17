@@ -17,3 +17,20 @@ def mkdir_p(path):
         else:
             raise
 
+
+import matplotlib.pyplot as plt
+import matplotlib.cm as cmx
+import matplotlib.colors as colors
+
+def getColormap(N,cmapname):
+    '''Returns a function that maps each index in 0, 1, ..., N-1 to a distinct RGB color.'''
+    colornorm = colors.Normalize(vmin=0, vmax=N-1)
+    scalarmap = cmx.ScalarMappable(norm=colornorm, cmap=cmapname)
+    def mapIndexToRgbColor(index):
+        return scalarmap.to_rgba(index)
+    return mapIndexToRgbColor
+
+def createScalarMap(name='hot', vmin=-10, vmax=10):
+    cm = plt.get_cmap(name)
+    cNorm  = colors.Normalize(vmin=vmin, vmax=vmax)
+    return cmx.ScalarMappable(norm=cNorm, cmap=cm)
