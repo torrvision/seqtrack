@@ -4,3 +4,5 @@ data
 tmp
 save
 logs
+*.sh
+
