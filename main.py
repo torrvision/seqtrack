@@ -24,7 +24,7 @@ def parse_arguments():
 
     parser.add_argument(
             '--dataset', help='specify the name of dataset',
-            type=str, default='moving_mnist')
+            type=str, default='')
 
     parser.add_argument(
             '--nosave', help='no need to save results?', 
@@ -54,6 +54,9 @@ def parse_arguments():
     parser.add_argument(
             '--batchsz', help='batch size', 
             type=int, default=1)
+    parser.add_argument(
+            '--lr', help='learning rate', 
+            type=float, default=0.001)
 
     parser.add_argument(
             '--device_number', help='gpu number for manual assignment', 

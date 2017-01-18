@@ -102,9 +102,6 @@ class Data_moving_mnist(object):
         # 1. online learning, 2. arbitrary training sequences 
         inputs_length = np.ones((o.batchsz), dtype=np.int32) * o.ntimesteps
 
-        # TODO: feature might not need to be flattened. change accordingly.
-        vids = vids.reshape((vids.shape[0],vids.shape[1],self.featdim))
-
         # Add fixed sized window for addtional label; [only moving_mnist]
         pos = np.concatenate((pos, pos+28), axis=2)
 
@@ -151,6 +148,7 @@ class Data_bouncing_mnist(object):
         # following paper's default parameter settings
         # TODO: remember some variables might need to set optional..
 
+        self.frmsz = o.bouncing_mnist['frmsz']
         self.featdim = o.bouncing_mnist['featdim'] # TODO: change featdim (CNN)
         self.outdim = o.bouncing_mnist['outdim']
 
@@ -444,9 +442,6 @@ class Data_bouncing_mnist(object):
         # TODO: variable length inputs for
         # 1. online learning, 2. arbitrary training sequences 
         inputs_length = np.ones((o.batchsz), dtype=np.int32) * o.ntimesteps
-
-        # TODO: feature might not need to be flattened. change accordingly.
-        data = data.reshape((data.shape[0],data.shape[1],self.featdim))
 
         batch = {
                 'inputs': data,

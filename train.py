@@ -47,8 +47,8 @@ def train(m, loader, o):
     '''
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
-        sess.run(tf.initialize_all_variables())
-        #sess.run(tf.global_variables_initializer()) # hmm.. is this better?
+        sess.run(tf.initialize_all_variables()) # TODO: will be deprecated
+        #sess.run(tf.global_variables_initializer()) # not available in my ver.
         if o.resume: 
             saver.restore(sess, o.resume_model)
         
@@ -73,7 +73,7 @@ def train(m, loader, o):
 
                 # results after every batch 
                 sys.stdout.write(
-                        '\rep {0:d}/{1:d}, batch {2:5d}/{3:5d}] '
+                        '\rep {0:d}/{1:d}, batch {2:d}/{3:d} '
                         '(BATCH) |loss:{4:.3f} |time:{5:.2f}'\
                                 .format(
                                     ie+1, o.nepoch, 
@@ -89,27 +89,28 @@ def train(m, loader, o):
             # - record the loss
             # - evaluate on train/test/val set
             # - print results (loss, time, etc.)
+            # - plot losses
             if not o.nosave:
                 save_path = saver.save(sess, 
                         o.path_model+'/ep{}.ckpt'.format(ie))
             losses['epoch'] = np.append(losses['epoch'], np.mean(loss_curr_ep))
             eval_results = {
-                    'train': evaluate(sess, m, loader, o, 'train', 0.2),
-                    'test': evaluate(sess, m, loader, o, 'test', 0.2)
+                    'train': evaluate(sess, m, loader, o, 'train', 0.01),
+                    'test': evaluate(sess, m, loader, o, 'test', 0.01)
                     }
             print 'ep {0:d}/{1:d} (EPOCH) |loss:{2:.3f} |IOU (train/test): '\
             '{3:.3f}/{4:.3f} |time:{5:.2f}'.format(
                     ie+1, o.nepoch, losses['epoch'][-1], 
                     eval_results['train']['IOU'], eval_results['test']['IOU'], 
                     time.time()-t_epoch)
+            draw.plot_losses(losses, o)
 
         # training finished
-        print 'training finished! ---------------------------------------------'
+        print '\ntraining finished! ------------------------------------------'
         print 'total time elapsed: {0:.2f}'.format(time.time()-t_total)
 
-        pdb.set_trace()
         draw.plot_losses(losses, o)
-        #m.update_network(m.net) # TODO: verify if this step is necessary
+        #m.update_network(m.net) # TODO: may not need this
 
 
 

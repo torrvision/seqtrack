@@ -19,16 +19,14 @@ class Opts(object):
         self.exectime           = helpers.get_time()
 
         #----------------------------------------------------------------------
-        # data set 
-        self.dataset            = 'moving_mnist' # (bouncing_mnist, etc.)
+        # data set specific parameters 
+        # TODO: only params that need to change; otherwise put it in data class
+        self.dataset            = '' # (bouncing_mnist, etc.)
         self.moving_mnist       = {
                                     'frmsz': 100,
                                     'featdim': 100*100,
                                     'outdim': 4 
                                     }
-        # TODO: if a param doesn't need to change, 
-        # let's just fix it with a default, instead of making it optional
-        # TODO: perhaps moving mnist should be the same
         self.bouncing_mnist     = {
                                     'frmsz': 100,
                                     'featdim': 10000,
@@ -78,8 +76,9 @@ class Opts(object):
         self.nosave             = False
         self.path_save          = os.path.join(
                                     self.path_base, 'save/'+self.exectime)
-        self.path_save_tmp      = os.path.join(
-                                    self.path_base, 'tmp/'+self.exectime)
+        #self.path_save_tmp      = os.path.join(
+                                    #self.path_base, 'tmp/'+self.exectime)
+        self.path_save_tmp      = os.path.join(self.path_base, 'tmp/') #TODO:tmp
         self.path_model         = os.path.join(self.path_save, 'models')
         self.path_eval          = os.path.join(self.path_save, 'evals')
         self.restore            = False 
@@ -95,7 +94,7 @@ class Opts(object):
         self.device_number      = 0
         # TODO: Not working now. will figure out on different environment
         self.gpu_manctrl        = False
-        self.gpu_frac           = 0.4 # TODO: is this optimal? 
+        self.gpu_frac           = 0.4 # TODO: is this optimal value? 
 
     
     def update_by_sysarg(self, args):
@@ -127,7 +126,7 @@ class Opts(object):
         if self.gpu_manctrl:
             self.tfconfig.gpu_options.allow_growth = True
             self.tfconfig.gpu_options.per_process_gpu_memory_fraction \
-                    = o.gpu_frac
+                    = self.gpu_frac
 
     def _run_sanitycheck(self):
         '''Options sanity check!

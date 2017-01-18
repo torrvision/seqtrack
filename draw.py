@@ -21,8 +21,8 @@ def show_moving_mnist(batch):
     for t in range(vids.shape[1]): # timesteps
         for i in range(vids.shape[0]): # batch
             plt.subplot(5,5,i+1)
-            #plt.imshow(vids[i,t])
-            plt.imshow(vids[i,t].reshape(100, 100))
+            plt.imshow(vids[i,t])
+            #plt.imshow(vids[i,t].reshape(100, 100))
             plt.title(digits[i])
             ax = plt.gca()
             ax.add_patch(
@@ -50,7 +50,8 @@ def show_bouncing_mnist(batch):
     for t in range(vids.shape[1]):
         for i in range(vids.shape[0]):
             plt.subplot(5,5,i+1)
-            plt.imshow(vids[i,t].reshape(100, 100))
+            plt.imshow(vids[i,t])
+            #plt.imshow(vids[i,t].reshape(100, 100))
             ax = plt.gca()
             ax.add_patch(
                     Rectangle(
