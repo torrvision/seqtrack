@@ -47,8 +47,10 @@ def train(m, loader, o):
     '''
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
-        sess.run(tf.initialize_all_variables()) # TODO: will be deprecated
-        #sess.run(tf.global_variables_initializer()) # not available in my ver.
+        if o.tfversion == '0.12':
+            sess.run(tf.global_variables_initializer()) 
+        elif o.tfversion == '0.11':
+            sess.run(tf.initialize_all_variables()) # TODO: will be deprecated
         if o.resume: 
             saver.restore(sess, o.resume_model)
         

@@ -17,6 +17,7 @@ class Opts(object):
         self.seed_global        = 9
         self.dtype              = tf.float32
         self.exectime           = helpers.get_time()
+        self.tfversion          = tf.__version__[0:4]
 
         #----------------------------------------------------------------------
         # data set specific parameters 
@@ -166,3 +167,9 @@ class Opts(object):
 
 
 
+if __name__ == '__main__':
+    '''Test options
+    '''
+
+    o = Opts()
+    pdb.set_trace()

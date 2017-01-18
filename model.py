@@ -84,7 +84,8 @@ def _cnn_filter(inputs, o):
         conv2 = _conv2d(relu1, w_conv2, b_conv2, strides_=[1,3,3,1])
         relu2 = _activate(conv2, activation_='relu')
         activations.append(relu2)
-    outputs = tf.pack(activations, axis=1)
+    #outputs = tf.pack(activations, axis=1)
+    outputs = tf.stack(activations, axis=1)
     return outputs
 
     # CNN no shared
@@ -124,6 +125,9 @@ def _activate(input_, activation_='relu'):
         raise ValueError('no available activation type!')
 
 def _get_rnncell(o, is_training=False):
+    # TODO: currently tensorflow changes rnn cells back to contrib. This should
+    # be treated better instead of changing based on version..
+
     # basic cell
     if o.cell_type == 'LSTM':
         '''
@@ -131,19 +135,33 @@ def _get_rnncell(o, is_training=False):
                 num_units=o.nunits, cell_clip=o.max_grad_norm) \
                 if o.grad_clip else tf.nn.rnn_cell.LSTMCell(num_units=o.nunits) 
         '''
-        cell = tf.nn.rnn_cell.LSTMCell(num_units=o.nunits)
+        if o.tfversion == '0.12':
+            cell = tf.contrib.rnn.LSTMCell(num_units=o.nunits)
+        elif o.tfversion == '0.11':
+            cell = tf.nn.rnn_cell.LSTMCell(num_units=o.nunits)
     elif o.cell_type == 'GRU':
-        cell = tf.nn.rnn_cell.GRUCell(num_units=o.nunits)
+        if o.tfversion == '0.12':
+            cell = tf.contrib.rnn.GRUCell(num_units=o.nunits)
+        elif o.tfversion == '0.11':
+            cell = tf.nn.rnn_cell.GRUCell(num_units=o.nunits)
     else:
         raise ValueError('cell not implemented yet or simply wrong!')
 
     # rnn drop out (only during training)
     if is_training and o.dropout_rnn:
-        cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=o.keep_ratio)
+        if o.tfversion == '0.12':
+            cell = tf.contrib.rnn.DropoutWrapper(
+                    cell, output_keep_prob=o.keep_ratio)
+        elif o.tfversion == '0.11':
+            cell = tf.nn.rnn_cell.DropoutWrapper(
+                    cell, output_keep_prob=o.keep_ratio)
 
     # multi-layers
     if o.nlayers > 1:
-        cell = tf.nn.rnn_cell.MultiRNNCell(cells=[cell]*o.nlayers)
+        if o.tfversion == '0.12':
+            cell = tf.contrib.rnn.MultiRNNCell(cells=[cell]*o.nlayers)
+        elif o.tfversion == '0.11':
+            cell = tf.nn.rnn_cell.MultiRNNCell(cells=[cell]*o.nlayers)
 
     return cell
 
