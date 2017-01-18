@@ -84,8 +84,10 @@ def _cnn_filter(inputs, o):
         conv2 = _conv2d(relu1, w_conv2, b_conv2, strides_=[1,3,3,1])
         relu2 = _activate(conv2, activation_='relu')
         activations.append(relu2)
-    #outputs = tf.pack(activations, axis=1)
-    outputs = tf.stack(activations, axis=1)
+    if o.tfversion == '0.12':
+        outputs = tf.stack(activations, axis=1)
+    elif o.tfversion == '0.11':
+        outputs = tf.pack(activations, axis=1)
     return outputs
 
     # CNN no shared
