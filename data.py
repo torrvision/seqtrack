@@ -20,6 +20,7 @@ class Data_moving_mnist(object):
         self.datafile = o.path_data+'/'+o.dataset+'/mnist.pkl.gz' 
         self.frmsz = o.moving_mnist['frmsz']
         self.featdim = o.moving_mnist['featdim'] # TODO: change featdim (CNN)
+        self.ninchannel = o.moving_mnist['ninchannel'] 
         self.outdim = o.moving_mnist['outdim']
 
         self._data = None  
@@ -51,12 +52,16 @@ class Data_moving_mnist(object):
         self.data_va = self.data['val']
         self.data_te = self.data['test']
              
-    def get_batch(self, ib, o, data_=None):
+    def get_batch(self, ib, o, ie_=0, data_=None):
         '''
         Everytime this function is called, create the batch number of moving 
         mnist sets. If this process has randomness, no other data augmentation 
         technique is applied for now. 
         '''
+        # shuffle train data at every epoch
+        if ie_ != 0:
+            self.idx_shuffle_tr = np.random.permutation(self.ntr)
+
         if data_ == 'train':
             data = self.data_tr
             idx_shuffle = self.idx_shuffle_tr
@@ -141,6 +146,7 @@ class Data_bouncing_mnist(object):
 
         self.ntr = self.data_tr['images'].shape[0]
         self.nte = self.data_te['images'].shape[0]
+
         self.idx_shuffle_tr = np.random.permutation(self.ntr)
         self.idx_shuffle_te = np.random.permutation(self.nte)
 
@@ -150,6 +156,7 @@ class Data_bouncing_mnist(object):
 
         self.frmsz = o.bouncing_mnist['frmsz']
         self.featdim = o.bouncing_mnist['featdim'] # TODO: change featdim (CNN)
+        self.ninchannel = o.bouncing_mnist['ninchannel'] 
         self.outdim = o.bouncing_mnist['outdim']
 
         self.num_digits_ = 1 
@@ -342,10 +349,14 @@ class Data_bouncing_mnist(object):
         self.buff_ptr = self.buff_ptr % self.buff_size
 
     #def GetBatch(self, o, verbose=False, count=1, data_=None):
-    def get_batch(self, ib, o, verbose=False, count=1, data_=None):
+    def get_batch(self, ib, o, ie_=0, verbose=False, count=1, data_=None):
         '''
         here in this function also made several changes in several places.
         '''
+        # shuffle train data at every epoch
+        if ie_ != 0:
+            self.idx_shuffle_tr = np.random.permutation(self.ntr)
+
         if data_ == 'train':
             data_all = self.data_tr
             idx_shuffle = self.idx_shuffle_tr
@@ -476,12 +487,10 @@ if __name__ == '__main__':
     '''
 
     # Test bouncing_mnist
-    '''
     from opts import Opts
     o = Opts()
     o.batchsz = 20
     loader = Data_bouncing_mnist(o)
-    batch = loader.get_batch(0, o, data_='train')
+    batch = loader.get_batch(0, o, ie_=1, data_='train')
     #loader.run_sanitycheck(batch)
-    '''
 
