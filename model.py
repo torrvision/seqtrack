@@ -113,13 +113,17 @@ def _cnn_filter(inputs, o):
         x = tf.expand_dims(inputs[:,t], 3) # TODO: double check this
         conv = _conv2d(x, w, b, strides_=[1,3,3,1])
         activations.append(_activate(conv, activation_='relu'))
-    outputs = tf.pack(activations, axis=1) 
+    if o.tfversion == '0.12':
+        outputs = tf.stack(activations, axis=1)
+    else:
+        outputs = tf.pack(activations, axis=1) 
     return outputs
 
 def _weight_variable(shape, wd=0.0):
     initial = tf.truncated_normal(shape, stddev=0.1)
     #if wd is not none:
-    weight_decay = tf.mul(tf.nn.l2_loss(initial), wd, name='weight_loss')
+    #weight_decay = tf.mul(tf.nn.l2_loss(initial), wd, name='weight_loss')
+    weight_decay = tf.multiply(tf.nn.l2_loss(initial), wd, name='weight_loss')
     tf.add_to_collection('losses', weight_decay)
     return tf.Variable(initial)
 
