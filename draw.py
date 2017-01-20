@@ -43,7 +43,6 @@ def show_bouncing_mnist(batch):
         vids = vids[:25] # only draws less than 25 examples
     pos = batch['labels']
     digits = batch['digits']
-    pdb.set_trace()
 
     plt.gray()
     plt.show()
@@ -105,19 +104,28 @@ def show_tracking_results_moving_mnist(results, o, save_=False):
                             .format(savedir,ib,ie, savedir,ib,ie))
 
                 
-def plot_losses(losses, o): # after trainingj
-    fig = plt.figure(figsize=(12,8))
-    ax1 = fig.add_subplot(211)
-    ax1.plot(np.arange(losses['batch'].shape[0])+1, losses['batch'], '-o')
-    ax1.set_title('batch losses')
-    ax2 = fig.add_subplot(212)
-    ax2.plot(np.arange(losses['epoch'].shape[0])+1, losses['epoch'], '-o')
-    ax2.set_title('epoch losses')
+def plot_losses(losses, o, intermediate_=False, cnt_=''): # after trainingj
+    if not intermediate_:
+        fig = plt.figure(figsize=(12,8))
+        ax1 = fig.add_subplot(211)
+        ax1.plot(np.arange(losses['batch'].shape[0])+1, losses['batch'], '-o')
+        ax1.set_title('batch losses')
+        ax2 = fig.add_subplot(212)
+        ax2.plot(np.arange(losses['epoch'].shape[0])+1, losses['epoch'], '-o')
+        ax2.set_title('epoch losses')
+    else:
+        fig = plt.figure(figsize=(12,8))
+        ax1 = fig.add_subplot(211)
+        ax1.plot(
+                np.arange(losses['interm_avg'].shape[0])+1, 
+                losses['interm_avg'], '-o')
+        ax1.set_title('average intermediate loss')
 
     if o.nosave:
-        outfile = os.path.join(o.path_save_tmp, o.exectime+'_losses.jpg')   
+        outfile = os.path.join(
+                o.path_save_tmp, o.exectime+'_losses{}.jpg'.format(cnt_))   
     else:
-        outfile = os.path.join(o.path_save, 'losses.jpg')
+        outfile = os.path.join(o.path_loss, '{}.jpg'.format(cnt_))
     plt.savefig(outfile)
     plt.close()
 
