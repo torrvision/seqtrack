@@ -26,22 +26,14 @@ class Opts(object):
         self.moving_mnist       = {
                                     'frmsz': 100,
                                     'featdim': 100*100,
+                                    'ninchannel': 1,
                                     'outdim': 4 
                                     }
         self.bouncing_mnist     = {
                                     'frmsz': 100,
                                     'featdim': 10000,
+                                    'ninchannel': 1, 
                                     'outdim': 4
-                                    #'nr_objs': 1,
-                                    #'img_row': 100,
-                                    #'img_col': 100,
-                                    #'clutter_move': 1,
-                                    #'with_clutters': 1,
-                                    #'nr_objs': 1,
-                                    #'seq_len': 20,
-                                    #'acc_scale': 0.1,
-                                    #'zoom_scale': 0.1,
-                                    #'double_mnist': False 
                                     }
 
         #----------------------------------------------------------------------
@@ -56,7 +48,9 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # model parameters - cnn (or feature extractor)
-        self.model_cnn          = 'vgg' # vgg, resnet, imagenet, etc.
+        self.cnn_pretrain       = False 
+        self.cnn_model          = 'vgg' # vgg, resnet, imagenet, etc.
+        self.nchannel           = [16, 16]
 
         #----------------------------------------------------------------------
         # training policies
@@ -65,10 +59,9 @@ class Opts(object):
         self.optimizer          = 'sgd' # sgd, adam, rmsprop
         self.lr                 = 0.001
         self.lr_update          = False
-        self.wd                 = 0.0
+        self.wd                 = 0.0 # weight decay for regularization
         self.grad_clip          = False
         self.max_grad_norm      = 5.0
-        self.regularization     = False # weight regularization!
 
         #----------------------------------------------------------------------
         # save (save training results), load (test), resume (keep training)
@@ -81,19 +74,17 @@ class Opts(object):
                                     #self.path_base, 'tmp/'+self.exectime)
         self.path_save_tmp      = os.path.join(self.path_base, 'tmp/') #TODO:tmp
         self.path_model         = os.path.join(self.path_save, 'models')
+        self.path_loss          = os.path.join(self.path_save, 'losses')
         self.path_eval          = os.path.join(self.path_save, 'evals')
         self.restore            = False 
         self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
-        self.resume_model       = None # 'specify_not_fully_trained_model.cpkt'
-        # TODO: resume is on different purpose from restore and will need 
-        # different stuff to be saved (as dict)
+        self.resume_data        = None
 
         #----------------------------------------------------------------------
         # device memory allocation 
         self.device             = 'gpu' # cpu or gpu; Don't change it for now
-        self.device_number      = 0
-        # TODO: Not working now. will figure out on different environment
+        self.device_number      = 0 # TODO: not working on local machine
         self.gpu_manctrl        = False
         self.gpu_frac           = 0.4 # TODO: is this optimal value? 
 
@@ -132,17 +123,16 @@ class Opts(object):
     def _run_sanitycheck(self):
         '''Options sanity check!
         '''
-        # TODO: put more assertions!
         assert(self.mode == 'train' or self.mode == 'test')
         assert((not self.restore and self.restore_model is None) or 
                 (self.restore and self.restore_model is not None))
-        assert((not self.resume and self.resume_model is None) or 
-                (self.resume and self.resume_model is not None))
         assert(
                 (self.mode=='test' 
                     and self.restore and self.restore_model is not None) or 
                 (self.mode=='train' 
                     and not self.restore and self.restore_model is None))
+        assert((not self.resume and self.resume_data is None) or
+                (self.resume and self.resume_data is not None))
 
     def _create_save_directories(self):
         if not self.nosave:
@@ -150,6 +140,7 @@ class Opts(object):
             helpers.mkdir_p(self.path_save)
             if self.mode == 'train':
                 os.makedirs(self.path_model)
+                os.makedirs(self.path_loss)
             elif self.mode == 'test':
                 os.makedirs(self.path_eval)
             else:

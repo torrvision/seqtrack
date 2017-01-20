@@ -39,7 +39,7 @@ def parse_arguments():
             '--resume', help='to resume training',
             action='store_true')
     parser.add_argument(
-            '--resume_model', help='model to resume',
+            '--resume_data', help='model to resume',
             type=str)
 
     parser.add_argument(
@@ -55,8 +55,17 @@ def parse_arguments():
             '--batchsz', help='batch size', 
             type=int, default=1)
     parser.add_argument(
+            '--optimizer', help='optimizer to train the model',
+            type=str, default='sgd')
+    parser.add_argument(
             '--lr', help='learning rate', 
             type=float, default=0.001)
+    parser.add_argument(
+            '--lr_update', help='adaptive learning rate', 
+            action='store_true')
+    parser.add_argument(
+            '--wd', help='weight decay', 
+            type=float, default=0.0)
 
     parser.add_argument(
             '--device_number', help='gpu number for manual assignment', 
