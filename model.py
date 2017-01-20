@@ -16,22 +16,31 @@ class Model_rnn_basic(object):
         # this is easy way otherwise need to specify dataset name too
         frmsz = self.loader.frmsz
         featdim = self.loader.featdim
+        ninchannel = self.loader.ninchannel # TODO: use this
         outdim = self.loader.outdim
 
         # TODO: if input image is color (ie, has 3 channels), change 
         # dimension of placeholder and convolution operations
-        inputs = tf.placeholder(
-                o.dtype, shape=[o.batchsz, o.ntimesteps, frmsz, frmsz])
+        if ninchannel == 1:
+            inputs_shape = [o.batchsz, o.ntimesteps, frmsz, frmsz]
+        else:
+            inputs_shape = [o.batchsz, o.ntimesteps, frmsz, frmsz, ninchannel]
+
+        inputs = tf.placeholder(o.dtype, shape=inputs_shape)
         inputs_length = tf.placeholder(o.dtype, shape=[o.batchsz])
         labels = tf.placeholder(
                 o.dtype, shape=[o.batchsz, o.ntimesteps, outdim])
 
-        use_cnnfeat = True # TODO: make it optionable..
-        if use_cnnfeat:
-            inputs_cnn = _cnn_filter(inputs, o)
-            inputs_cell = tf.reshape(inputs_cnn, [o.batchsz, o.ntimesteps, -1])
-        else:
-            inputs_cell = tf.reshape(inputs, [o.batchsz, o.ntimesteps, -1])
+        use_cnnfeat = True# TODO: make it optionable..
+        if o.cnn_pretrain: # use pre-trained model
+            print 'use pretrained model: {}'.format(o.cnn_model)
+            raise ValueError('not implemented yet')
+        else: 
+            if use_cnnfeat: # train from scratch
+                inputs_cnn = _cnn_filter(inputs, o)
+                inputs_cell = tf.reshape(inputs_cnn, [o.batchsz, o.ntimesteps, -1])
+            else: # no use of cnn
+                inputs_cell = tf.reshape(inputs, [o.batchsz, o.ntimesteps, -1])
 
         cell = _get_rnncell(o, is_training=self._is_training)
         cell_outputs, cell_states = tf.nn.dynamic_rnn(
@@ -48,14 +57,18 @@ class Model_rnn_basic(object):
         outputs = tf.matmul(cell_outputs, w_out) + b_out
         outputs = tf.reshape(outputs, [-1, o.ntimesteps, outdim]) # orig. shape
  
-        loss = tf.reduce_mean(tf.square(outputs-labels))
+        #loss = tf.reduce_mean(tf.square(outputs-labels))
+        loss_l2 = tf.reduce_mean(tf.square(outputs-labels))
+        tf.add_to_collection('losses', loss_l2)
+        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+        # TODO: check if loss_l2 and loss_total is the same with wd=0.0
 
         net = {
                 'inputs': inputs,
                 'inputs_length': inputs_length,
                 'labels': labels,
                 'outputs': outputs,
-                'loss': loss}
+                'loss': loss_total}
         return net
 
     def update_network(self, net_new):
@@ -72,9 +85,10 @@ def _cnn_filter(inputs, o):
     assert(len(input_shape)==4) # TODO: assuming one channel image; change later 
 
     # CNN shared
-    w_conv1 = _weight_variable([3,3,1,16])
+    '''
+    w_conv1 = _weight_variable([3,3,1,16], wd=o.wd)
     b_conv1 = _bias_variable([16])
-    w_conv2 = _weight_variable([3,3,16,16])
+    w_conv2 = _weight_variable([3,3,16,16], wd=o.wd)
     b_conv2 = _bias_variable([16])
     activations = []
     for t in range(o.ntimesteps):
@@ -89,22 +103,24 @@ def _cnn_filter(inputs, o):
     elif o.tfversion == '0.11':
         outputs = tf.pack(activations, axis=1)
     return outputs
+    '''
 
     # CNN no shared
-    '''
     activations = []
     for t in range(o.ntimesteps):
-        w = _weight_variable([3,3,1,16])
+        w = _weight_variable([3,3,1,16], wd=o.wd)
         b = _bias_variable([16])
         x = tf.expand_dims(inputs[:,t], 3) # TODO: double check this
         conv = _conv2d(x, w, b, strides_=[1,3,3,1])
         activations.append(_activate(conv, activation_='relu'))
     outputs = tf.pack(activations, axis=1) 
     return outputs
-    '''
 
-def _weight_variable(shape):
+def _weight_variable(shape, wd=0.0):
     initial = tf.truncated_normal(shape, stddev=0.1)
+    #if wd is not none:
+    weight_decay = tf.mul(tf.nn.l2_loss(initial), wd, name='weight_loss')
+    tf.add_to_collection('losses', weight_decay)
     return tf.Variable(initial)
 
 def _bias_variable(shape):
