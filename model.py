@@ -19,8 +19,6 @@ class Model_rnn_basic(object):
         ninchannel = self.loader.ninchannel # TODO: use this
         outdim = self.loader.outdim
 
-        # TODO: if input image is color (ie, has 3 channels), change 
-        # dimension of placeholder and convolution operations
         if ninchannel == 1:
             inputs_shape = [o.batchsz, o.ntimesteps, frmsz, frmsz]
         else:
@@ -57,11 +55,9 @@ class Model_rnn_basic(object):
         outputs = tf.matmul(cell_outputs, w_out) + b_out
         outputs = tf.reshape(outputs, [-1, o.ntimesteps, outdim]) # orig. shape
  
-        #loss = tf.reduce_mean(tf.square(outputs-labels))
         loss_l2 = tf.reduce_mean(tf.square(outputs-labels))
         tf.add_to_collection('losses', loss_l2)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
-        # TODO: check if loss_l2 and loss_total is the same with wd=0.0
 
         net = {
                 'inputs': inputs,
@@ -85,10 +81,9 @@ def _cnn_filter(inputs, o):
     assert(len(input_shape)==4) # TODO: assuming one channel image; change later 
 
     # CNN shared
-    '''
-    w_conv1 = _weight_variable([3,3,1,16], wd=o.wd)
+    w_conv1 = _weight_variable([3,3,1,16], o, wd=o.wd)
     b_conv1 = _bias_variable([16])
-    w_conv2 = _weight_variable([3,3,16,16], wd=o.wd)
+    w_conv2 = _weight_variable([3,3,16,16], o, wd=o.wd)
     b_conv2 = _bias_variable([16])
     activations = []
     for t in range(o.ntimesteps):
@@ -103,27 +98,30 @@ def _cnn_filter(inputs, o):
     elif o.tfversion == '0.11':
         outputs = tf.pack(activations, axis=1)
     return outputs
-    '''
 
     # CNN no shared
+    '''
     activations = []
     for t in range(o.ntimesteps):
-        w = _weight_variable([3,3,1,16], wd=o.wd)
+        w = _weight_variable([3,3,1,16], o, wd=o.wd)
         b = _bias_variable([16])
         x = tf.expand_dims(inputs[:,t], 3) # TODO: double check this
         conv = _conv2d(x, w, b, strides_=[1,3,3,1])
         activations.append(_activate(conv, activation_='relu'))
     if o.tfversion == '0.12':
         outputs = tf.stack(activations, axis=1)
-    else:
+    elif o.tfversion == '0.11':
         outputs = tf.pack(activations, axis=1) 
     return outputs
+    '''
 
-def _weight_variable(shape, wd=0.0):
+def _weight_variable(shape, o, wd=0.0):
     initial = tf.truncated_normal(shape, stddev=0.1)
     #if wd is not none:
-    #weight_decay = tf.mul(tf.nn.l2_loss(initial), wd, name='weight_loss')
-    weight_decay = tf.multiply(tf.nn.l2_loss(initial), wd, name='weight_loss')
+    if o.tfversion == '0.12':
+        weight_decay = tf.multiply(tf.nn.l2_loss(initial), wd, name='weight_loss')
+    elif o.tfversion == '0.11':
+        weight_decay = tf.mul(tf.nn.l2_loss(initial), wd, name='weight_loss')
     tf.add_to_collection('losses', weight_decay)
     return tf.Variable(initial)
 

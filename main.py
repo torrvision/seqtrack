@@ -50,7 +50,7 @@ def parse_arguments():
             action='store_true')
     parser.add_argument(
             '--nepoch', help='number of epochs', 
-            type=int, default=1)
+            type=int, default=10)
     parser.add_argument(
             '--batchsz', help='batch size', 
             type=int, default=1)
