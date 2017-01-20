@@ -101,3 +101,6 @@ if __name__ == "__main__":
     else:
         raise ValueError('Currently, only either train or test mode supported')
 
+    print '**Saved in the following directory.'
+    print o.path_save if not o.nosave else o.path_save_tmp
+
