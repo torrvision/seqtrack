@@ -125,7 +125,7 @@ def plot_losses(losses, o, intermediate_=False, cnt_=''): # after trainingj
         outfile = os.path.join(
                 o.path_save_tmp, o.exectime+'_losses{}.png'.format(cnt_))   
     else:
-        outfile = os.path.join(o.path_loss, '{}.png'.format(cnt_))
+        outfile = os.path.join(o.path_loss, 'losses{}.png'.format(cnt_))
     plt.savefig(outfile)
     plt.close()
 

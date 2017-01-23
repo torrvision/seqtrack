@@ -18,6 +18,8 @@ def mkdir_p(path):
             raise
 
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.cm as cmx
 import matplotlib.colors as colors
