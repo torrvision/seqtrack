@@ -46,6 +46,12 @@ def parse_arguments():
             '--usetfapi', help='set to use tensorflow rnn api', 
             action='store_true')
     parser.add_argument(
+            '--cell_type', help='rnn cell type',
+            type=str, default='LSTM')
+    parser.add_argument(
+            '--nunits', help='number of hidden units in rnn cell',
+            type=int, default=300)
+    parser.add_argument(
             '--ntimesteps', help='number of time steps for rnn',
             type=int, default=30)
     parser.add_argument(

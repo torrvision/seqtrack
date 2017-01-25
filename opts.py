@@ -41,7 +41,7 @@ class Opts(object):
         self.usetfapi           = False
         self.model              = 'rnn_basic'
         self.cell_type          = 'LSTM' 
-        self.nunits             = 300 # or dimension?
+        self.nunits             = 300 
         self.ntimesteps         = 30
         self.nlayers            = 1
         self.dropout_rnn        = False

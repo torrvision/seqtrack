@@ -47,9 +47,9 @@ class Model_rnn_basic(object):
                     sequence_length=inputs_length,
                     inputs=inputs_cell)
         else: # manual rnn module
-            label_init = labels[:,0]
             cell_outputs = _rnn_pass( # TODO: work on passing gt init
-                    inputs_cell, label_init, o, is_training=self._is_training)
+                    inputs_cell, labels[:,0], o, is_training=self._is_training)
+
 
         cell_outputs = tf.reshape(cell_outputs, [o.batchsz*o.ntimesteps,o.nunits])
         w_out = tf.get_variable(
@@ -88,10 +88,16 @@ def _rnn_pass(inputs, label_init, o, is_training=False):
     '''
 
     def _get_lstm_params(nunits, featdim):
-        shape_W = [nunits+featdim, nunits]
-        shape_b = [nunits]
+        shape_W = [nunits+featdim, nunits*4] 
+        shape_b = [nunits*4]
         params = {}
         with tf.variable_scope('LSTMcell'):
+            # TODO: this may be different from the original LSTM..
+            params['W'] = tf.get_variable('W', shape=shape_W, dtype=o.dtype, 
+                    initializer=tf.truncated_normal_initializer(stddev=1.0)) 
+            params['b'] = tf.get_variable('b', shape=shape_b, dtype=o.dtype, 
+                    initializer=tf.constant_initializer(value=0.0))
+            '''
             params['Wf'] = tf.get_variable('Wf', shape=shape_W, dtype=o.dtype, 
                     initializer=tf.truncated_normal_initializer()) 
             params['Wi'] = tf.get_variable('Wi', shape=shape_W, dtype=o.dtype, 
@@ -101,18 +107,47 @@ def _rnn_pass(inputs, label_init, o, is_training=False):
             params['Wo'] = tf.get_variable('Wo', shape=shape_W, dtype=o.dtype, 
                     initializer=tf.truncated_normal_initializer())
             params['bf'] = tf.get_variable('bf', shape=shape_b, dtype=o.dtype, 
-                    initializer=tf.constant_initializer())
+                    initializer=tf.constant_initializer(0.0))
             params['bi'] = tf.get_variable('bi', shape=shape_b, dtype=o.dtype, 
-                    initializer=tf.constant_initializer())
+                    initializer=tf.constant_initializer(0.0))
             params['bc'] = tf.get_variable('bc', shape=shape_b, dtype=o.dtype, 
-                    initializer=tf.constant_initializer())
+                    initializer=tf.constant_initializer(0.0))
             params['bo'] = tf.get_variable('bo', shape=shape_b, dtype=o.dtype, 
-                    initializer=tf.constant_initializer())
+                    initializer=tf.constant_initializer(0.0))
+            '''
         return params
 
     #def _activate_rnncell(x_curr, h_prev, y_prev, C_prev, params, o):
     def _activate_rnncell(x_curr, h_prev, C_prev, params, o):
         if o.cell_type == 'LSTM': # standard LSTM (no peephole)
+            W = params['W']
+            b = params['b']
+            # forget, input, memory cell, output, hidden 
+            if o.tfversion == '0.12': # TODO: remove once upgrade to 0.12
+                f_curr, i_curr, C_curr_tilda, o_curr = tf.split(1, 4, 
+                        tf.matmul(tf.concat_v2(1,(h_prev,x_curr)), W) +  b)
+                # TODO: added forget bias...
+                C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
+                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda)
+                h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
+                ''' 
+                f_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wf) + bf)
+                i_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wi) + bi )
+                C_curr_tilda = tf.tanh(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wc) + bc)
+                C_curr = f_curr * C_prev + i_curr * C_curr_tilda
+                o_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wo) + bo )
+                h_curr = o_curr * tf.tanh(C_curr)
+                '''
+            elif o.tfversion == '0.11':
+                f_curr, i_curr, C_curr_tilda, o_curr = tf.split(1, 4, 
+                        tf.matmul(tf.concat(1,(h_prev,x_curr)), W) +  b)
+                # TODO: added forget bias...
+                C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
+                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda)
+                h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
+            else:
+                raise ValueError('no avaialble tensorflow version')
+        elif o.cell_type == 'LSTM_variant': # coupled input and forget gates
             Wf = params['Wf']
             Wi = params['Wi']
             Wc = params['Wc']
@@ -121,42 +156,39 @@ def _rnn_pass(inputs, label_init, o, is_training=False):
             bi = params['bi']
             bc = params['bc']
             bo = params['bo']
-
             # forget, input, memory cell, output, hidden 
             if o.tfversion == '0.12': # TODO: remove once upgrade to 0.12
                 f_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wf) + bf)
-                i_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wi) + bi )
                 C_curr_tilda = tf.tanh(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wc) + bc)
-                C_curr = tf.multiply(f_curr, C_prev) + tf.multiply(i_curr, C_curr_tilda)
+                C_curr = f_curr * C_prev + (1-f_curr) * C_curr_tilda
                 o_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wo) + bo )
-                h_curr = tf.multiply(o_curr, tf.tanh(C_curr)) 
+                h_curr = o_curr * tf.tanh(C_curr)
             elif o.tfversion == '0.11':
                 f_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wf) + bf)
-                i_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wi) + bi )
                 C_curr_tilda = tf.tanh(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wc) + bc)
-                C_curr = tf.mul(f_curr, C_prev) + tf.mul(i_curr, C_curr_tilda)
+                C_curr = f_curr * C_prev + (1-f_curr) * C_curr_tilda
                 o_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wo) + bo )
-                h_curr = tf.mul(o_curr, tf.tanh(C_curr)) 
+                h_curr = o_curr * tf.tanh(C_curr)
             else:
                 raise ValueError('no avaialble tensorflow version')
-        elif o.cell_type == 'LSTM_variant': # peephole or coupled input/forget
-            raise ValueError('Not implemented yet!')
         else:
             raise ValueError('Not implemented yet!')
         return h_curr, C_curr
 
     # lstm weight and bias parameters
     params = _get_lstm_params(o.nunits, inputs.get_shape().as_list()[-1])
+    
+    # initial states
+    # TODO: normal init state?
+    h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
+    C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
+    #y_prev = label_init # TODO: use output!
 
+    # unroll
     hs = []
     for t in range(o.ntimesteps): # TODO: change if variable length input/out
-        if t == 0:
-            h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) #TODO: correct?
-            #y_prev = label_init # TODO: use output!
-            C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
-        x_curr = inputs[:,t] 
-        #h_prev, C_prev = _activate_rnncell(x_curr, h_prev, y_prev, C_prev, o) 
-        h_prev, C_prev = _activate_rnncell(x_curr, h_prev, C_prev, params, o) #TODO: use output!
+        #h_prev, C_prev = _activate_rnncell(inputs[:,t], h_prev, y_prev, C_prev, params, o) #TODO: use output! 
+        h_prev, C_prev = _activate_rnncell(inputs[:,t], h_prev, C_prev, params, o) 
         hs.append(h_prev)
 
     # list to tensor
@@ -212,9 +244,9 @@ def _weight_variable(shape, o, wd=0.0):
     initial = tf.truncated_normal(shape, stddev=0.1)
     #if wd is not none:
     if o.tfversion == '0.12':
-        weight_decay = tf.multiply(tf.nn.l2_loss(initial), wd, name='weight_loss')
+        weight_decay = tf.nn.l2_loss(initial) * wd
     elif o.tfversion == '0.11':
-        weight_decay = tf.mul(tf.nn.l2_loss(initial), wd, name='weight_loss')
+        weight_decay = tf.nn.l2_loss(initial) * wd
     tf.add_to_collection('losses', weight_decay)
     return tf.Variable(initial)
 
@@ -257,6 +289,11 @@ def _get_rnncell(o, is_training=False):
             cell = tf.contrib.rnn.GRUCell(num_units=o.nunits)
         elif o.tfversion == '0.11':
             cell = tf.nn.rnn_cell.GRUCell(num_units=o.nunits)
+    elif o.cell_type == 'basic':
+        if o.tfversion == '0.12':
+            cell = tf.contrib.rnn.BasicRNNCell(num_units=o.nunits)
+        elif o.tfversion == '0.11':
+            cell = tf.nn.rnn_cell.BasicRNNCell(num_units=o.nunits)
     else:
         raise ValueError('cell not implemented yet or simply wrong!')
 
@@ -299,6 +336,7 @@ if __name__ == '__main__':
     o = Opts()
     o.dataset = 'bouncing_mnist'
     o.batchsz = 20
+    #o.usetfapi = True
     loader = data.load_data(o)
     m = load_model(o, loader)
     pdb.set_trace()
