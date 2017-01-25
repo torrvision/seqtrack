@@ -123,19 +123,19 @@ def _rnn_pass(inputs, label_init, o, is_training=False):
             bo = params['bo']
 
             # forget, input, memory cell, output, hidden 
-            f_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wf) + bf)
-            i_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wi) + bi )# forget
-            C_curr_tilda = tf.tanh(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wc) + bc)
             if o.tfversion == '0.12': # TODO: remove once upgrade to 0.12
+                f_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wf) + bf)
+                i_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wi) + bi )
+                C_curr_tilda = tf.tanh(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wc) + bc)
                 C_curr = tf.multiply(f_curr, C_prev) + tf.multiply(i_curr, C_curr_tilda)
-            elif o.tfversion == '0.11':
-                C_curr = tf.mul(f_curr, C_prev) + tf.mul(i_curr, C_curr_tilda)
-            else:
-                raise ValueError('no avaialble tensorflow version')
-            o_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wo) + bo )# forget
-            if o.tfversion == '0.12':
+                o_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wo) + bo )
                 h_curr = tf.multiply(o_curr, tf.tanh(C_curr)) 
             elif o.tfversion == '0.11':
+                f_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wf) + bf)
+                i_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wi) + bi )
+                C_curr_tilda = tf.tanh(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wc) + bc)
+                C_curr = tf.mul(f_curr, C_prev) + tf.mul(i_curr, C_curr_tilda)
+                o_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wo) + bo )
                 h_curr = tf.mul(o_curr, tf.tanh(C_curr)) 
             else:
                 raise ValueError('no avaialble tensorflow version')
