@@ -31,21 +31,25 @@ class Model_rnn_basic(object):
 
         use_cnnfeat = True# TODO: make it optionable..
         if o.cnn_pretrain: # use pre-trained model
-            print 'use pretrained model: {}'.format(o.cnn_model)
             raise ValueError('not implemented yet')
         else: 
             if use_cnnfeat: # train from scratch
                 inputs_cnn = _cnn_filter(inputs, o)
-                inputs_cell = tf.reshape(inputs_cnn, [o.batchsz, o.ntimesteps, -1])
+                inputs_cell = tf.reshape(inputs_cnn,[o.batchsz,o.ntimesteps,-1])
             else: # no use of cnn
                 inputs_cell = tf.reshape(inputs, [o.batchsz, o.ntimesteps, -1])
 
-        cell = _get_rnncell(o, is_training=self._is_training)
-        cell_outputs, cell_states = tf.nn.dynamic_rnn(
-                cell=cell,
-                dtype=o.dtype,
-                sequence_length=inputs_length,
-                inputs=inputs_cell)
+        if o.usetfapi:
+            cell = _get_rnncell(o, is_training=self._is_training)
+            cell_outputs, cell_states = tf.nn.dynamic_rnn(
+                    cell=cell,
+                    dtype=o.dtype,
+                    sequence_length=inputs_length,
+                    inputs=inputs_cell)
+        else: # manual rnn module
+            label_init = labels[:,0]
+            cell_outputs = _rnn_pass( # TODO: work on passing gt init
+                    inputs_cell, label_init, o, is_training=self._is_training)
 
         cell_outputs = tf.reshape(cell_outputs, [o.batchsz*o.ntimesteps,o.nunits])
         w_out = tf.get_variable(
@@ -67,12 +71,100 @@ class Model_rnn_basic(object):
                 'loss': loss_total}
         return net
 
-    def update_network(self, net_new):
-        self.net = net_new
 
 class Model_someothermodel(object):
     def __init__(self, o):
         print 'not implemented yet'
+
+
+def _rnn_pass(inputs, label_init, o, is_training=False):
+    ''' This is a (manually designed) rnn unrolling function.
+    Note that this is not supposed to reproduce the same (or similar) results
+    that one would produce from using tensorflow API.
+    One clear distinction is that this module uses the ground-truth label for
+    the first frame; that is specific for tracking task. 
+    Also, besides the previous hidden state and current input, rnn cell receives
+    the previous output. How we are using this is undecided or unexplored yet.
+    '''
+
+    def _get_lstm_params(nunits, featdim):
+        shape_W = [nunits+featdim, nunits]
+        shape_b = [nunits]
+        params = {}
+        with tf.variable_scope('LSTMcell'):
+            params['Wf'] = tf.get_variable('Wf', shape=shape_W, dtype=o.dtype, 
+                    initializer=tf.truncated_normal_initializer()) 
+            params['Wi'] = tf.get_variable('Wi', shape=shape_W, dtype=o.dtype, 
+                    initializer=tf.truncated_normal_initializer())
+            params['Wc'] = tf.get_variable('Wc', shape=shape_W, dtype=o.dtype, 
+                    initializer=tf.truncated_normal_initializer())
+            params['Wo'] = tf.get_variable('Wo', shape=shape_W, dtype=o.dtype, 
+                    initializer=tf.truncated_normal_initializer())
+            params['bf'] = tf.get_variable('bf', shape=shape_b, dtype=o.dtype, 
+                    initializer=tf.constant_initializer())
+            params['bi'] = tf.get_variable('bi', shape=shape_b, dtype=o.dtype, 
+                    initializer=tf.constant_initializer())
+            params['bc'] = tf.get_variable('bc', shape=shape_b, dtype=o.dtype, 
+                    initializer=tf.constant_initializer())
+            params['bo'] = tf.get_variable('bo', shape=shape_b, dtype=o.dtype, 
+                    initializer=tf.constant_initializer())
+        return params
+
+    #def _activate_rnncell(x_curr, h_prev, y_prev, C_prev, params, o):
+    def _activate_rnncell(x_curr, h_prev, C_prev, params, o):
+        if o.cell_type == 'LSTM': # standard LSTM (no peephole)
+            Wf = params['Wf']
+            Wi = params['Wi']
+            Wc = params['Wc']
+            Wo = params['Wo']
+            bf = params['bf']
+            bi = params['bi']
+            bc = params['bc']
+            bo = params['bo']
+
+            # forget, input, memory cell, output, hidden 
+            f_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wf) + bf)
+            i_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wi) + bi )# forget
+            C_curr_tilda = tf.tanh(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wc) + bc)
+            if o.tfversion == '0.12': # TODO: remove once upgrade to 0.12
+                C_curr = tf.multiply(f_curr, C_prev) + tf.multiply(i_curr, C_curr_tilda)
+            elif o.tfversion == '0.11':
+                C_curr = tf.mul(f_curr, C_prev) + tf.mul(i_curr, C_curr_tilda)
+            else:
+                raise ValueError('no avaialble tensorflow version')
+            o_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wo) + bo )# forget
+            if o.tfversion == '0.12':
+                h_curr = tf.multiply(o_curr, tf.tanh(C_curr)) 
+            elif o.tfversion == '0.11':
+                h_curr = tf.mul(o_curr, tf.tanh(C_curr)) 
+            else:
+                raise ValueError('no avaialble tensorflow version')
+        elif o.cell_type == 'LSTM_variant': # peephole or coupled input/forget
+            raise ValueError('Not implemented yet!')
+        else:
+            raise ValueError('Not implemented yet!')
+        return h_curr, C_curr
+
+    # lstm weight and bias parameters
+    params = _get_lstm_params(o.nunits, inputs.get_shape().as_list()[-1])
+
+    hs = []
+    for t in range(o.ntimesteps): # TODO: change if variable length input/out
+        if t == 0:
+            h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) #TODO: correct?
+            #y_prev = label_init # TODO: use output!
+            C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
+        x_curr = inputs[:,t] 
+        #h_prev, C_prev = _activate_rnncell(x_curr, h_prev, y_prev, C_prev, o) 
+        h_prev, C_prev = _activate_rnncell(x_curr, h_prev, C_prev, params, o) #TODO: use output!
+        hs.append(h_prev)
+
+    # list to tensor
+    if o.tfversion == '0.12': 
+        hs = tf.stack(hs, axis=1)
+    elif o.tfversion == '0.11':
+        hs = tf.pack(hs, axis=1)
+    return hs 
 
 def _cnn_filter(inputs, o):
     input_shape = inputs.get_shape().as_list()
@@ -88,9 +180,10 @@ def _cnn_filter(inputs, o):
     activations = []
     for t in range(o.ntimesteps):
         x = tf.expand_dims(inputs[:,t],3) 
-        conv1 = _conv2d(x, w_conv1, b_conv1, strides_=[1,3,3,1])
+        conv1 = _conv2d(x, w_conv1, b_conv1, strides_=[1,3,3,1]) # TODO: low st
         relu1 = _activate(conv1, activation_='relu')
-        conv2 = _conv2d(relu1, w_conv2, b_conv2, strides_=[1,3,3,1])
+        conv2 = _conv2d(relu1, w_conv2, b_conv2, strides_=[1,3,3,1]) #TODO: low st
+        #conv2 = _conv2d(relu1, w_conv2, b_conv2, strides_=[1,1,1,1]) #TODO: low st
         relu2 = _activate(conv2, activation_='relu')
         activations.append(relu2)
     if o.tfversion == '0.12':
@@ -205,6 +298,7 @@ if __name__ == '__main__':
     import data
     o = Opts()
     o.dataset = 'bouncing_mnist'
+    o.batchsz = 20
     loader = data.load_data(o)
     m = load_model(o, loader)
     pdb.set_trace()

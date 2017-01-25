@@ -43,6 +43,9 @@ def parse_arguments():
             type=str)
 
     parser.add_argument(
+            '--usetfapi', help='set to use tensorflow rnn api', 
+            action='store_true')
+    parser.add_argument(
             '--ntimesteps', help='number of time steps for rnn',
             type=int, default=30)
     parser.add_argument(

@@ -144,7 +144,7 @@ def _init_train_settings(m, loader, o):
 
     train_opts = {
             'nepoch': o.nepoch if not o.debugmode else 2,
-            'nbatch': loader.ntr/o.batchsz if not o.debugmode else 2000,
+            'nbatch': loader.ntr/o.batchsz if not o.debugmode else 300,
             'lr_recipe': lr_recipe,
             'losses': losses,
             'iteration': iteration,
