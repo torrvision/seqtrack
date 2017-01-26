@@ -41,7 +41,7 @@ class Model_rnn_basic(object):
 
         if o.usetfapi:
             cell = _get_rnncell(o, is_training=self._is_training)
-            cell_outputs, cell_states = tf.nn.dynamic_rnn(
+            cell_outputs, _ = tf.nn.dynamic_rnn(
                     cell=cell,
                     dtype=o.dtype,
                     sequence_length=inputs_length,
@@ -50,6 +50,7 @@ class Model_rnn_basic(object):
             cell_outputs = _rnn_pass( # TODO: work on passing gt init
                     inputs_cell, labels[:,0], o, is_training=self._is_training)
 
+        pdb.set_trace() # check cell_ouputs dimension.
 
         cell_outputs = tf.reshape(cell_outputs, [o.batchsz*o.ntimesteps,o.nunits])
         w_out = tf.get_variable(
@@ -92,29 +93,10 @@ def _rnn_pass(inputs, label_init, o, is_training=False):
         shape_b = [nunits*4]
         params = {}
         with tf.variable_scope('LSTMcell'):
-            # TODO: this may be different from the original LSTM..
             params['W'] = tf.get_variable('W', shape=shape_W, dtype=o.dtype, 
-                    initializer=tf.truncated_normal_initializer(stddev=1.0)) 
+                    initializer=tf.truncated_normal_initializer(stddev=0.1)) 
             params['b'] = tf.get_variable('b', shape=shape_b, dtype=o.dtype, 
-                    initializer=tf.constant_initializer(value=0.0))
-            '''
-            params['Wf'] = tf.get_variable('Wf', shape=shape_W, dtype=o.dtype, 
-                    initializer=tf.truncated_normal_initializer()) 
-            params['Wi'] = tf.get_variable('Wi', shape=shape_W, dtype=o.dtype, 
-                    initializer=tf.truncated_normal_initializer())
-            params['Wc'] = tf.get_variable('Wc', shape=shape_W, dtype=o.dtype, 
-                    initializer=tf.truncated_normal_initializer())
-            params['Wo'] = tf.get_variable('Wo', shape=shape_W, dtype=o.dtype, 
-                    initializer=tf.truncated_normal_initializer())
-            params['bf'] = tf.get_variable('bf', shape=shape_b, dtype=o.dtype, 
-                    initializer=tf.constant_initializer(0.0))
-            params['bi'] = tf.get_variable('bi', shape=shape_b, dtype=o.dtype, 
-                    initializer=tf.constant_initializer(0.0))
-            params['bc'] = tf.get_variable('bc', shape=shape_b, dtype=o.dtype, 
-                    initializer=tf.constant_initializer(0.0))
-            params['bo'] = tf.get_variable('bo', shape=shape_b, dtype=o.dtype, 
-                    initializer=tf.constant_initializer(0.0))
-            '''
+                    initializer=tf.constant_initializer())
         return params
 
     #def _activate_rnncell(x_curr, h_prev, y_prev, C_prev, params, o):
@@ -123,30 +105,11 @@ def _rnn_pass(inputs, label_init, o, is_training=False):
             W = params['W']
             b = params['b']
             # forget, input, memory cell, output, hidden 
-            if o.tfversion == '0.12': # TODO: remove once upgrade to 0.12
-                f_curr, i_curr, C_curr_tilda, o_curr = tf.split(1, 4, 
-                        tf.matmul(tf.concat_v2(1,(h_prev,x_curr)), W) +  b)
-                # TODO: added forget bias...
-                C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
-                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda)
-                h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
-                ''' 
-                f_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wf) + bf)
-                i_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wi) + bi )
-                C_curr_tilda = tf.tanh(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wc) + bc)
-                C_curr = f_curr * C_prev + i_curr * C_curr_tilda
-                o_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wo) + bo )
-                h_curr = o_curr * tf.tanh(C_curr)
-                '''
-            elif o.tfversion == '0.11':
-                f_curr, i_curr, C_curr_tilda, o_curr = tf.split(1, 4, 
-                        tf.matmul(tf.concat(1,(h_prev,x_curr)), W) +  b)
-                # TODO: added forget bias...
-                C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
-                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda)
-                h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
-            else:
-                raise ValueError('no avaialble tensorflow version')
+            f_curr, i_curr, C_curr_tilda, o_curr = tf.split(
+                    tf.matmul(tf.concat_v2((h_prev,x_curr),1), W) +  b, 4, 1)
+            C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
+                    tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) # TODO: added forget bias..
+            h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
         elif o.cell_type == 'LSTM_variant': # coupled input and forget gates
             Wf = params['Wf']
             Wi = params['Wi']
@@ -157,20 +120,11 @@ def _rnn_pass(inputs, label_init, o, is_training=False):
             bc = params['bc']
             bo = params['bo']
             # forget, input, memory cell, output, hidden 
-            if o.tfversion == '0.12': # TODO: remove once upgrade to 0.12
-                f_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wf) + bf)
-                C_curr_tilda = tf.tanh(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wc) + bc)
-                C_curr = f_curr * C_prev + (1-f_curr) * C_curr_tilda
-                o_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wo) + bo )
-                h_curr = o_curr * tf.tanh(C_curr)
-            elif o.tfversion == '0.11':
-                f_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wf) + bf)
-                C_curr_tilda = tf.tanh(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wc) + bc)
-                C_curr = f_curr * C_prev + (1-f_curr) * C_curr_tilda
-                o_curr = tf.sigmoid(tf.matmul(tf.concat(1,(h_prev,x_curr)), Wo) + bo )
-                h_curr = o_curr * tf.tanh(C_curr)
-            else:
-                raise ValueError('no avaialble tensorflow version')
+            f_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wf) + bf)
+            C_curr_tilda = tf.tanh(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wc) + bc)
+            C_curr = f_curr * C_prev + (1-f_curr) * C_curr_tilda
+            o_curr = tf.sigmoid(tf.matmul(tf.concat_v2((h_prev,x_curr),1), Wo) + bo )
+            h_curr = o_curr * tf.tanh(C_curr)
         else:
             raise ValueError('Not implemented yet!')
         return h_curr, C_curr
@@ -192,10 +146,7 @@ def _rnn_pass(inputs, label_init, o, is_training=False):
         hs.append(h_prev)
 
     # list to tensor
-    if o.tfversion == '0.12': 
-        hs = tf.stack(hs, axis=1)
-    elif o.tfversion == '0.11':
-        hs = tf.pack(hs, axis=1)
+    hs = tf.stack(hs, axis=1)
     return hs 
 
 def _cnn_filter(inputs, o):
@@ -218,10 +169,7 @@ def _cnn_filter(inputs, o):
         #conv2 = _conv2d(relu1, w_conv2, b_conv2, strides_=[1,1,1,1]) #TODO: low st
         relu2 = _activate(conv2, activation_='relu')
         activations.append(relu2)
-    if o.tfversion == '0.12':
-        outputs = tf.stack(activations, axis=1)
-    elif o.tfversion == '0.11':
-        outputs = tf.pack(activations, axis=1)
+    outputs = tf.stack(activations, axis=1)
     return outputs
 
     # CNN no shared
@@ -233,20 +181,13 @@ def _cnn_filter(inputs, o):
         x = tf.expand_dims(inputs[:,t], 3) # TODO: double check this
         conv = _conv2d(x, w, b, strides_=[1,3,3,1])
         activations.append(_activate(conv, activation_='relu'))
-    if o.tfversion == '0.12':
-        outputs = tf.stack(activations, axis=1)
-    elif o.tfversion == '0.11':
-        outputs = tf.pack(activations, axis=1) 
+    outputs = tf.stack(activations, axis=1)
     return outputs
     '''
 
 def _weight_variable(shape, o, wd=0.0):
     initial = tf.truncated_normal(shape, stddev=0.1)
-    #if wd is not none:
-    if o.tfversion == '0.12':
-        weight_decay = tf.nn.l2_loss(initial) * wd
-    elif o.tfversion == '0.11':
-        weight_decay = tf.nn.l2_loss(initial) * wd
+    weight_decay = tf.nn.l2_loss(initial) * wd
     tf.add_to_collection('losses', weight_decay)
     return tf.Variable(initial)
 
@@ -270,48 +211,27 @@ def _activate(input_, activation_='relu'):
         raise ValueError('no available activation type!')
 
 def _get_rnncell(o, is_training=False):
-    # TODO: currently tensorflow changes rnn cells back to contrib. This should
-    # be treated better instead of changing based on version..
-
-    # basic cell
     if o.cell_type == 'LSTM':
         '''
         cell = tf.nn.rnn_cell.LSTMCell(
                 num_units=o.nunits, cell_clip=o.max_grad_norm) \
                 if o.grad_clip else tf.nn.rnn_cell.LSTMCell(num_units=o.nunits) 
         '''
-        if o.tfversion == '0.12':
-            cell = tf.contrib.rnn.LSTMCell(num_units=o.nunits)
-        elif o.tfversion == '0.11':
-            cell = tf.nn.rnn_cell.LSTMCell(num_units=o.nunits)
+        cell = tf.contrib.rnn.LSTMCell(num_units=o.nunits)
     elif o.cell_type == 'GRU':
-        if o.tfversion == '0.12':
-            cell = tf.contrib.rnn.GRUCell(num_units=o.nunits)
-        elif o.tfversion == '0.11':
-            cell = tf.nn.rnn_cell.GRUCell(num_units=o.nunits)
+        cell = tf.contrib.rnn.GRUCell(num_units=o.nunits)
     elif o.cell_type == 'basic':
-        if o.tfversion == '0.12':
-            cell = tf.contrib.rnn.BasicRNNCell(num_units=o.nunits)
-        elif o.tfversion == '0.11':
-            cell = tf.nn.rnn_cell.BasicRNNCell(num_units=o.nunits)
+        cell = tf.contrib.rnn.BasicRNNCell(num_units=o.nunits)
     else:
         raise ValueError('cell not implemented yet or simply wrong!')
 
     # rnn drop out (only during training)
     if is_training and o.dropout_rnn:
-        if o.tfversion == '0.12':
-            cell = tf.contrib.rnn.DropoutWrapper(
-                    cell, output_keep_prob=o.keep_ratio)
-        elif o.tfversion == '0.11':
-            cell = tf.nn.rnn_cell.DropoutWrapper(
-                    cell, output_keep_prob=o.keep_ratio)
+        cell = tf.contrib.rnn.DropoutWrapper(cell,output_keep_prob=o.keep_ratio)
 
     # multi-layers
     if o.nlayers > 1:
-        if o.tfversion == '0.12':
-            cell = tf.contrib.rnn.MultiRNNCell(cells=[cell]*o.nlayers)
-        elif o.tfversion == '0.11':
-            cell = tf.nn.rnn_cell.MultiRNNCell(cells=[cell]*o.nlayers)
+        cell = tf.contrib.rnn.MultiRNNCell(cells=[cell]*o.nlayers)
 
     return cell
 

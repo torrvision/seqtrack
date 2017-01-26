@@ -32,10 +32,7 @@ def train(m, loader, o):
     '''
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
-        if o.tfversion == '0.12':
-            sess.run(tf.global_variables_initializer()) 
-        elif o.tfversion == '0.11':
-            sess.run(tf.initialize_all_variables()) 
+        sess.run(tf.global_variables_initializer()) 
         if o.resume: 
             saver.restore(sess, resume_model)
         

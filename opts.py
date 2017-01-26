@@ -116,6 +116,7 @@ class Opts(object):
         self.tfconfig = tf.ConfigProto()
         # TODO: not sure if this should be always true.
         self.tfconfig.allow_soft_placement = True
+        #self.tfconfig.log_device_placement = True
         if self.gpu_manctrl:
             self.tfconfig.gpu_options.allow_growth = True
             self.tfconfig.gpu_options.per_process_gpu_memory_fraction \
