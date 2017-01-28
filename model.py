@@ -50,8 +50,6 @@ class Model_rnn_basic(object):
             cell_outputs = _rnn_pass( # TODO: work on passing gt init
                     inputs_cell, labels[:,0], o, is_training=self._is_training)
 
-        pdb.set_trace() # check cell_ouputs dimension.
-
         cell_outputs = tf.reshape(cell_outputs, [o.batchsz*o.ntimesteps,o.nunits])
         w_out = tf.get_variable(
                 'w_out', shape=[o.nunits,outdim], dtype=o.dtype)
@@ -107,8 +105,10 @@ def _rnn_pass(inputs, label_init, o, is_training=False):
             # forget, input, memory cell, output, hidden 
             f_curr, i_curr, C_curr_tilda, o_curr = tf.split(
                     tf.matmul(tf.concat_v2((h_prev,x_curr),1), W) +  b, 4, 1)
-            C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
+            C_curr = tf.sigmoid(f_curr) * C_prev + \
                     tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) # TODO: added forget bias..
+            #C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
+                    #tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) # TODO: added forget bias..
             h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
         elif o.cell_type == 'LSTM_variant': # coupled input and forget gates
             Wf = params['Wf']
@@ -136,6 +136,8 @@ def _rnn_pass(inputs, label_init, o, is_training=False):
     # TODO: normal init state?
     h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
     C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
+    #h_prev = tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype)
+    #C_prev = tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype)
     #y_prev = label_init # TODO: use output!
 
     # unroll
@@ -217,7 +219,9 @@ def _get_rnncell(o, is_training=False):
                 num_units=o.nunits, cell_clip=o.max_grad_norm) \
                 if o.grad_clip else tf.nn.rnn_cell.LSTMCell(num_units=o.nunits) 
         '''
-        cell = tf.contrib.rnn.LSTMCell(num_units=o.nunits)
+        #cell = tf.contrib.rnn.LSTMCell(num_units=o.nunits)
+        # TODO: debugging
+        cell = tf.contrib.rnn.LSTMCell(num_units=o.nunits, forget_bias=0.0)
     elif o.cell_type == 'GRU':
         cell = tf.contrib.rnn.GRUCell(num_units=o.nunits)
     elif o.cell_type == 'basic':
