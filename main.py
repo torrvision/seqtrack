@@ -101,7 +101,7 @@ if __name__ == "__main__":
 
     loader = data.load_data(o)
 
-    m = model.load_model(o, loader)
+    m = model.load_model(o)
 
     if o.mode == 'train':
         train(m, loader, o)

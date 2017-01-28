@@ -23,18 +23,9 @@ class Opts(object):
         # data set specific parameters 
         # TODO: only params that need to change; otherwise put it in data class
         self.dataset            = '' # (bouncing_mnist, etc.)
-        self.moving_mnist       = {
-                                    'frmsz': 100,
-                                    'featdim': 100*100,
-                                    'ninchannel': 1,
-                                    'outdim': 4 
-                                    }
-        self.bouncing_mnist     = {
-                                    'frmsz': 100,
-                                    'featdim': 10000,
-                                    'ninchannel': 1, 
-                                    'outdim': 4
-                                    }
+        self.frmsz              = None
+        self.ninchannel         = None
+        self.outdim             = None
 
         #----------------------------------------------------------------------
         # model parameters - rnn
@@ -43,7 +34,7 @@ class Opts(object):
         self.cell_type          = 'LSTM' 
         self.nunits             = 300 
         self.ntimesteps         = 30
-        self.nlayers            = 1
+        self.rnn_nlayers        = 1
         self.dropout_rnn        = False
         self.keep_ratio         = 0.5
 
@@ -51,7 +42,11 @@ class Opts(object):
         # model parameters - cnn (or feature extractor)
         self.cnn_pretrain       = False 
         self.cnn_model          = 'vgg' # vgg, resnet, imagenet, etc.
-        self.nchannel           = [16, 16]
+        self.cnn_nchannels      = [16, 16]
+        self.cnn_nlayers        = 2
+        self.cnn_filtsz         = [3, 3]
+        self.cnn_strides        = [3, 3]
+        # TODO: add dropout and batch norm option
 
         #----------------------------------------------------------------------
         # training policies
@@ -111,6 +106,15 @@ class Opts(object):
         self._set_gpu_config()
         #self._print_settings()
         #self._save_settings()
+        self._set_dataset_params()
+
+    def _set_dataset_params(self):
+        if self.dataset == 'moving_mnist' or self.dataset == 'bouncing_mnist':
+            self.frmsz = 100 # image size (assuming square)
+            self.ninchannel = 1 # number of image channels
+            self.outdim = 4 # rnn final output
+        else:
+            raise ValueError('not implemented yet, coming soon..')
 
     def _set_gpu_config(self):
         self.tfconfig = tf.ConfigProto()
@@ -135,6 +139,9 @@ class Opts(object):
                     and not self.restore and self.restore_model is None))
         assert((not self.resume and self.resume_data is None) or
                 (self.resume and self.resume_data is not None))
+        assert(self.cnn_nlayers == len(self.cnn_nchannels))
+        assert(self.cnn_nlayers == len(self.cnn_filtsz))
+        assert(self.cnn_nlayers == len(self.cnn_strides))
 
     def _create_save_directories(self):
         if not self.nosave:

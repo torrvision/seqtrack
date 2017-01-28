@@ -18,10 +18,9 @@ class Data_moving_mnist(object):
     '''
     def __init__(self, o):
         self.datafile = o.path_data+'/'+o.dataset+'/mnist.pkl.gz' 
-        self.frmsz = o.moving_mnist['frmsz']
-        self.featdim = o.moving_mnist['featdim'] # TODO: change featdim (CNN)
-        self.ninchannel = o.moving_mnist['ninchannel'] 
-        self.outdim = o.moving_mnist['outdim']
+        self.frmsz = o.frmsz
+        self.ninchannel = o.ninchannel
+        self.outdim = o.outdim
 
         self._data = None  
         self._data_tr, self._data_va, self.data_te = None, None, None
@@ -154,10 +153,9 @@ class Data_bouncing_mnist(object):
         # following paper's default parameter settings
         # TODO: remember some variables might need to set optional..
 
-        self.frmsz = o.bouncing_mnist['frmsz']
-        self.featdim = o.bouncing_mnist['featdim'] # TODO: change featdim (CNN)
-        self.ninchannel = o.bouncing_mnist['ninchannel'] 
-        self.outdim = o.bouncing_mnist['outdim']
+        self.frmsz = o.frmsz
+        self.ninchannel = o.ninchannel
+        self.outdim = o.outdim
 
         self.num_digits_ = 1 
         self.image_size_ = 100 
