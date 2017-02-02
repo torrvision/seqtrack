@@ -28,15 +28,20 @@ class Opts(object):
         self.outdim             = None
 
         #----------------------------------------------------------------------
-        # model parameters - rnn
+        # model - general
+        self.model              = 'rnn_attention_s' # {rnn_basic, rnn_attention_s, rnn_attention_t}
         self.usetfapi           = False
-        self.model              = 'rnn_basic'
+
+        #----------------------------------------------------------------------
+        # model parameters - rnn
         self.cell_type          = 'LSTM' 
         self.nunits             = 300 
         self.ntimesteps         = 30
         self.rnn_nlayers        = 1
         self.dropout_rnn        = False
         self.keep_ratio         = 0.5
+        self.lstmforgetbias     = False
+        self.yprev_mode         = '' # nouse, concat_abs, concat_spatial (later), weight
 
         #----------------------------------------------------------------------
         # model parameters - cnn (or feature extractor)
@@ -76,6 +81,12 @@ class Opts(object):
         self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
         self.resume_data        = None
+
+        #----------------------------------------------------------------------
+        # custom libraries
+        self.path_home          = os.path.expanduser('~')
+        self.path_customlib     = os.path.join(self.path_home, 
+                                'tensorflow/bazel-bin/tensorflow/core/user_ops') 
 
         #----------------------------------------------------------------------
         # device memory allocation 

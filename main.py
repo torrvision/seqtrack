@@ -43,8 +43,12 @@ def parse_arguments():
             type=str)
 
     parser.add_argument(
+            '--model', help='model!',
+            type=str, default='rnn_attention_s')
+    parser.add_argument(
             '--usetfapi', help='set to use tensorflow rnn api', 
             action='store_true')
+
     parser.add_argument(
             '--cell_type', help='rnn cell type',
             type=str, default='LSTM')
@@ -57,6 +61,10 @@ def parse_arguments():
     parser.add_argument(
             '--dropout_rnn', help='set dropout for rnn', 
             action='store_true')
+    parser.add_argument(
+            '--yprev_mode', help='way of using y_prev',
+            type=str, default='')
+
     parser.add_argument(
             '--nepoch', help='number of epochs', 
             type=int, default=10)
