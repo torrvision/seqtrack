@@ -114,8 +114,7 @@ class RNN_basic(object):
         if o.usetfapi: # TODO: will (and should) be deprecated. 
             outputs = self._rnn_pass_API(inputs_cnn, inputs_length, o)
         else: # manual rnn module
-            #outputs = self._rnn_pass(inputs_cnn, labels[:,0], o) # NOTE: no y_prev passing; will be deprecated
-            outputs = self._rnn_pass_wip(labels, o) 
+            outputs = self._rnn_pass(labels, o) 
  
         # TODO: once variable length, labels should respect that setting too!
         loss_l2 = tf.reduce_mean(tf.square(outputs-labels))
@@ -130,13 +129,15 @@ class RNN_basic(object):
                 'loss': loss_total}
         return net
 
-    def _rnn_pass_wip(self, labels, o):
+    def _rnn_pass(self, labels, o):
 
         def _get_lstm_params(o):
             if o.yprev_mode == 'nouse':
                 shape_W = [o.nunits+self.featdim, o.nunits*4] 
             elif o.yprev_mode == 'concat_abs':
                 shape_W = [o.nunits+self.featdim+o.outdim, o.nunits*4] 
+            elif o.yprev_mode == 'weight':
+                shape_W = [o.nunits+self.featdim, o.nunits*4] 
             else:
                 raise ValueError('not implemented yet')
             shape_b = [o.nunits*4]
@@ -161,15 +162,57 @@ class RNN_basic(object):
             W_lstm = self.params['W_lstm']
             b_lstm = self.params['b_lstm']
             # forget, input, memory cell, output, hidden 
-            x_curr = tf.reshape(x_curr, [o.batchsz, -1])
             if o.yprev_mode == 'nouse':
+                x_curr = tf.reshape(x_curr, [o.batchsz, -1])
                 f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
                     tf.concat_v2((h_prev, x_curr), 1), W_lstm) + b_lstm, 4, 1)
             elif o.yprev_mode == 'concat_abs':
+                x_curr = tf.reshape(x_curr, [o.batchsz, -1])
                 f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
                     tf.concat_v2((h_prev, x_curr, y_prev), 1), W_lstm) + b_lstm, 4, 1)
-            elif o.yprev_mode == 'weight': # interpret as filtering
-                raise ValueError('WIP')
+            elif o.yprev_mode == 'weight':
+                # beta and gamma
+                # TODO: optimum beta?
+                s_all = tf.constant(o.frmsz ** 2, dtype=o.dtype) 
+                s_roi = (y_prev[:,2]-y_prev[:,0]) * (y_prev[:,3]-y_prev[:,1])
+                tf.assert_positive(s_roi)
+                tf.assert_greater_equal(s_all, s_roi)
+                beta = 0.95 # TODO: make it optionable
+                gamma = ((1-beta)/beta) * s_all / s_roi
+                y_prev_scale = self.cnnout['w'] / o.frmsz
+
+                x_curr_weighted = []
+                for b in range(o.batchsz):
+                    x_start = y_prev[b,0] * y_prev_scale
+                    x_end   = y_prev[b,2] * y_prev_scale
+                    y_start = y_prev[b,1] * y_prev_scale
+                    y_end   = y_prev[b,3] * y_prev_scale
+                    grid_x, grid_y = tf.meshgrid(
+                        tf.range(x_start, x_end),
+                        tf.range(y_start, y_end))
+                    grid_x_flat = tf.reshape(grid_x, [-1])
+                    grid_y_flat = tf.reshape(grid_y, [-1])
+                    # NOTE: Can't check if indices is empty or not.. problem?
+                    #tf.assert_positive(grid_x_flat.get_shape().num_elements())
+                    #tf.assert_positive(grid_y_flat.get_shape().num_elements())
+                    grids = tf.stack([grid_y_flat, grid_x_flat]) # NOTE: x,y order
+                    grids = tf.reshape(tf.transpose(grids), [-1, 2])
+                    grids = tf.cast(grids, tf.int32)
+                    initial = tf.constant(
+                        beta, shape=[self.cnnout['h'], self.cnnout['w']])
+                    mask_beta = tf.Variable(initial)
+                    mask_subset = tf.gather_nd(mask_beta, grids)
+                    mask_subset_reweight = mask_subset*gamma[b]
+                    mask_gamma = tf.scatter_nd_update(
+                        mask_beta, grids, mask_subset_reweight)
+                    x_curr_weighted.append(
+                        x_curr[b] * tf.expand_dims(mask_gamma, 2))
+                x_curr_weighted = tf.stack(x_curr_weighted, axis=0)
+
+                x_curr_weighted = tf.reshape(x_curr_weighted, [o.batchsz, -1])
+                f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
+                    tf.concat_v2((h_prev, x_curr_weighted), 1), W_lstm)+ b_lstm, 
+                    4, 1)
             else:
                 raise ValueError('not implemented yet')
             if o.lstmforgetbias:
@@ -205,72 +248,6 @@ class RNN_basic(object):
             
         # list to tensor
         outputs = tf.stack(outputs, axis=1)
-        return outputs 
-
-    def _rnn_pass(self, inputs, label_init, o): # TODO: will be deprecated.
-        #raise ValueError('This will be deprecated!')
-        ''' This is a (manually designed) rnn unrolling function.
-        Note that this is not supposed to reproduce the same (or similar) 
-        results that one would produce from using tensorflow API.
-        One clear distinction is that this module uses the ground-truth label 
-        for the first frame; that is specific for tracking task. 
-        Also, besides the previous hidden state and current input, rnn cell 
-        receives the previous output. How we are using this is undecided or 
-        unexplored yet.
-        '''
-        def _get_lstm_params(nunits, featdim):
-            shape_W = [nunits+featdim, nunits*4] 
-            shape_b = [nunits*4]
-            params = {}
-            with tf.variable_scope('LSTMcell'):
-                params['W'] = tf.get_variable('W', shape=shape_W, dtype=o.dtype, 
-                        initializer=tf.truncated_normal_initializer(stddev=0.001)) 
-                params['b'] = tf.get_variable('b', shape=shape_b, dtype=o.dtype, 
-                        initializer=tf.constant_initializer())
-            return params
-
-        def _activate_rnncell(x_curr, h_prev, C_prev, params, o):
-            if o.cell_type == 'LSTM': # standard LSTM (no peephole)
-                W = params['W']
-                b = params['b']
-                # forget, input, memory cell, output, hidden 
-                f_curr, i_curr, C_curr_tilda, o_curr = tf.split(
-                        tf.matmul(tf.concat_v2((h_prev,x_curr),1), W) + b, 4, 1)
-                C_curr = tf.sigmoid(f_curr) * C_prev + \
-                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
-                h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
-            elif o.cell_type == 'LSTM_variant': # coupled input and forget gates
-                raise ValueError('Not implemented yet!')
-            else:
-                raise ValueError('Not implemented yet!')
-            return h_curr, C_curr
-
-        # reshape 
-        inputs = tf.reshape(inputs,[o.batchsz,o.ntimesteps,-1])
-
-        # lstm weight and bias parameters
-        params = _get_lstm_params(o.nunits, inputs.get_shape().as_list()[-1])
-        
-        # initial states
-        # TODO: normal init state? -> seems zero state is okay. no difference.
-        h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
-        C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
-
-        # unroll
-        hs = []
-        for t in range(o.ntimesteps): # TODO: change if variable length input/out
-            h_prev, C_prev = _activate_rnncell(inputs[:,t], h_prev, C_prev, params, o) 
-            hs.append(h_prev)
-
-        # list to tensor
-        cell_outputs = tf.stack(hs, axis=1)
-        cell_outputs = tf.reshape(cell_outputs, [-1, o.nunits])
-        # TODO: fixed the dimension of b_out
-        w_out = tf.get_variable(
-                'w_out', shape=[o.nunits, o.outdim], dtype=o.dtype)
-        b_out = tf.get_variable('b_out', shape=[o.outdim], dtype=o.dtype)
-        outputs = tf.matmul(cell_outputs, w_out) + b_out
-        outputs = tf.reshape(outputs, [-1, o.ntimesteps, o.outdim]) # orig. shape
         return outputs 
 
     def _rnn_pass_API(self, inputs_cnn, inputs_length, o):
@@ -467,16 +444,15 @@ class RNN_attention_s(object):
                     grids = tf.stack([grid_y_flat, grid_x_flat]) # NOTE: x,y order
                     grids = tf.reshape(tf.transpose(grids), [-1, 2])
                     grids = tf.cast(grids, tf.int32)
-                    initial = tf.constant(beta, 
-                            shape=[self.cnnout['h'], self.cnnout['w']])
+                    initial = tf.constant(
+                        beta, shape=[self.cnnout['h'], self.cnnout['w']])
                     mask_beta = tf.Variable(initial)
                     mask_subset = tf.gather_nd(mask_beta, grids)
                     mask_subset_reweight = mask_subset*gamma[b]
                     mask_gamma = tf.scatter_nd_update(
-                            mask_beta, grids, mask_subset_reweight)
+                        mask_beta, grids, mask_subset_reweight)
                     x_curr_weighted.append(
-                            x_curr[b] * tf.expand_dims(mask_gamma, 2))
-
+                        x_curr[b] * tf.expand_dims(mask_gamma, 2))
                 x_curr_weighted = tf.stack(x_curr_weighted, axis=0)
                 input_to_mlp = tf.concat_v2(
                     (tf.reshape(x_curr_weighted, [o.batchsz, -1]), h_prev), 1)
@@ -603,7 +579,7 @@ if __name__ == '__main__':
     o.ninchannel = 1
     o.outdim = 4
     o.yprev_mode = 'weight' # nouse, concat_abs, weight
-    o.model = 'rnn_attention_s' # rnn_basic, rnn_attention_s
+    o.model = 'rnn_basic' # rnn_basic, rnn_attention_s
     #o.usetfapi = True
     m = load_model(o)
     pdb.set_trace()
