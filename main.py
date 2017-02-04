@@ -44,7 +44,7 @@ def parse_arguments():
 
     parser.add_argument(
             '--model', help='model!',
-            type=str, default='rnn_attention_s')
+            type=str, default='rnn_attention_sa')
     parser.add_argument(
             '--usetfapi', help='set to use tensorflow rnn api', 
             action='store_true')

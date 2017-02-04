@@ -29,8 +29,12 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # model - general
-        self.model              = 'rnn_attention_s' # {rnn_basic, rnn_attention_s, rnn_attention_t}
+        self.model              = 'rnn_attention_st' # {rnn_basic, rnn_attention_s, rnn_attention_t}
         self.usetfapi           = False
+
+        #----------------------------------------------------------------------
+        # model - attention
+        self.h_concat_ratio     = 1
 
         #----------------------------------------------------------------------
         # model parameters - rnn

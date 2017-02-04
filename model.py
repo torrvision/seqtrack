@@ -410,14 +410,11 @@ class RNN_attention_s(object):
                 input_to_mlp = tf.concat_v2(
                     (tf.reshape(x_curr, [o.batchsz, -1]), h_prev, y_prev), 1)
             elif o.yprev_mode == 'weight':
-                '''This mode uses y_prev to put higher weights on the region in
-                x_curr (before x_curr is combined with the hidden state). But, 
-                the sum of x_curr is preserved after reweighting.
-                (eq) beta*S_all + beta*gamma*S_roi = S_all 
-                <-> gamma = ((1-beta)/beta) * (S_all/S_roi)
-                beta and gamma: decreasing and increasing factor respectively.
-                '''
-                # beta and gamma
+                # Put higher weights on the ROI of x_curr based on y_prev.
+                # Note that the sum of x_curr is preserved after reweighting.
+                # (eq) beta*S_all + beta*gamma*S_roi = S_all 
+                # <-> gamma = ((1-beta)/beta) * (S_all/S_roi)
+                # beta and gamma: decreasing and increasing factor respectively.
                 # TODO: optimum beta?
                 s_all = tf.constant(o.frmsz ** 2, dtype=o.dtype) 
                 s_roi = (y_prev[:,2]-y_prev[:,0]) * (y_prev[:,3]-y_prev[:,1])
@@ -521,21 +518,6 @@ class RNN_attention_s(object):
         # rnn unroll
         outputs = []
         for t in range(o.ntimesteps): # TODO: change if variable length input/out
-            #------------------------------------------------------------------
-            # NOTE: A thought on passing y_prev to the next rnn cell.
-            # I feel that this is unnecessary and can be wrong, especially for 
-            # the spatial attention model. Currently, it is not being used for 
-            # the attention model. 
-            # However, this also means that I am not yet using the GT patch at
-            # the first frame. Need to think about how you can use the GT patch.
-            # Also, it means that it's not actually tracking a target, rather
-            # it is performing some "unknown" object detection. 
-            # 
-            # *One thing to try out is to use both y_prev and h_prev to compute
-            # attention model. 
-            # You still need to give a careful thought on whether conv(Hidden)
-            # is different from just Hidden, and if it actually has a meaning.
-            #------------------------------------------------------------------
             h_prev, C_prev = _activate_rnncell(
                 self.cnnout['feat'][:,t], h_prev, C_prev, y_prev, o) 
             # TODO: Need to pass GT labels during training like teacher forcing
@@ -551,6 +533,248 @@ class RNN_attention_s(object):
         return outputs 
 
 
+#------------------------------------------------------------------------------
+# NOTE: rnn_attention_st
+# - concatenation was used instead of dot product which measures similarity.
+# - y_prev is used only implicitly through hidden states (not used explicitly). 
+#------------------------------------------------------------------------------
+class RNN_attention_st(object):
+    def __init__(self, o, is_training=False):
+        self._is_training = is_training
+        self.net = None
+        self.cnnout = {}
+        self.params = {}
+        self.net = self._create_network(o)
+
+    def _cnnout_update(self, cnn, inputs):
+        self.cnnout['feat'] = cnn.create_network(inputs)
+        self.cnnout['shape'] = self.cnnout['feat'].get_shape().as_list()
+        self.cnnout['h'] = self.cnnout['shape'][2] #TODO: double check w and h
+        self.cnnout['w'] = self.cnnout['shape'][3]
+        self.cnnout['c'] = self.cnnout['shape'][4]
+        self.featdim = self.cnnout['h']*self.cnnout['w']*self.cnnout['c']
+        assert(len(self.cnnout['shape'])==5)
+        assert(self.cnnout['h']==self.cnnout['w']) # NOTE: be careful if change
+
+    def _create_network(self, o):
+        if o.ninchannel == 1:
+            inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz]
+        else: 
+            inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
+        inputs = tf.placeholder(o.dtype, shape=inputs_shape)
+        inputs_length = tf.placeholder(o.dtype, shape=[o.batchsz])
+        labels = tf.placeholder(
+                o.dtype, shape=[o.batchsz, o.ntimesteps, o.outdim])
+
+        # CNN 
+        if o.cnn_pretrain: # use pre-trained model
+            raise ValueError('not implemented yet') # TODO: try vgg
+        else: # train from scratch
+            cnn = CNN(o)
+            self._cnnout_update(cnn, inputs)
+
+        # RNN
+        outputs = self._rnn_pass(labels, o)
+ 
+        # TODO: once variable length, labels should respect that setting too!
+        loss_l2 = tf.reduce_mean(tf.square(outputs-labels))
+        tf.add_to_collection('losses', loss_l2)
+        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+
+        net = {
+                'inputs': inputs,
+                'inputs_length': inputs_length,
+                'labels': labels,
+                'outputs': outputs,
+                'loss': loss_total}
+        return net
+
+    def _rnn_pass(self, labels, o):
+
+        def _get_lstm_params(o):
+            shape_W_s = [o.nunits+self.featdim, o.nunits*4] 
+            shape_b_s = [o.nunits*4]
+            with tf.variable_scope('LSTMcell_s'):
+                self.params['W_lstm_s'] = tf.get_variable(
+                    'W_lstm_s', shape=shape_W_s, dtype=o.dtype, 
+                    initializer=tf.truncated_normal_initializer(stddev=0.001)) 
+                self.params['b_lstm_s'] = tf.get_variable(
+                    'b_lstm_s', shape=shape_b_s, dtype=o.dtype, 
+                    initializer=tf.constant_initializer())
+            shape_W_t = [o.nunits+(o.nunits*o.h_concat_ratio*o.ntimesteps), 
+                o.nunits*4] 
+            shape_b_t = [o.nunits*4]
+            with tf.variable_scope('LSTMcell_t'):
+                self.params['W_lstm_t'] = tf.get_variable(
+                    'W_lstm_t', shape=shape_W_t, dtype=o.dtype, 
+                    initializer=tf.truncated_normal_initializer(stddev=0.001)) 
+                self.params['b_lstm_t'] = tf.get_variable(
+                    'b_lstm_t', shape=shape_b_t, dtype=o.dtype, 
+                    initializer=tf.constant_initializer())
+
+        def _get_attention_params(o):
+            # NOTE: For rnn_attention_st, we don't use y_prev explicitly, ie.,
+            # it's always "nouse" because it's impossible to use y_prev.  
+            # However, it's actually using it via h_prev so shouldn't be bad.
+
+            # 1. attention_s
+            annotationdim_s = self.cnnout['h']*self.cnnout['w']
+            shape_W_mlp1_s = [o.nunits+self.featdim, o.nunits] # NOTE: 1st arg can be diff size
+            shape_b_mlp1_s = [o.nunits] # NOTE: 1st arg can be different mlp size
+            shape_W_mlp2_s = [o.nunits, annotationdim_s] # NOTE: 1st arg can be different mlp size 
+            shape_b_mlp2_s = [annotationdim_s]
+            with tf.variable_scope('mlp_s'):
+                self.params['W_mlp1_s'] = tf.get_variable(
+                    'W_mlp1_s', shape=shape_W_mlp1_s, dtype=o.dtype,
+                    initializer=tf.truncated_normal_initializer(stddev=0.01))
+                self.params['b_mlp1_s'] = tf.get_variable(
+                    'b_mlp1_s', shape=shape_b_mlp1_s, dtype=o.dtype,
+                    initializer=tf.constant_initializer())
+                self.params['W_mlp2_s'] = tf.get_variable(
+                    'W_mlp2_s', shape=shape_W_mlp2_s, dtype=o.dtype,
+                    initializer=tf.truncated_normal_initializer(stddev=0.01))
+                self.params['b_mlp2_s'] = tf.get_variable(
+                    'b_mlp2_s', shape=shape_b_mlp2_s, dtype=o.dtype,
+                    initializer=tf.constant_initializer())
+
+            # 2. attention_t (Note that y_prev is only used in the bottom RNN)
+            attentiondim_t = o.ntimesteps
+            shape_W_mlp1_t = [o.nunits+
+                (o.nunits*o.h_concat_ratio*attentiondim_t), o.nunits] 
+            shape_b_mlp1_t = [o.nunits]
+            shape_W_mlp2_t = [o.nunits, attentiondim_t] 
+            shape_b_mlp2_t = [attentiondim_t]
+            with tf.variable_scope('mlp_t'):
+                self.params['W_mlp1_t'] = tf.get_variable(
+                    'W_mlp1_t', shape=shape_W_mlp1_t, dtype=o.dtype,
+                    initializer=tf.truncated_normal_initializer(stddev=0.01))
+                self.params['b_mlp1_t'] = tf.get_variable(
+                    'b_mlp1_t', shape=shape_b_mlp1_t, dtype=o.dtype,
+                    initializer=tf.constant_initializer())
+                self.params['W_mlp2_t'] = tf.get_variable(
+                    'W_mlp2_t', shape=shape_W_mlp2_t, dtype=o.dtype,
+                    initializer=tf.truncated_normal_initializer(stddev=0.01))
+                self.params['b_mlp2_t'] = tf.get_variable(
+                    'b_mlp2_t', shape=shape_b_mlp2_t, dtype=o.dtype,
+                    initializer=tf.constant_initializer())
+        
+        def _get_rnnout_params(o):
+            with tf.variable_scope('rnnout'):
+                self.params['W_out'] = tf.get_variable(
+                    'W_out', shape=[o.nunits, o.outdim], dtype=o.dtype, 
+                    initializer=tf.truncated_normal_initializer()) # NOTE: stddev
+                self.params['b_out'] = tf.get_variable(
+                    'b_out', shape=[o.outdim], dtype=o.dtype, 
+                    initializer=tf.constant_initializer())
+
+        def _activate_rnncell_s(x_curr, h_prev, C_prev, o):
+            W_lstm = self.params['W_lstm_s']
+            b_lstm = self.params['b_lstm_s']
+            W_mlp1 = self.params['W_mlp1_s']
+            b_mlp1 = self.params['b_mlp1_s']
+            W_mlp2 = self.params['W_mlp2_s']
+            b_mlp2 = self.params['b_mlp2_s']
+
+            input_to_mlp = tf.concat_v2(
+                (tf.reshape(x_curr, [o.batchsz, -1]), h_prev), 1) 
+
+            mlp1 = tf.tanh(tf.matmul(input_to_mlp, W_mlp1) + b_mlp1)
+            e = tf.tanh(tf.matmul(mlp1, W_mlp2) + b_mlp2) # TODO: try diff act.
+
+            # attention weight alpha
+            e_exp = tf.exp(e)
+            alpha = e_exp/tf.expand_dims(tf.reduce_sum(e_exp,axis=1),1)
+
+            # compute (expected) attention overlayed context vector z
+            z = tf.reshape(alpha, [o.batchsz, self.cnnout['h'], self.cnnout['w'], 1]) * x_curr
+            z = tf.reshape(z, [o.batchsz, -1])
+
+            # LSTM (standard; no peep hole or coupled input/forget gate version)
+            f_curr, i_curr, C_curr_tilda, o_curr = tf.split(
+                tf.matmul(tf.concat_v2((h_prev, z), 1), W_lstm) + b_lstm, 4, 1)
+
+            if o.lstmforgetbias:
+                C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
+                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
+            else:
+                C_curr = tf.sigmoid(f_curr) * C_prev + \
+                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
+            h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
+            return h_curr, C_curr
+
+        def _activate_rnncell_t(x_curr, h_prev, C_prev, o):
+            W_lstm = self.params['W_lstm_t']
+            b_lstm = self.params['b_lstm_t']
+            W_mlp1 = self.params['W_mlp1_t']
+            b_mlp1 = self.params['b_mlp1_t']
+            W_mlp2 = self.params['W_mlp2_t']
+            b_mlp2 = self.params['b_mlp2_t']
+
+            # NOTE: from the original attention paper by Cho or Chris Olah's 
+            # blog, it says that they measure the similarity between h_{t-1} 
+            # and others using dot product. I am instead doing concatenation.
+            # TODO: Try dot product.
+            input_to_mlp = tf.concat_v2(
+                (tf.reshape(x_curr, [o.batchsz, -1]), h_prev), 1) 
+
+            mlp1 = tf.tanh(tf.matmul(input_to_mlp, W_mlp1) + b_mlp1)
+            e = tf.tanh(tf.matmul(mlp1, W_mlp2) + b_mlp2) # TODO: try diff act.
+
+            # attention weight alpha
+            e_exp = tf.exp(e)
+            alpha = e_exp/tf.expand_dims(tf.reduce_sum(e_exp,axis=1),1)
+
+            # compute (expected) attention overlayed context vector z
+            z = tf.expand_dims(alpha, 2) * x_curr
+            z = tf.reshape(z, [o.batchsz, -1])
+
+            # LSTM (standard; no peep hole or coupled input/forget gate version)
+            f_curr, i_curr, C_curr_tilda, o_curr = tf.split(
+                tf.matmul(tf.concat_v2((h_prev, z), 1), W_lstm) + b_lstm, 4, 1)
+
+            if o.lstmforgetbias:
+                C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
+                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
+            else:
+                C_curr = tf.sigmoid(f_curr) * C_prev + \
+                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
+            h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
+            return h_curr, C_curr
+
+        # get params (NOTE: variables shared across timestep)
+        _get_lstm_params(o)
+        _get_attention_params(o)
+        _get_rnnout_params(o)
+
+        # initial states 
+        #TODO: this changes whether t<n or t>=n
+        h_prev_s = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
+        C_prev_s = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
+        h_prev_t = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
+        C_prev_t = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
+
+        # rnn_s unroll
+        hs = []
+        for ts in range(o.ntimesteps): # TODO: change if variable length input/out
+            h_prev_s, C_prev_s = _activate_rnncell_s(
+                self.cnnout['feat'][:,ts], h_prev_s, C_prev_s, o)
+            # NOTE: can reduce the size of h_prev_s using h_concat_ratio
+            hs.append(h_prev_s)
+        hs = tf.stack(hs, axis=1) # this becomes x_curr for rnn_t
+
+        # rnn_t unroll
+        outputs = []
+        for tt in range(o.ntimesteps): # TODO: change if variable length input/out
+            h_prev_t, C_prev_t = _activate_rnncell_t(hs, h_prev_t, C_prev_t, o)
+            y_prev = tf.matmul(h_prev_t, self.params['W_out']) \
+                + self.params['b_out']
+            outputs.append(y_prev)
+
+        # list to tensor
+        outputs = tf.stack(outputs, axis=1)
+        return outputs 
+
+
 def load_model(o):
     is_training = True if o.mode == 'train' else False
     # TODO: check by actually logging device placement!
@@ -559,6 +783,8 @@ def load_model(o):
             model = RNN_basic(o, is_training=is_training) 
         elif o.model == 'rnn_attention_s':
             model = RNN_attention_s(o, is_training=is_training)
+        elif o.model == 'rnn_attention_st':
+            model = RNN_attention_st(o, is_training=is_training)
         elif o.model == 'rnn_bidirectional_attention':
             raise ValueError('model not implemeted yet')
         else:
@@ -579,7 +805,7 @@ if __name__ == '__main__':
     o.ninchannel = 1
     o.outdim = 4
     o.yprev_mode = 'weight' # nouse, concat_abs, weight
-    o.model = 'rnn_basic' # rnn_basic, rnn_attention_s
+    o.model = 'rnn_attention_st' # rnn_basic, rnn_attention_s, rnn_attention_st
     #o.usetfapi = True
     m = load_model(o)
     pdb.set_trace()
