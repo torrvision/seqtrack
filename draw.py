@@ -9,58 +9,40 @@ from matplotlib.patches import Rectangle
 
 import helpers
 
-def show_moving_mnist(batch):
+
+def show_dataset_batch(batch, dataset, frmsz):
     vids = batch['inputs']
     if vids.shape[0] > 25: 
         vids = vids[:25] # only draws less than 25 
     pos = batch['labels']
-    digits = batch['digits']
+    pos = pos * frmsz # TODO: y is relative scale? change for other datasets too
+    
+    if dataset == 'moving_mnist' or dataset == 'bouncing_mnist':
+        digits = batch['digits']
+        plt.gray()
 
-    plt.gray()
-    plt.show()
     for t in range(vids.shape[1]): # timesteps
+        fig = plt.figure(figsize=(12,12))
         for i in range(vids.shape[0]): # batch
             plt.subplot(5,5,i+1)
-            plt.imshow(vids[i,t])
-            #plt.imshow(vids[i,t].reshape(100, 100))
-            plt.title(digits[i])
+            if dataset == 'ilsvrc':
+                plt.imshow(np.uint8(vids[i,t]))
+            elif dataset == 'moving_mnist' or dataset == 'bouncing_mnist':
+                plt.imshow(vids[i,t])
+            if dataset == 'moving_mnist' or dataset == 'bouncing_mnist':
+                plt.title(digits[i])
             ax = plt.gca()
             ax.add_patch(
-                    Rectangle(
-                        #pos[i,t][::-1], 28, 28, 
-                        pos[i,t,0:2][::-1], pos[i,t,3]-pos[i,t,1], pos[i,t,2]-pos[i,t,0],
-                        facecolor='r', edgecolor='r', fill=False))
+                Rectangle(
+                    (pos[i,t,0], pos[i,t,1]), 
+                    pos[i,t,2]-pos[i,t,0], pos[i,t,3]-pos[i,t,1],
+                    facecolor='r', edgecolor='r', fill=False))
             plt.draw()
             plt.axis('off')
-        plt.savefig('tmp/frame{0:03d}.png'.format(t))
+        plt.savefig('tmp/{}/frame{}.png'.format(dataset, t))
         plt.close()
-    os.system('convert -loop 0 -delay 30 tmp/frame*.png tmp/vid.gif')
-
-def show_bouncing_mnist(batch):
-
-    vids = batch['inputs']
-    if vids.shape[0] > 25:
-        vids = vids[:25] # only draws less than 25 examples
-    pos = batch['labels']
-    digits = batch['digits']
-
-    plt.gray()
-    plt.show()
-    for t in range(vids.shape[1]):
-        for i in range(vids.shape[0]):
-            plt.subplot(5,5,i+1)
-            plt.imshow(vids[i,t])
-            #plt.imshow(vids[i,t].reshape(100, 100))
-            ax = plt.gca()
-            ax.add_patch(
-                    Rectangle(
-                        pos[i,t,0:2][::-1], pos[i,t,3]-pos[i,t,1], pos[i,t,2]-pos[i,t,0],
-                        facecolor='r', edgecolor='r', fill=False))
-            plt.draw()
-            plt.axis('off')
-        plt.savefig('tmp/bmnist/frame{}.png'.format(t))
-        plt.close()
-    os.system('convert -loop 0 -delay 30 tmp/bmnist/frame*.png tmp/bmnist/vid.gif')
+    os.system('convert -loop 0 -delay 30 tmp/{}/frame*.png tmp/{}/vid.gif'.\
+        format(dataset, dataset))
 
 def show_tracking_results_moving_mnist(results, o, save_=False):
     if save_:
