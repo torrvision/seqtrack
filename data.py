@@ -488,16 +488,19 @@ class Data_ilsvrc(object):
     def _update_snps(self, dstype):
         def create_snps(dstype):
             output = {}
-            if dstype is 'test':
-                xory = ['Data'] # no annotations for test data
+            if dstype is 'test': # no annotations exis for test data set
+                path_snp_data = os.path.join(self.path_data, 'Data/VID/{}'.format(dstype))
+                snps = os.listdir(path_snp_data)
+                snps_data = [path_snp_data + '/' + snp for snp in snps]
+                output['Data'] = snps_data
             else:
-                xory = ['Annotations', 'Data']
-            for i, val in enumerate(xory):
-                path_snp = os.path.join(
-                    self.path_data, '{}/VID/{}'.format(val, dstype))
-                snps = os.listdir(path_snp)
-                snps = [path_snp + '/' + snp for snp in snps]
-                output[val] = snps
+                path_snp_data = os.path.join(self.path_data, 'Data/VID/{}'.format(dstype))
+                path_snp_anno = os.path.join(self.path_data, 'Annotations/VID/{}'.format(dstype))
+                snps = os.listdir(path_snp_data)
+                snps_data = [path_snp_data + '/' + snp for snp in snps]
+                snps_anno = [path_snp_anno + '/' + snp for snp in snps]
+                output['Data'] = snps_data
+                output['Annotations'] = snps_anno
             return output
         if self.snp[dstype] is None:
             self.snp[dstype] = create_snps(dstype)
@@ -742,6 +745,6 @@ if __name__ == '__main__':
     dstype = 'train'
     loader = load_data(o)
     batch = loader.get_batch(0, o, dstype)
-    #loader.run_sanitycheck(batch, o.dataset, o.frmsz)
+    loader.run_sanitycheck(batch, o.dataset, o.frmsz)
     pdb.set_trace()
 

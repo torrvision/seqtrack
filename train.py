@@ -89,9 +89,10 @@ def train(m, loader, o):
             # - save resume 
             losses['epoch'] = np.append(losses['epoch'], np.mean(loss_curr_ep))
             draw.plot_losses(losses, o)
+            val_name = 'test' if o.dataset == 'bouncing_mnist' else 'val'
             eval_results = {
                     'train': evaluate(sess, m, loader, o, 'train', 0.01),
-                    'test': evaluate(sess, m, loader, o, 'test', 0.01)
+                    'test': evaluate(sess, m, loader, o, val_name, 0.01)
                     }
             print 'ep {0:d}/{1:d} (EPOCH) |loss:{2:.6f} |IOU (train/test): '\
             '{3:.3f}/{4:.3f} |time:{5:.2f}'.format(
