@@ -17,7 +17,7 @@ class CNN(object):
     def create_network(self, inputs):
         def _run_sanitycheck(inputs):
             input_shape = inputs.get_shape().as_list()
-            assert(len(input_shape)==4) # TODO: assuming one channel image; change later
+            #assert(len(input_shape)==4) # TODO: assuming one channel image; change later
             assert(self.batchsz == input_shape[0])
             assert(self.ntimesteps == input_shape[1])
 
@@ -63,7 +63,8 @@ class CNN(object):
         activations = []
         for t in range(self.ntimesteps): # TODO: variable length inputs!!!
             for i in range(self.nlayers):
-                x = tf.expand_dims(inputs[:,t],3) if i==0 else relu
+                #x = tf.expand_dims(inputs[:,t],3) if i==0 else relu
+                x = inputs[:,t] if i==0 else relu
                 st = self.strides[i]
                 # TODO: convolution different stride at each layer
                 conv = _conv2d(x, w_conv[i], b_conv[i], strides_=[1,st,st,1])
@@ -94,12 +95,9 @@ class RNN_basic(object):
         assert(len(self.cnnout['shape'])==5)
 
     def _create_network(self, o):
-        if o.ninchannel == 1:
-            inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz]
-        else: 
-            inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
+        inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
         inputs = tf.placeholder(o.dtype, shape=inputs_shape)
-        inputs_length = tf.placeholder(o.dtype, shape=[o.batchsz])
+        inputs_length = tf.placeholder(tf.int32, shape=[o.batchsz])
         labels = tf.placeholder(
                 o.dtype, shape=[o.batchsz, o.ntimesteps, o.outdim])
 
@@ -117,8 +115,8 @@ class RNN_basic(object):
             outputs = self._rnn_pass(labels, o) 
  
         # TODO: once variable length, labels should respect that setting too!
-        loss_l2 = tf.reduce_mean(tf.square(outputs-labels))
-        tf.add_to_collection('losses', loss_l2)
+        loss = get_loss(outputs, labels, inputs_length)
+        tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
         net = {
@@ -313,12 +311,9 @@ class RNN_attention_s(object):
         assert(self.cnnout['h']==self.cnnout['w']) # NOTE: be careful if change
 
     def _create_network(self, o):
-        if o.ninchannel == 1:
-            inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz]
-        else: 
-            inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
+        inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
         inputs = tf.placeholder(o.dtype, shape=inputs_shape)
-        inputs_length = tf.placeholder(o.dtype, shape=[o.batchsz])
+        inputs_length = tf.placeholder(tf.int32, shape=[o.batchsz])
         labels = tf.placeholder(
                 o.dtype, shape=[o.batchsz, o.ntimesteps, o.outdim])
 
@@ -333,8 +328,8 @@ class RNN_attention_s(object):
         outputs = self._rnn_pass(labels, o)
  
         # TODO: once variable length, labels should respect that setting too!
-        loss_l2 = tf.reduce_mean(tf.square(outputs-labels))
-        tf.add_to_collection('losses', loss_l2)
+        loss = get_loss(outputs, labels, inputs_length)
+        tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
         net = {
@@ -484,8 +479,9 @@ class RNN_attention_s(object):
             e = tf.tanh(tf.matmul(mlp1, W_mlp2) + b_mlp2) # TODO: try diff act.
 
             # attention weight alpha
-            e_exp = tf.exp(e)
-            alpha = e_exp/tf.expand_dims(tf.reduce_sum(e_exp,axis=1),1)
+            #e_exp = tf.exp(e)
+            #alpha = e_exp/tf.expand_dims(tf.reduce_sum(e_exp,axis=1),1)
+            alpha = tf.nn.softmax(e)
 
             # compute (expected) attention overlayed context vector z
             z = tf.reshape(alpha, [o.batchsz, self.cnnout['h'], self.cnnout['w'], 1]) * x_curr
@@ -557,12 +553,9 @@ class RNN_attention_st(object):
         assert(self.cnnout['h']==self.cnnout['w']) # NOTE: be careful if change
 
     def _create_network(self, o):
-        if o.ninchannel == 1:
-            inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz]
-        else: 
-            inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
+        inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
         inputs = tf.placeholder(o.dtype, shape=inputs_shape)
-        inputs_length = tf.placeholder(o.dtype, shape=[o.batchsz])
+        inputs_length = tf.placeholder(tf.int32, shape=[o.batchsz])
         labels = tf.placeholder(
                 o.dtype, shape=[o.batchsz, o.ntimesteps, o.outdim])
 
@@ -575,10 +568,10 @@ class RNN_attention_st(object):
 
         # RNN
         outputs = self._rnn_pass(labels, o)
- 
+
         # TODO: once variable length, labels should respect that setting too!
-        loss_l2 = tf.reduce_mean(tf.square(outputs-labels))
-        tf.add_to_collection('losses', loss_l2)
+        loss = get_loss(outputs, labels, inputs_length)
+        tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
         net = {
@@ -601,8 +594,9 @@ class RNN_attention_st(object):
                 self.params['b_lstm_s'] = tf.get_variable(
                     'b_lstm_s', shape=shape_b_s, dtype=o.dtype, 
                     initializer=tf.constant_initializer())
-            shape_W_t = [o.nunits+(o.nunits*o.h_concat_ratio*o.ntimesteps), 
-                o.nunits*4] 
+            #shape_W_t = [o.nunits+(o.nunits*o.h_concat_ratio*o.ntimesteps), 
+                #o.nunits*4] 
+            shape_W_t = [o.nunits+o.nunits, o.nunits*4] # because sum will be used.
             shape_b_t = [o.nunits*4]
             with tf.variable_scope('LSTMcell_t'):
                 self.params['W_lstm_t'] = tf.get_variable(
@@ -675,6 +669,12 @@ class RNN_attention_st(object):
             W_mlp2 = self.params['W_mlp2_s']
             b_mlp2 = self.params['b_mlp2_s']
 
+            # NOTE: I am not doing similarity based attention here. 
+            # Instead, I am doing mlp + softmax
+            # However, even show,attend,tell paper didn't do cosine similarity.
+            # They combined hidden and features merely by addition.
+            # They used relu instead of tanh.
+            # Also consider using batch norm.
             input_to_mlp = tf.concat_v2(
                 (tf.reshape(x_curr, [o.batchsz, -1]), h_prev), 1) 
 
@@ -682,8 +682,9 @@ class RNN_attention_st(object):
             e = tf.tanh(tf.matmul(mlp1, W_mlp2) + b_mlp2) # TODO: try diff act.
 
             # attention weight alpha
-            e_exp = tf.exp(e)
-            alpha = e_exp/tf.expand_dims(tf.reduce_sum(e_exp,axis=1),1)
+            #e_exp = tf.exp(e)
+            #alpha = e_exp/tf.expand_dims(tf.reduce_sum(e_exp,axis=1),1)
+            alpha = tf.nn.softmax(e)
 
             # compute (expected) attention overlayed context vector z
             z = tf.reshape(alpha, [o.batchsz, self.cnnout['h'], self.cnnout['w'], 1]) * x_curr
@@ -702,31 +703,51 @@ class RNN_attention_st(object):
             h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
             return h_curr, C_curr
 
-        def _activate_rnncell_t(x_curr, h_prev, C_prev, o):
+        def _activate_rnncell_t(x_curr, h_prev, C_prev, t, o):
             W_lstm = self.params['W_lstm_t']
             b_lstm = self.params['b_lstm_t']
-            W_mlp1 = self.params['W_mlp1_t']
-            b_mlp1 = self.params['b_mlp1_t']
-            W_mlp2 = self.params['W_mlp2_t']
-            b_mlp2 = self.params['b_mlp2_t']
 
             # NOTE: from the original attention paper by Cho or Chris Olah's 
             # blog, it says that they measure the similarity between h_{t-1} 
             # and others using dot product. I am instead doing concatenation.
-            # TODO: Try dot product.
+
+            # method1: using MLP same as attention_s
+            '''
+            W_mlp1 = self.params['W_mlp1_t']
+            b_mlp1 = self.params['b_mlp1_t']
+            W_mlp2 = self.params['W_mlp2_t']
+            b_mlp2 = self.params['b_mlp2_t']
             input_to_mlp = tf.concat_v2(
                 (tf.reshape(x_curr, [o.batchsz, -1]), h_prev), 1) 
 
             mlp1 = tf.tanh(tf.matmul(input_to_mlp, W_mlp1) + b_mlp1)
             e = tf.tanh(tf.matmul(mlp1, W_mlp2) + b_mlp2) # TODO: try diff act.
+            '''
+            # method2: using cosine similarity like standard attention
+            # e: 'similarities'
+            # NOTE: this is way slower than method1
+            #x_curr = x_curr[:, 0:t+1, :]
+            # attention range should be up until current time step
+            h_prev_norm = tf.sqrt(tf.reduce_sum(tf.pow(h_prev, 2), 1))
+            x_curr_norms = tf.sqrt(tf.reduce_sum(tf.pow(x_curr, 2), 2))
+            h_x_dotprod = tf.reduce_sum(
+                tf.expand_dims(h_prev, axis=1) * x_curr, axis=2)
+            e = tf.div(h_x_dotprod, 
+                tf.expand_dims(h_prev_norm, axis=1) * x_curr_norms + 1e-4)
 
             # attention weight alpha
-            e_exp = tf.exp(e)
-            alpha = e_exp/tf.expand_dims(tf.reduce_sum(e_exp,axis=1),1)
+            #e_exp = tf.exp(e)
+            #alpha = e_exp/tf.expand_dims(tf.reduce_sum(e_exp,axis=1),1)
+            alpha = tf.nn.softmax(e)
 
             # compute (expected) attention overlayed context vector z
             z = tf.expand_dims(alpha, 2) * x_curr
-            z = tf.reshape(z, [o.batchsz, -1])
+            z = tf.reduce_sum(z, axis=1)  
+            #z = tf.reshape(z, [o.batchsz, -1])
+            # NOTE: used summation instead of reshape to make the dimension 
+            # consistent over different time step (same as S.A.T implentation).
+            # I am not sure if sum is really a good thing to do though. Also,
+            # the training progress seems worse.
 
             # LSTM (standard; no peep hole or coupled input/forget gate version)
             f_curr, i_curr, C_curr_tilda, o_curr = tf.split(
@@ -765,7 +786,8 @@ class RNN_attention_st(object):
         # rnn_t unroll
         outputs = []
         for tt in range(o.ntimesteps): # TODO: change if variable length input/out
-            h_prev_t, C_prev_t = _activate_rnncell_t(hs, h_prev_t, C_prev_t, o)
+            h_prev_t, C_prev_t = _activate_rnncell_t(
+                hs, h_prev_t, C_prev_t, tt, o)
             y_prev = tf.matmul(h_prev_t, self.params['W_out']) \
                 + self.params['b_out']
             outputs.append(y_prev)
@@ -774,6 +796,23 @@ class RNN_attention_st(object):
         outputs = tf.stack(outputs, axis=1)
         return outputs 
 
+
+def get_loss(outputs, labels, inputs_length):
+    # loss = tf.reduce_mean(tf.square(outputs-labels)) # previous loss 
+    # loss1: sum of two L2 distances for left-top and right-bottom
+    loss1_batch = []
+    for i in range(labels.get_shape().as_list()[0]): # batchsz or # examples
+        sq = tf.square(
+                outputs[i,:inputs_length[i]]-labels[i,:inputs_length[i]])
+        mean_of_l2_sum = tf.reduce_mean(tf.add(
+            tf.sqrt(tf.add(sq[:,0],sq[:,1])), 
+            tf.sqrt(tf.add(sq[:,2],sq[:,3]))))
+        loss1_batch.append(mean_of_l2_sum)
+    loss = tf.reduce_mean(tf.stack(loss1_batch, axis=0))
+    # loss2: IoU, 
+    # loss3: penalty loss considering the structure in (x1, x2, y1, y2)
+    # loss4: cross-entropy between probabilty maps (need to change label) 
+    return loss
 
 def load_model(o):
     is_training = True if o.mode == 'train' else False
@@ -785,7 +824,7 @@ def load_model(o):
             model = RNN_attention_s(o, is_training=is_training)
         elif o.model == 'rnn_attention_st':
             model = RNN_attention_st(o, is_training=is_training)
-        elif o.model == 'rnn_bidirectional_attention':
+        elif o.model == 'rnn_attention_st_bidirectional':
             raise ValueError('model not implemeted yet')
         else:
             raise ValueError('model not implemented yet or simply wrong..')
@@ -796,14 +835,11 @@ if __name__ == '__main__':
     '''
 
     from opts import Opts
-    import data
     o = Opts()
     o.mode = 'train'
     o.dataset = 'bouncing_mnist'
     o.batchsz = 20
-    o.frmsz = 100
-    o.ninchannel = 1
-    o.outdim = 4
+    o._set_dataset_params()
     o.yprev_mode = 'weight' # nouse, concat_abs, weight
     o.model = 'rnn_attention_st' # rnn_basic, rnn_attention_s, rnn_attention_st
     #o.usetfapi = True

@@ -37,6 +37,7 @@ def train(m, loader, o):
             saver.restore(sess, resume_model)
         
         for ie in range(ep_start, nepoch):
+            loader.update_epoch_begin('train')
             t_epoch = time.time()
             #lr_epoch = o.lr*(0.1**np.floor(float(ie)/(nepoch/2))) \
                     #if o.lr_update else o.lr 
@@ -47,7 +48,7 @@ def train(m, loader, o):
             loss_curr_ep = np.array([], dtype=np.float32) # for avg epoch loss
             for ib in range(nbatch):
                 t_batch = time.time()
-                batch = loader.get_batch(ib, o, ie_=ie, data_='train')
+                batch = loader.get_batch(ib, o, dstype='train')
                 #loader.run_sanitycheck(batch) # TODO: run if change dataset
 
                 fdict = {
@@ -61,7 +62,7 @@ def train(m, loader, o):
                 # **results after every batch 
                 sys.stdout.write(
                         '\rep {0:d}/{1:d}, batch {2:d}/{3:d} '
-                        '(BATCH) |loss:{4:.3f} |time:{5:.2f}'\
+                        '(BATCH) |loss:{4:.6f} |time:{5:.2f}'\
                                 .format(
                                     ie+1, nepoch, ib+1, nbatch,
                                     loss, time.time()-t_batch))
@@ -92,7 +93,7 @@ def train(m, loader, o):
                     'train': evaluate(sess, m, loader, o, 'train', 0.01),
                     'test': evaluate(sess, m, loader, o, 'test', 0.01)
                     }
-            print 'ep {0:d}/{1:d} (EPOCH) |loss:{2:.3f} |IOU (train/test): '\
+            print 'ep {0:d}/{1:d} (EPOCH) |loss:{2:.6f} |IOU (train/test): '\
             '{3:.3f}/{4:.3f} |time:{5:.2f}'.format(
                     ie+1, nepoch, losses['epoch'][-1], 
                     eval_results['train']['IOU'], eval_results['test']['IOU'], 
@@ -141,7 +142,7 @@ def _init_train_settings(m, loader, o):
 
     train_opts = {
             'nepoch': o.nepoch if not o.debugmode else 2,
-            'nbatch': loader.ntr/o.batchsz if not o.debugmode else 300,
+            'nbatch': loader.nexps['train']/o.batchsz if not o.debugmode else 300,
             'lr_recipe': lr_recipe,
             'losses': losses,
             'iteration': iteration,
@@ -157,7 +158,7 @@ def _get_lr_recipe():
     lr_recipe = np.zeros([100], dtype=np.float32)
     for i in range(lr_recipe.shape[0]):
         if i < 5:
-            lr_recipe[i] = 0.0001*(0.1**i)
+            lr_recipe[i] = 0.0001*(0.1**i) # TODO: check if this is alright
         else:
             lr_recipe[i] = lr_recipe[4]
     return lr_recipe

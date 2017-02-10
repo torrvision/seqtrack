@@ -6,15 +6,8 @@ import os
 import draw
 
 
-def evaluate(sess, m, loader, o, data_, batch_percent_=1.0, draw_=False):
-    if data_ == 'train':
-        datasz = loader.ntr
-    elif data_ == 'val':
-        datasz = loader.nva
-    elif data_ == 'test':
-        datasz = loader.nte
-    else:
-        raise ValueError('no valid data kind')
+def evaluate(sess, m, loader, o, dstype, batch_percent_=1.0, draw_=False):
+    datasz = loader.nexps[dstype]
 
     results = {'idx': [], 'inputs': [], 'labels': [], 'outputs': []}
     #for ib in range(datasz/o.batchsz if not o.debugmode else 100):
@@ -22,9 +15,9 @@ def evaluate(sess, m, loader, o, data_, batch_percent_=1.0, draw_=False):
             if not o.debugmode else 100):
         sys.stdout.write(
                 '\r(during \'{}\') evaluating {}th batch on [{}] set..'.format(
-                    o.mode, ib+1, data_))
+                    o.mode, ib+1, dstype))
         sys.stdout.flush()
-        batch = loader.get_batch(ib, o, data_=data_)
+        batch = loader.get_batch(ib, o, dstype)
 
         fdict = {
                 m.net['inputs']: batch['inputs'],
@@ -64,8 +57,8 @@ def compute_IOU_new(outputs, labels):
         average IOU over all outputs
     '''
     # list to array
-    boxA = np.asarray(outputs)
-    boxB = np.asarray(labels)
+    boxA = np.asarray(outputs) * 100 # NOTE: ACTUAL IMAGE SIZE SHOULD BE CONSIDERED WHEN COMPUTING IOU.
+    boxB = np.asarray(labels) * 100 # NOTE: ACTUAL IMAGE SIZE SHOULD BE CONSIDERED WHEN COMPUTING IOU.
 
     # determine the (x, y)-coordinates of the intersection rectangle
     xA = np.maximum(boxA[:,:,:,0], boxB[:,:,:,0])

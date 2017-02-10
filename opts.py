@@ -58,6 +58,10 @@ class Opts(object):
         # TODO: add dropout and batch norm option
 
         #----------------------------------------------------------------------
+        # model parameters - NTM
+        
+
+        #----------------------------------------------------------------------
         # training policies
         self.nepoch             = 10
         self.batchsz            = 1
@@ -72,6 +76,7 @@ class Opts(object):
         # save (save training results), load (test), resume (keep training)
         self.path_base          = os.path.dirname(__file__)
         self.path_data          = os.path.join(self.path_base, 'data')
+        self.path_aux           = os.path.join(self.path_base, 'aux')
         self.nosave             = False
         self.path_save          = os.path.join(
                                     self.path_base, 'save/'+self.exectime)
@@ -127,6 +132,11 @@ class Opts(object):
         if self.dataset == 'moving_mnist' or self.dataset == 'bouncing_mnist':
             self.frmsz = 100 # image size (assuming square)
             self.ninchannel = 1 # number of image channels
+            self.outdim = 4 # rnn final output
+        elif self.dataset == 'ilsvrc':
+            # TODO: try different frmsz
+            self.frmsz = 100 # image (re)size, width and height. assuming square
+            self.ninchannel = 3
             self.outdim = 4 # rnn final output
         else:
             raise ValueError('not implemented yet, coming soon..')

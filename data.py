@@ -634,7 +634,10 @@ class Data_ilsvrc(object):
             doc = self._parsexml(xmlfile)
             w = np.float32(doc['annotation']['size']['width'])
             h = np.float32(doc['annotation']['size']['height'])
-            bndbox = [None, None, None, None]
+            # NOTE: Case of no object in the current frame.
+            # Either None or zeros. None becomes 'nan' when converting to numpy.
+            #bndbox = [None, None, None, None]
+            bndbox = [0, 0, 0, 0]
             if 'object' in doc['annotation']:
                 if type(doc['annotation']['object']) is list:
                     nobjs = len(doc['annotation']['object'])
