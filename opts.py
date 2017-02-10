@@ -2,6 +2,7 @@ import pdb
 import numpy as np
 import os
 import tensorflow as tf
+import socket
 
 import helpers
 
@@ -75,7 +76,10 @@ class Opts(object):
         #----------------------------------------------------------------------
         # save (save training results), load (test), resume (keep training)
         self.path_base          = os.path.dirname(__file__)
-        self.path_data          = os.path.join(self.path_base, 'data')
+        #self.path_data          = os.path.join(self.path_base, 'data')
+        self.path_data_home     = '/home/namhoon/data' \
+                                if socket.gethostname()=='namhoon-PC' \
+                                else '/mnt/data/namhoon'
         self.path_aux           = os.path.join(self.path_base, 'aux')
         self.nosave             = False
         self.path_save          = os.path.join(
@@ -140,6 +144,7 @@ class Opts(object):
             self.outdim = 4 # rnn final output
         else:
             raise ValueError('not implemented yet, coming soon..')
+        self.path_data = os.path.join(self.path_data_home, self.dataset)
 
     def _set_gpu_config(self):
         self.tfconfig = tf.ConfigProto()

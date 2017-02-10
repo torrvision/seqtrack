@@ -22,7 +22,8 @@ class Data_moving_mnist(object):
     "RATM: Recurrent Attentive Tracking Model"
     '''
     def __init__(self, o):
-        self.datafile = o.path_data+'/'+o.dataset+'/mnist.pkl.gz' 
+        #self.datafile = o.path_data+'/'+o.dataset+'/mnist.pkl.gz' 
+        self.datafile = o.path_data + '/mnist.pkl.gz'
         self.frmsz = o.frmsz
         self.ninchannel = o.ninchannel
         self.outdim = o.outdim
@@ -135,7 +136,8 @@ class Data_bouncing_mnist(object):
     '''
 
     def __init__(self, o):
-        self.data_path = os.path.join(o.path_base, 'data/bouncing_mnist')
+        #self.data_path = os.path.join(o.path_base, 'data/bouncing_mnist')
+        self.data_path = o.path_data
         self._set_default_params(o)
 
         self.data = dict.fromkeys({'train', 'val', 'test'}, None)
@@ -448,7 +450,7 @@ class Data_bouncing_mnist(object):
 
 class Data_ilsvrc(object):
     def __init__(self, o):
-        self.path_data = '/home/namhoon/data/ILSVRC' # TODO: loadable in server
+        self.path_data      = o.path_data
 
         self.snp            = dict.fromkeys({'train', 'val', 'test'}, None)
         self.nsnps          = dict.fromkeys({'train', 'val', 'test'}, None)
