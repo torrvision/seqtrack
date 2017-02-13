@@ -39,12 +39,12 @@ def parse_arguments():
             '--resume', help='to resume training',
             action='store_true')
     parser.add_argument(
-            '--resume_data', help='model to resume',
+            '--resume_data', help='data to resume',
             type=str)
 
     parser.add_argument(
             '--model', help='model!',
-            type=str, default='rnn_attention_sa')
+            type=str, default='')
     parser.add_argument(
             '--usetfapi', help='set to use tensorflow rnn api', 
             action='store_true')
@@ -57,7 +57,7 @@ def parse_arguments():
             type=int, default=300)
     parser.add_argument(
             '--ntimesteps', help='number of time steps for rnn',
-            type=int, default=30)
+            type=int, default=20)
     parser.add_argument(
             '--dropout_rnn', help='set dropout for rnn', 
             action='store_true')
@@ -67,16 +67,16 @@ def parse_arguments():
 
     parser.add_argument(
             '--nepoch', help='number of epochs', 
-            type=int, default=10)
+            type=int, default=20)
     parser.add_argument(
             '--batchsz', help='batch size', 
             type=int, default=1)
     parser.add_argument(
             '--optimizer', help='optimizer to train the model',
-            type=str, default='sgd')
+            type=str, default='adam')
     parser.add_argument(
             '--lr', help='learning rate', 
-            type=float, default=0.001)
+            type=float, default=0.0001)
     parser.add_argument(
             '--lr_update', help='adaptive learning rate', 
             action='store_true')

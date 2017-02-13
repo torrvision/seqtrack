@@ -190,8 +190,10 @@ class Data_bouncing_mnist(object):
         # f has 'train' and 'test' and each has 'inputs' and 'targets'
         for dstype in ['train', 'test']:
             self.data[dstype] = dict.fromkeys({'images', 'targets'}, None) 
-            self.data[dstype]['images'] = np.asarray(f['train/inputs'].value)
-            self.data[dstype]['targets'] = np.asarray(f['train/targets'].value)
+            self.data[dstype]['images'] = np.asarray(
+                    f['{}/inputs'.format(dstype)].value)
+            self.data[dstype]['targets'] = np.asarray(
+                    f['{}/targets'.format(dstype)].value)
             self.nexps[dstype] = self.data[dstype]['images'].shape[0]
         f.close()
 
@@ -740,11 +742,11 @@ if __name__ == '__main__':
     from opts import Opts
     o = Opts()
     o.batchsz = 20
-    o.dataset = 'ilsvrc' # moving_mnist, bouncing_mnist, ilsvrc
+    o.dataset = 'bouncing_mnist' # moving_mnist, bouncing_mnist, ilsvrc
     o._set_dataset_params()
     dstype = 'train'
     loader = load_data(o)
     batch = loader.get_batch(0, o, dstype)
-    loader.run_sanitycheck(batch, o.dataset, o.frmsz)
+    #loader.run_sanitycheck(batch, o.dataset, o.frmsz)
     pdb.set_trace()
 

@@ -3,6 +3,7 @@ import sys
 import numpy as np
 import tensorflow as tf
 import time
+import os
 
 import draw
 from evaluate import evaluate
@@ -31,19 +32,16 @@ def train(m, loader, o):
     with tf.Session(config=config if o.gpu_manctrl else None) as sess:
     '''
     t_total = time.time()
+    t_iteration = time.time()
     with tf.Session(config=o.tfconfig) as sess:
         sess.run(tf.global_variables_initializer()) 
         if o.resume: 
             saver.restore(sess, resume_model)
         
         for ie in range(ep_start, nepoch):
-            loader.update_epoch_begin('train')
             t_epoch = time.time()
-            #lr_epoch = o.lr*(0.1**np.floor(float(ie)/(nepoch/2))) \
-                    #if o.lr_update else o.lr 
-            # using another (manual) recipe
+            loader.update_epoch_begin('train')
             lr_epoch = lr_recipe[ie] if o.lr_update else o.lr
-            # TODO: may need a different recipe; also consider exponential decay
 
             loss_curr_ep = np.array([], dtype=np.float32) # for avg epoch loss
             for ib in range(nbatch):
@@ -62,7 +60,7 @@ def train(m, loader, o):
                 # **results after every batch 
                 sys.stdout.write(
                         '\rep {0:d}/{1:d}, batch {2:d}/{3:d} '
-                        '(BATCH) |loss:{4:.6f} |time:{5:.2f}'\
+                        '(BATCH) |loss:{4:.5f} |time:{5:.2f}'\
                                 .format(
                                     ie+1, nepoch, ib+1, nbatch,
                                     loss, time.time()-t_batch))
@@ -72,14 +70,63 @@ def train(m, loader, o):
                 losses['interm'] = np.append(losses['interm'], loss)
 
                 iteration += 1
-                if iteration % 1000 == 0: # check regularly
-                    # draw average loss so far
+                # **after a certain iteration, perform the followings
+                # - record and plot the loss
+                # - evaluate on train/test/val set
+                # - check eval losses on train and val sets
+                # - print results (loss, eval resutls, time, etc.)
+                # - save the model and resume info 
+                # NOTE: if model is too large to save frequently, adjust the 
+                # iteration number for saving routine in particular.
+                if iteration % 20000 == 0: # save intermediate model
+                    print ' '
+                    # record and plot (intermediate) loss
+                    loss_interm_avg = np.mean(losses['interm'])
                     losses['interm_avg'] = np.append(
-                            losses['interm_avg'], np.mean(losses['interm']))
-                    draw.plot_losses(losses, o, True, str(iteration))
+                            losses['interm_avg'], loss_interm_avg)
                     losses['interm'] = np.array([], dtype=np.float32)
+                    draw.plot_losses(losses, o, True, str(iteration))
+                    # evaluate
+                    val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
+                    evals = {
+                        'train': evaluate(sess, m, loader, o, 'train', 300),
+                        val_: evaluate(sess, m, loader, o, val_, 300)}
+                    # check losses on train and val set
+                    losses['interm_eval_subset_train'] = np.append(
+                            losses['interm_eval_subset_train'],
+                            np.mean(evals['train']['loss']))
+                    losses['interm_eval_subset_val'] = np.append(
+                            losses['interm_eval_subset_val'],
+                            np.mean(evals[val_]['loss']))
+                    draw.plot_losses_train_val(
+                            losses['interm_eval_subset_train'],
+                            losses['interm_eval_subset_val'],
+                            o, str(iteration))
+                    # print results
+                    print 'ep {0:d}/{1:d} (ITERATION-{2:d}) |loss: {3:.5f} '\
+                        '|(train/{4:s}) IOU: {5:.3f}/{6:.3f}, '\
+                        'AUC: {7:.3f}/{8:.3f}, CLE: {9:.3f}/{10:.3f} '\
+                        '|time:{11:.2f}'.format(
+                        ie+1, nepoch, iteration, loss_interm_avg, val_, 
+                        evals['train']['iou'], evals[val_]['iou'], 
+                        evals['train']['auc'], evals[val_]['auc'], 
+                        evals['train']['cle'], evals[val_]['cle'], 
+                        time.time()-t_iteration)
+                    t_iteration = time.time() 
+                    # save model and resume info
+                    if not o.nosave:
+                        # TODO: check save_path 
+                        saved_model = saver.save(sess, os.path.join(
+                            o.path_model, 'iteration{}.ckpt'.format(iteration)))
+                        resume = {}
+                        resume['ie'] = ie
+                        resume['iteration'] = iteration
+                        resume['losses'] = losses
+                        resume['model'] = saved_model
+                        np.save(o.path_save + '/resume.npy', resume)
             print ' '
 
+            '''Not using below as performing evaluation at iterations
             # **after every epoch, perform the followings
             # - record the loss
             # - plot losses
@@ -88,16 +135,19 @@ def train(m, loader, o):
             # - save the model
             # - save resume 
             losses['epoch'] = np.append(losses['epoch'], np.mean(loss_curr_ep))
-            draw.plot_losses(losses, o)
+            draw.plot_losses(losses, o) # TODO: change this. batch loss too long
             val_name = 'test' if o.dataset == 'bouncing_mnist' else 'val'
             eval_results = {
                     'train': evaluate(sess, m, loader, o, 'train', 0.01),
-                    'test': evaluate(sess, m, loader, o, val_name, 0.01)
+                    val_name: evaluate(sess, m, loader, o, val_name, 0.01)
                     }
-            print 'ep {0:d}/{1:d} (EPOCH) |loss:{2:.6f} |IOU (train/test): '\
-            '{3:.3f}/{4:.3f} |time:{5:.2f}'.format(
-                    ie+1, nepoch, losses['epoch'][-1], 
-                    eval_results['train']['IOU'], eval_results['test']['IOU'], 
+            print 'ep {0:d}/{1:d} (EPOCH) |loss:{2:.5f} |(train/{3:s}) '\
+                    'IOU: {4:.3f}/{5:.3f}, AUC: {6:.3f}/{7:.3f}, '\
+                    'CLE: {8:.3f}/{9:.3f} |time:{10:.2f}'.format(
+                    ie+1, nepoch, losses['epoch'][-1], val_name,
+                    eval_results['train']['iou'], eval_results[val_name]['iou'], 
+                    eval_results['train']['auc'], eval_results[val_name]['auc'], 
+                    eval_results['train']['cle'], eval_results[val_name]['cle'], 
                     time.time()-t_epoch)
 
             if not o.nosave:
@@ -109,7 +159,7 @@ def train(m, loader, o):
                 resume['losses'] = losses
                 resume['model'] = o.path_model+'/ep{}.ckpt'.format(ie)
                 np.save(o.path_save + '/resume.npy', resume)
-
+            '''
 
         # **training finished
         print '\ntraining finished! ------------------------------------------'
@@ -129,7 +179,9 @@ def _init_train_settings(m, loader, o):
                 'batch': np.array([], dtype=np.float32),
                 'epoch': np.array([], dtype=np.float32),
                 'interm': np.array([], dtype=np.float32),
-                'interm_avg': np.array([], dtype=np.float32)
+                'interm_avg': np.array([], dtype=np.float32),
+                'interm_eval_subset_train': np.array([], dtype=np.float32),
+                'interm_eval_subset_val': np.array([], dtype=np.float32)
                 }
         iteration = 0
         resume_model = None
@@ -155,6 +207,9 @@ def _init_train_settings(m, loader, o):
     return train_opts
 
 def _get_lr_recipe():
+    # TODO: may need a different recipe; also consider exponential decay
+    # (previous) lr_epoch = o.lr*(0.1**np.floor(float(ie)/(nepoch/2))) \
+            #if o.lr_update else o.lr 
     # manual learning rate recipe
     lr_recipe = np.zeros([100], dtype=np.float32)
     for i in range(lr_recipe.shape[0]):

@@ -804,6 +804,8 @@ def get_loss(outputs, labels, inputs_length):
     for i in range(labels.get_shape().as_list()[0]): # batchsz or # examples
         sq = tf.square(
                 outputs[i,:inputs_length[i]]-labels[i,:inputs_length[i]])
+        # NOTE: here it's mean over timesteps. If only want to have a loss for
+        # the last time step, it should be changed.
         mean_of_l2_sum = tf.reduce_mean(tf.add(
             tf.sqrt(tf.add(sq[:,0],sq[:,1])), 
             tf.sqrt(tf.add(sq[:,2],sq[:,3]))))

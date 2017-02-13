@@ -111,4 +111,20 @@ def plot_losses(losses, o, intermediate_=False, cnt_=''): # after trainingj
     plt.savefig(outfile)
     plt.close()
 
+def plot_losses_train_val(loss_train, loss_val, o, cnt_):
+    fig = plt.figure(figsize=(12,8))
+    ax1 = fig.add_subplot(111)
+    ax1.plot(np.arange(loss_train.shape[0]), loss_train, 'b-o')
+    ax1.plot(np.arange(loss_val.shape[0]), loss_val, 'r-o')
+    ax1.set_title('average intermediate loss for evaluation subsets')
+    if o.nosave:
+        outfile = os.path.join(
+            o.path_save_tmp, o.exectime+'_losses_evalsubset{}.png'.format(cnt_))
+    else:
+        outfile = os.path.join(
+                o.path_loss, 'losses_evalsubset{}.png'.format(cnt_))
+    plt.savefig(outfile)
+    plt.close()
+
+
 

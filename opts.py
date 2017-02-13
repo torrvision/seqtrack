@@ -30,7 +30,7 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # model - general
-        self.model              = 'rnn_attention_st' # {rnn_basic, rnn_attention_s, rnn_attention_t}
+        self.model              = '' # {rnn_basic, rnn_attention_s, rnn_attention_t}
         self.usetfapi           = False
 
         #----------------------------------------------------------------------
@@ -41,7 +41,7 @@ class Opts(object):
         # model parameters - rnn
         self.cell_type          = 'LSTM' 
         self.nunits             = 300 
-        self.ntimesteps         = 30
+        self.ntimesteps         = 20
         self.rnn_nlayers        = 1
         self.dropout_rnn        = False
         self.keep_ratio         = 0.5
@@ -64,10 +64,10 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # training policies
-        self.nepoch             = 10
+        self.nepoch             = 20
         self.batchsz            = 1
-        self.optimizer          = 'sgd' # sgd, adam, rmsprop
-        self.lr                 = 0.001
+        self.optimizer          = 'adam' # sgd, adam, rmsprop
+        self.lr                 = 0.0001
         self.lr_update          = False
         self.wd                 = 0.0 # weight decay for regularization
         self.grad_clip          = False
@@ -128,9 +128,9 @@ class Opts(object):
         self._run_sanitycheck()
         self._create_save_directories()
         self._set_gpu_config()
+        self._set_dataset_params()
         #self._print_settings()
         #self._save_settings()
-        self._set_dataset_params()
 
     def _set_dataset_params(self):
         if self.dataset == 'moving_mnist' or self.dataset == 'bouncing_mnist':
