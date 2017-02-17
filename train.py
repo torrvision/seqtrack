@@ -52,6 +52,7 @@ def train(m, loader, o):
                 fdict = {
                         m.net['inputs']: batch['inputs'],
                         m.net['inputs_length']: batch['inputs_length'],
+                        m.net['inputs_HW']: batch['inputs_HW'],
                         m.net['labels']: batch['labels'],
                         lr: lr_epoch
                         }
@@ -108,9 +109,9 @@ def train(m, loader, o):
                         'AUC: {7:.3f}/{8:.3f}, CLE: {9:.3f}/{10:.3f} '\
                         '|time:{11:.2f}'.format(
                         ie+1, nepoch, iteration, loss_interm_avg, val_, 
-                        evals['train']['iou'], evals[val_]['iou'], 
+                        evals['train']['iou_mean'], evals[val_]['iou_mean'], 
                         evals['train']['auc'], evals[val_]['auc'], 
-                        evals['train']['cle'], evals[val_]['cle'], 
+                        evals['train']['cle_mean'], evals[val_]['cle_mean'], 
                         time.time()-t_iteration)
                     t_iteration = time.time() 
                     # save model and resume info

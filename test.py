@@ -2,11 +2,14 @@ import pdb
 import tensorflow as tf
 import argparse
 import time
+import os
+import numpy as np
 
 from opts import Opts
 from evaluate import evaluate
 import data
 import model
+import draw
 
 
 def parse_arguments():
@@ -79,33 +82,61 @@ def test(m, loader, o, dstype):
     '''
 
     saver = tf.train.Saver()
-
     with tf.Session(config=o.tfconfig) as sess:
         saver.restore(sess, o.restore_model)
         t_start = time.time()
         results = evaluate(sess, m, loader, o, dstype) 
-        pdb.set_trace()
-        
-        print '---------------------------------------------------------------'
-        print 'Evaluation finished (time: {}).'.format(time.time()-t_start)
-        print 'Model: {}'.format(o.model) 
-        print 'dataset: {}(''{}'')'.format(o.dataset, dstype)
-        print 'iou: {}'.format(results['iou'])
-        print 'success_rates: {}'.format(results['success_rates'])
-        print 'auc: {}'.format(results['auc'])
-        print 'cle: {}'.format(results['cle'])
-        print 'results and plots are saved at {}'.format()
-        print '---------------------------------------------------------------'
+
+    # save results
+    savedir = os.path.join(
+            o.path_base, os.path.dirname(o.restore_model)[:-7] + '/evaluations')
+    if not os.path.exists(savedir): os.makedirs(savedir)
+    # due to the size of results, save subsets only
+    results_partial = {}
+    results_partial['iou_mean'] = results['iou_mean']
+    results_partial['success_rates'] = results['success_rates']
+    results_partial['auc'] = results['auc']
+    results_partial['cle_mean'] = results['cle_mean']
+    results_partial['precision_rates'] = results['precision_rates']
+    results_partial['cle_representative'] = results['cle_representative']
+    np.save(savedir + '/results_partial.npy', results_partial)
+
+    # Plot success and precision plots
+    draw.plot_successplot(results['success_rates'], results['auc'], o, savedir)
+    draw.plot_precisionplot(
+            results['precision_rates'], results['cle_representative'], 
+            o, savedir)
+
+    # VISUALIZE TRACKING RESULTS 
+    # TODO: not available yet..
+
+    # print
+    print '-------------------------------------------------------------------'
+    print 'Evaluation finished (time: {0:.3f}).'.format(time.time()-t_start)
+    print 'Model: {}'.format(o.model) 
+    print 'dataset: {}(''{}'')'.format(o.dataset, dstype)
+    print 'iou_mean: {0:.3f}'.format(results['iou_mean'])
+    print 'success_rates: [%s]' % ', '.join(
+            '%.3f' % val for val in results['success_rates'])
+    print 'auc: {0:.3f}'.format(results['auc'])
+    print 'cle_mean: {0:.3f}'.format(results['cle_mean'])
+    print 'precision_rates: [%s]' % ', '.join(
+            '%.3f' % val for val in results['precision_rates'])
+    print 'cle_representative: {0:.3f}'.format(results['cle_representative'])
+    print 'results and plots are saved at {}'.format(savedir)
+    print '-------------------------------------------------------------------'
 
 
 if __name__ == '__main__':
     '''Test script
     Provide the followings:
         - CUDA_VISIBLE_DEVICES
-        - dataset
-        - model
-        - restore_model 
-        - gpu_manctrl
+        - dataset (e.g., bouncing_mnist)
+        - model (e.g., rnn_attention_st)
+        - restore_model (e.g., ***.ckpt)
+        - gpu_manctrl 
+        - ntimesteps
+        - (optionally) batchsz
     Note that if provided option is inconsitent with the trained model 
     (e.g., ntimesteps), it will fail to restore the model.
     '''
@@ -118,6 +149,7 @@ if __name__ == '__main__':
     loader = data.load_data(o)
     m = model.load_model(o)
 
-    dstype = 'test'
+    # NOTE: depending on dstype, can load a 'longer' or 'full' test sequences
+    dstype = 'test' 
     test(m, loader, o, dstype=dstype)
 

@@ -98,6 +98,7 @@ class RNN_basic(object):
         inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
         inputs = tf.placeholder(o.dtype, shape=inputs_shape)
         inputs_length = tf.placeholder(tf.int32, shape=[o.batchsz])
+        inputs_HW = tf.placeholder(o.dtype, shape=[o.batchsz, 2])
         labels = tf.placeholder(
                 o.dtype, shape=[o.batchsz, o.ntimesteps, o.outdim])
 
@@ -115,13 +116,14 @@ class RNN_basic(object):
             outputs = self._rnn_pass(labels, o) 
  
         # TODO: once variable length, labels should respect that setting too!
-        loss = get_loss(outputs, labels, inputs_length)
+        loss = get_loss(outputs, labels, inputs_length, inputs_HW)
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
         net = {
                 'inputs': inputs,
                 'inputs_length': inputs_length,
+                'inputs_HW': inputs_HW,
                 'labels': labels,
                 'outputs': outputs,
                 'loss': loss_total}
@@ -176,7 +178,7 @@ class RNN_basic(object):
                 tf.assert_positive(s_roi)
                 tf.assert_greater_equal(s_all, s_roi)
                 beta = 0.95 # TODO: make it optionable
-                gamma = ((1-beta)/beta) * s_all / s_roi
+                gamma = ((1-beta)/beta) * s_all / s_roi # NOTE: division?
                 y_prev_scale = self.cnnout['w'] / o.frmsz
 
                 x_curr_weighted = []
@@ -226,24 +228,44 @@ class RNN_basic(object):
         _get_lstm_params(o)
         _get_rnnout_params(o)
 
-        # initial states 
-        #TODO: this changes whether t<n or t>=n
-        h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
-        C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
-        y_prev = labels[:,0]
+        if self._is_training:
+            # initial states 
+            h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
+            C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
+            y_prev = labels[:,0]
 
-        # unroll
-        outputs = []
-        for t in range(o.ntimesteps): # TODO: change if variable length input/out
-            h_prev, C_prev = _activate_rnncell(
-                self.cnnout['feat'][:,t], h_prev, C_prev, y_prev, o) 
-            if t == 0: # NOTE: pass ground-truth at t=2 (if t<n)
-                y_prev = labels[:,0]
-            else:
-                y_prev = tf.matmul(h_prev, self.params['W_out']) \
-                    + self.params['b_out']
-            outputs.append(y_prev)
-            
+            # unroll
+            outputs = []
+            for t in range(o.ntimesteps): # TODO: change if variable length input/out
+                h_prev, C_prev = _activate_rnncell(
+                    self.cnnout['feat'][:,t], h_prev, C_prev, y_prev, o) 
+                if t == 0: # NOTE: pass ground-truth at t=2 (if t<n)
+                    y_prev = labels[:,0]
+                else:
+                    y_prev = tf.matmul(h_prev, self.params['W_out']) \
+                        + self.params['b_out']
+                outputs.append(y_prev)
+        else: # test
+            pdb.set_trace() # WIP
+
+            # initial states 
+            # TODO: this changes whether t<n or t>=n; need such a signal.
+            h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
+            C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
+            y_prev = labels[:,0]
+
+            # unroll
+            outputs = []
+            for t in range(o.ntimesteps): # TODO: change if variable length input/out
+                h_prev, C_prev = _activate_rnncell(
+                    self.cnnout['feat'][:,t], h_prev, C_prev, y_prev, o) 
+                if t == 0: # NOTE: pass ground-truth at t=2 (if t<n)
+                    y_prev = labels[:,0]
+                else:
+                    y_prev = tf.matmul(h_prev, self.params['W_out']) \
+                        + self.params['b_out']
+                outputs.append(y_prev)
+       
         # list to tensor
         outputs = tf.stack(outputs, axis=1)
         return outputs 
@@ -314,6 +336,7 @@ class RNN_attention_s(object):
         inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
         inputs = tf.placeholder(o.dtype, shape=inputs_shape)
         inputs_length = tf.placeholder(tf.int32, shape=[o.batchsz])
+        inputs_HW = tf.placeholder(o.dtype, shape=[o.batchsz, 2])
         labels = tf.placeholder(
                 o.dtype, shape=[o.batchsz, o.ntimesteps, o.outdim])
 
@@ -328,13 +351,14 @@ class RNN_attention_s(object):
         outputs = self._rnn_pass(labels, o)
  
         # TODO: once variable length, labels should respect that setting too!
-        loss = get_loss(outputs, labels, inputs_length)
+        loss = get_loss(outputs, labels, inputs_length, inputs_HW)
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
         net = {
                 'inputs': inputs,
                 'inputs_length': inputs_length,
+                'inputs_HW': inputs_HW,
                 'labels': labels,
                 'outputs': outputs,
                 'loss': loss_total}
@@ -556,6 +580,7 @@ class RNN_attention_st(object):
         inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
         inputs = tf.placeholder(o.dtype, shape=inputs_shape)
         inputs_length = tf.placeholder(tf.int32, shape=[o.batchsz])
+        inputs_HW = tf.placeholder(o.dtype, shape=[o.batchsz, 2])
         labels = tf.placeholder(
                 o.dtype, shape=[o.batchsz, o.ntimesteps, o.outdim])
 
@@ -570,13 +595,14 @@ class RNN_attention_st(object):
         outputs = self._rnn_pass(labels, o)
 
         # TODO: once variable length, labels should respect that setting too!
-        loss = get_loss(outputs, labels, inputs_length)
+        loss = get_loss(outputs, labels, inputs_length, inputs_HW)
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
         net = {
                 'inputs': inputs,
                 'inputs_length': inputs_length,
+                'inputs_HW': inputs_HW,
                 'labels': labels,
                 'outputs': outputs,
                 'loss': loss_total}
@@ -732,8 +758,11 @@ class RNN_attention_st(object):
             x_curr_norms = tf.sqrt(tf.reduce_sum(tf.pow(x_curr, 2), 2))
             h_x_dotprod = tf.reduce_sum(
                 tf.expand_dims(h_prev, axis=1) * x_curr, axis=2)
-            e = tf.div(h_x_dotprod, 
-                tf.expand_dims(h_prev_norm, axis=1) * x_curr_norms + 1e-4)
+            # TODO: CHECK tf.div or tf.divide
+            #e = tf.div(h_x_dotprod, 
+                #tf.expand_dims(h_prev_norm, axis=1) * x_curr_norms + 1e-4)
+            e = h_x_dotprod / (tf.expand_dims(h_prev_norm, axis=1) * 
+                    x_curr_norms + 1e-4)
 
             # attention weight alpha
             #e_exp = tf.exp(e)
@@ -797,8 +826,9 @@ class RNN_attention_st(object):
         return outputs 
 
 
-def get_loss(outputs, labels, inputs_length):
+def get_loss(outputs, labels, inputs_length, inputs_HW):
     # loss = tf.reduce_mean(tf.square(outputs-labels)) # previous loss 
+
     # loss1: sum of two L2 distances for left-top and right-bottom
     loss1_batch = []
     for i in range(labels.get_shape().as_list()[0]): # batchsz or # examples
@@ -810,10 +840,35 @@ def get_loss(outputs, labels, inputs_length):
             tf.sqrt(tf.add(sq[:,0],sq[:,1])), 
             tf.sqrt(tf.add(sq[:,2],sq[:,3]))))
         loss1_batch.append(mean_of_l2_sum)
-    loss = tf.reduce_mean(tf.stack(loss1_batch, axis=0))
-    # loss2: IoU, 
+    loss_box = tf.reduce_mean(tf.stack(loss1_batch, axis=0))
+
+    # loss2: IoU
+    scalar = tf.stack(
+            (inputs_HW[:,1], inputs_HW[:,0], inputs_HW[:,1], inputs_HW[:,0]), 
+            axis=1)
+    boxA = outputs * tf.expand_dims(scalar, 1)
+    boxB = labels * tf.expand_dims(scalar, 1)
+    xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
+    yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
+    xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
+    yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
+    interArea = (xB - xA + 1) * (yB - yA + 1) # NEED actual image size
+    boxAArea = (boxA[:,:,2] - boxA[:,:,0] + 1) * (boxA[:,:,3] - boxA[:,:,1] + 1) 
+    boxBArea = (boxB[:,:,2] - boxB[:,:,0] + 1) * (boxB[:,:,3] - boxB[:,:,1] + 1) 
+    # TODO: CHECK tf.div or tf.divide
+    #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
+    iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
+    iou_valid = []
+    for i in range(labels.get_shape().as_list()[0]):
+        iou_valid.append(iou[i, :inputs_length[i]])
+    iou_mean = tf.reduce_mean(iou_valid)
+    loss_iou = 1 - iou_mean
+
     # loss3: penalty loss considering the structure in (x1, x2, y1, y2)
     # loss4: cross-entropy between probabilty maps (need to change label) 
+
+    loss = loss_box + loss_iou
+    #loss = loss_box
     return loss
 
 def load_model(o):
@@ -840,7 +895,7 @@ if __name__ == '__main__':
     o = Opts()
     o.mode = 'train'
     o.dataset = 'bouncing_mnist'
-    o.batchsz = 20
+    o.batchsz = 10
     o._set_dataset_params()
     o.yprev_mode = 'weight' # nouse, concat_abs, weight
     o.model = 'rnn_attention_st' # rnn_basic, rnn_attention_s, rnn_attention_st

@@ -62,7 +62,7 @@ class Data_moving_mnist(object):
         vids = np.zeros((o.batchsz, o.ntimesteps, self.frmsz, self.frmsz), 
                 dtype=np.float32)
         pos_init = np.random.randint(self.frmsz-28, size=(o.batchsz,2))
-        pos = np.zeros((o.batchsz, o.ntimesteps, 2), dtype=np.float32)
+        pos = np.zeros((o.batchsz, o.ntimesteps, 2), dtype=np.int32)
         pos[:,0] = pos_init
 
         posmax = self.frmsz-29
@@ -98,11 +98,13 @@ class Data_moving_mnist(object):
         # 1. online learning, 2. arbitrary training sequences 
         inputs_length = np.ones((o.batchsz), dtype=np.int32) * o.ntimesteps
 
+        inputs_HW = np.ones((o.batchsz, 2), dtype=np.float32) * self.frmsz
+
         # Add fixed sized window to make label 4 dimension. [only moving_mnist]
         pos = np.concatenate((pos, pos+28), axis=2)
 
         # relative scale of label
-        pos = pos / o.frmsz
+        pos = pos / float(o.frmsz)
 
         # add one more dimension to data for placeholder tensor shape
         vids = np.expand_dims(vids, axis=4)
@@ -110,6 +112,7 @@ class Data_moving_mnist(object):
         batch = {
                 'inputs': vids,
                 'inputs_length': inputs_length, 
+                'inputs_HW': inputs_HW, 
                 'labels': pos,
                 'digits': data['targets'][idx],
                 'idx': idx
@@ -152,12 +155,12 @@ class Data_bouncing_mnist(object):
         # following paper's default parameter settings
         # TODO: remember some variables might need to set optional..
         self.num_digits_ = 1 
-        self.image_size_ = 100 
+        self.frmsz = o.frmsz
         self.scale_range = 0.1 
         self.buff = True
         self.step_length_ = 0.1
         self.digit_size_ = 28
-        self.frame_size_ = self.image_size_ ** 2
+        self.frame_size_ = self.frmsz ** 2
         self.dataset_size_ = 10000  # Size is relevant only for val/test sets.
         #self.row_ = 0 # NL: should not use it!!!
         self.clutter_size_min_ = 5
@@ -180,7 +183,7 @@ class Data_bouncing_mnist(object):
         self.buff_size = 2000
         self.buff_cap = 0
         self.buff_data = np.zeros((self.buff_size, o.ntimesteps, 
-            self.image_size_, self.image_size_), dtype=np.float32)
+            self.frmsz, self.frmsz), dtype=np.float32)
         self.buff_label = np.zeros((self.buff_size, o.ntimesteps, 4))
         self.clutter_move = 1 
         self.with_clutters = 1 
@@ -212,7 +215,7 @@ class Data_bouncing_mnist(object):
             self, batch_size, o,
             image_size_=None, object_size_=None, step_length_=None):
         if image_size_ is None:
-            image_size_ = self.image_size_
+            image_size_ = self.frmsz
         if object_size_ is None:
             object_size_ = self.digit_size_
         if step_length_ is None:
@@ -274,7 +277,7 @@ class Data_bouncing_mnist(object):
         if num_clutterPack is None :
             num_clutterPack = self.num_clutterPack
         if image_size_ is None :
-            image_size_ = self.image_size_ * 2
+            image_size_ = self.frmsz * 2
         if num_clutters_ is None :
             num_clutters_ = self.num_clutters_ * 4
         clutterIMG = np.zeros((num_clutterPack, image_size_, image_size_))
@@ -294,7 +297,7 @@ class Data_bouncing_mnist(object):
         data_all = self.data[dstype]
 
         if image_size_ is None :
-            image_size_ = self.image_size_
+            image_size_ = self.frmsz
         if num_clutters_ is None :
             num_clutters_ = self.num_clutters_
         if fake and self.clutterpack_exists:
@@ -337,9 +340,9 @@ class Data_bouncing_mnist(object):
         idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
         
         start_y, start_x = self._GetRandomTrajectory(o.batchsz * self.num_digits_, o)
-        window_y, window_x = self._GetRandomTrajectory(o.batchsz * 1, o, self.image_size_*2, object_size_=self.image_size_, step_length_ = 1e-2)
+        window_y, window_x = self._GetRandomTrajectory(o.batchsz * 1, o, self.frmsz*2, object_size_=self.frmsz, step_length_ = 1e-2)
         # TODO: change data to real image or cluttered background
-        data = np.zeros((o.batchsz, o.ntimesteps, self.image_size_, self.image_size_), dtype=np.float32)
+        data = np.zeros((o.batchsz, o.ntimesteps, self.frmsz, self.frmsz), dtype=np.float32)
         label = np.zeros((o.batchsz, o.ntimesteps, 4), dtype=np.float32)
 
         for j in range(o.batchsz): 
@@ -356,12 +359,12 @@ class Data_bouncing_mnist(object):
                         for i in range(o.ntimesteps):
                             wx = window_x[i,j]
                             wy = window_y[i,j]
-                            data[j, i] = self._Overlap(clutter_bg[wy:wy+self.image_size_, wx:wx+self.image_size_], data[j, i])
+                            data[j, i] = self._Overlap(clutter_bg[wy:wy+self.frmsz, wx:wx+self.frmsz], data[j, i])
                     else:
                         for i in range(o.ntimesteps):
                             wx = window_x[0, j]
                             wy = window_y[0, j]
-                            data[j, i] = self._Overlap(clutter_bg[wy:wy+self.image_size_, wx:wx+self.image_size_], data[j, i])
+                            data[j, i] = self._Overlap(clutter_bg[wy:wy+self.frmsz, wx:wx+self.frmsz], data[j, i])
                 for n in range(self.num_digits_):
                     #ind = self.indices_[self.row_]
                     ind = idx[j]
@@ -390,7 +393,7 @@ class Data_bouncing_mnist(object):
                             digit_size_ = np.shape(scale_image)[0]
                         bottom = top  + digit_size_
                         right  = left + digit_size_
-                        if right>self.image_size_ or bottom>self.image_size_:
+                        if right>self.frmsz or bottom>self.frmsz:
                             scale_image = bak_digit_image
                             bottom = top  + self.digit_size_
                             right  = left + self.digit_size_
@@ -404,7 +407,7 @@ class Data_bouncing_mnist(object):
                         wy=window_y[i, j]
                         wx=window_x[i, j]
                         data[j, i, top:bottom, left:right] = self._Overlap(data[j, i, top:bottom, left:right], scale_image)
-                        data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.image_size_, wx:wx+self.image_size_])
+                        data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.frmsz, wx:wx+self.frmsz])
                         # NL: (y,x) -> (x,y)
                         #label[j, i] = label_offset + np.array([top, left, top, left])
                         label[j, i] = label_offset + np.array([left, top, left, top])
@@ -413,18 +416,20 @@ class Data_bouncing_mnist(object):
                         for i in range(o.ntimesteps):
                             wx = window_x[i,j]
                             wy = window_y[i,j]
-                            data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.image_size_, wx:wx+self.image_size_])
+                            data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.frmsz, wx:wx+self.frmsz])
                     else:
                         for i in range(o.ntimesteps):
                             wx = window_x[0,j]
                             wy = window_y[0,j]
-                            data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.image_size_, wx:wx+self.image_size_])
+                            data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.frmsz, wx:wx+self.frmsz])
                 if self.buff:
                     self._setBuff(data[j], label[j])
 
         # TODO: variable length inputs for
         # 1. online learning, 2. arbitrary training sequences 
         inputs_length = np.ones((o.batchsz), dtype=np.int32) * o.ntimesteps
+
+        inputs_HW = np.ones((o.batchsz, 2), dtype=np.float32) * self.frmsz
 
         # relative scale of label
         label = label / o.frmsz
@@ -435,6 +440,7 @@ class Data_bouncing_mnist(object):
         batch = {
                 'inputs': data,
                 'inputs_length': inputs_length, 
+                'inputs_HW': inputs_HW,
                 'labels': label,
                 'digits': data_all['targets'][idx],
                 'idx': idx
@@ -672,6 +678,7 @@ class Data_ilsvrc(object):
             dtype=np.float32)
         label = np.zeros((o.batchsz, o.ntimesteps, o.outdim), dtype=np.float32)
         inputs_length = np.zeros((o.batchsz), dtype=np.int32)
+        inputs_HW = np.zeros((o.batchsz, 2), dtype=np.float32)
 
         for ie in range(o.batchsz):
             for t, ifrm in enumerate(self.exps[dstype]['frm'][idx[ie]]):
@@ -695,6 +702,7 @@ class Data_ilsvrc(object):
                     interpolation=cv2.INTER_AREA)
                 label[ie,t] = y
             inputs_length[ie] = t+1
+            inputs_HW[ie] = x.shape[0:2]
 
         # TODO: 
         # 1. image normalization with mean and std
@@ -704,6 +712,7 @@ class Data_ilsvrc(object):
         batch = {
                 'inputs': data,
                 'inputs_length': inputs_length, 
+                'inputs_HW': inputs_HW,
                 'labels': label,
                 'idx': idx
                 }
@@ -742,7 +751,7 @@ if __name__ == '__main__':
     from opts import Opts
     o = Opts()
     o.batchsz = 20
-    o.dataset = 'bouncing_mnist' # moving_mnist, bouncing_mnist, ilsvrc
+    o.dataset = 'ilsvrc' # moving_mnist, bouncing_mnist, ilsvrc
     o._set_dataset_params()
     dstype = 'train'
     loader = load_data(o)

@@ -28,7 +28,7 @@ def show_dataset_batch(batch, dataset, frmsz):
             if dataset == 'ilsvrc':
                 plt.imshow(np.uint8(vids[i,t]))
             elif dataset == 'moving_mnist' or dataset == 'bouncing_mnist':
-                plt.imshow(vids[i,t])
+                plt.imshow(np.squeeze(vids[i,t], axis=(2,)))
             if dataset == 'moving_mnist' or dataset == 'bouncing_mnist':
                 plt.title(digits[i])
             ax = plt.gca()
@@ -126,5 +126,47 @@ def plot_losses_train_val(loss_train, loss_val, o, cnt_):
     plt.savefig(outfile)
     plt.close()
 
+def plot_successplot(success_rates, auc, o, savedir):
+    '''
+    Currently, only one plot is being passed. To compare the performances 
+    between other models, you will need to consider drawing all plots at once.
+    (easy..)
+    '''
+    fig = plt.figure(figsize=(6,6))
+    ax1 = fig.add_subplot(111)
+    success_rates_thresholds = np.append(np.arange(0,1,0.1), 1)
+    ax1.plot(success_rates_thresholds, success_rates, 
+        'b-o', label='auc:{0:.3f}'.format(auc))
+    legend = ax1.legend(loc='center left')
+    ax1.set_title('success plot')
+    ax1.set_xlabel('overlap threshold')
+    ax1.set_ylabel('success rate')
+    if o.nosave:
+        outfile = os.path.join(o.path_save_tmp, o.exectime+'_successplot.png')
+    else:
+        outfile = os.path.join(savedir, 'successplot.png')
+    plt.savefig(outfile)
+    plt.close()
 
+def plot_precisionplot(precision_rates, cle_representative, o, savedir):
+    '''
+    Currently, only one plot is being passed. To compare the performances 
+    between other models, you will need to consider drawing all plots at once.
+    (easy..)
+    '''
+    fig = plt.figure(figsize=(6,6))
+    ax1 = fig.add_subplot(111)
+    precision_rate_thresholds = np.arange(0, 60, 10)
+    ax1.plot(precision_rate_thresholds, precision_rates, 
+        'b-o', label='cle_representative:{0:.3f}'.format(cle_representative))
+    legend = ax1.legend(loc='center right')
+    ax1.set_title('precision plot')
+    ax1.set_xlabel('location error threshold (pixel)')
+    ax1.set_ylabel('precision')
+    if o.nosave:
+        outfile = os.path.join(o.path_save_tmp, o.exectime+'_precisionplot.png')
+    else:
+        outfile = os.path.join(savedir, 'precisionplot.png')
+    plt.savefig(outfile)
+    plt.close()
 
