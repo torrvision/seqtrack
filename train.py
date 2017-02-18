@@ -78,7 +78,7 @@ def train(m, loader, o):
                 # - check eval losses on train and val sets
                 # - print results (loss, eval resutls, time, etc.)
                 # - save the model and resume info 
-                if iteration % 20 == 0: # save intermediate model
+                if iteration % 20000 == 0: # save intermediate model
                     print ' '
                     # record and plot (intermediate) loss
                     loss_interm_avg = np.mean(losses['interm'])
