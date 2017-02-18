@@ -7,6 +7,7 @@ import os
 
 import draw
 from evaluate import evaluate
+import helpers
 
 
 def train(m, loader, o):
@@ -77,9 +78,7 @@ def train(m, loader, o):
                 # - check eval losses on train and val sets
                 # - print results (loss, eval resutls, time, etc.)
                 # - save the model and resume info 
-                # NOTE: if model is too large to save frequently, adjust the 
-                # iteration number for saving routine in particular.
-                if iteration % 20000 == 0: # save intermediate model
+                if iteration % 20 == 0: # save intermediate model
                     print ' '
                     # record and plot (intermediate) loss
                     loss_interm_avg = np.mean(losses['interm'])
@@ -90,8 +89,10 @@ def train(m, loader, o):
                     # evaluate
                     val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
                     evals = {
-                        'train': evaluate(sess, m, loader, o, 'train', 300),
-                        val_: evaluate(sess, m, loader, o, val_, 300)}
+                        'train': evaluate(sess, m, loader, o, 'train', 300, 
+                            hold_inputs=True, shuffle_local=True),
+                        val_: evaluate(sess, m, loader, o, val_, 300, 
+                            hold_inputs=True, shuffle_local=True)}
                     # check losses on train and val set
                     losses['interm_eval_subset_train'] = np.append(
                             losses['interm_eval_subset_train'],
@@ -103,6 +104,9 @@ def train(m, loader, o):
                             losses['interm_eval_subset_train'],
                             losses['interm_eval_subset_val'],
                             o, str(iteration))
+                    # visualize tracking results examples
+                    draw.show_track_results(
+                            evals['train'], loader, 'train', o, iteration)
                     # print results
                     print 'ep {0:d}/{1:d} (ITERATION-{2:d}) |loss: {3:.5f} '\
                         '|(train/{4:s}) IOU: {5:.3f}/{6:.3f}, '\
@@ -117,8 +121,11 @@ def train(m, loader, o):
                     # save model and resume info
                     if not o.nosave:
                         # TODO: check save_path 
+                        pdb.set_trace()
+                        savedir = os.path.join(o.path_save, 'models')
+                        if not os.path.exists(savedir): helpers.mkdir_p(savedir)
                         saved_model = saver.save(sess, os.path.join(
-                            o.path_model, 'iteration{}.ckpt'.format(iteration)))
+                            savedir, 'iteration{}.ckpt'.format(iteration)))
                         resume = {}
                         resume['ie'] = ie
                         resume['iteration'] = iteration

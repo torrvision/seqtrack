@@ -7,7 +7,8 @@ import time
 import draw
 
 
-def evaluate(sess, m, loader, o, dstype, nbatches_=None, draw_=False ):
+def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False, 
+        shuffle_local=False):
     '''
     Args: 
         nbatches_: the number of batches to evaluate 
@@ -48,18 +49,19 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, draw_=False ):
 
     results = {
             'idx': [], 
-            #'inputs': [], # TOO large to have in memory
+            'inputs': [], # TOO large to have in memory
             'inputs_length': [], 
             'inputs_HW': [], 
             'labels': [], 
             'outputs': [],
-            'loss': []}
+            'loss': [],
+            'nbatches': nbatches}
 
     #for ib in range(datasz/o.batchsz if not o.debugmode else 100):
     #for ib in range(nbatches if not o.debugmode else 100):
     for ib in range(nbatches):
         t_start = time.time()
-        batch = loader.get_batch(ib, o, dstype)
+        batch = loader.get_batch(ib, o, dstype, shuffle_local=shuffle_local)
         # process each time step one by one
         for t in range(o.ntimesteps):
             batch_split = get_batch_split_fortest(batch, t)
@@ -75,7 +77,8 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, draw_=False ):
                     [m.net['outputs'], m.net['loss']], feed_dict=fdict)
 
             results['idx'].append(batch_split['idx'])
-            #results['inputs'].append(batch_split['inputs']) # no memory
+            if hold_inputs:
+                results['inputs'].append(batch_split['inputs']) # no memory
             results['inputs_length'].append(batch_split['inputs_length'])
             results['inputs_HW'].append(batch_split['inputs_HW'])
             results['labels'].append(batch_split['labels'])
@@ -94,19 +97,6 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, draw_=False ):
             results['outputs'], results['labels'], 
             results['inputs_length'], results['inputs_HW'], 
             nbatches, o)
-
-    # TODO: Write a new drawing module.
-    # 1. integrate all data sets in one, 
-    # 2. adjust as results doesn't contain input image any more
-    # 3. may not need to be inside here
-    if not o.nosave and draw_:
-        if o.dataset == 'moving_mnist':
-            draw.show_tracking_results_moving_mnist(results, o, save_=True)
-        elif o.dataset == 'bouncing_mnist':
-            draw.show_tracking_results_bouncing_mnist(results, o, save_=True)
-            raise ValueError('not implemented yet')
-        else: 
-            raise ValueError('wrong dataset!')
 
     return results
 
@@ -160,7 +150,7 @@ def evaluate_outputs(outputs, labels, inputs_length, inputs_HW, nbatches, o):
     assert(batchsz_est == o.batchsz)
     boxA = np.reshape(boxA, [nbatches, o.ntimesteps, -1, o.ntimesteps, 4]) 
     boxB = np.reshape(boxB, [nbatches, o.ntimesteps, -1, o.ntimesteps, 4]) 
-    inputs_length = np.reshape(inputs_length, [nbatches, o.ntimesteps, 1])
+    inputs_length = np.reshape(inputs_length, [nbatches, o.ntimesteps, -1])
     inputs_HW = np.reshape(inputs_HW, [nbatches, o.ntimesteps, -1, 2])
 
     # back to original scale (pixel)
@@ -176,13 +166,22 @@ def evaluate_outputs(outputs, labels, inputs_length, inputs_HW, nbatches, o):
     yB = np.minimum(boxA[:,:,:,:,3], boxB[:,:,:,:,3])
 
     # compute the area of intersection rectangle
-    interArea = (xB - xA + 1) * (yB - yA + 1)
+    # NOTE: Wrong. Adding 1 makes huge change
+    #interArea = (xB - xA + 1) * (yB - yA + 1) 
+    interArea = np.maximum((xB - xA), 0) * np.maximum((yB - yA), 0)
 
     # compute the area of both the prediction and ground-truth rectangles
+    # NOTE: Wrong. Adding 1 makes huge change
+    '''
     boxAArea = (boxA[:,:,:,:,2] - boxA[:,:,:,:,0] + 1)\
             * (boxA[:,:,:,:,3] - boxA[:,:,:,:,1] + 1)
     boxBArea = (boxB[:,:,:,:,2] - boxB[:,:,:,:,0] + 1)\
             * (boxB[:,:,:,:,3] - boxB[:,:,:,:,1] + 1)
+    '''
+    boxAArea = (boxA[:,:,:,:,2] - boxA[:,:,:,:,0])\
+            * (boxA[:,:,:,:,3] - boxA[:,:,:,:,1])
+    boxBArea = (boxB[:,:,:,:,2] - boxB[:,:,:,:,0])\
+            * (boxB[:,:,:,:,3] - boxB[:,:,:,:,1])
 
     # compute the intersection over union by taking the intersection area and 
     # dividing it by the sum of prediction + ground-truth areas - the 
@@ -224,8 +223,8 @@ def evaluate_outputs(outputs, labels, inputs_length, inputs_HW, nbatches, o):
             for b in range(iou.shape[2]): # batchsz 
                 # TODO: negative iou score spotted in a few places.
                 # might be better to have loss term on iou.
-                #if iou[i,t,b,inputs_length[i,t,b]-1] < 0:
-                    #pdb.set_trace()
+                if iou[i,t,b,inputs_length[i,t,b]-1] < 0:
+                    pdb.set_trace()
                 iou_valid.append(iou[i,t,b,inputs_length[i,t,b]-1])
                 success_rate_counter.append(
                     iou[i,t,b,inputs_length[i,t,b]-1] > success_rate_thresholds)

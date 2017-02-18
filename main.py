@@ -25,6 +25,9 @@ def parse_arguments():
     parser.add_argument(
             '--dataset', help='specify the name of dataset',
             type=str, default='')
+    parser.add_argument(
+            '--trainsplit', help='specify the split of train dataset (ILSVRC)',
+            type=int, default=0)
 
     parser.add_argument(
             '--nosave', help='no need to save results?', 

@@ -24,6 +24,7 @@ class Opts(object):
         # data set specific parameters 
         # TODO: only params that need to change; otherwise put it in data class
         self.dataset            = '' # (bouncing_mnist, etc.)
+        self.trainsplit         = None # 0,1,2,3 or 9 for all train sets
         self.frmsz              = None
         self.ninchannel         = None
         self.outdim             = None
@@ -76,20 +77,13 @@ class Opts(object):
         #----------------------------------------------------------------------
         # save (save training results), load (test), resume (keep training)
         self.path_base          = os.path.dirname(__file__)
-        #self.path_data          = os.path.join(self.path_base, 'data')
+        self.path_data          = ''
         self.path_data_home     = '/home/namhoon/data' \
                                 if socket.gethostname()=='namhoon-PC' \
                                 else '/mnt/data/namhoon'
         self.path_aux           = os.path.join(self.path_base, 'aux')
         self.nosave             = False
-        self.path_save          = os.path.join(
-                                    self.path_base, 'save/'+self.exectime)
-        #self.path_save_tmp      = os.path.join(
-                                    #self.path_base, 'tmp/'+self.exectime)
-        self.path_save_tmp      = os.path.join(self.path_base, 'tmp/') #TODO:tmp
-        self.path_model         = os.path.join(self.path_save, 'models')
-        self.path_loss          = os.path.join(self.path_save, 'losses')
-        self.path_eval          = os.path.join(self.path_save, 'evals')
+        self.path_save          = ''
         self.restore            = False 
         self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
@@ -126,7 +120,8 @@ class Opts(object):
         tf.set_random_seed(self.seed_global) # TODO: not 100% certain
         np.random.seed(self.seed_global) # checked! 
         self._run_sanitycheck()
-        self._create_save_directories()
+        #self._create_save_directories()
+        self._set_save_directory()
         self._set_gpu_config()
         self._set_dataset_params()
         #self._print_settings()
@@ -137,7 +132,7 @@ class Opts(object):
             self.frmsz = 100 # image size (assuming square)
             self.ninchannel = 1 # number of image channels
             self.outdim = 4 # rnn final output
-        elif self.dataset == 'ilsvrc':
+        elif self.dataset == 'ILSVRC':
             # TODO: try different frmsz
             self.frmsz = 100 # image (re)size, width and height. assuming square
             self.ninchannel = 3
@@ -173,17 +168,11 @@ class Opts(object):
         assert(self.cnn_nlayers == len(self.cnn_filtsz))
         assert(self.cnn_nlayers == len(self.cnn_strides))
 
-    def _create_save_directories(self):
-        if not self.nosave:
-            #os.makedirs(self.path_save)
-            helpers.mkdir_p(self.path_save)
-            if self.mode == 'train':
-                os.makedirs(self.path_model)
-                os.makedirs(self.path_loss)
-            elif self.mode == 'test':
-                os.makedirs(self.path_eval)
-            else:
-                raise ValueError('currently mode should be only train or test')
+    def _set_save_directory(self):
+        if self.nosave:
+            self.path_save = os.path.join(self.path_base, 'tmp/'+self.exectime)
+        else:
+            self.path_save = os.path.join(self.path_base, 'save/'+self.exectime) 
 
     def _print_settings(self):
         '''Print current parameter settings 
@@ -196,10 +185,8 @@ class Opts(object):
         # TODO: implement this function
 
 
-
 if __name__ == '__main__':
     '''Test options
     '''
-
     o = Opts()
     pdb.set_trace()

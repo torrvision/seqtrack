@@ -91,7 +91,8 @@ def test(m, loader, o, dstype):
     savedir = os.path.join(
             o.path_base, os.path.dirname(o.restore_model)[:-7] + '/evaluations')
     if not os.path.exists(savedir): os.makedirs(savedir)
-    # due to the size of results, save subsets only
+
+    # save subset of results (due to memory)
     results_partial = {}
     results_partial['iou_mean'] = results['iou_mean']
     results_partial['success_rates'] = results['success_rates']
@@ -108,7 +109,7 @@ def test(m, loader, o, dstype):
             o, savedir)
 
     # VISUALIZE TRACKING RESULTS 
-    # TODO: not available yet..
+    # TODO: not available yet.. can't hold all examples in 'results'. 
 
     # print
     print '-------------------------------------------------------------------'

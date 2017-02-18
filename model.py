@@ -829,7 +829,7 @@ class RNN_attention_st(object):
 def get_loss(outputs, labels, inputs_length, inputs_HW):
     # loss = tf.reduce_mean(tf.square(outputs-labels)) # previous loss 
 
-    # loss1: sum of two L2 distances for left-top and right-bottom
+    ''' previous L2 loss
     loss1_batch = []
     for i in range(labels.get_shape().as_list()[0]): # batchsz or # examples
         sq = tf.square(
@@ -841,6 +841,14 @@ def get_loss(outputs, labels, inputs_length, inputs_HW):
             tf.sqrt(tf.add(sq[:,2],sq[:,3]))))
         loss1_batch.append(mean_of_l2_sum)
     loss_box = tf.reduce_mean(tf.stack(loss1_batch, axis=0))
+    '''
+
+    # loss1: sum of two l1 distances for left-top and right-bottom
+    loss_l1 = []
+    for i in range(labels.get_shape().as_list()[0]): # batchsz or # examples
+        loss_l1.append(tf.reduce_mean(tf.abs(
+            outputs[i, :inputs_length[i]] - labels[i, :inputs_length[i]])))
+    loss_l1 = tf.reduce_mean(loss_l1)
 
     # loss2: IoU
     scalar = tf.stack(
@@ -852,9 +860,12 @@ def get_loss(outputs, labels, inputs_length, inputs_HW):
     yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
     xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
     yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
-    interArea = (xB - xA + 1) * (yB - yA + 1) # NEED actual image size
-    boxAArea = (boxA[:,:,2] - boxA[:,:,0] + 1) * (boxA[:,:,3] - boxA[:,:,1] + 1) 
-    boxBArea = (boxB[:,:,2] - boxB[:,:,0] + 1) * (boxB[:,:,3] - boxB[:,:,1] + 1) 
+    #interArea = (xB - xA + 1) * (yB - yA + 1)
+    #boxAArea = (boxA[:,:,2] - boxA[:,:,0] + 1) * (boxA[:,:,3] - boxA[:,:,1] + 1) 
+    #boxBArea = (boxB[:,:,2] - boxB[:,:,0] + 1) * (boxB[:,:,3] - boxB[:,:,1] + 1) 
+    interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
+    boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
+    boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
     # TODO: CHECK tf.div or tf.divide
     #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
     iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
@@ -862,12 +873,13 @@ def get_loss(outputs, labels, inputs_length, inputs_HW):
     for i in range(labels.get_shape().as_list()[0]):
         iou_valid.append(iou[i, :inputs_length[i]])
     iou_mean = tf.reduce_mean(iou_valid)
-    loss_iou = 1 - iou_mean
+    loss_iou = 1 - iou_mean # NOTE: Any normalization?
 
-    # loss3: penalty loss considering the structure in (x1, x2, y1, y2)
+    # loss3: CLE
+
     # loss4: cross-entropy between probabilty maps (need to change label) 
 
-    loss = loss_box + loss_iou
+    loss = loss_l1 + loss_iou
     #loss = loss_box
     return loss
 
@@ -897,8 +909,8 @@ if __name__ == '__main__':
     o.dataset = 'bouncing_mnist'
     o.batchsz = 10
     o._set_dataset_params()
-    o.yprev_mode = 'weight' # nouse, concat_abs, weight
-    o.model = 'rnn_attention_st' # rnn_basic, rnn_attention_s, rnn_attention_st
+    o.yprev_mode = 'concat_abs' # nouse, concat_abs, weight
+    o.model = 'rnn_basic' # rnn_basic, rnn_attention_s, rnn_attention_st
     #o.usetfapi = True
     m = load_model(o)
     pdb.set_trace()

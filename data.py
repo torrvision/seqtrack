@@ -49,14 +49,17 @@ class Data_moving_mnist(object):
             if dstype in self.nexps and self.nexps[dstype] is not None:
                 self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
 
-    def get_batch(self, ib, o, dstype):
+    def get_batch(self, ib, o, dstype, shuffle_local=False):
         '''
         Everytime this function is called, create the batch number of moving 
         mnist sets. If this process has randomness, no other data augmentation 
         technique is applied for now. 
         '''
         data = self.data[dstype]
-        idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
+        if shuffle_local: # used for evaluation during train
+            idx = np.random.permutation(self.nexps[dstype])[(ib*o.batchsz):(ib+1)*o.batchsz]
+        else:
+            idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
 
         # the following is a modified version from RATM data preparation
         vids = np.zeros((o.batchsz, o.ntimesteps, self.frmsz, self.frmsz), 
@@ -333,11 +336,14 @@ class Data_bouncing_mnist(object):
             if dstype in self.nexps and self.nexps[dstype] is not None:
                 self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
 
-    def get_batch(self, ib, o, dstype, verbose=False, count=1):
+    def get_batch(self, ib, o, dstype, verbose=False, count=1, shuffle_local=False):
         '''Here in this function also made several changes in several places.
         '''
         data_all = self.data[dstype]
-        idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
+        if shuffle_local: # used for evaluation during train
+            idx = np.random.permutation(self.nexps[dstype])[(ib*o.batchsz):(ib+1)*o.batchsz]
+        else:
+            idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
         
         start_y, start_x = self._GetRandomTrajectory(o.batchsz * self.num_digits_, o)
         window_y, window_x = self._GetRandomTrajectory(o.batchsz * 1, o, self.frmsz*2, object_size_=self.frmsz, step_length_ = 1e-2)
@@ -448,6 +454,10 @@ class Data_bouncing_mnist(object):
 
         return batch
 
+    def get_image(self, idx, dstype):
+        #NOTE: This method can't give you all images in a sequence! (not useful)
+        return self.data[dstype]['images'][idx]
+
     def update_epoch_begin(self, dstype):
         # may no need dstype, as this shuffles train data only.
         self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
@@ -456,9 +466,10 @@ class Data_bouncing_mnist(object):
         draw.show_dataset_batch(batch, dataset, frmsz)
 
 
-class Data_ilsvrc(object):
+class Data_ILSVRC(object):
     def __init__(self, o):
         self.path_data      = o.path_data
+        self.trainsplit     = o.trainsplit # 0, 1, 2, 3, or 9 for all
 
         self.snp            = dict.fromkeys({'train', 'val', 'test'}, None)
         self.nsnps          = dict.fromkeys({'train', 'val', 'test'}, None)
@@ -496,19 +507,50 @@ class Data_ilsvrc(object):
     def _update_snps(self, dstype):
         def create_snps(dstype):
             output = {}
-            if dstype is 'test': # no annotations exis for test data set
-                path_snp_data = os.path.join(self.path_data, 'Data/VID/{}'.format(dstype))
+            if dstype is 'test': # Only data exists. No annotations available. 
+                path_snp_data = os.path.join(
+                    self.path_data, 'Data/VID/{}'.format(dstype))
                 snps = os.listdir(path_snp_data)
                 snps_data = [path_snp_data + '/' + snp for snp in snps]
                 output['Data'] = snps_data
-            else:
-                path_snp_data = os.path.join(self.path_data, 'Data/VID/{}'.format(dstype))
-                path_snp_anno = os.path.join(self.path_data, 'Annotations/VID/{}'.format(dstype))
+            elif dstype is 'val': 
+                path_snp_data = os.path.join(
+                    self.path_data, 'Data/VID/{}'.format(dstype))
+                path_snp_anno = os.path.join(
+                    self.path_data, 'Annotations/VID/{}'.format(dstype))
                 snps = os.listdir(path_snp_data)
                 snps_data = [path_snp_data + '/' + snp for snp in snps]
                 snps_anno = [path_snp_anno + '/' + snp for snp in snps]
                 output['Data'] = snps_data
                 output['Annotations'] = snps_anno
+            elif dstype is 'train': # train data has 4 splits.
+                if self.trainsplit in [0,1,2,3]:
+                    path_snp_data = os.path.join(self.path_data, 
+                        'Data/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(self.trainsplit))
+                    path_snp_anno = os.path.join(self.path_data, 
+                        'Annotations/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(self.trainsplit))
+                    snps = os.listdir(path_snp_data)
+                    snps_data = [path_snp_data + '/' + snp for snp in snps]
+                    snps_anno = [path_snp_anno + '/' + snp for snp in snps]
+                    output['Data'] = snps_data
+                    output['Annotations'] = snps_anno
+                elif self.trainsplit == 9: # MAGIC NUMBER for all train data 
+                    snps_data_all = []
+                    snps_anno_all = []
+                    for i in range(4):
+                        path_snp_data = os.path.join(self.path_data, 
+                            'Data/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(i))
+                        path_snp_anno = os.path.join(self.path_data, 
+                            'Annotations/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(i))
+                        snps = os.listdir(path_snp_data)
+                        snps_data = [path_snp_data + '/' + snp for snp in snps]
+                        snps_anno = [path_snp_anno + '/' + snp for snp in snps]
+                        snps_data_all.extend(snps_data)
+                        snps_anno_all.extend(snps_anno)
+                    output['Data'] = snps_data_all
+                    output['Annotations'] = snps_anno_all
+                else:
+                    raise ValueError('No available option for train split')
             return output
         if self.snp[dstype] is None:
             self.snp[dstype] = create_snps(dstype)
@@ -555,8 +597,12 @@ class Data_ilsvrc(object):
             return objids_snp
     
         if self.objids_snp[dstype] is None:
-            filename = os.path.join(
-                o.path_aux, 'objids_snp_{}.npy'.format(dstype))
+            if dstype == 'train':
+                filename = os.path.join(o.path_aux, 
+                    'objids_snp_{}_{}.npy'.format(dstype, self.trainsplit))
+            else:
+                filename = os.path.join(o.path_aux, 
+                    'objids_snp_{}.npy'.format(dstype))
             if os.path.exists(filename):
                 self.objids_snp[dstype] = np.load(filename).tolist()
             else: # if no file, create and also save
@@ -642,7 +688,7 @@ class Data_ilsvrc(object):
             if dstype in self.nexps and self.nexps[dstype] is not None:
                 self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
     
-    def get_batch(self, ib, o, dstype):
+    def get_batch(self, ib, o, dstype, shuffle_local=False):
         def get_bndbox_from_xml(xmlfile, trackid):
             doc = self._parsexml(xmlfile)
             w = np.float32(doc['annotation']['size']['width'])
@@ -671,7 +717,10 @@ class Data_ilsvrc(object):
                             np.float32(doc['annotation']['object']['bndbox']['ymax']) / h]
             return bndbox # xyxy format
 
-        idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
+        if shuffle_local: # used for evaluation during train
+            idx = np.random.permutation(self.nexps[dstype])[(ib*o.batchsz):(ib+1)*o.batchsz]
+        else:
+            idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
 
         data = np.zeros(
             (o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel), 
@@ -737,8 +786,8 @@ def load_data(o):
         loader = Data_moving_mnist(o)
     elif o.dataset == 'bouncing_mnist':
         loader = Data_bouncing_mnist(o)
-    elif o.dataset == 'ilsvrc':
-        loader = Data_ilsvrc(o)
+    elif o.dataset == 'ILSVRC':
+        loader = Data_ILSVRC(o)
     else:
         raise ValueError('dataset not implemented yet')
     return loader
@@ -751,11 +800,12 @@ if __name__ == '__main__':
     from opts import Opts
     o = Opts()
     o.batchsz = 20
-    o.dataset = 'ilsvrc' # moving_mnist, bouncing_mnist, ilsvrc
+    o.dataset = 'ILSVRC' # moving_mnist, bouncing_mnist, ILSVRC 
+    o.trainsplit = 0
     o._set_dataset_params()
     dstype = 'train'
     loader = load_data(o)
     batch = loader.get_batch(0, o, dstype)
-    #loader.run_sanitycheck(batch, o.dataset, o.frmsz)
+    loader.run_sanitycheck(batch, o.dataset, o.frmsz)
     pdb.set_trace()
 

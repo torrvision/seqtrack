@@ -25,7 +25,7 @@ def show_dataset_batch(batch, dataset, frmsz):
         fig = plt.figure(figsize=(12,12))
         for i in range(vids.shape[0]): # batch
             plt.subplot(5,5,i+1)
-            if dataset == 'ilsvrc':
+            if dataset == 'ILSVRC':
                 plt.imshow(np.uint8(vids[i,t]))
             elif dataset == 'moving_mnist' or dataset == 'bouncing_mnist':
                 plt.imshow(np.squeeze(vids[i,t], axis=(2,)))
@@ -44,48 +44,54 @@ def show_dataset_batch(batch, dataset, frmsz):
     os.system('convert -loop 0 -delay 30 tmp/{}/frame*.png tmp/{}/vid.gif'.\
         format(dataset, dataset))
 
-def show_tracking_results_moving_mnist(results, o, save_=False):
-    if save_:
-        savedir = os.path.join(o.path_eval, 'results_moving_mnist_tmp') 
-        helpers.mkdir_p(savedir) 
+def show_track_results(results, loader, dstype, o, iteration=None):
 
-    idx = results['idx']
-    inputs = results['inputs']
-    labels = results['labels']
-    outputs = results['outputs']
-    frmsz = o.moving_mnist['frmsz']
+    nbatches = results['nbatches']
+    idx = np.reshape(np.asarray(results['idx']), 
+            [nbatches, o.ntimesteps, -1])
+    inputs = np.reshape(np.asarray(results['inputs']),
+            [nbatches, o.ntimesteps, -1, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel])
+    outputs = np.reshape(np.asarray(results['outputs']), 
+            [nbatches, o.ntimesteps, -1, o.ntimesteps, 4])
+    labels = np.reshape(np.asarray(results['labels']), 
+            [nbatches, o.ntimesteps, -1, o.ntimesteps, 4])
+    inputs_length = np.reshape(np.asarray(results['inputs_length']), 
+            [nbatches, o.ntimesteps, -1])
 
-    plt.gray()
-    plt.show()
-    for ib in range(len(idx)):
-        for ie in range(o.batchsz):
+    if o.dataset in ['moving_mnist', 'bouncing_mnist']:
+        plt.gray()
+
+    for i in range(nbatches): # nbatches
+        for b in range(o.batchsz):
+            fig = plt.figure(figsize=(12,8))
             for t in range(o.ntimesteps):
-                img_at_t = inputs[ib][ie,t].reshape(frmsz, frmsz)
-                pos_gt_at_t = labels[ib][ie,t]
-                pos_pred_at_t = outputs[ib][ie,t]
-
-                plt.imshow(img_at_t)
+                plt.subplot(5,o.ntimesteps/5,t+1)
+                #image
+                img = inputs[i,t,b,inputs_length[i,t,b]-1]
+                if o.dataset in ['moving_mnist', 'bouncing_mnist']:
+                    plt.imshow(np.squeeze(img, axis=2))
+                else: 
+                    pdb.set_trace() # didn't check np.uint8 yet
+                    plt.imshow(np.uint8(img))
+                #rectangles
+                box_gt = labels[i,t,b,inputs_length[i,t,b]-1] * 100 # 100 scale
+                box_pred = outputs[i,t,b,inputs_length[i,t,b]-1] * 100
                 ax = plt.gca()
-                ax.add_patch(
-                        Rectangle(
-                            pos_gt_at_t[::-1], 28, 28,
-                            facecolor='r', edgecolor='r', fill=False))
-                ax.add_patch(
-                        Rectangle(
-                            pos_pred_at_t[::-1], 28, 28,
-                            facecolor='b', edgecolor='b', fill=False))
-                plt.draw()
-                plt.axis('off')
-                plt.savefig(
-                        savedir+'/b{0:d}_exp{1:d}_frm{2:03d}.png'.format(ib,ie,t))
-                plt.close()
-            os.system(
-                    'convert -loop 0 -delay 30\
-                    {0:s}/b{1:d}_exp{2:d}_frm*.png\
-                    {3:s}/b{4:d}_exp{5:d}_vid.gif'\
-                            .format(savedir,ib,ie, savedir,ib,ie))
+                ax.add_patch(Rectangle(
+                    (box_gt[0], box_gt[1]), 
+                    box_gt[2]-box_gt[0], box_gt[3]-box_gt[1], 
+                    facecolor='r', edgecolor='r', fill=False))
+                ax.add_patch(Rectangle(
+                    (box_pred[0], box_pred[1]), 
+                    box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
+                    facecolor='b', edgecolor='b', fill=False))
+            savedir = os.path.join(o.path_save, 'track_results')
+            if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+            outfile = os.path.join(
+                savedir, 'iteration_{}_idx{}.png'.format(iteration, idx[i,0,b]))
+            plt.savefig(outfile)
+            plt.close()
 
-                
 def plot_losses(losses, o, intermediate_=False, cnt_=''): # after trainingj
     if not intermediate_:
         fig = plt.figure(figsize=(12,8))
@@ -103,11 +109,9 @@ def plot_losses(losses, o, intermediate_=False, cnt_=''): # after trainingj
                 losses['interm_avg'], '-o')
         ax1.set_title('average intermediate loss')
 
-    if o.nosave:
-        outfile = os.path.join(
-                o.path_save_tmp, o.exectime+'_losses{}.png'.format(cnt_))   
-    else:
-        outfile = os.path.join(o.path_loss, 'losses{}.png'.format(cnt_))
+    savedir = os.path.join(o.path_save, 'losses')
+    if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+    outfile = os.path.join(savedir, '{}.png'.format(cnt_))
     plt.savefig(outfile)
     plt.close()
 
@@ -117,12 +121,10 @@ def plot_losses_train_val(loss_train, loss_val, o, cnt_):
     ax1.plot(np.arange(loss_train.shape[0]), loss_train, 'b-o')
     ax1.plot(np.arange(loss_val.shape[0]), loss_val, 'r-o')
     ax1.set_title('average intermediate loss for evaluation subsets')
-    if o.nosave:
-        outfile = os.path.join(
-            o.path_save_tmp, o.exectime+'_losses_evalsubset{}.png'.format(cnt_))
-    else:
-        outfile = os.path.join(
-                o.path_loss, 'losses_evalsubset{}.png'.format(cnt_))
+
+    savedir = os.path.join(o.path_save, 'losses_evalsubset')
+    if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+    outfile = os.path.join(savedir, '{}.png'.format(cnt_))
     plt.savefig(outfile)
     plt.close()
 
@@ -131,6 +133,8 @@ def plot_successplot(success_rates, auc, o, savedir):
     Currently, only one plot is being passed. To compare the performances 
     between other models, you will need to consider drawing all plots at once.
     (easy..)
+    Also, the savedir is where the model (that is used to produce results) 
+    is located .
     '''
     fig = plt.figure(figsize=(6,6))
     ax1 = fig.add_subplot(111)
@@ -141,10 +145,8 @@ def plot_successplot(success_rates, auc, o, savedir):
     ax1.set_title('success plot')
     ax1.set_xlabel('overlap threshold')
     ax1.set_ylabel('success rate')
-    if o.nosave:
-        outfile = os.path.join(o.path_save_tmp, o.exectime+'_successplot.png')
-    else:
-        outfile = os.path.join(savedir, 'successplot.png')
+
+    outfile = os.path.join(savedir, 'successplot.png')
     plt.savefig(outfile)
     plt.close()
 
@@ -153,6 +155,8 @@ def plot_precisionplot(precision_rates, cle_representative, o, savedir):
     Currently, only one plot is being passed. To compare the performances 
     between other models, you will need to consider drawing all plots at once.
     (easy..)
+    Also, the savedir is where the model (that is used to produce results) 
+    is located .
     '''
     fig = plt.figure(figsize=(6,6))
     ax1 = fig.add_subplot(111)
@@ -163,10 +167,7 @@ def plot_precisionplot(precision_rates, cle_representative, o, savedir):
     ax1.set_title('precision plot')
     ax1.set_xlabel('location error threshold (pixel)')
     ax1.set_ylabel('precision')
-    if o.nosave:
-        outfile = os.path.join(o.path_save_tmp, o.exectime+'_precisionplot.png')
-    else:
-        outfile = os.path.join(savedir, 'precisionplot.png')
+    outfile = os.path.join(savedir, 'precisionplot.png')
     plt.savefig(outfile)
     plt.close()
 
