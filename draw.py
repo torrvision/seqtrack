@@ -62,14 +62,43 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
         plt.gray()
 
     cnt = 0
-    for i in range(nbatches): # nbatches
+    rand_batch_indices = np.random.permutation(nbatches)
+    for i in rand_batch_indices: # nbatches
         for b in range(o.batchsz):
             cnt += 1
             if cnt > nlimit:
                 return 
 
+            max_inputs_length = np.max(inputs_length[i,:,b])
             fig = plt.figure(figsize=(12,8))
+            for t in range(max_inputs_length):
+                plt.subplot(5,o.ntimesteps/5,t+1)
+                #image
+                img = inputs[i,max_inputs_length,b,t]
+                if o.dataset in ['moving_mnist', 'bouncing_mnist']:
+                    plt.imshow(np.squeeze(img, axis=2))
+                else: 
+                    # unnormalize using stat
+                    img *= loader.stat[dstype]['std']
+                    img += loader.stat[dstype]['mean']
+                    plt.imshow(np.uint8(img))
+                #rectangles
+                box_gt = labels[i,max_inputs_length,b,t] * 100 # 100 scale
+                box_pred = outputs[i,max_inputs_length,b,t] * 100
+                ax = plt.gca()
+                ax.add_patch(Rectangle(
+                    (box_gt[0], box_gt[1]), 
+                    box_gt[2]-box_gt[0], box_gt[3]-box_gt[1], 
+                    facecolor='r', edgecolor='r', fill=False))
+                ax.add_patch(Rectangle(
+                    (box_pred[0], box_pred[1]), 
+                    box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
+                    facecolor='b', edgecolor='b', fill=False))
+
+            '''
             for t in range(o.ntimesteps):
+                if t > np.max(inputs_length[i,:,b])-1:
+                    break
                 plt.subplot(5,o.ntimesteps/5,t+1)
                 #image
                 img = inputs[i,t,b,inputs_length[i,t,b]-1]
@@ -77,7 +106,6 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
                     plt.imshow(np.squeeze(img, axis=2))
                 else: 
                     # unnormalize using stat
-                    pdb.set_trace()
                     img *= loader.stat[dstype]['std']
                     img += loader.stat[dstype]['mean']
                     plt.imshow(np.uint8(img))
@@ -93,6 +121,7 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
                     (box_pred[0], box_pred[1]), 
                     box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
                     facecolor='b', edgecolor='b', fill=False))
+            '''
 
             savedir = os.path.join(o.path_save, 'track_results')
             if not os.path.exists(savedir): helpers.mkdir_p(savedir)
