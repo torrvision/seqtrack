@@ -33,6 +33,7 @@ class Opts(object):
         # model - general
         self.model              = '' # {rnn_basic, rnn_attention_s, rnn_attention_t}
         self.usetfapi           = False
+        self.losses             = None
 
         #----------------------------------------------------------------------
         # model - attention
@@ -53,10 +54,6 @@ class Opts(object):
         # model parameters - cnn (or feature extractor)
         self.cnn_pretrain       = False 
         self.cnn_model          = 'vgg' # vgg, resnet, imagenet, etc.
-        self.cnn_nchannels      = [16, 16]
-        self.cnn_nlayers        = 2
-        self.cnn_filtsz         = [3, 3]
-        self.cnn_strides        = [3, 3]
         # TODO: add dropout and batch norm option
 
         #----------------------------------------------------------------------
@@ -164,9 +161,6 @@ class Opts(object):
                     and not self.restore and self.restore_model is None))
         assert((not self.resume and self.resume_data is None) or
                 (self.resume and self.resume_data is not None))
-        assert(self.cnn_nlayers == len(self.cnn_nchannels))
-        assert(self.cnn_nlayers == len(self.cnn_filtsz))
-        assert(self.cnn_nlayers == len(self.cnn_strides))
 
     def _set_save_directory(self):
         if self.nosave:

@@ -51,6 +51,9 @@ def parse_arguments():
     parser.add_argument(
             '--usetfapi', help='set to use tensorflow rnn api', 
             action='store_true')
+    parser.add_argument(
+            '--losses', nargs='+', help='list of losses to be used',
+            type=str) # example [l1, iou]
 
     parser.add_argument(
             '--cell_type', help='rnn cell type',
@@ -116,11 +119,9 @@ if __name__ == "__main__":
 
     if o.mode == 'train':
         train(m, loader, o)
-    elif o.mode == 'test':
-        test(m, loader, o)
     else:
-        raise ValueError('Currently, only either train or test mode supported')
+        raise ValueError ('Use this only for train. test script is elsewhere.')
 
     print '**Saved in the following directory.'
-    print o.path_save if not o.nosave else o.path_save_tmp
+    print o.path_save
 

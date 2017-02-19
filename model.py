@@ -7,20 +7,27 @@ class CNN(object):
     def __init__(self, o):
         self.batchsz        = o.batchsz
         self.ntimesteps     = o.ntimesteps
-        self.nlayers        = o.cnn_nlayers
-        self.nchannels      = o.cnn_nchannels
-        self.filtsz         = o.cnn_filtsz
-        self.strides        = o.cnn_strides
         self.wd             = o.wd
         self.ninchannel     = o.ninchannel
+        self._set_architecture_params(o.dataset)
+
+    def _set_architecture_params(self, dataset):
+        if dataset in ['moving_mnist', 'bouncing_mnist']: # easy datasets
+            self.nlayers = 2
+            self.nchannels = [16, 16]
+            self.filtsz = [3, 3]
+            self.strides = [3, 3]
+        else: # ILSVRC or other data set of natural images 
+            # TODO: potentially a lot of room for improvement here
+            self.nlayers = 3
+            self.nchannels = [16, 32, 64]
+            self.filtsz = [7, 5, 3]
+            self.strides = [3, 2, 1]
+        assert(self.nlayers == len(self.nchannels))
+        assert(self.nlayers == len(self.filtsz))
+        assert(self.nlayers == len(self.strides))
 
     def create_network(self, inputs):
-        def _run_sanitycheck(inputs):
-            input_shape = inputs.get_shape().as_list()
-            #assert(len(input_shape)==4) # TODO: assuming one channel image; change later
-            assert(self.batchsz == input_shape[0])
-            assert(self.ntimesteps == input_shape[1])
-
         def _get_cnn_params():
             # CNN params shared across all time steps
             def _weight_variable(shape, wd=0.0): # TODO: this can be used global (maybe with scope)
@@ -58,7 +65,6 @@ class CNN(object):
             else:
                 raise ValueError('no available activation type!')
 
-        _run_sanitycheck(inputs)
         w_conv, b_conv = _get_cnn_params()
         activations = []
         for t in range(self.ntimesteps): # TODO: variable length inputs!!!
@@ -66,7 +72,6 @@ class CNN(object):
                 #x = tf.expand_dims(inputs[:,t],3) if i==0 else relu
                 x = inputs[:,t] if i==0 else relu
                 st = self.strides[i]
-                # TODO: convolution different stride at each layer
                 conv = _conv2d(x, w_conv[i], b_conv[i], strides_=[1,st,st,1])
                 if False: # i == self.nlayers-1: # last layer
                     relu = _activate(conv, activation_='linear')
@@ -74,6 +79,7 @@ class CNN(object):
                     relu = _activate(conv, activation_='relu')
             activations.append(relu)
         outputs = tf.stack(activations, axis=1)
+
         return outputs
 
 
@@ -111,12 +117,12 @@ class RNN_basic(object):
 
         # RNN
         if o.usetfapi: # TODO: will (and should) be deprecated. 
+            assert(False)
             outputs = self._rnn_pass_API(inputs_cnn, inputs_length, o)
         else: # manual rnn module
             outputs = self._rnn_pass(labels, o) 
  
-        # TODO: once variable length, labels should respect that setting too!
-        loss = get_loss(outputs, labels, inputs_length, inputs_HW)
+        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
@@ -232,14 +238,14 @@ class RNN_basic(object):
             # initial states 
             h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
             C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
-            y_prev = labels[:,0]
+            y_prev = labels[:,0] # pass gt at the first frame
 
             # unroll
             outputs = []
             for t in range(o.ntimesteps): # TODO: change if variable length input/out
                 h_prev, C_prev = _activate_rnncell(
                     self.cnnout['feat'][:,t], h_prev, C_prev, y_prev, o) 
-                if t == 0: # NOTE: pass ground-truth at t=2 (if t<n)
+                if t == 0: # NOTE: pass ground-truth at t=2 (if t<T)
                     y_prev = labels[:,0]
                 else:
                     y_prev = tf.matmul(h_prev, self.params['W_out']) \
@@ -350,8 +356,7 @@ class RNN_attention_s(object):
         # RNN
         outputs = self._rnn_pass(labels, o)
  
-        # TODO: once variable length, labels should respect that setting too!
-        loss = get_loss(outputs, labels, inputs_length, inputs_HW)
+        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
@@ -594,8 +599,7 @@ class RNN_attention_st(object):
         # RNN
         outputs = self._rnn_pass(labels, o)
 
-        # TODO: once variable length, labels should respect that setting too!
-        loss = get_loss(outputs, labels, inputs_length, inputs_HW)
+        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
@@ -826,9 +830,8 @@ class RNN_attention_st(object):
         return outputs 
 
 
-def get_loss(outputs, labels, inputs_length, inputs_HW):
+def get_loss(outputs, labels, inputs_length, inputs_HW, o):
     # loss = tf.reduce_mean(tf.square(outputs-labels)) # previous loss 
-
     ''' previous L2 loss
     loss1_batch = []
     for i in range(labels.get_shape().as_list()[0]): # batchsz or # examples
@@ -843,45 +846,47 @@ def get_loss(outputs, labels, inputs_length, inputs_HW):
     loss_box = tf.reduce_mean(tf.stack(loss1_batch, axis=0))
     '''
 
+    loss = []
+
     # loss1: sum of two l1 distances for left-top and right-bottom
-    loss_l1 = []
-    for i in range(labels.get_shape().as_list()[0]): # batchsz or # examples
-        loss_l1.append(tf.reduce_mean(tf.abs(
-            outputs[i, :inputs_length[i]] - labels[i, :inputs_length[i]])))
-    loss_l1 = tf.reduce_mean(loss_l1)
+    if 'l1' in o.losses:
+        loss_l1 = []
+        for i in range(labels.get_shape().as_list()[0]): # batchsz or # examples
+            loss_l1.append(tf.reduce_mean(tf.abs(
+                outputs[i, :inputs_length[i]] - labels[i, :inputs_length[i]])))
+        loss_l1 = tf.reduce_mean(loss_l1)
+        loss.append(loss_l1)
 
     # loss2: IoU
-    scalar = tf.stack(
-            (inputs_HW[:,1], inputs_HW[:,0], inputs_HW[:,1], inputs_HW[:,0]), 
-            axis=1)
-    boxA = outputs * tf.expand_dims(scalar, 1)
-    boxB = labels * tf.expand_dims(scalar, 1)
-    xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
-    yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
-    xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
-    yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
-    #interArea = (xB - xA + 1) * (yB - yA + 1)
-    #boxAArea = (boxA[:,:,2] - boxA[:,:,0] + 1) * (boxA[:,:,3] - boxA[:,:,1] + 1) 
-    #boxBArea = (boxB[:,:,2] - boxB[:,:,0] + 1) * (boxB[:,:,3] - boxB[:,:,1] + 1) 
-    interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
-    boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
-    boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
-    # TODO: CHECK tf.div or tf.divide
-    #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
-    iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
-    iou_valid = []
-    for i in range(labels.get_shape().as_list()[0]):
-        iou_valid.append(iou[i, :inputs_length[i]])
-    iou_mean = tf.reduce_mean(iou_valid)
-    loss_iou = 1 - iou_mean # NOTE: Any normalization?
+    if 'iou' in o.losses:
+        scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
+            inputs_HW[:,1], inputs_HW[:,0]), axis=1)
+        boxA = outputs * tf.expand_dims(scalar, 1)
+        boxB = labels * tf.expand_dims(scalar, 1)
+        xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
+        yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
+        xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
+        yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
+        #interArea = (xB - xA + 1) * (yB - yA + 1)
+        #boxAArea = (boxA[:,:,2] - boxA[:,:,0] + 1) * (boxA[:,:,3] - boxA[:,:,1] + 1) 
+        #boxBArea = (boxB[:,:,2] - boxB[:,:,0] + 1) * (boxB[:,:,3] - boxB[:,:,1] + 1) 
+        interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
+        boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
+        boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
+        # TODO: CHECK tf.div or tf.divide
+        #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
+        iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
+        iou_valid = []
+        for i in range(labels.get_shape().as_list()[0]):
+            iou_valid.append(iou[i, :inputs_length[i]])
+        iou_mean = tf.reduce_mean(iou_valid)
+        loss_iou = 1 - iou_mean # NOTE: Any normalization?
+        loss.append(loss_iou)
 
     # loss3: CLE
-
     # loss4: cross-entropy between probabilty maps (need to change label) 
 
-    loss = loss_l1 + loss_iou
-    #loss = loss_box
-    return loss
+    return tf.reduce_sum(loss)
 
 def load_model(o):
     is_training = True if o.mode == 'train' else False
@@ -906,12 +911,14 @@ if __name__ == '__main__':
     from opts import Opts
     o = Opts()
     o.mode = 'train'
-    o.dataset = 'bouncing_mnist'
+    o.dataset = 'ILSVRC'
     o.batchsz = 10
     o._set_dataset_params()
     o.yprev_mode = 'concat_abs' # nouse, concat_abs, weight
     o.model = 'rnn_basic' # rnn_basic, rnn_attention_s, rnn_attention_st
+    o.losses = ['l1', 'iou']
     #o.usetfapi = True
+
     m = load_model(o)
     pdb.set_trace()
 
