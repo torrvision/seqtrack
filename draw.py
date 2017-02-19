@@ -44,7 +44,7 @@ def show_dataset_batch(batch, dataset, frmsz):
     os.system('convert -loop 0 -delay 30 tmp/{}/frame*.png tmp/{}/vid.gif'.\
         format(dataset, dataset))
 
-def show_track_results(results, loader, dstype, o, iteration=None):
+def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
 
     nbatches = results['nbatches']
     idx = np.reshape(np.asarray(results['idx']), 
@@ -61,8 +61,13 @@ def show_track_results(results, loader, dstype, o, iteration=None):
     if o.dataset in ['moving_mnist', 'bouncing_mnist']:
         plt.gray()
 
+    cnt = 0
     for i in range(nbatches): # nbatches
         for b in range(o.batchsz):
+            cnt += 1
+            if cnt > nlimit:
+                return 
+
             fig = plt.figure(figsize=(12,8))
             for t in range(o.ntimesteps):
                 plt.subplot(5,o.ntimesteps/5,t+1)
@@ -71,7 +76,10 @@ def show_track_results(results, loader, dstype, o, iteration=None):
                 if o.dataset in ['moving_mnist', 'bouncing_mnist']:
                     plt.imshow(np.squeeze(img, axis=2))
                 else: 
-                    pdb.set_trace() # didn't check np.uint8 yet
+                    # unnormalize using stat
+                    pdb.set_trace()
+                    img *= loader.stat[dstype]['std']
+                    img += loader.stat[dstype]['mean']
                     plt.imshow(np.uint8(img))
                 #rectangles
                 box_gt = labels[i,t,b,inputs_length[i,t,b]-1] * 100 # 100 scale
@@ -85,6 +93,7 @@ def show_track_results(results, loader, dstype, o, iteration=None):
                     (box_pred[0], box_pred[1]), 
                     box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
                     facecolor='b', edgecolor='b', fill=False))
+
             savedir = os.path.join(o.path_save, 'track_results')
             if not os.path.exists(savedir): helpers.mkdir_p(savedir)
             outfile = os.path.join(

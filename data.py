@@ -482,10 +482,13 @@ class Data_ILSVRC(object):
         self.nexps          = dict.fromkeys({'train', 'val', 'test'}, None)
         self.idx_shuffle    = dict.fromkeys({'train', 'val', 'test'}, None)
 
+        self.stat           = dict.fromkeys({'train', 'val', 'test'}, None)
+
         self._load_data(o)
         self._update_idx_shuffle(['train', 'val', 'test'])
 
     def _load_data(self, o):
+        # TODO: need to process and load test data set as well..
         # TODO: not loading test data yet. ILSVRC doesn't have "Annotations" for
         # test set. I can still load "Data", but need to fix a couple of places
         # to load only "Data". Will fix it later.
@@ -498,6 +501,7 @@ class Data_ILSVRC(object):
             self._update_snp_frmsplits(dstype, o.ntimesteps) # NOTE: perform at every epoch?
             self._update_exps(dstype)
             self._update_nexps(dstype)
+            self._update_stat(dstype, o)
 
     def _parsexml(self, xmlfile):
         with open(xmlfile) as f:
@@ -687,6 +691,43 @@ class Data_ILSVRC(object):
         for dstype in dstypes:
             if dstype in self.nexps and self.nexps[dstype] is not None:
                 self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
+
+    def _update_stat(self, dstype, o):
+        def create_stat(dstype):
+            stat = dict.fromkeys({'mean', 'std'}, None)
+            mean = []
+            std = []
+            for i in range(self.nsnps[dstype]):
+                print 'computing mean and std in snippet of {}, {}/{}'.format(
+                        dstype, i+1, self.nsnps[dstype])
+                imglist = os.listdir(self.snp[dstype]['Data'][i])
+                imglist = [self.snp[dstype]['Data'][i] + '/' + img for img in imglist]
+                xs = []
+                for j in imglist:
+                    # NOTE: perform resize image!
+                    xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
+                        (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+                xs = np.asarray(xs)
+                mean.append(np.mean(xs, axis=0))
+                std.append(np.std(xs, axis=0))
+            mean = np.mean(np.asarray(mean), axis=0)
+            std = np.mean(np.asarray(std), axis=0)
+            stat['mean'] = mean
+            stat['std'] = std
+            return stat
+
+        if self.stat[dstype] is None:
+            if dstype == 'train':
+                filename = os.path.join(o.path_aux, 
+                    'meanstd_{}_frmsz_{}_train_{}.npy'.format(o.dataset, o.frmsz, self.trainsplit))
+            else:
+                filename = os.path.join(o.path_aux,
+                        'meanstd_{}_frmsz_{}_{}.npy'.format(o.dataset, o.frmsz, dstype))
+            if os.path.exists(filename):
+                self.stat[dstype] = np.load(filename).tolist()
+            else:
+                self.stat[dstype] = create_stat(dstype) 
+                np.save(filename, self.stat[dstype])
     
     def get_batch(self, ib, o, dstype, shuffle_local=False):
         def get_bndbox_from_xml(xmlfile, trackid):
@@ -758,6 +799,10 @@ class Data_ILSVRC(object):
         # 2. data augmentation (rotation, scaling, translation)
         # 3. data perturbation.. (need to think about this)
 
+        # image normalization 
+        data -= self.stat[dstype]['mean']
+        data /= self.stat[dstype]['std']
+
         batch = {
                 'inputs': data,
                 'inputs_length': inputs_length, 
@@ -806,6 +851,6 @@ if __name__ == '__main__':
     dstype = 'train'
     loader = load_data(o)
     batch = loader.get_batch(0, o, dstype)
-    loader.run_sanitycheck(batch, o.dataset, o.frmsz)
+    #loader.run_sanitycheck(batch, o.dataset, o.frmsz)
     pdb.set_trace()
 
