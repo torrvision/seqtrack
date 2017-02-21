@@ -63,8 +63,9 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
 
     cnt = 0
     rand_batch_indices = np.random.permutation(nbatches)
+    rand_expinbatch_indices = np.random.permutation(o.batchsz)
     for i in rand_batch_indices: # nbatches
-        for b in range(o.batchsz):
+        for b in rand_expinbatch_indices: # number of examples in a batch
             cnt += 1
             if cnt > nlimit:
                 return 
@@ -74,7 +75,7 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
             for t in range(max_inputs_length):
                 plt.subplot(5,o.ntimesteps/5,t+1)
                 #image
-                img = inputs[i,max_inputs_length,b,t]
+                img = inputs[i,max_inputs_length-1,b,t]
                 if o.dataset in ['moving_mnist', 'bouncing_mnist']:
                     plt.imshow(np.squeeze(img, axis=2))
                 else: 
@@ -83,8 +84,8 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
                     img += loader.stat[dstype]['mean']
                     plt.imshow(np.uint8(img))
                 #rectangles
-                box_gt = labels[i,max_inputs_length,b,t] * 100 # 100 scale
-                box_pred = outputs[i,max_inputs_length,b,t] * 100
+                box_gt = labels[i,max_inputs_length-1,b,t] * 100 # 100 scale
+                box_pred = outputs[i,max_inputs_length-1,b,t] * 100
                 ax = plt.gca()
                 ax.add_patch(Rectangle(
                     (box_gt[0], box_gt[1]), 
