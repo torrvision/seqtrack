@@ -26,6 +26,9 @@ def parse_arguments():
             '--dataset', help='specify the name of dataset',
             type=str, default='')
     parser.add_argument(
+            '--path_data_home', help='location of datasets',
+            type=str, default='')
+    parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
             type=int, default=0)
 

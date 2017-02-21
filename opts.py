@@ -85,6 +85,7 @@ class Opts(object):
         self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
         self.resume_data        = None
+        self.path_logs          = './logs'
 
         #----------------------------------------------------------------------
         # custom libraries

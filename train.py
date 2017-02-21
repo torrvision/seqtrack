@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 import time
 import os
+import os.path
 
 import draw
 from evaluate import evaluate
@@ -25,6 +26,11 @@ def train(m, loader, o):
 
     saver = tf.train.Saver()
 
+    tf.summary.scalar('loss', m.net['loss'])
+    # tf.summary.histogram('output', m.net['outputs'])
+    summary_op = tf.summary.merge_all()
+
+
     '''
     config = tf.ConfigProto()
     config.allow_soft_placement = True
@@ -36,6 +42,9 @@ def train(m, loader, o):
     t_iteration = time.time()
     with tf.Session(config=o.tfconfig) as sess:
         sess.run(tf.global_variables_initializer()) 
+
+        train_writer = tf.summary.FileWriter(os.path.join(o.path_logs, 'train'), sess.graph)
+
         if o.resume: 
             saver.restore(sess, resume_model)
         
@@ -57,7 +66,11 @@ def train(m, loader, o):
                         m.net['labels']: batch['labels'],
                         lr: lr_epoch
                         }
-                _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
+                if ib % 10 == 0:
+                    _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
+                    train_writer.add_summary(summary, ib)
+                else:
+                    _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
 
                 # **results after every batch 
                 sys.stdout.write(

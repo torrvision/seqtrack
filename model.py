@@ -32,22 +32,27 @@ class CNN(object):
             # CNN params shared across all time steps
             def _weight_variable(shape, wd=0.0): # TODO: this can be used global (maybe with scope)
                 initial = tf.truncated_normal(shape, stddev=0.1)
-                weight_decay = tf.nn.l2_loss(initial) * wd
+                # weight_decay = tf.nn.l2_loss(initial) * wd
+                # tf.add_to_collection('losses', weight_decay)
+                # return tf.Variable(initial)
+                var = tf.Variable(initial, name='weight')
+                weight_decay = tf.nn.l2_loss(var) * wd
                 tf.add_to_collection('losses', weight_decay)
-                return tf.Variable(initial)
+                return var
             def _bias_variable(shape): # TODO: this can be used global (maybe with scope)
                 initial = tf.constant(0.1, shape=shape)
-                return tf.Variable(initial)
+                return tf.Variable(initial, name='bias')
             w_conv = []
             b_conv = []
             for i in range(self.nlayers):
-                shape_w = [
-                        self.filtsz[i], self.filtsz[i], # TODO: try different sz
-                        self.ninchannel if i==0 else self.nchannels[i-1], 
-                        self.nchannels[i]]
-                shape_b = [self.nchannels[i]]
-                w_conv.append(_weight_variable(shape_w, wd=self.wd))
-                b_conv.append(_bias_variable(shape_b))
+                with tf.name_scope('layer_{}'.format(i)):
+                    shape_w = [
+                            self.filtsz[i], self.filtsz[i], # TODO: try different sz
+                            self.ninchannel if i==0 else self.nchannels[i-1], 
+                            self.nchannels[i]]
+                    shape_b = [self.nchannels[i]]
+                    w_conv.append(_weight_variable(shape_w, wd=self.wd))
+                    b_conv.append(_bias_variable(shape_b))
             return w_conv, b_conv
 
         def _conv2d(x, w, b, strides_):
@@ -68,16 +73,17 @@ class CNN(object):
         w_conv, b_conv = _get_cnn_params()
         activations = []
         for t in range(self.ntimesteps): # TODO: variable length inputs!!!
-            for i in range(self.nlayers):
-                #x = tf.expand_dims(inputs[:,t],3) if i==0 else relu
-                x = inputs[:,t] if i==0 else relu
-                st = self.strides[i]
-                conv = _conv2d(x, w_conv[i], b_conv[i], strides_=[1,st,st,1])
-                if False: # i == self.nlayers-1: # last layer
-                    relu = _activate(conv, activation_='linear')
-                else: 
-                    relu = _activate(conv, activation_='relu')
-            activations.append(relu)
+            with tf.name_scope('time_{}'.format(t)):
+                for i in range(self.nlayers):
+                    #x = tf.expand_dims(inputs[:,t],3) if i==0 else relu
+                    x = inputs[:,t] if i==0 else relu
+                    st = self.strides[i]
+                    conv = _conv2d(x, w_conv[i], b_conv[i], strides_=[1,st,st,1])
+                    if False: # i == self.nlayers-1: # last layer
+                        relu = _activate(conv, activation_='linear')
+                    else: 
+                        relu = _activate(conv, activation_='relu')
+                activations.append(relu)
         outputs = tf.stack(activations, axis=1)
 
         return outputs
@@ -92,7 +98,8 @@ class RNN_basic(object):
         self.net = self._create_network(o)
 
     def _cnnout_update(self, cnn, inputs):
-        self.cnnout['feat'] = cnn.create_network(inputs)
+        with tf.name_scope('cnn'):
+            self.cnnout['feat'] = cnn.create_network(inputs)
         self.cnnout['shape'] = self.cnnout['feat'].get_shape().as_list()
         self.cnnout['h'] = self.cnnout['shape'][2] #TODO: double check w and h
         self.cnnout['w'] = self.cnnout['shape'][3]
@@ -102,11 +109,11 @@ class RNN_basic(object):
 
     def _create_network(self, o):
         inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
-        inputs = tf.placeholder(o.dtype, shape=inputs_shape)
-        inputs_length = tf.placeholder(tf.int32, shape=[o.batchsz])
+        inputs = tf.placeholder(o.dtype, shape=inputs_shape, name='image')
+        inputs_length = tf.placeholder(tf.int32, shape=[o.batchsz], name='seq_length')
         inputs_HW = tf.placeholder(o.dtype, shape=[o.batchsz, 2])
         labels = tf.placeholder(
-                o.dtype, shape=[o.batchsz, o.ntimesteps, o.outdim])
+                o.dtype, shape=[o.batchsz, o.ntimesteps, o.outdim], name='label')
 
         # CNN 
         if o.cnn_pretrain: # use pre-trained model
@@ -116,12 +123,13 @@ class RNN_basic(object):
             self._cnnout_update(cnn, inputs)
 
         # RNN
-        if o.usetfapi: # TODO: will (and should) be deprecated. 
-            assert(False)
-            outputs = self._rnn_pass_API(inputs_cnn, inputs_length, o)
-        else: # manual rnn module
-            outputs = self._rnn_pass(labels, o) 
- 
+        with tf.name_scope('rnn'):
+            if o.usetfapi: # TODO: will (and should) be deprecated. 
+                assert(False)
+                outputs = self._rnn_pass_API(inputs_cnn, inputs_length, o)
+            else: # manual rnn module
+                outputs = self._rnn_pass(labels, o) 
+
         loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
@@ -243,6 +251,7 @@ class RNN_basic(object):
             # unroll
             outputs = []
             for t in range(o.ntimesteps): # TODO: change if variable length input/out
+                # with tf.name_scope('time_{}'.format(t)):
                 h_prev, C_prev = _activate_rnncell(
                     self.cnnout['feat'][:,t], h_prev, C_prev, y_prev, o) 
                 if t == 0: # NOTE: pass ground-truth at t=2 (if t<T)
