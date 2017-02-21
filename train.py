@@ -75,9 +75,9 @@ def train(m, loader, o):
                 # **results after every batch 
                 sys.stdout.write(
                         '\rep {0:d}/{1:d}, batch {2:d}/{3:d} '
-                        '(BATCH) |loss:{4:.5f} |time:{5:.2f}'\
+                        '(BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'\
                                 .format(
-                                    ie+1, nepoch, ib+1, nbatch,
+                                    ie+1, nepoch, ib+1, nbatch, o.batchsz,
                                     loss, time.time()-t_batch))
                 sys.stdout.flush()
                 losses['batch'] = np.append(losses['batch'], loss)
@@ -91,7 +91,8 @@ def train(m, loader, o):
                 # - check eval losses on train and val sets
                 # - print results (loss, eval resutls, time, etc.)
                 # - save the model and resume info 
-                if iteration % (10000 if not o.debugmode else 20) == 0: # save intermediate model
+                assess_period = 10000/o.batchsz
+                if iteration % (assess_period if not o.debugmode else 20) == 0: # save intermediate model
                     print ' '
                     # record and plot (intermediate) loss
                     loss_interm_avg = np.mean(losses['interm'])
@@ -102,9 +103,11 @@ def train(m, loader, o):
                     # evaluate
                     val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
                     evals = {
-                        'train': evaluate(sess, m, loader, o, 'train', 100, 
+                        'train': evaluate(sess, m, loader, o, 'train', 
+                            np.maximum(int(np.floor(100/o.batchsz)), 1), 
                             hold_inputs=True, shuffle_local=True),
-                        val_: evaluate(sess, m, loader, o, val_, 100, 
+                        val_: evaluate(sess, m, loader, o, val_, 
+                            np.maximum(int(np.floor(100/o.batchsz)), 1), 
                             hold_inputs=True, shuffle_local=True)}
                     # check losses on train and val set
                     losses['interm_eval_subset_train'] = np.append(
@@ -144,6 +147,8 @@ def train(m, loader, o):
                         resume['model'] = saved_model
                         np.save(o.path_save + '/resume.npy', resume)
             print ' '
+            print 'ep {0:d}/{1:d} (EPOCH) |time:{2:.2f}'.format(
+                    ie+1, nepoch, time.time()-t_epoch)
 
             '''Not using below as performing evaluation at iterations
             # **after every epoch, perform the followings
