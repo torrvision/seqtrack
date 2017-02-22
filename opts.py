@@ -3,6 +3,7 @@ import numpy as np
 import os
 import tensorflow as tf
 import socket
+import random
 
 import helpers
 
@@ -85,7 +86,10 @@ class Opts(object):
         self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
         self.resume_data        = None
-        self.path_logs          = './logs'
+        #self.path_logs          = './logs'
+        # 'logs' directory reserved for saving system level logs (being used in
+        # a shell script)
+        self.path_summary       = os.path.join(self.path_base, 'summary')
 
         #----------------------------------------------------------------------
         # custom libraries
@@ -117,6 +121,7 @@ class Opts(object):
         '''
         tf.set_random_seed(self.seed_global) # TODO: not 100% certain
         np.random.seed(self.seed_global) # checked! 
+        random.seed(self.seed_global)
         self._run_sanitycheck()
         #self._create_save_directories()
         self._set_save_directory()
@@ -167,7 +172,9 @@ class Opts(object):
         if self.nosave:
             self.path_save = os.path.join(self.path_base, 'tmp/'+self.exectime)
         else:
-            self.path_save = os.path.join(self.path_base, 'save/'+self.exectime) 
+            #self.path_save = os.path.join(self.path_base, 'save/'+self.exectime) 
+            self.path_save = os.path.join(self.path_data_home, 
+                    'save/'+self.exectime) 
 
     def _print_settings(self):
         '''Print current parameter settings 

@@ -4,7 +4,7 @@ import numpy as np
 import tensorflow as tf
 import time
 import os
-import os.path
+#import os.path
 
 import draw
 from evaluate import evaluate
@@ -43,7 +43,11 @@ def train(m, loader, o):
     with tf.Session(config=o.tfconfig) as sess:
         sess.run(tf.global_variables_initializer()) 
 
-        train_writer = tf.summary.FileWriter(os.path.join(o.path_logs, 'train'), sess.graph)
+        path_summary_train = os.path.join(o.path_summary, 'train')
+        if not os.path.exists(path_summary_train): 
+            helpers.mkdir_p(path_summary_train)
+        train_writer = tf.summary.FileWriter(path_summary_train, sess.graph)
+        #train_writer = tf.summary.FileWriter(os.path.join(o.path_logs, 'train'), sess.graph)
 
         if o.resume: 
             saver.restore(sess, resume_model)
@@ -91,7 +95,7 @@ def train(m, loader, o):
                 # - check eval losses on train and val sets
                 # - print results (loss, eval resutls, time, etc.)
                 # - save the model and resume info 
-                assess_period = 10000/o.batchsz
+                assess_period = 20000/o.batchsz
                 if iteration % (assess_period if not o.debugmode else 20) == 0: # save intermediate model
                     print ' '
                     # record and plot (intermediate) loss

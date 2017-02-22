@@ -10,7 +10,7 @@ from matplotlib.patches import Rectangle
 import helpers
 
 
-def show_dataset_batch(batch, dataset, frmsz):
+def show_dataset_batch(batch, dataset, frmsz, stat=None):
     vids = batch['inputs']
     if vids.shape[0] > 25: 
         vids = vids[:25] # only draws less than 25 
@@ -25,10 +25,15 @@ def show_dataset_batch(batch, dataset, frmsz):
         fig = plt.figure(figsize=(12,12))
         for i in range(vids.shape[0]): # batch
             plt.subplot(5,5,i+1)
-            if dataset == 'ILSVRC':
-                plt.imshow(np.uint8(vids[i,t]))
-            elif dataset == 'moving_mnist' or dataset == 'bouncing_mnist':
+            if dataset in ['moving_mnist', 'bouncing_mnist']:
                 plt.imshow(np.squeeze(vids[i,t], axis=(2,)))
+            else:
+                # unnormalize using stat
+                img = vids[i,t]
+                img *= stat['std']
+                img += stat['mean']
+                plt.imshow(np.uint8(img))
+
             if dataset == 'moving_mnist' or dataset == 'bouncing_mnist':
                 plt.title(digits[i])
             ax = plt.gca()
