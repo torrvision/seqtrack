@@ -471,18 +471,32 @@ class Data_ILSVRC(object):
         self.path_data      = o.path_data
         self.trainsplit     = o.trainsplit # 0, 1, 2, 3, or 9 for all
 
-        self.snp            = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.nsnps          = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.nfrms_snp      = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.objids_snp     = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.maxtrackid_snp = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.snp_frmsplits  = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.snps               = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.nsnps              = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.nfrms_snp          = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.objids_allfrm_snp  = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.objids_snp         = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.objids_valid_snp   = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.objvalidfrms_snp   = dict.fromkeys({'train', 'val', 'test'}, None)
 
-        self.exps           = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.nexps          = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.idx_shuffle    = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.nexps              = dict.fromkeys({'train', 'val', 'test'}, None)
 
-        self.stat           = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.idx_shuffle        = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.stat               = dict.fromkeys({'train', 'val', 'test'}, None)
+
+        ''' should be deprecated
+        # NOTE: maxtrackid_snp+1 is not equal to the number of objects! 
+        # turns out that some id is missing and skipped in annotation.
+        self.maxtrackid_snp     = dict.fromkeys({'train', 'val', 'test'}, None)
+
+        self.snps_frmsplits     = dict.fromkeys({'train', 'val', 'test'}, None)
+
+        self.exps               = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.nexps              = dict.fromkeys({'train', 'val', 'test'}, None)
+        self.idx_shuffle        = dict.fromkeys({'train', 'val', 'test'}, None)
+
+        self.stat               = dict.fromkeys({'train', 'val', 'test'}, None)
+        '''
 
         self._load_data(o)
         self._update_idx_shuffle(['train', 'val', 'test'])
@@ -496,12 +510,19 @@ class Data_ILSVRC(object):
             self._update_snps(dstype)
             self._update_nsnps(dstype)
             self._update_nfrms_snp(dstype)
-            self._update_objids_snp(dstype, o)
+            self._update_objids_allfrm_snp(dstype, o)
+            self._update_objids_snp(dstype) # simply unique obj ids in a snippet
+            self._update_objvalidfrms_snp(dstype)
+            self._update_nexps(dstype)
+            self._update_stat(dstype, o)
+
+            '''
             self._update_maxtrackid_snp(dstype)
             self._update_snp_frmsplits(dstype, o.ntimesteps) # NOTE: perform at every epoch?
             self._update_exps(dstype)
             self._update_nexps(dstype)
             self._update_stat(dstype, o)
+            '''
 
     def _parsexml(self, xmlfile):
         with open(xmlfile) as f:
@@ -556,24 +577,24 @@ class Data_ILSVRC(object):
                 else:
                     raise ValueError('No available option for train split')
             return output
-        if self.snp[dstype] is None:
-            self.snp[dstype] = create_snps(dstype)
+        if self.snps[dstype] is None:
+            self.snps[dstype] = create_snps(dstype)
 
     def _update_nsnps(self, dstype):
         if self.nsnps[dstype] is None:
-            self.nsnps[dstype] = len(self.snp[dstype]['Data'])
+            self.nsnps[dstype] = len(self.snps[dstype]['Data'])
 
     def _update_nfrms_snp(self, dstype):
         def create_nfrms_snp(dstype):
             nfrms = []
-            for snp in self.snp[dstype]['Data']:
+            for snp in self.snps[dstype]['Data']:
                 nfrms.append(len(glob.glob(snp+'/*.JPEG')))
             return nfrms
         if self.nfrms_snp[dstype] is None:
             self.nfrms_snp[dstype] = create_nfrms_snp(dstype)
 
-    def _update_objids_snp(self, dstype, o):
-        def extract_objids_snp(dstype):
+    def _update_objids_allfrm_snp(self, dstype, o):
+        def extract_objids_allfrm_snp(dstype):
             def extract_objids_from_xml(xmlfile, doc=None):
                 if doc is None: 
                     doc = self._parsexml(xmlfile)
@@ -589,29 +610,81 @@ class Data_ILSVRC(object):
                 else:
                     return [None] # No object in this file (or current frame)
 
-            objids_snp = []
+            objids_allfrm_snp = []
             for i in range(self.nsnps[dstype]):
                 print i
                 objids_frm = []
                 for j in range(self.nfrms_snp[dstype][i]):
-                    xmlfile = os.path.join(self.snp[dstype]['Annotations'][i], 
+                    xmlfile = os.path.join(self.snps[dstype]['Annotations'][i], 
                         '{0:06d}.xml'.format(j))
                     objids_frm.append(extract_objids_from_xml(xmlfile))
-                objids_snp.append(objids_frm)
-            return objids_snp
+                objids_allfrm_snp.append(objids_frm)
+            return objids_allfrm_snp
     
-        if self.objids_snp[dstype] is None:
+        if self.objids_allfrm_snp[dstype] is None:
             if dstype == 'train':
                 filename = os.path.join(o.path_aux, 
-                    'objids_snp_{}_{}.npy'.format(dstype, self.trainsplit))
+                    'objids_allfrm_snp_{}_{}.npy'.format(dstype, self.trainsplit))
             else:
                 filename = os.path.join(o.path_aux, 
-                    'objids_snp_{}.npy'.format(dstype))
+                    'objids_allfrm_snp_{}.npy'.format(dstype))
             if os.path.exists(filename):
-                self.objids_snp[dstype] = np.load(filename).tolist()
+                self.objids_allfrm_snp[dstype] = np.load(filename).tolist()
             else: # if no file, create and also save
-                self.objids_snp[dstype] = extract_objids_snp(dstype)
-                np.save(filename, self.objids_snp[dstype])
+                self.objids_allfrm_snp[dstype] = extract_objids_allfrm_snp(dstype)
+                np.save(filename, self.objids_allfrm_snp[dstype])
+
+    def _update_objids_snp(self, dstype):
+        assert(self.objids_allfrm_snp[dstype] is not None) # obtain from 'objids_allfrm_snp'
+        def find_objids_snp(dstype):
+            output = []
+            for objids_allfrm_snp in self.objids_allfrm_snp[dstype]:
+                objids_unique = set([item for sublist in objids_allfrm_snp for item in sublist])
+                objids_unique.discard(None)
+                assert(len(objids_unique)>0)
+                output.append(objids_unique)
+            return output
+        if self.objids_snp[dstype] is None:
+            self.objids_snp[dstype] = find_objids_snp(dstype)
+
+    def _update_objvalidfrms_snp(self, dstype):
+        assert(self.objids_allfrm_snp[dstype] is not None) # obtain from 'objids_allfrm_snp'
+        def extract_objvalidfrms_snp(dstype):
+            objvalidfrms_snp = []
+            # NOTE: there are objs that only appear one frame. 
+            # This objids are not valid. Thus, objids_valid_snp comes in.
+            objids_valid_snp = []
+            for i in range(self.nsnps[dstype]): # snippets
+                #print 'processing objvalidfrms_snp {}'.format(i)
+                objvalidfrms = {}
+                objids_valid = []
+                for objid in self.objids_snp[dstype][i]: # objects
+                    validfrms = []
+                    flag_one = False
+                    flag_consecutive_one = False
+                    for t in range(self.nfrms_snp[dstype][i]):
+                        if objid in self.objids_allfrm_snp[dstype][i][t]:
+                            validfrms.append(1)
+                            if flag_one:
+                                flag_consecutive_one = True
+                            flag_one = True
+                        else:
+                            validfrms.append(0)
+                            flag_one = False
+                    assert(np.sum(validfrms)> 0)
+                    if flag_consecutive_one: # the object should be seen at least 2 consecutive frames
+                        objvalidfrms[objid] = validfrms
+                        objids_valid.append(objid)
+
+                # check if there is not a single available objvalidfrms
+                assert(len(objvalidfrms)>0)
+                objvalidfrms_snp.append(objvalidfrms)
+                objids_valid_snp.append(set(objids_valid))
+            self.objids_valid_snp[dstype] = objids_valid_snp
+            return objvalidfrms_snp
+
+        if self.objvalidfrms_snp[dstype] is None:
+            self.objvalidfrms_snp[dstype] = extract_objvalidfrms_snp(dstype)
 
     def _update_maxtrackid_snp(self, dstype):
         def compute_maxtrackid_snp(dstype):
@@ -620,13 +693,13 @@ class Data_ILSVRC(object):
                 '''This is wrong; need max trackid, which is the number of total 
                 objects in a snippet.
                 currentmax = 0
-                for j in self.objids_snp[dstype][i]:
+                for j in self.objids_allfrm_snp[dstype][i]:
                     if len(j) > currentmax:
                         currentmax = len(j)
                 maxtrackid_snp.append(currentmax)
                 '''
                 currentmax = 0
-                for j in self.objids_snp[dstype][i]:
+                for j in self.objids_allfrm_snp[dstype][i]:
                     if max(j) > currentmax:
                         currentmax = max(j)
                 maxtrackid_snp.append(currentmax)
@@ -656,8 +729,8 @@ class Data_ILSVRC(object):
                 output[i] = _get_split_sum(frm_min, frm_max, nfrms_snp)
             return output
 
-        if self.snp_frmsplits[dstype] is None:
-            self.snp_frmsplits[dstype] = create_snp_frmsplits(dstype, frm_max)
+        if self.snps_frmsplits[dstype] is None:
+            self.snps_frmsplits[dstype] = create_snp_frmsplits(dstype, frm_max)
 
     def _update_exps(self, dstype):
         def create_exps(dstype):
@@ -670,12 +743,14 @@ class Data_ILSVRC(object):
             exps['frm'] = []
             exps['trackid'] = []
             for i in range(self.nsnps[dstype]):
-                frms = [0] + np.cumsum(self.snp_frmsplits[dstype][i]).tolist()
+                frms = [0] + np.cumsum(self.snps_frmsplits[dstype][i]).tolist()
                 # NOTE: creating sequences for every objects in the snippet.
+                # TODO: the use of maxtrackid_snp should be deprecated.
+                raise ValueError('maxtrackid_snp should be deprecated')
                 for iobj in range(self.maxtrackid_snp[dstype][i]+1):
                     for iseg in range(len(frms)-1):
-                        exps['Annotation'].append(self.snp[dstype]['Annotations'][i])
-                        exps['Data'].append(self.snp[dstype]['Data'][i])
+                        exps['Annotation'].append(self.snps[dstype]['Annotations'][i])
+                        exps['Data'].append(self.snps[dstype]['Data'][i])
                         exps['frm'].append(range(frms[iseg], frms[iseg+1]))
                         exps['trackid'].append(iobj)
             return exps
@@ -685,7 +760,8 @@ class Data_ILSVRC(object):
 
     def _update_nexps(self, dstype):
         if self.nexps[dstype] is None:
-            self.nexps[dstype] = len(self.exps[dstype]['Data'])
+            #self.nexps[dstype] = len(self.exps[dstype]['Data'])
+            self.nexps[dstype] = self.nsnps[dstype]
 
     def _update_idx_shuffle(self, dstypes):
         for dstype in dstypes:
@@ -700,8 +776,8 @@ class Data_ILSVRC(object):
             for i in range(self.nsnps[dstype]):
                 print 'computing mean and std in snippet of {}, {}/{}'.format(
                         dstype, i+1, self.nsnps[dstype])
-                imglist = os.listdir(self.snp[dstype]['Data'][i])
-                imglist = [self.snp[dstype]['Data'][i] + '/' + img for img in imglist]
+                imglist = os.listdir(self.snps[dstype]['Data'][i])
+                imglist = [self.snps[dstype]['Data'][i] + '/' + img for img in imglist]
                 xs = []
                 for j in imglist:
                     # NOTE: perform resize image!
@@ -728,8 +804,123 @@ class Data_ILSVRC(object):
             else:
                 self.stat[dstype] = create_stat(dstype) 
                 np.save(filename, self.stat[dstype])
-    
+
     def get_batch(self, ib, o, dstype, shuffle_local=False):
+        def select_frms(objvalidfrms):
+            # firstly create consecutive 0s 
+            segment_minlen = 2
+            consecutiveones = []
+            stack = []
+            for i, val in enumerate(objvalidfrms):
+                if val == 0: 
+                    if len(stack) >= segment_minlen:
+                        consecutiveones.append(stack)
+                    stack = []
+                elif val == 1:
+                    stack.append(i)
+                else:
+                    raise ValueError('should be either 1 or 0')
+            if len(stack) >= segment_minlen: consecutiveones.append(stack)
+
+            # randomly choose one segment
+            try:
+                frms_cand = random.choice(consecutiveones)
+            except:
+                pdb.set_trace()
+
+            # select frames (randomness in it and < RNN size)
+            frm_length = np.minimum(
+                random.randint(segment_minlen, len(frms_cand)), o.ntimesteps)
+            frm_start = random.randint(0, len(frms_cand)-frm_length)
+            frms = frms_cand[frm_start:frm_start+frm_length]
+            return frms
+
+        def get_bndbox_from_xml(xmlfile, objid):
+            doc = self._parsexml(xmlfile)
+            w = np.float32(doc['annotation']['size']['width'])
+            h = np.float32(doc['annotation']['size']['height'])
+            # NOTE: Case of no object in the current frame.
+            # Either None or zeros. None becomes 'nan' when converting to numpy.
+            #bndbox = [None, None, None, None]
+            bndbox = [0, 0, 0, 0]
+            if 'object' in doc['annotation']:
+                if type(doc['annotation']['object']) is list:
+                    nobjs = len(doc['annotation']['object'])
+                    for i in range(nobjs):
+                        if int(doc['annotation']['object'][i]['trackid']) == objid:
+                            bndbox = [
+                                np.float32(doc['annotation']['object'][i]['bndbox']['xmin']) / w,
+                                np.float32(doc['annotation']['object'][i]['bndbox']['ymin']) / h,
+                                np.float32(doc['annotation']['object'][i]['bndbox']['xmax']) / w,
+                                np.float32(doc['annotation']['object'][i]['bndbox']['ymax']) / h]
+                            break
+                else:
+                    if int(doc['annotation']['object']['trackid']) == objid:
+                        bndbox = [
+                            np.float32(doc['annotation']['object']['bndbox']['xmin']) / w,
+                            np.float32(doc['annotation']['object']['bndbox']['ymin']) / h,
+                            np.float32(doc['annotation']['object']['bndbox']['xmax']) / w,
+                            np.float32(doc['annotation']['object']['bndbox']['ymax']) / h]
+            else:
+                # NOTE: this case should be considered later.
+                raise ValueError('currently not allowing no labeled frames')
+            return bndbox # xyxy format
+
+        if shuffle_local: # used for evaluation during train
+            idx = np.random.permutation(self.nexps[dstype])[(ib*o.batchsz):(ib+1)*o.batchsz]
+        else:
+            idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
+
+        data = np.zeros(
+            (o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel), 
+            dtype=np.float32)
+        label = np.zeros((o.batchsz, o.ntimesteps, o.outdim), dtype=np.float32)
+        inputs_length = np.zeros((o.batchsz), dtype=np.int32)
+        inputs_HW = np.zeros((o.batchsz, 2), dtype=np.float32)
+
+        for ie in range(o.batchsz): # batchsz
+            # randomly select an object
+            objid = random.sample(self.objids_valid_snp[dstype][idx[ie]], 1)[0]
+
+            # randomly select segment of frames (t<T)
+            frms = select_frms(self.objvalidfrms_snp[dstype][idx[ie]][objid])
+
+            for t, frm in enumerate(frms):
+                # for x; image
+                fimg = self.snps[dstype]['Data'][idx[ie]] + '/{0:06d}.JPEG'.format(frm)
+                x = cv2.imread(fimg)[:,:,(2,1,0)]
+
+                # for y; label
+                xmlfile = self.snps[dstype]['Annotations'][idx[ie]] + '/{0:06d}.xml'.format(frm)
+                y = get_bndbox_from_xml(xmlfile, objid)
+
+                # image resize. NOTE: the best image size? need experiments
+                data[ie,t] = cv2.resize(x, (o.frmsz, o.frmsz), 
+                    interpolation=cv2.INTER_AREA)
+                label[ie,t] = y
+            inputs_length[ie] = len(frms)
+            inputs_HW[ie] = x.shape[0:2]
+
+        # TODO: 
+        # 1. image normalization with mean and std
+        # 2. data augmentation (rotation, scaling, translation)
+        # 3. data perturbation.. (need to think about this)
+
+        # image normalization 
+        data -= self.stat[dstype]['mean']
+        data /= self.stat[dstype]['std']
+
+        batch = {
+                'inputs': data,
+                'inputs_length': inputs_length, 
+                'inputs_HW': inputs_HW,
+                'labels': label,
+                'idx': idx
+                }
+
+        return batch
+    
+    def get_batch_old(self, ib, o, dstype, shuffle_local=False):
         def get_bndbox_from_xml(xmlfile, trackid):
             doc = self._parsexml(xmlfile)
             w = np.float32(doc['annotation']['size']['width'])
@@ -823,7 +1014,7 @@ class Data_ILSVRC(object):
         #self._update_snp_frmsplits(self, dstype, frm_max):
 
     def run_sanitycheck(self, batch, dataset, frmsz):
-        draw.show_dataset_batch(batch, dataset, frmsz)
+        draw.show_dataset_batch(batch, dataset, frmsz, self.stat[dstype])
 
 
 def load_data(o):
@@ -851,6 +1042,7 @@ if __name__ == '__main__':
     dstype = 'train'
     loader = load_data(o)
     batch = loader.get_batch(0, o, dstype)
-    #loader.run_sanitycheck(batch, o.dataset, o.frmsz)
+    #batch = loader.get_batch_old(0, o, dstype)
+    loader.run_sanitycheck(batch, o.dataset, o.frmsz)
     pdb.set_trace()
 
