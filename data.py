@@ -64,17 +64,17 @@ class Data_moving_mnist(object):
             idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
 
         # the following is a modified version from RATM data preparation
-        vids = np.zeros((o.batchsz, o.ntimesteps, self.frmsz, self.frmsz), 
+        vids = np.zeros((o.batchsz, o.ntimesteps+1, self.frmsz, self.frmsz), 
                 dtype=np.float32)
         pos_init = np.random.randint(self.frmsz-28, size=(o.batchsz,2))
-        pos = np.zeros((o.batchsz, o.ntimesteps, 2), dtype=np.int32)
+        pos = np.zeros((o.batchsz, o.ntimesteps+1, 2), dtype=np.int32)
         pos[:,0] = pos_init
 
         posmax = self.frmsz-29
 
         d = np.random.randint(low=-15, high=15, size=(o.batchsz,2))
 
-        for t in range(o.ntimesteps):
+        for t in range(o.ntimesteps+1):
             dtm1 = d
             d = np.random.randint(low=-15, high=15, size=(o.batchsz,2))
             for i in range(o.batchsz):
@@ -89,7 +89,7 @@ class Data_moving_mnist(object):
                         pos[i,t,1]:pos[i,t,1]+28,
                         pos[i,t,0]:pos[i,t,0]+28] = \
                                 data['images'][idx[i]]
-            if t < o.ntimesteps-1:
+            if t < o.ntimesteps+1-1:
                 pos[:,t+1] = pos[:,t]+.1*d+.9*dtm1
 
                 # check for proposer position (reflect if necessary)
@@ -101,7 +101,7 @@ class Data_moving_mnist(object):
 
         # TODO: variable length inputs for
         # 1. online learning, 2. arbitrary training sequences 
-        inputs_length = np.ones((o.batchsz), dtype=np.int32) * o.ntimesteps
+        inputs_length = np.ones((o.batchsz), dtype=np.int32) * (o.ntimesteps+1)
 
         inputs_HW = np.ones((o.batchsz, 2), dtype=np.float32) * self.frmsz
 
@@ -187,9 +187,9 @@ class Data_bouncing_mnist(object):
         self.buff_ptr = 0
         self.buff_size = 2000
         self.buff_cap = 0
-        self.buff_data = np.zeros((self.buff_size, o.ntimesteps, 
+        self.buff_data = np.zeros((self.buff_size, o.ntimesteps+1, 
             self.frmsz, self.frmsz), dtype=np.float32)
-        self.buff_label = np.zeros((self.buff_size, o.ntimesteps, 4))
+        self.buff_label = np.zeros((self.buff_size, o.ntimesteps+1, 4))
         self.clutter_move = 1 
         self.with_clutters = 1 
 
@@ -225,7 +225,7 @@ class Data_bouncing_mnist(object):
             object_size_ = self.digit_size_
         if step_length_ is None:
             step_length_ = self.step_length_
-        length = o.ntimesteps
+        length = o.ntimesteps+1
         canvas_size = image_size_ - object_size_
 
         # Initial position uniform random inside the box.
@@ -347,11 +347,12 @@ class Data_bouncing_mnist(object):
         else:
             idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
         
+        data = np.zeros((o.batchsz, o.ntimesteps+1, self.frmsz, self.frmsz), dtype=np.float32)
+        label = np.zeros((o.batchsz, o.ntimesteps+1, 4), dtype=np.float32)
+
         start_y, start_x = self._GetRandomTrajectory(o.batchsz * self.num_digits_, o)
         window_y, window_x = self._GetRandomTrajectory(o.batchsz * 1, o, self.frmsz*2, object_size_=self.frmsz, step_length_ = 1e-2)
         # TODO: change data to real image or cluttered background
-        data = np.zeros((o.batchsz, o.ntimesteps, self.frmsz, self.frmsz), dtype=np.float32)
-        label = np.zeros((o.batchsz, o.ntimesteps, 4), dtype=np.float32)
 
         for j in range(o.batchsz): 
             if np.random.random()<0.7 and self.buff and self.buff_cap > self.buff_size/2.0:
@@ -364,12 +365,12 @@ class Data_bouncing_mnist(object):
                 cm = np.random.ranf() < self.clutter_move
                 if wc:
                     if cm:
-                        for i in range(o.ntimesteps):
+                        for i in range(o.ntimesteps+1):
                             wx = window_x[i,j]
                             wy = window_y[i,j]
                             data[j, i] = self._Overlap(clutter_bg[wy:wy+self.frmsz, wx:wx+self.frmsz], data[j, i])
                     else:
-                        for i in range(o.ntimesteps):
+                        for i in range(o.ntimesteps+1):
                             wx = window_x[0, j]
                             wy = window_y[0, j]
                             data[j, i] = self._Overlap(clutter_bg[wy:wy+self.frmsz, wx:wx+self.frmsz], data[j, i])
@@ -391,7 +392,7 @@ class Data_bouncing_mnist(object):
                         digit_image = data_all['images'][ind, :, :] / 255.0 * np.random.uniform(self.face_intensity_min, self.face_intensity_max)
                     bak_digit_image = digit_image 
                     digit_size_ = self.digit_size_
-                    for i in range(o.ntimesteps):
+                    for i in range(o.ntimesteps+1):
                         scale_factor = np.exp((np.random.random_sample()-0.5)*self.scale_range)
                         scale_image = spn.zoom(digit_image, scale_factor)
                         digit_size_ = digit_size_ * scale_factor 
@@ -421,12 +422,12 @@ class Data_bouncing_mnist(object):
                         label[j, i] = label_offset + np.array([left, top, left, top])
                 if wc:
                     if cm:
-                        for i in range(o.ntimesteps):
+                        for i in range(o.ntimesteps+1):
                             wx = window_x[i,j]
                             wy = window_y[i,j]
                             data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.frmsz, wx:wx+self.frmsz])
                     else:
-                        for i in range(o.ntimesteps):
+                        for i in range(o.ntimesteps+1):
                             wx = window_x[0,j]
                             wy = window_y[0,j]
                             data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.frmsz, wx:wx+self.frmsz])
@@ -435,7 +436,7 @@ class Data_bouncing_mnist(object):
 
         # TODO: variable length inputs for
         # 1. online learning, 2. arbitrary training sequences 
-        inputs_length = np.ones((o.batchsz), dtype=np.int32) * o.ntimesteps
+        inputs_length = np.ones((o.batchsz), dtype=np.int32) * (o.ntimesteps+1)
 
         inputs_HW = np.ones((o.batchsz, 2), dtype=np.float32) * self.frmsz
 
@@ -488,20 +489,6 @@ class Data_ILSVRC(object):
         self.idx_shuffle        = dict.fromkeys({'train', 'val', 'test'}, None)
         self.stat               = dict.fromkeys({'train', 'val', 'test'}, None)
 
-        ''' should be deprecated
-        # NOTE: maxtrackid_snp+1 is not equal to the number of objects! 
-        # turns out that some id is missing and skipped in annotation.
-        self.maxtrackid_snp     = dict.fromkeys({'train', 'val', 'test'}, None)
-
-        self.snps_frmsplits     = dict.fromkeys({'train', 'val', 'test'}, None)
-
-        self.exps               = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.nexps              = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.idx_shuffle        = dict.fromkeys({'train', 'val', 'test'}, None)
-
-        self.stat               = dict.fromkeys({'train', 'val', 'test'}, None)
-        '''
-
         self._load_data(o)
         self._update_idx_shuffle(['train', 'val', 'test'])
 
@@ -519,14 +506,6 @@ class Data_ILSVRC(object):
             self._update_objvalidfrms_snp(dstype)
             self._update_nexps(dstype)
             self._update_stat(dstype, o)
-
-            '''
-            self._update_maxtrackid_snp(dstype)
-            self._update_snp_frmsplits(dstype, o.ntimesteps) # NOTE: perform at every epoch?
-            self._update_exps(dstype)
-            self._update_nexps(dstype)
-            self._update_stat(dstype, o)
-            '''
 
     def _parsexml(self, xmlfile):
         with open(xmlfile) as f:
@@ -690,81 +669,8 @@ class Data_ILSVRC(object):
         if self.objvalidfrms_snp[dstype] is None:
             self.objvalidfrms_snp[dstype] = extract_objvalidfrms_snp(dstype)
 
-    def _update_maxtrackid_snp(self, dstype):
-        def compute_maxtrackid_snp(dstype):
-            maxtrackid_snp = []
-            for i in range(self.nsnps[dstype]):
-                '''This is wrong; need max trackid, which is the number of total 
-                objects in a snippet.
-                currentmax = 0
-                for j in self.objids_allfrm_snp[dstype][i]:
-                    if len(j) > currentmax:
-                        currentmax = len(j)
-                maxtrackid_snp.append(currentmax)
-                '''
-                currentmax = 0
-                for j in self.objids_allfrm_snp[dstype][i]:
-                    if max(j) > currentmax:
-                        currentmax = max(j)
-                maxtrackid_snp.append(currentmax)
-            return maxtrackid_snp 
-
-        if self.maxtrackid_snp[dstype] is None:
-            self.maxtrackid_snp[dstype] = compute_maxtrackid_snp(dstype)
-
-    def _update_snp_frmsplits(self, dstype, frm_max):
-        def create_snp_frmsplits(dstype, frm_max):
-            def _get_split_sum(frm_min, frm_max, seq_length):
-                cnt = 0
-                lengths = []
-                while cnt < seq_length:
-                    if seq_length-cnt < frm_max:
-                        length = seq_length-cnt
-                    else:
-                        length = np.random.randint(frm_min, frm_max)
-                    lengths.append(length)
-                    cnt += length
-                    #print length, cnt, seq_length
-                assert(np.sum(lengths)==seq_length)
-                return lengths
-            frm_min = 2
-            output = {}
-            for i, nfrms_snp in enumerate(self.nfrms_snp[dstype]):
-                output[i] = _get_split_sum(frm_min, frm_max, nfrms_snp)
-            return output
-
-        if self.snps_frmsplits[dstype] is None:
-            self.snps_frmsplits[dstype] = create_snp_frmsplits(dstype, frm_max)
-
-    def _update_exps(self, dstype):
-        def create_exps(dstype):
-            # NOTE: Since dataset is big, I can't contain actual 'data' in one 
-            # dict. Instead, actual data will be loaded during batch loading.
-            # The dict 'exps' contains necessary information to load such data.
-            exps = {}
-            exps['Annotation'] = []
-            exps['Data'] = []
-            exps['frm'] = []
-            exps['trackid'] = []
-            for i in range(self.nsnps[dstype]):
-                frms = [0] + np.cumsum(self.snps_frmsplits[dstype][i]).tolist()
-                # NOTE: creating sequences for every objects in the snippet.
-                # TODO: the use of maxtrackid_snp should be deprecated.
-                raise ValueError('maxtrackid_snp should be deprecated')
-                for iobj in range(self.maxtrackid_snp[dstype][i]+1):
-                    for iseg in range(len(frms)-1):
-                        exps['Annotation'].append(self.snps[dstype]['Annotations'][i])
-                        exps['Data'].append(self.snps[dstype]['Data'][i])
-                        exps['frm'].append(range(frms[iseg], frms[iseg+1]))
-                        exps['trackid'].append(iobj)
-            return exps
-
-        if self.exps[dstype] is None:
-            self.exps[dstype] = create_exps(dstype)
-
     def _update_nexps(self, dstype):
         if self.nexps[dstype] is None:
-            #self.nexps[dstype] = len(self.exps[dstype]['Data'])
             self.nexps[dstype] = self.nsnps[dstype]
 
     def _update_idx_shuffle(self, dstypes):
@@ -831,7 +737,7 @@ class Data_ILSVRC(object):
 
     def get_batch(self, ib, o, dstype, shuffle_local=False):
         def select_frms(objvalidfrms):
-            # firstly create consecutive 0s 
+            # firstly create consecutive 1s 
             segment_minlen = 2
             consecutiveones = []
             stack = []
@@ -849,9 +755,9 @@ class Data_ILSVRC(object):
             # randomly choose one segment
             frms_cand = random.choice(consecutiveones)
 
-            # select frames (randomness in it and < RNN size)
+            # select frames (randomness in it and < RNN+1 size)
             frm_length = np.minimum(
-                random.randint(segment_minlen, len(frms_cand)), o.ntimesteps)
+                random.randint(segment_minlen, len(frms_cand)), o.ntimesteps+1)
             frm_start = random.randint(0, len(frms_cand)-frm_length)
             frms = frms_cand[frm_start:frm_start+frm_length]
             return frms
@@ -892,10 +798,12 @@ class Data_ILSVRC(object):
         else:
             idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
 
+        # NOTE: examples have a length of ntimesteps+1.
         data = np.zeros(
-            (o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel), 
+            (o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel), 
             dtype=np.float32)
-        label = np.zeros((o.batchsz, o.ntimesteps, o.outdim), dtype=np.float32)
+        label = np.zeros((o.batchsz, o.ntimesteps+1, o.outdim), dtype=np.float32)
+        #inputs_valid = np.zeros((o.batchsz, o.ntimesteps+1), dtype=np.int32)
         inputs_length = np.zeros((o.batchsz), dtype=np.int32)
         inputs_HW = np.zeros((o.batchsz, 2), dtype=np.float32)
 
@@ -916,28 +824,27 @@ class Data_ILSVRC(object):
                 y = get_bndbox_from_xml(xmlfile, objid)
 
                 # image resize. NOTE: the best image size? need experiments
-                pdb.set_trace()
                 if not o.useresizedimg: 
                     data[ie,t] = cv2.resize(x, (o.frmsz, o.frmsz), 
                         interpolation=cv2.INTER_AREA)
                 else:
                     data[ie,t] = x
                 label[ie,t] = y
+            #inputs_valid[ie,:len(frms)] = 1 # NOTE: currently not sparse sequence
             inputs_length[ie] = len(frms)
             inputs_HW[ie] = x.shape[0:2]
 
-        # TODO: 
-        # 1. image normalization with mean and std
-        # 2. data augmentation (rotation, scaling, translation)
-        # 3. data perturbation.. (need to think about this)
+        # TODO: Data augmentation
+        # 1. data augmentation (rotation, scaling, translation)
+        # 2. data perturbation.. 
 
         # image normalization 
-        pdb.set_trace() # check stat is a scalar
         data -= self.stat[dstype]['mean']
         data /= self.stat[dstype]['std']
 
         batch = {
                 'inputs': data,
+                #'inputs_valid': inputs_valid, 
                 'inputs_length': inputs_length, 
                 'inputs_HW': inputs_HW,
                 'labels': label,
@@ -946,98 +853,11 @@ class Data_ILSVRC(object):
 
         return batch
     
-    def get_batch_old(self, ib, o, dstype, shuffle_local=False):
-        def get_bndbox_from_xml(xmlfile, trackid):
-            doc = self._parsexml(xmlfile)
-            w = np.float32(doc['annotation']['size']['width'])
-            h = np.float32(doc['annotation']['size']['height'])
-            # NOTE: Case of no object in the current frame.
-            # Either None or zeros. None becomes 'nan' when converting to numpy.
-            #bndbox = [None, None, None, None]
-            bndbox = [0, 0, 0, 0]
-            if 'object' in doc['annotation']:
-                if type(doc['annotation']['object']) is list:
-                    nobjs = len(doc['annotation']['object'])
-                    for i in range(nobjs):
-                        if int(doc['annotation']['object'][i]['trackid']) == trackid:
-                            bndbox = [
-                                np.float32(doc['annotation']['object'][i]['bndbox']['xmin']) / w,
-                                np.float32(doc['annotation']['object'][i]['bndbox']['ymin']) / h,
-                                np.float32(doc['annotation']['object'][i]['bndbox']['xmax']) / w,
-                                np.float32(doc['annotation']['object'][i]['bndbox']['ymax']) / h]
-                            break
-                else:
-                    if int(doc['annotation']['object']['trackid']) == trackid:
-                        bndbox = [
-                            np.float32(doc['annotation']['object']['bndbox']['xmin']) / w,
-                            np.float32(doc['annotation']['object']['bndbox']['ymin']) / h,
-                            np.float32(doc['annotation']['object']['bndbox']['xmax']) / w,
-                            np.float32(doc['annotation']['object']['bndbox']['ymax']) / h]
-            return bndbox # xyxy format
-
-        if shuffle_local: # used for evaluation during train
-            idx = np.random.permutation(self.nexps[dstype])[(ib*o.batchsz):(ib+1)*o.batchsz]
-        else:
-            idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
-
-        data = np.zeros(
-            (o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel), 
-            dtype=np.float32)
-        label = np.zeros((o.batchsz, o.ntimesteps, o.outdim), dtype=np.float32)
-        inputs_length = np.zeros((o.batchsz), dtype=np.int32)
-        inputs_HW = np.zeros((o.batchsz, 2), dtype=np.float32)
-
-        for ie in range(o.batchsz):
-            for t, ifrm in enumerate(self.exps[dstype]['frm'][idx[ie]]):
-                # for x; image
-                fimg = self.exps[dstype]['Data'][idx[ie]] \
-                    + '/{0:06d}.JPEG'.format(ifrm)
-                x = cv2.imread(fimg)[:,:,(2,1,0)]
-                
-                # for y; label
-                xmlfile = self.exps[dstype]['Annotation'][idx[ie]] \
-                    + '/{0:06d}.xml'.format(ifrm)
-                trackid = self.exps[dstype]['trackid'][idx[ie]]
-                # NOTE: every example has an assigned trackid, but this doesn't
-                # mean that it has the object at every frame. In case it doesn't
-                # have that object, y is assigned [None, None, None, None]. 
-                # This will be converted to nan when saving into a numpy array.
-                y = get_bndbox_from_xml(xmlfile, trackid)
-
-                # image resize. NOTE: the best image size? need experiments
-                data[ie,t] = cv2.resize(x, (o.frmsz, o.frmsz), 
-                    interpolation=cv2.INTER_AREA)
-                label[ie,t] = y
-            inputs_length[ie] = t+1
-            inputs_HW[ie] = x.shape[0:2]
-
-        # TODO: 
-        # 1. image normalization with mean and std
-        # 2. data augmentation (rotation, scaling, translation)
-        # 3. data perturbation.. (need to think about this)
-
-        # image normalization 
-        data -= self.stat[dstype]['mean']
-        data /= self.stat[dstype]['std']
-
-        batch = {
-                'inputs': data,
-                'inputs_length': inputs_length, 
-                'inputs_HW': inputs_HW,
-                'labels': label,
-                'idx': idx
-                }
-
-        return batch
-
     def update_epoch_begin(self, dstype):
         '''Perform updates at each epoch. Whatever necessary comes into this.
         '''
         # may no need dstype, as this shuffles train data only.
         self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
-        # NOTE: consider updating random splits
-        # If this is the case, 'nbatch' in train module should be adaptive.
-        #self._update_snp_frmsplits(self, dstype, frm_max):
 
     def run_sanitycheck(self, batch, dataset, frmsz):
         draw.show_dataset_batch(batch, dataset, frmsz, self.stat[dstype])
@@ -1089,11 +909,9 @@ if __name__ == '__main__':
     o._set_dataset_params()
     dstype = 'train'
     
-    o.useresizedimg = False
+    #o.useresizedimg = False # NOTE: set it False if need to create resized imgs
     loader = load_data(o)
-    pdb.set_trace()
     batch = loader.get_batch(0, o, dstype)
-    #batch = loader.get_batch_old(0, o, dstype) # will be deprecated
     #loader.run_sanitycheck(batch, o.dataset, o.frmsz)
     #loader.save_resized_images(o) # to create resized images
     pdb.set_trace()
