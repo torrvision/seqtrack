@@ -15,6 +15,8 @@ import random
 import xmltodict
 import cv2
 
+import helpers
+
 
 class Data_moving_mnist(object):
     '''
@@ -470,6 +472,8 @@ class Data_ILSVRC(object):
     def __init__(self, o):
         self.path_data      = o.path_data
         self.trainsplit     = o.trainsplit # 0, 1, 2, 3, or 9 for all
+        self.datadirname    = 'Data_frmsz{}'.format(o.frmsz) \
+                                if o.useresizedimg else 'Data'
 
         self.snps               = dict.fromkeys({'train', 'val', 'test'}, None)
         self.nsnps              = dict.fromkeys({'train', 'val', 'test'}, None)
@@ -534,13 +538,13 @@ class Data_ILSVRC(object):
             output = {}
             if dstype is 'test': # Only data exists. No annotations available. 
                 path_snp_data = os.path.join(
-                    self.path_data, 'Data/VID/{}'.format(dstype))
+                    self.path_data, '{}/VID/{}'.format(self.datadirname, dstype))
                 snps = os.listdir(path_snp_data)
                 snps_data = [path_snp_data + '/' + snp for snp in snps]
                 output['Data'] = snps_data
             elif dstype is 'val': 
                 path_snp_data = os.path.join(
-                    self.path_data, 'Data/VID/{}'.format(dstype))
+                    self.path_data, '{}/VID/{}'.format(self.datadirname, dstype))
                 path_snp_anno = os.path.join(
                     self.path_data, 'Annotations/VID/{}'.format(dstype))
                 snps = os.listdir(path_snp_data)
@@ -551,7 +555,7 @@ class Data_ILSVRC(object):
             elif dstype is 'train': # train data has 4 splits.
                 if self.trainsplit in [0,1,2,3]:
                     path_snp_data = os.path.join(self.path_data, 
-                        'Data/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(self.trainsplit))
+                        '{0:s}/VID/train/ILSVRC2015_VID_train_{1:04d}'.format(self.datadirname, self.trainsplit))
                     path_snp_anno = os.path.join(self.path_data, 
                         'Annotations/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(self.trainsplit))
                     snps = os.listdir(path_snp_data)
@@ -564,7 +568,7 @@ class Data_ILSVRC(object):
                     snps_anno_all = []
                     for i in range(4):
                         path_snp_data = os.path.join(self.path_data, 
-                            'Data/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(i))
+                            '{0:s}/VID/train/ILSVRC2015_VID_train_{1:04d}'.format(self.datadirname, i))
                         path_snp_anno = os.path.join(self.path_data, 
                             'Annotations/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(i))
                         snps = os.listdir(path_snp_data)
@@ -769,15 +773,14 @@ class Data_ILSVRC(object):
                 self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
 
     def _update_stat(self, dstype, o):
-        def create_stat(dstype):
+        def create_stat_pixelwise(dstype): # NOTE: obsolete
             stat = dict.fromkeys({'mean', 'std'}, None)
             mean = []
             std = []
-            for i in range(self.nsnps[dstype]):
+            for i, snp in enumerate(self.snps[dstype]['Data']):
                 print 'computing mean and std in snippet of {}, {}/{}'.format(
                         dstype, i+1, self.nsnps[dstype])
-                imglist = os.listdir(self.snps[dstype]['Data'][i])
-                imglist = [self.snps[dstype]['Data'][i] + '/' + img for img in imglist]
+                imglist = glob.glob(snp+'/*.JPEG')
                 xs = []
                 for j in imglist:
                     # NOTE: perform resize image!
@@ -788,6 +791,27 @@ class Data_ILSVRC(object):
                 std.append(np.std(xs, axis=0))
             mean = np.mean(np.asarray(mean), axis=0)
             std = np.mean(np.asarray(std), axis=0)
+            stat['mean'] = mean
+            stat['std'] = std
+            return stat
+        def create_stat_global(dstype):
+            stat = dict.fromkeys({'mean', 'std'}, None)
+            means = []
+            stds = []
+            for i, snp in enumerate(self.snps[dstype]['Data']):
+                print 'computing mean and std in snippet of {}, {}/{}'.format(
+                        dstype, i+1, self.nsnps[dstype])
+                imglist = glob.glob(snp+'/*.JPEG')
+                xs = []
+                for j in imglist:
+                    # NOTE: perform resize image!
+                    xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
+                        (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+                means.append(np.mean(xs))
+                stds.append(np.std(xs))
+            mean = np.mean(means)
+            std = np.mean(stds)
+            pdb.set_trace()
             stat['mean'] = mean
             stat['std'] = std
             return stat
@@ -802,7 +826,7 @@ class Data_ILSVRC(object):
             if os.path.exists(filename):
                 self.stat[dstype] = np.load(filename).tolist()
             else:
-                self.stat[dstype] = create_stat(dstype) 
+                self.stat[dstype] = create_stat_global(dstype) 
                 np.save(filename, self.stat[dstype])
 
     def get_batch(self, ib, o, dstype, shuffle_local=False):
@@ -823,10 +847,7 @@ class Data_ILSVRC(object):
             if len(stack) >= segment_minlen: consecutiveones.append(stack)
 
             # randomly choose one segment
-            try:
-                frms_cand = random.choice(consecutiveones)
-            except:
-                pdb.set_trace()
+            frms_cand = random.choice(consecutiveones)
 
             # select frames (randomness in it and < RNN size)
             frm_length = np.minimum(
@@ -895,8 +916,12 @@ class Data_ILSVRC(object):
                 y = get_bndbox_from_xml(xmlfile, objid)
 
                 # image resize. NOTE: the best image size? need experiments
-                data[ie,t] = cv2.resize(x, (o.frmsz, o.frmsz), 
-                    interpolation=cv2.INTER_AREA)
+                pdb.set_trace()
+                if not o.useresizedimg: 
+                    data[ie,t] = cv2.resize(x, (o.frmsz, o.frmsz), 
+                        interpolation=cv2.INTER_AREA)
+                else:
+                    data[ie,t] = x
                 label[ie,t] = y
             inputs_length[ie] = len(frms)
             inputs_HW[ie] = x.shape[0:2]
@@ -907,6 +932,7 @@ class Data_ILSVRC(object):
         # 3. data perturbation.. (need to think about this)
 
         # image normalization 
+        pdb.set_trace() # check stat is a scalar
         data -= self.stat[dstype]['mean']
         data /= self.stat[dstype]['std']
 
@@ -1016,6 +1042,28 @@ class Data_ILSVRC(object):
     def run_sanitycheck(self, batch, dataset, frmsz):
         draw.show_dataset_batch(batch, dataset, frmsz, self.stat[dstype])
 
+    def save_resized_images(self, o):
+        '''
+        This module performs resizing of images offline. 
+        '''
+        assert(o.trainsplit == 9)
+        assert(o.useresizedimg == False)
+        for dstype in ['train', 'val']: # NOTE: need to perform for test set
+            for i, snp in enumerate(self.snps[dstype]['Data']):
+                print dstype, i, self.nsnps[dstype], snp
+
+                savedir = snp.replace('Data', 'Data_frmsz{}'.format(o.frmsz))
+                if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+
+                imglist = glob.glob(snp+'/*.JPEG')
+                for img in imglist:
+                    # image read and resize
+                    x = cv2.resize(cv2.imread(img), 
+                            (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
+                    # save
+                    fname = img.replace('Data', 'Data_frmsz{}'.format(o.frmsz))
+                    cv2.imwrite(fname, x)
+
 
 def load_data(o):
     if o.dataset == 'moving_mnist':
@@ -1040,9 +1088,13 @@ if __name__ == '__main__':
     o.trainsplit = 0
     o._set_dataset_params()
     dstype = 'train'
+    
+    o.useresizedimg = False
     loader = load_data(o)
+    pdb.set_trace()
     batch = loader.get_batch(0, o, dstype)
-    #batch = loader.get_batch_old(0, o, dstype)
-    loader.run_sanitycheck(batch, o.dataset, o.frmsz)
+    #batch = loader.get_batch_old(0, o, dstype) # will be deprecated
+    #loader.run_sanitycheck(batch, o.dataset, o.frmsz)
+    #loader.save_resized_images(o) # to create resized images
     pdb.set_trace()
 

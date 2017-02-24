@@ -132,7 +132,7 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
             savedir = os.path.join(o.path_save, 'track_results')
             if not os.path.exists(savedir): helpers.mkdir_p(savedir)
             outfile = os.path.join(
-                savedir, 'iteration_{}_idx{}.png'.format(iteration, idx[i,0,b]))
+                savedir, 'iteration_{}_{}_idx{}.png'.format(iteration, dstype, idx[i,0,b]))
             plt.savefig(outfile)
             plt.close()
 

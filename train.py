@@ -127,6 +127,9 @@ def train(m, loader, o):
                     # visualize tracking results examples
                     draw.show_track_results(
                         evals['train'], loader, 'train', o, iteration,nlimit=20)
+                    draw.show_track_results(
+                        evals[val_], loader, val_, o, iteration,nlimit=20)
+                    # print results
                     # print results
                     print 'ep {0:d}/{1:d} (ITERATION-{2:d}) |loss: {3:.5f} '\
                         '|(train/{4:s}) IOU: {5:.3f}/{6:.3f}, '\

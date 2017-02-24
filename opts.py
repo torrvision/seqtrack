@@ -29,11 +29,11 @@ class Opts(object):
         self.frmsz              = None
         self.ninchannel         = None
         self.outdim             = None
+        self.useresizedimg      = True
 
         #----------------------------------------------------------------------
         # model - general
         self.model              = '' # {rnn_basic, rnn_attention_s, rnn_attention_t}
-        self.usetfapi           = False
         self.losses             = None
 
         #----------------------------------------------------------------------

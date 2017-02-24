@@ -4,15 +4,13 @@ import os
 
 
 class CNN(object):
-    def __init__(self, o):
-        self.batchsz        = o.batchsz
-        self.ntimesteps     = o.ntimesteps
-        self.wd             = o.wd
-        self.ninchannel     = o.ninchannel
-        self._set_architecture_params(o.dataset)
+    def __init__(self, o, is_train=False):
+        self.is_train = is_train # dropout
+        self._update_params(o)
 
-    def _set_architecture_params(self, dataset):
-        if dataset in ['moving_mnist', 'bouncing_mnist']: # easy datasets
+    def _update_params(self, o):
+        # non-learnable params; dataset dependent
+        if o.dataset in ['moving_mnist', 'bouncing_mnist']: # easy datasets
             self.nlayers = 2
             self.nchannels = [16, 16]
             self.filtsz = [3, 3]
@@ -27,7 +25,81 @@ class CNN(object):
         assert(self.nlayers == len(self.filtsz))
         assert(self.nlayers == len(self.strides))
 
+        # learnable parameters; CNN params shared across all time steps
+        w_conv = []
+        b_conv = []
+        for i in range(self.nlayers):
+            with tf.name_scope('layer_{}'.format(i)):
+                shape_w = [self.filtsz[i], self.filtsz[i], # TODO: try different sz
+                        o.ninchannel*2+1 if i==0 else self.nchannels[i-1], # two inputs + 1 mask channel
+                        self.nchannels[i]]
+                shape_b = [self.nchannels[i]]
+                w_conv.append(get_weight_variable(shape_w,name_='w',wd=o.wd))
+                b_conv.append(get_bias_variable(shape_b,name_='b',wd=o.wd))
+        self.params = {}
+        self.params['w_conv'] = w_conv
+        self.params['b_conv'] = b_conv
+
+    def pass_onetime(self, x_curr, x_prev, y_prev, o):
+        # create mask using y_prev
+        masks = []
+        for b in range(o.batchsz):
+            # grids 
+            #x_start = y_prev[b,0]
+            #x_end   = y_prev[b,2]
+            #y_start = y_prev[b,1]
+            #y_end   = y_prev[b,3]
+            # NOTE: in case negative, may need to use maximum operator
+            x_start = tf.cond(
+                    tf.logical_or(y_prev[b,0]<0.0, y_prev[b,0]>1.0),
+                    lambda: tf.constant(0.0), lambda: y_prev[b,0])
+            x_end = tf.cond(
+                    tf.logical_or(y_prev[b,2]<0.0, y_prev[b,2]>1.0),
+                    lambda: tf.constant(1.0), lambda: y_prev[b,2])
+            x_end = tf.cond(x_end < x_start, 
+                    lambda: tf.constant(1.0), lambda: x_end)
+            y_start = tf.cond(
+                    tf.logical_or(y_prev[b,1]<0.0, y_prev[b,1]>1.0),
+                    lambda: tf.constant(0.0), lambda: y_prev[b,1])
+            y_end = tf.cond(
+                    tf.logical_or(y_prev[b,3]<0.0, y_prev[b,3]>1.0),
+                    lambda: tf.constant(1.0), lambda: y_prev[b,3])
+            y_end = tf.cond(y_end < y_start, 
+                    lambda: tf.constant(1.0), lambda: y_end)
+
+            # TODO: check if there is a tf-like way of creating mask
+            # One way is to use tf.ones followed by tf.pad. However, it seems
+            # not possible (currently) to construct a ones tensor from unknown
+            # values. Should be at least partially known to create a tensor. 
+            grid_x, grid_y = tf.meshgrid(
+                    tf.range(x_start, x_end), tf.range(y_start, y_end))
+            grid_x_flat = tf.reshape(grid_x, [-1])
+            grid_y_flat = tf.reshape(grid_y, [-1])
+            grids = tf.stack([grid_y_flat, grid_x_flat]) # NOTE: x,y order
+            grids = tf.reshape(tf.transpose(grids), [-1, 2])
+            grids = tf.cast(grids, tf.int32)
+            # mask
+            mask = tf.Variable(
+                    tf.constant(0.0, shape=[o.frmsz, o.frmsz]), trainable=False)
+            mask_subset = tf.gather_nd(mask, grids)
+            mask_subset_adjust = mask_subset + 1.0
+            mask_updated = tf.scatter_nd_update(mask, grids, mask_subset_adjust)
+            masks.append(mask_updated)
+        masks = tf.expand_dims(tf.stack(masks, axis=0), 3)
+
+        # input concat
+        cnnin = tf.concat_v2((x_prev, x_curr, masks), 3)
+
+        # convolutions; feed-forward
+        for i in range(self.nlayers):
+            x = cnnin if i==0 else act
+            conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], 
+                    [1,self.strides[i],self.strides[i],1])
+            act = activate(conv, 'relu')
+        return act 
+
     def create_network(self, inputs):
+        raise ValueError('this module is deprecated')
         def _get_cnn_params():
             # CNN params shared across all time steps
             def _weight_variable(shape, wd=0.0): # TODO: this can be used global (maybe with scope)
@@ -77,101 +149,71 @@ class CNN(object):
                 for i in range(self.nlayers):
                     #x = tf.expand_dims(inputs[:,t],3) if i==0 else relu
                     x = inputs[:,t] if i==0 else relu
-                    st = self.strides[i]
-                    conv = _conv2d(x, w_conv[i], b_conv[i], strides_=[1,st,st,1])
-                    if False: # i == self.nlayers-1: # last layer
-                        relu = _activate(conv, activation_='linear')
-                    else: 
-                        relu = _activate(conv, activation_='relu')
+                    conv = _conv2d(x, w_conv[i], b_conv[i], 
+                            strides_=[1,self.strides[i],self.strides[i],1])
+                    relu = _activate(conv, activation_='relu')
                 activations.append(relu)
         outputs = tf.stack(activations, axis=1)
-
         return outputs
 
 
 class RNN_basic(object):
-    def __init__(self, o, is_training=False):
-        self._is_training = is_training
-        self.net = None
-        self.cnnout = {}
-        self.params = {}
-        self.net = self._create_network(o)
+    def __init__(self, o, is_train=True):
+        self._is_train = is_train
 
-    def _cnnout_update(self, cnn, inputs):
-        with tf.name_scope('cnn'):
-            self.cnnout['feat'] = cnn.create_network(inputs)
-        self.cnnout['shape'] = self.cnnout['feat'].get_shape().as_list()
-        self.cnnout['h'] = self.cnnout['shape'][2] #TODO: double check w and h
-        self.cnnout['w'] = self.cnnout['shape'][3]
-        self.cnnout['c'] = self.cnnout['shape'][4]
-        self.featdim = self.cnnout['h']*self.cnnout['w']*self.cnnout['c']
-        assert(len(self.cnnout['shape'])==5)
+    def update_params(self, cnnout, o):
+        params = {}
 
-    def _create_network(self, o):
-        inputs_shape = [o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel]
-        inputs = tf.placeholder(o.dtype, shape=inputs_shape, name='image')
-        inputs_length = tf.placeholder(tf.int32, shape=[o.batchsz], name='seq_length')
-        inputs_HW = tf.placeholder(o.dtype, shape=[o.batchsz, 2])
-        labels = tf.placeholder(
-                o.dtype, shape=[o.batchsz, o.ntimesteps, o.outdim], name='label')
+        # cnn params
+        cnnout_shape = cnnout.get_shape().as_list()
+        params['cnn_h'] = cnnout_shape[1]
+        params['cnn_w'] = cnnout_shape[2]
+        params['cnn_c'] = cnnout_shape[3]
+        params['cnn_featdim'] = cnnout_shape[1]*cnnout_shape[2]*cnnout_shape[3]
 
-        # CNN 
-        if o.cnn_pretrain: # use pre-trained model
-            raise ValueError('not implemented yet')
-        else: 
-            cnn = CNN(o)
-            self._cnnout_update(cnn, inputs)
-
-        # RNN
-        with tf.name_scope('rnn'):
-            if o.usetfapi: # TODO: will (and should) be deprecated. 
-                assert(False)
-                outputs = self._rnn_pass_API(inputs_cnn, inputs_length, o)
-            else: # manual rnn module
-                outputs = self._rnn_pass(labels, o) 
-
-        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
-        tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
-
-        net = {
-                'inputs': inputs,
-                'inputs_length': inputs_length,
-                'inputs_HW': inputs_HW,
-                'labels': labels,
-                'outputs': outputs,
-                'loss': loss_total}
-        return net
-
-    def _rnn_pass(self, labels, o):
-
-        def _get_lstm_params(o):
-            if o.yprev_mode == 'nouse':
-                shape_W = [o.nunits+self.featdim, o.nunits*4] 
-            elif o.yprev_mode == 'concat_abs':
-                shape_W = [o.nunits+self.featdim+o.outdim, o.nunits*4] 
-            elif o.yprev_mode == 'weight':
-                shape_W = [o.nunits+self.featdim, o.nunits*4] 
-            else:
-                raise ValueError('not implemented yet')
+        # lstm params
+        with tf.variable_scope('LSTMcell'):
+            shape_w = [o.nunits+params['cnn_featdim'], o.nunits*4] 
             shape_b = [o.nunits*4]
-            with tf.variable_scope('LSTMcell'):
-                self.params['W_lstm'] = tf.get_variable(
-                    'W_lstm', shape=shape_W, dtype=o.dtype, 
-                    initializer=tf.truncated_normal_initializer(stddev=0.001)) 
-                self.params['b_lstm'] = tf.get_variable(
-                    'b_lstm', shape=shape_b, dtype=o.dtype, 
-                    initializer=tf.constant_initializer())
+            params['w_lstm'] = tf.get_variable(
+                'w_lstm', shape=shape_w, dtype=o.dtype, 
+                initializer=tf.truncated_normal_initializer(stddev=0.1)) 
+            params['b_lstm'] = tf.get_variable(
+                'b_lstm', shape=shape_b, dtype=o.dtype, 
+                initializer=tf.constant_initializer(0.1))
 
-        def _get_rnnout_params(o):
-            with tf.variable_scope('rnnout'):
-                self.params['W_out'] = tf.get_variable(
-                    'W_out', shape=[o.nunits, o.outdim], dtype=o.dtype, 
-                    initializer=tf.truncated_normal_initializer()) # NOTE: stddev
-                self.params['b_out'] = tf.get_variable(
-                    'b_out', shape=[o.outdim], dtype=o.dtype, 
-                    initializer=tf.constant_initializer())
+        # rnnout params 
+        with tf.variable_scope('rnnout'):
+            params['w_out'] = tf.get_variable(
+                'w_out', shape=[o.nunits, o.outdim], dtype=o.dtype, 
+                initializer=tf.truncated_normal_initializer(stddev=0.1))
+            params['b_out'] = tf.get_variable(
+                'b_out', shape=[o.outdim], dtype=o.dtype, 
+                initializer=tf.constant_initializer(0.1))
 
+        self.params = params
+
+    def pass_onetime(self, cnnout, h_prev, C_prev, o):
+        # directly flatten cnnout and concat with h_prev 
+        # NOTE: possibly other options such as projection of cnnout before 
+        # concatenating with h_prev; C. Olah -> no need. 
+        xy_in = tf.reshape(cnnout, [o.batchsz, -1])
+
+        f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
+            tf.concat_v2((h_prev, xy_in), 1), self.params['w_lstm']) + 
+            self.params['b_lstm'], 4, 1)
+
+        if o.lstmforgetbias:
+            C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
+                    tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
+        else:
+            C_curr = tf.sigmoid(f_curr) * C_prev + \
+                    tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
+        h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
+        return h_curr, C_curr
+
+    def _rnn_pass(self, labels, cnn, o):
+        raise ValueError('this module is deprecated')
         def _activate_rnncell(x_curr, h_prev, C_prev, y_prev, o):
             W_lstm = self.params['W_lstm']
             b_lstm = self.params['b_lstm']
@@ -181,9 +223,78 @@ class RNN_basic(object):
                 f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
                     tf.concat_v2((h_prev, x_curr), 1), W_lstm) + b_lstm, 4, 1)
             elif o.yprev_mode == 'concat_abs':
+                # x and y concat
                 x_curr = tf.reshape(x_curr, [o.batchsz, -1])
+                xy_cat = tf.concat_v2((x_curr, y_prev), 1)
+                # non-linear transformation
+                xy_in = activate(tf.matmul(xy_cat, self.params['W_in']) 
+                        + self.params['b_in'], 'relu')
                 f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
-                    tf.concat_v2((h_prev, x_curr, y_prev), 1), W_lstm) + b_lstm, 4, 1)
+                    tf.concat_v2((h_prev, xy_in), 1), W_lstm) + b_lstm, 4, 1)
+            elif o.yprev_mode == 'concat_channel':
+                masks = []
+                for b in range(o.batchsz):
+                    # grids
+                    '''
+                    x_start = y_prev[b,0]
+                    x_end   = y_prev[b,2]
+                    y_start = y_prev[b,1]
+                    y_end   = y_prev[b,3]
+                    '''
+                    # NOTE: in case negative, may need to use maximum operator
+                    #x_start = tf.cond(y_prev[b,0]<0.0 or y_prev[b,0]>1.0,
+                            #lambda: 0.0, lambda: y_prev[b,0])
+                    x_start = tf.cond(
+                            tf.logical_or(y_prev[b,0]<0.0, y_prev[b,0]>1.0),
+                            lambda: tf.constant(0.0), lambda: y_prev[b,0])
+                    x_end = tf.cond(
+                            tf.logical_or(y_prev[b,2]<0.0, y_prev[b,2]>1.0),
+                            lambda: tf.constant(1.0), lambda: y_prev[b,2])
+                    x_end = tf.cond(x_end < x_start, 
+                            lambda: tf.constant(1.0), lambda: x_end)
+                    y_start = tf.cond(
+                            tf.logical_or(y_prev[b,1]<0.0, y_prev[b,1]>1.0),
+                            lambda: tf.constant(0.0), lambda: y_prev[b,1])
+                    y_end = tf.cond(
+                            tf.logical_or(y_prev[b,3]<0.0, y_prev[b,3]>1.0),
+                            lambda: tf.constant(1.0), lambda: y_prev[b,3])
+                    y_end = tf.cond(y_end < y_start, 
+                            lambda: tf.constant(1.0), lambda: y_end)
+                    
+                    grid_x, grid_y = tf.meshgrid(
+                            tf.range(x_start, x_end), tf.range(y_start, y_end))
+                    grid_x_flat = tf.reshape(grid_x, [-1])
+                    grid_y_flat = tf.reshape(grid_y, [-1])
+                    grids = tf.stack([grid_y_flat, grid_x_flat]) # NOTE: x,y order
+                    grids = tf.reshape(tf.transpose(grids), [-1, 2])
+                    grids = tf.cast(grids, tf.int32)
+                    # mask
+                    initial = tf.constant(
+                        0.0, shape=[self.cnnout['h'], self.cnnout['w']])
+                    mask = tf.Variable(initial, trainable=False)
+                    mask_subset = tf.gather_nd(mask, grids)
+                    mask_subset_adjust = mask_subset + 1.0
+                    mask_updated = tf.scatter_nd_update(
+                            mask, grids, mask_subset_adjust)
+                    masks.append(mask_updated)
+                masks = tf.expand_dims(tf.stack(masks, axis=0), 3)
+
+                # NOTE: here, I am flattening again image feature..
+                if 0:
+                    masks = tf.reshape(masks, [o.batchsz, -1])
+                    x_curr = tf.reshape(x_curr, [o.batchsz, -1])
+                    f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
+                        tf.concat_v2((h_prev, x_curr, masks), 1), W_lstm) + b_lstm, 4, 1)
+                else: # 
+                    xy_cat = tf.concat_v2((x_curr, masks), 3)
+                    # spatial convolution
+                    xy_conv = activate(conv2d(xy_cat, self.params['W_conv'], 
+                        self.params['b_conv'], [1,1,1,1]))
+                    xy_in = activate(tf.matmul(
+                        tf.reshape(xy_conv, [o.batchsz, -1]), self.params['W_in']) 
+                        + self.params['b_in'], 'relu')
+                    f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
+                        tf.concat_v2((h_prev, xy_in), 1), W_lstm) + b_lstm, 4, 1)
             elif o.yprev_mode == 'weight':
                 # beta and gamma
                 # TODO: optimum beta?
@@ -241,8 +352,9 @@ class RNN_basic(object):
         # get params
         _get_lstm_params(o)
         _get_rnnout_params(o)
+        _get_rnnin_params(o)
 
-        if self._is_training:
+        if self._is_train:
             # initial states 
             h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
             C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
@@ -262,76 +374,16 @@ class RNN_basic(object):
                 outputs.append(y_prev)
         else: # test
             pdb.set_trace() # WIP
-
-            # initial states 
-            # TODO: this changes whether t<n or t>=n; need such a signal.
-            h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
-            C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype)
-            y_prev = labels[:,0]
-
-            # unroll
-            outputs = []
-            for t in range(o.ntimesteps): # TODO: change if variable length input/out
-                h_prev, C_prev = _activate_rnncell(
-                    self.cnnout['feat'][:,t], h_prev, C_prev, y_prev, o) 
-                if t == 0: # NOTE: pass ground-truth at t=2 (if t<n)
-                    y_prev = labels[:,0]
-                else:
-                    y_prev = tf.matmul(h_prev, self.params['W_out']) \
-                        + self.params['b_out']
-                outputs.append(y_prev)
+            raise ValueError('not implmented yet')
        
         # list to tensor
         outputs = tf.stack(outputs, axis=1)
         return outputs 
 
-    def _rnn_pass_API(self, inputs_cnn, inputs_length, o):
-        # get rnn cell
-        def _get_rnncell(o, is_training=False):
-            if o.cell_type == 'LSTM':
-                '''
-                cell = tf.nn.rnn_cell.LSTMCell(
-                        num_units=o.nunits, cell_clip=o.max_grad_norm) \
-                        if o.grad_clip else tf.nn.rnn_cell.LSTMCell(num_units=o.nunits) 
-                '''
-                cell = tf.contrib.rnn.LSTMCell(num_units=o.nunits)
-            elif o.cell_type == 'GRU':
-                cell = tf.contrib.rnn.GRUCell(num_units=o.nunits)
-            elif o.cell_type == 'basic':
-                cell = tf.contrib.rnn.BasicRNNCell(num_units=o.nunits)
-            else:
-                raise ValueError('cell not implemented yet or simply wrong!')
-            # rnn drop out (only during training)
-            if is_training and o.dropout_rnn:
-                cell = tf.contrib.rnn.DropoutWrapper(
-                        cell,output_keep_prob=o.keep_ratio)
-            # multi-layers
-            if o.rnn_nlayers > 1:
-                cell = tf.contrib.rnn.MultiRNNCell(cells=[cell]*o.rnn_nlayers)
-            return cell
-
-        # reshape 
-        inputs_cell = tf.reshape(inputs_cnn,[o.batchsz,o.ntimesteps,-1])
-
-        cell = _get_rnncell(o, is_training=self._is_training)
-        cell_outputs, _ = tf.nn.dynamic_rnn(
-                cell=cell,
-                dtype=o.dtype,
-                sequence_length=inputs_length,
-                inputs=inputs_cell)
-        cell_outputs = tf.reshape(cell_outputs, [o.batchsz*o.ntimesteps,o.nunits])
-        # TODO: fixed the dimension of b_out, but didn't test it yet
-        w_out = tf.get_variable(
-                'w_out', shape=[o.nunits, o.outdim], dtype=o.dtype)
-        b_out = tf.get_variable('b_out', shape=[o.outdim], dtype=o.dtype)
-        outputs = tf.matmul(cell_outputs, w_out) + b_out
-        outputs = tf.reshape(outputs, [-1, o.ntimesteps, o.outdim]) # orig. shape
-        return outputs
-
 
 class RNN_attention_s(object):
-    def __init__(self, o, is_training=False):
-        self._is_training = is_training
+    def __init__(self, o, is_train=False):
+        self._is_train = is_train
         self.net = None
         self.cnnout = {}
         self.params = {}
@@ -573,8 +625,8 @@ class RNN_attention_s(object):
 # - y_prev is used only implicitly through hidden states (not used explicitly). 
 #------------------------------------------------------------------------------
 class RNN_attention_st(object):
-    def __init__(self, o, is_training=False):
-        self._is_training = is_training
+    def __init__(self, o, is_train=False):
+        self._is_train = is_train
         self.net = None
         self.cnnout = {}
         self.params = {}
@@ -860,7 +912,7 @@ def get_loss(outputs, labels, inputs_length, inputs_HW, o):
     # loss1: sum of two l1 distances for left-top and right-bottom
     if 'l1' in o.losses:
         loss_l1 = []
-        for i in range(labels.get_shape().as_list()[0]): # batchsz or # examples
+        for i in range(o.batchsz): # batchsz or # examples
             loss_l1.append(tf.reduce_mean(tf.abs(
                 outputs[i, :inputs_length[i]] - labels[i, :inputs_length[i]])))
         loss_l1 = tf.reduce_mean(loss_l1)
@@ -897,16 +949,117 @@ def get_loss(outputs, labels, inputs_length, inputs_HW, o):
 
     return tf.reduce_sum(loss)
 
-def load_model(o):
-    is_training = True if o.mode == 'train' else False
-    # TODO: check by actually logging device placement!
+# weight variable; created variables are new and will not be shared.
+def get_weight_variable(
+        shape_, mean_=0.0, stddev_=0.1, trainable_=True, name_=None, wd=0.0):
+    initial = tf.truncated_normal(shape=shape_, mean=mean_, stddev=stddev_)
+    var = tf.Variable(initial_value=initial, trainable=trainable_, name=name_)
+    weight_decay = tf.nn.l2_loss(var) * wd
+    tf.add_to_collection('losses', weight_decay)
+    return var
+
+# bias variable; created variables are new and will not be shared.
+def get_bias_variable(shape_, value=0.1, trainable_=True, name_=None, wd=0.0):
+    initial = tf.constant(value, shape=shape_)
+    var = tf.Variable(initial_value=initial, trainable=trainable_, name=name_)
+    weight_decay = tf.nn.l2_loss(var) * wd
+    tf.add_to_collection('losses', weight_decay)
+    return var
+
+def conv2d(x, w, b, strides_):
+    return tf.nn.conv2d(x, w, strides=strides_, padding='SAME') + b
+
+def activate(input_, activation_='relu'):
+    if activation_ == 'relu':
+        return tf.nn.relu(input_)
+    elif activation_ == 'tanh':
+        return tf.nn.tanh(input_)
+    elif activation_ == 'sigmoid':
+        return tf.nn.sigmoid(input_)
+    elif activation_ == 'linear': # no activation!
+        return input_
+    else:
+        raise ValueError('no available activation type!')
+
+
+class Model(object):
+    def __init__(self, o):
+        self.net = self._load_model(o) 
+
+    def _load_model(self, o):
+        # train or test flag
+        is_train = True if o.mode == 'train' else False
+
+        # TODO: check by actually logging device placement!
+        with tf.device('/{}:{}'.format(o.device, o.device_number)):
+            # CNN and RNN
+            cnn = CNN(o) # NOTE: if not o.cnn_pretrain else CNN_pretrained()
+            rnn = RNN_basic(o) # currently developing model
+
+            inputs = tf.placeholder(o.dtype, 
+                    shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
+                    name='inputs')
+            inputs_length = tf.placeholder(tf.int32, 
+                    shape=[o.batchsz], 
+                    name='inputs_length')
+            inputs_HW = tf.placeholder(o.dtype, 
+                    shape=[o.batchsz, 2], 
+                    name='inputs_HW')
+            labels = tf.placeholder(o.dtype, 
+                    shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
+                    name='labels')
+
+            assert(is_train == True)
+
+            # RNN unroll
+            outputs = []
+            rnninit = False
+            for t in range(1, o.ntimesteps+1):
+                if t==1:
+                    #h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # NOTE: or normal init
+                    #C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # NOTE: or normal init
+                    h_prev = tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype) 
+                    C_prev = tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype) 
+                    y_prev = labels[:,0]
+                else:
+                    h_prev = h_curr
+                    C_prev = C_curr
+                    y_prev = y_curr
+                x_prev = inputs[:,t-1]
+                x_curr = inputs[:,t]
+
+                cnnout = cnn.pass_onetime(x_curr, x_prev, y_prev, o)
+
+                if not rnninit: rnn.update_params(cnnout, o); rnninit = True
+                h_curr, C_curr = rnn.pass_onetime(cnnout, h_prev, C_prev, o)
+
+                y_curr = tf.matmul(h_curr, rnn.params['w_out']) + rnn.params['b_out']
+                outputs.append(y_curr)
+            outputs = tf.stack(outputs, axis=1) # list to tensor
+
+            pdb.set_trace()
+            loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
+            tf.add_to_collection('losses', loss)
+            loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+
+            net = {
+                    'inputs': inputs,
+                    'inputs_length': inputs_length,
+                    'inputs_HW': inputs_HW,
+                    'labels': labels,
+                    'outputs': outputs,
+                    'loss': loss_total}
+            return net
+
+def load_model_deprecated(o):
+    is_train = True if o.mode == 'train' else False
     with tf.device('/{}:{}'.format(o.device, o.device_number)):
         if o.model == 'rnn_basic':
-            model = RNN_basic(o, is_training=is_training) 
+            model = RNN_basic(o, is_train=is_train) 
         elif o.model == 'rnn_attention_s':
-            model = RNN_attention_s(o, is_training=is_training)
+            model = RNN_attention_s(o, is_train=is_train)
         elif o.model == 'rnn_attention_st':
-            model = RNN_attention_st(o, is_training=is_training)
+            model = RNN_attention_st(o, is_train=is_train)
         elif o.model == 'rnn_attention_st_bidirectional':
             raise ValueError('model not implemeted yet')
         else:
@@ -923,11 +1076,10 @@ if __name__ == '__main__':
     o.dataset = 'ILSVRC'
     o.batchsz = 10
     o._set_dataset_params()
-    o.yprev_mode = 'concat_abs' # nouse, concat_abs, weight
-    o.model = 'rnn_basic' # rnn_basic, rnn_attention_s, rnn_attention_st
-    o.losses = ['l1', 'iou']
-    #o.usetfapi = True
+    #o.yprev_mode = 'concat_channel' # nouse, concat_abs, concat_channel, weight
+    #o.model = 'rnn_basic' # rnn_basic, rnn_attention_s, rnn_attention_st
+    o.losses = ['l1'] # 'l1', 'iou', etc.
 
-    m = load_model(o)
+    m = Model(o)
     pdb.set_trace()
 

@@ -3,7 +3,8 @@ import argparse
 
 from opts           import Opts
 import data
-import model
+#import model
+from model          import Model
 from train          import train
 from test           import test
 
@@ -25,9 +26,9 @@ def parse_arguments():
     parser.add_argument(
             '--dataset', help='specify the name of dataset',
             type=str, default='')
-    parser.add_argument(
-            '--path_data_home', help='location of datasets',
-            type=str, default='')
+    #parser.add_argument(
+            #'--path_data_home', help='location of datasets',
+            #type=str, default='')
     parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
             type=int, default=0)
@@ -51,9 +52,6 @@ def parse_arguments():
     parser.add_argument(
             '--model', help='model!',
             type=str, default='')
-    parser.add_argument(
-            '--usetfapi', help='set to use tensorflow rnn api', 
-            action='store_true')
     parser.add_argument(
             '--losses', nargs='+', help='list of losses to be used',
             type=str) # example [l1, iou]
@@ -118,7 +116,8 @@ if __name__ == "__main__":
 
     loader = data.load_data(o)
 
-    m = model.load_model(o)
+    #m = model.load_model(o)
+    m = Model(o)
 
     if o.mode == 'train':
         train(m, loader, o)
