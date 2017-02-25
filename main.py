@@ -71,6 +71,9 @@ def parse_arguments():
     parser.add_argument(
             '--yprev_mode', help='way of using y_prev',
             type=str, default='')
+    parser.add_argument(
+            '--pass_ygt', help='pass gt y instead pred y during training', 
+            action='store_true')
 
     parser.add_argument(
             '--nepoch', help='number of epochs', 

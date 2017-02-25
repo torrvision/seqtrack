@@ -50,6 +50,7 @@ class Opts(object):
         self.keep_ratio         = 0.5
         self.lstmforgetbias     = False
         self.yprev_mode         = '' # nouse, concat_abs, concat_spatial (later), weight
+        self.pass_ygt           = False
 
         #----------------------------------------------------------------------
         # model parameters - cnn (or feature extractor)

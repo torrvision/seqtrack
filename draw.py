@@ -50,16 +50,15 @@ def show_dataset_batch(batch, dataset, frmsz, stat=None):
         format(dataset, dataset))
 
 def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
-
     nbatches = results['nbatches']
     idx = np.reshape(np.asarray(results['idx']), 
             [nbatches, o.ntimesteps, -1])
     inputs = np.reshape(np.asarray(results['inputs']),
-            [nbatches, o.ntimesteps, -1, o.ntimesteps, o.frmsz, o.frmsz, o.ninchannel])
+            [nbatches, o.ntimesteps, -1, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel])
     outputs = np.reshape(np.asarray(results['outputs']), 
             [nbatches, o.ntimesteps, -1, o.ntimesteps, 4])
     labels = np.reshape(np.asarray(results['labels']), 
-            [nbatches, o.ntimesteps, -1, o.ntimesteps, 4])
+            [nbatches, o.ntimesteps, -1, o.ntimesteps+1, 4])
     inputs_length = np.reshape(np.asarray(results['inputs_length']), 
             [nbatches, o.ntimesteps, -1])
 
@@ -75,12 +74,17 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
             if cnt > nlimit:
                 return 
 
-            max_inputs_length = np.max(inputs_length[i,:,b])
+            max_inputs_length = np.max(inputs_length[i,:,b]) # can be up to ntimesteps+1
+            ncols = 5 
+            nrows = int(np.ceil(o.ntimesteps/float(ncols))) + 1
             fig = plt.figure(figsize=(12,8))
             for t in range(max_inputs_length):
-                plt.subplot(5,o.ntimesteps/5,t+1)
+                if t == 0:
+                    plt.subplot(nrows,ncols,t+1)
+                else:
+                    plt.subplot(nrows,ncols,t+ncols)
                 #image
-                img = inputs[i,max_inputs_length-1,b,t]
+                img = inputs[i,max_inputs_length-1-1,b,t]
                 if o.dataset in ['moving_mnist', 'bouncing_mnist']:
                     plt.imshow(np.squeeze(img, axis=2))
                 else: 
@@ -89,17 +93,18 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
                     img += loader.stat[dstype]['mean']
                     plt.imshow(np.uint8(img))
                 #rectangles
-                box_gt = labels[i,max_inputs_length-1,b,t] * 100 # 100 scale
-                box_pred = outputs[i,max_inputs_length-1,b,t] * 100
                 ax = plt.gca()
+                box_gt = labels[i,max_inputs_length-1-1,b,t] * 100 # 100 scale
                 ax.add_patch(Rectangle(
                     (box_gt[0], box_gt[1]), 
                     box_gt[2]-box_gt[0], box_gt[3]-box_gt[1], 
                     facecolor='r', edgecolor='r', fill=False))
-                ax.add_patch(Rectangle(
-                    (box_pred[0], box_pred[1]), 
-                    box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
-                    facecolor='b', edgecolor='b', fill=False))
+                if t>0: #output only after frame 1
+                    box_pred = outputs[i,max_inputs_length-1-1,b,t-1] * 100
+                    ax.add_patch(Rectangle(
+                        (box_pred[0], box_pred[1]), 
+                        box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
+                        facecolor='b', edgecolor='b', fill=False))
 
             '''
             for t in range(o.ntimesteps):
@@ -214,4 +219,16 @@ def plot_precisionplot(precision_rates, cle_representative, o, savedir):
     outfile = os.path.join(savedir, 'precisionplot.png')
     plt.savefig(outfile)
     plt.close()
+
+def dbg_masks(dbg):
+    pdb.set_trace()
+    for t in range(len(dbg)):
+        y_prev = dbg[t][0]
+        masks = dbg[t][1]
+
+        # save 
+        fig = plt.figure(figsize=(6,6))
+        ax = fig.add_subplot(111)
+        plt.imshow(np.squeeze(masks, axis=2))
+    pdb.set_trace()
 

@@ -63,7 +63,7 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
         t_start = time.time()
         batch = loader.get_batch(ib, o, dstype, shuffle_local=shuffle_local)
         # process each time step one by one
-        for t in range(o.ntimesteps):
+        for t in range(1, o.ntimesteps+1): # inputs has o.ntimesteps+1 length
             batch_split = get_batch_split_fortest(batch, t)
 
             fdict = {
@@ -138,10 +138,14 @@ def evaluate_outputs(outputs, labels, inputs_length, inputs_HW, nbatches, o):
     '''
     # TODO:
     # - test when the segment is not the first segment of full sequence. 
-    
+
+    # NOTE:
+    # Be careful about the length difference in outputs and labels
+
     # list to array
     boxA = np.asarray(outputs)
     boxB = np.asarray(labels)
+    boxB = boxB[:,:,1:,:] # only valid length; no first frame gt label
     inputs_length = np.asarray(inputs_length)
     inputs_HW = np.asarray(inputs_HW)
 
@@ -218,19 +222,19 @@ def evaluate_outputs(outputs, labels, inputs_length, inputs_HW, nbatches, o):
         for t in range(iou.shape[1]): # time splits
             # TODO: besides t==0 condition, need another indicator telling 
             # whether it is first segment or not!
-            if t == 0: 
-                continue # don't evaluate the output at the first frame
+            # NOTE: below option is deprecated as all outputs are valid
+            #if t == 0: 
+                #continue # don't evaluate the output at the first frame
             for b in range(iou.shape[2]): # batchsz 
-                # TODO: negative iou score spotted in a few places.
-                # might be better to have loss term on iou.
-                if iou[i,t,b,inputs_length[i,t,b]-1] < 0:
+                # TODO: negative iou score?
+                if iou[i,t,b,inputs_length[i,t,b]-1-1] < 0:
                     pdb.set_trace()
-                iou_valid.append(iou[i,t,b,inputs_length[i,t,b]-1])
+                iou_valid.append(iou[i,t,b,inputs_length[i,t,b]-1-1])
                 success_rate_counter.append(
-                    iou[i,t,b,inputs_length[i,t,b]-1] > success_rate_thresholds)
-                cle_valid.append(cle[i,t,b,inputs_length[i,t,b]-1])
+                    iou[i,t,b,inputs_length[i,t,b]-1-1] > success_rate_thresholds)
+                cle_valid.append(cle[i,t,b,inputs_length[i,t,b]-1-1])
                 precision_rate_counter.append(
-                    cle[i,t,b,inputs_length[i,t,b]-1]<precision_rate_thresholds)
+                    cle[i,t,b,inputs_length[i,t,b]-1-1]<precision_rate_thresholds)
 
     iou_valid = np.asarray(iou_valid)
     iou_mean = np.mean(iou_valid)

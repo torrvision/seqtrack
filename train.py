@@ -76,6 +76,14 @@ def train(m, loader, o):
                 else:
                     _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
 
+
+                # NOTE: debugging for mask
+                '''
+                _, dbg = sess.run([optimizer, m.net['dbg']], feed_dict=fdict)
+                draw.dbg_masks(dbg)
+                pdb.set_trace()
+                '''
+
                 # **results after every batch 
                 sys.stdout.write(
                         '\rep {0:d}/{1:d}, batch {2:d}/{3:d} '
@@ -108,10 +116,10 @@ def train(m, loader, o):
                     val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
                     evals = {
                         'train': evaluate(sess, m, loader, o, 'train', 
-                            np.maximum(int(np.floor(100/o.batchsz)), 1), 
+                            np.maximum(int(np.floor(50/o.batchsz)), 1), 
                             hold_inputs=True, shuffle_local=True),
                         val_: evaluate(sess, m, loader, o, val_, 
-                            np.maximum(int(np.floor(100/o.batchsz)), 1), 
+                            np.maximum(int(np.floor(50/o.batchsz)), 1), 
                             hold_inputs=True, shuffle_local=True)}
                     # check losses on train and val set
                     losses['interm_eval_subset_train'] = np.append(
@@ -129,7 +137,6 @@ def train(m, loader, o):
                         evals['train'], loader, 'train', o, iteration,nlimit=20)
                     draw.show_track_results(
                         evals[val_], loader, val_, o, iteration,nlimit=20)
-                    # print results
                     # print results
                     print 'ep {0:d}/{1:d} (ITERATION-{2:d}) |loss: {3:.5f} '\
                         '|(train/{4:s}) IOU: {5:.3f}/{6:.3f}, '\
