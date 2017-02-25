@@ -717,18 +717,17 @@ class Data_ILSVRC(object):
                 stds.append(np.std(xs))
             mean = np.mean(means)
             std = np.mean(stds)
-            pdb.set_trace()
             stat['mean'] = mean
             stat['std'] = std
             return stat
 
         if self.stat[dstype] is None:
             if dstype == 'train':
-                filename = os.path.join(o.path_aux, 
+                filename = os.path.join(o.path_stat, 
                     'meanstd_{}_frmsz_{}_train_{}.npy'.format(o.dataset, o.frmsz, self.trainsplit))
             else:
-                filename = os.path.join(o.path_aux,
-                        'meanstd_{}_frmsz_{}_{}.npy'.format(o.dataset, o.frmsz, dstype))
+                filename = os.path.join(o.path_stat,
+                    'meanstd_{}_frmsz_{}_{}.npy'.format(o.dataset, o.frmsz, dstype))
             if os.path.exists(filename):
                 self.stat[dstype] = np.load(filename).tolist()
             else:

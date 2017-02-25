@@ -81,6 +81,7 @@ class Opts(object):
                                 if socket.gethostname()=='namhoon-PC' \
                                 else '/mnt/data/namhoon'
         self.path_aux           = os.path.join(self.path_base, 'aux')
+        self.path_stat          = os.path.join(self.path_base, 'stat')
         self.nosave             = False
         self.path_save          = ''
         self.restore            = False 
