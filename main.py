@@ -76,6 +76,10 @@ def parse_arguments():
             action='store_true')
 
     parser.add_argument(
+            '--dropout_cnn', help='dropout in cnn (only during train)', 
+            action='store_true')
+
+    parser.add_argument(
             '--nepoch', help='number of epochs', 
             type=int, default=20)
     parser.add_argument(

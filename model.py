@@ -4,7 +4,7 @@ import os
 
 
 class CNN(object):
-    def __init__(self, o, is_train=False):
+    def __init__(self, o, is_train):
         self.is_train = is_train # dropout
         self._update_params(o)
 
@@ -37,8 +37,9 @@ class CNN(object):
         for i in range(self.nlayers):
             with tf.name_scope('layer_{}'.format(i)):
                 if o.yprev_mode == 'concat_channel':
-                    shape_w = [self.filtsz[i], self.filtsz[i], # TODO: try different sz
-                            o.ninchannel*2+1 if i==0 else self.nchannels[i-1], # two inputs + 1 mask channel
+                    # two input images + 1 mask channel
+                    shape_w = [self.filtsz[i], self.filtsz[i], 
+                            o.ninchannel*2+1 if i==0 else self.nchannels[i-1], 
                             self.nchannels[i]]
                 elif o.yprev_mode == 'concat_abs':
                     shape_w = [self.filtsz[i], self.filtsz[i],
@@ -54,50 +55,28 @@ class CNN(object):
     def pass_onetime(self, x_curr, x_prev, y_prev, o):
         if o.yprev_mode == 'concat_channel':
             # create mask using y_prev
-            masks = []
-            for b in range(o.batchsz):
-                # grids 
-                #x_start = y_prev[b,0]
-                #x_end   = y_prev[b,2]
-                #y_start = y_prev[b,1]
-                #y_end   = y_prev[b,3]
-                # NOTE: in case negative, may need to use maximum operator
-                x_start = tf.cond(
-                        tf.logical_or(y_prev[b,0]<0.0, y_prev[b,0]>1.0),
-                        lambda: tf.constant(0.0), lambda: y_prev[b,0])
-                x_end = tf.cond(
-                        tf.logical_or(y_prev[b,2]<0.0, y_prev[b,2]>1.0),
-                        lambda: tf.constant(1.0), lambda: y_prev[b,2])
-                x_end = tf.cond(x_end < x_start, 
-                        lambda: tf.constant(1.0), lambda: x_end)
-                y_start = tf.cond(
-                        tf.logical_or(y_prev[b,1]<0.0, y_prev[b,1]>1.0),
-                        lambda: tf.constant(0.0), lambda: y_prev[b,1])
-                y_end = tf.cond(
-                        tf.logical_or(y_prev[b,3]<0.0, y_prev[b,3]>1.0),
-                        lambda: tf.constant(1.0), lambda: y_prev[b,3])
-                y_end = tf.cond(y_end < y_start, 
-                        lambda: tf.constant(1.0), lambda: y_end)
-
-                # TODO: check if there is a tf-like way of creating mask
-                # One way is to use tf.ones followed by tf.pad. However, it seems
-                # not possible (currently) to construct a ones tensor from unknown
-                # values. Should be at least partially known to create a tensor. 
-                grid_x, grid_y = tf.meshgrid(
-                        tf.range(x_start, x_end), tf.range(y_start, y_end))
-                grid_x_flat = tf.reshape(grid_x, [-1])
-                grid_y_flat = tf.reshape(grid_y, [-1])
-                grids = tf.stack([grid_y_flat, grid_x_flat]) # NOTE: x,y order
-                grids = tf.reshape(tf.transpose(grids), [-1, 2])
-                grids = tf.cast(grids, tf.int32)
-                # mask
-                mask = tf.Variable(
-                        tf.constant(0.0, shape=[o.frmsz, o.frmsz]), trainable=False)
-                mask_subset = tf.gather_nd(mask, grids)
-                mask_subset_adjust = mask_subset + 1.0
-                mask_updated = tf.scatter_nd_update(mask, grids, mask_subset_adjust)
-                masks.append(mask_updated)
-            masks = tf.expand_dims(tf.stack(masks, axis=0), 3)
+            x1 = y_prev[:,0] * o.frmsz
+            y1 = y_prev[:,1] * o.frmsz
+            x2 = y_prev[:,2] * o.frmsz
+            y2 = y_prev[:,3] * o.frmsz
+            grid_x, grid_y = tf.meshgrid(
+                    tf.range(o.frmsz, dtype=o.dtype),
+                    tf.range(o.frmsz, dtype=o.dtype))
+            # resize tensors so that they can be compared
+            x1 = tf.expand_dims(tf.expand_dims(x1,1),2)
+            x2 = tf.expand_dims(tf.expand_dims(x2,1),2)
+            y1 = tf.expand_dims(tf.expand_dims(y1,1),2)
+            y2 = tf.expand_dims(tf.expand_dims(y2,1),2)
+            grid_x = tf.tile(tf.expand_dims(grid_x,0), [o.batchsz,1,1])
+            grid_y = tf.tile(tf.expand_dims(grid_y,0), [o.batchsz,1,1])
+            # mask
+            masks = tf.logical_and(
+                tf.logical_and(tf.less_equal(x1, grid_x), 
+                    tf.less_equal(grid_x, x2)),
+                tf.logical_and(tf.less_equal(y1, grid_y), 
+                    tf.less_equal(grid_y, y2)))
+            # type and dim change so that it can be concated with x
+            masks = tf.expand_dims(tf.cast(masks, o.dtype),3)
 
             # input concat
             cnnin = tf.concat_v2((x_prev, x_curr, masks), 3)
@@ -108,6 +87,8 @@ class CNN(object):
                 conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], 
                         [1,self.strides[i],self.strides[i],1])
                 act = activate(conv, 'relu')
+                if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
+                    act = tf.nn.dropout(act, o.keep_ratio_cnn)
             return act, masks 
         elif o.yprev_mode == 'concat_abs':
             # NOTE:  This is a test to debug concat_channel!
@@ -118,65 +99,9 @@ class CNN(object):
                 conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], 
                         [1,self.strides[i],self.strides[i],1])
                 act = activate(conv, 'relu')
+                if self.is_train and o.dropout_cnn and i==1:
+                    act = tf.nn.dropout(act, o.keep_ratio_cnn)
             return tf.concat_v2((tf.reshape(act, [o.batchsz, -1]), y_prev), 1)
-
-    def create_network(self, inputs):
-        raise ValueError('this module is deprecated')
-        def _get_cnn_params():
-            # CNN params shared across all time steps
-            def _weight_variable(shape, wd=0.0): # TODO: this can be used global (maybe with scope)
-                initial = tf.truncated_normal(shape, stddev=0.1)
-                # weight_decay = tf.nn.l2_loss(initial) * wd
-                # tf.add_to_collection('losses', weight_decay)
-                # return tf.Variable(initial)
-                var = tf.Variable(initial, name='weight')
-                weight_decay = tf.nn.l2_loss(var) * wd
-                tf.add_to_collection('losses', weight_decay)
-                return var
-            def _bias_variable(shape): # TODO: this can be used global (maybe with scope)
-                initial = tf.constant(0.1, shape=shape)
-                return tf.Variable(initial, name='bias')
-            w_conv = []
-            b_conv = []
-            for i in range(self.nlayers):
-                with tf.name_scope('layer_{}'.format(i)):
-                    shape_w = [
-                            self.filtsz[i], self.filtsz[i], # TODO: try different sz
-                            self.ninchannel if i==0 else self.nchannels[i-1], 
-                            self.nchannels[i]]
-                    shape_b = [self.nchannels[i]]
-                    w_conv.append(_weight_variable(shape_w, wd=self.wd))
-                    b_conv.append(_bias_variable(shape_b))
-            return w_conv, b_conv
-
-        def _conv2d(x, w, b, strides_):
-            return tf.nn.conv2d(x, w, strides=strides_, padding='SAME') + b
-
-        def _activate(input_, activation_='relu'):
-            if activation_ == 'relu':
-                return tf.nn.relu(input_)
-            elif activation_ == 'tanh':
-                return tf.nn.tanh(input_)
-            elif activation_ == 'sigmoid':
-                return tf.nn.sigmoid(input_)
-            elif activation_ == 'linear': # no activation!
-                return input_
-            else:
-                raise ValueError('no available activation type!')
-
-        w_conv, b_conv = _get_cnn_params()
-        activations = []
-        for t in range(self.ntimesteps): # TODO: variable length inputs!!!
-            with tf.name_scope('time_{}'.format(t)):
-                for i in range(self.nlayers):
-                    #x = tf.expand_dims(inputs[:,t],3) if i==0 else relu
-                    x = inputs[:,t] if i==0 else relu
-                    conv = _conv2d(x, w_conv[i], b_conv[i], 
-                            strides_=[1,self.strides[i],self.strides[i],1])
-                    relu = _activate(conv, activation_='relu')
-                activations.append(relu)
-        outputs = tf.stack(activations, axis=1)
-        return outputs
 
 
 class RNN_basic(object):
@@ -236,6 +161,7 @@ class RNN_basic(object):
         # directly flatten cnnout and concat with h_prev 
         # NOTE: possibly other options such as projection of cnnout before 
         # concatenating with h_prev; C. Olah -> no need. 
+        # TODO: try Conv LSTM
         xy_in = tf.reshape(cnnout, [o.batchsz, -1])
 
         f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
@@ -250,174 +176,6 @@ class RNN_basic(object):
                     tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
         h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
         return h_curr, C_curr
-
-    def _rnn_pass(self, labels, cnn, o):
-        raise ValueError('this module is deprecated')
-        def _activate_rnncell(x_curr, h_prev, C_prev, y_prev, o):
-            W_lstm = self.params['W_lstm']
-            b_lstm = self.params['b_lstm']
-            # forget, input, memory cell, output, hidden 
-            if o.yprev_mode == 'nouse':
-                x_curr = tf.reshape(x_curr, [o.batchsz, -1])
-                f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
-                    tf.concat_v2((h_prev, x_curr), 1), W_lstm) + b_lstm, 4, 1)
-            elif o.yprev_mode == 'concat_abs':
-                # x and y concat
-                x_curr = tf.reshape(x_curr, [o.batchsz, -1])
-                xy_cat = tf.concat_v2((x_curr, y_prev), 1)
-                # non-linear transformation
-                xy_in = activate(tf.matmul(xy_cat, self.params['W_in']) 
-                        + self.params['b_in'], 'relu')
-                f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
-                    tf.concat_v2((h_prev, xy_in), 1), W_lstm) + b_lstm, 4, 1)
-            elif o.yprev_mode == 'concat_channel':
-                masks = []
-                for b in range(o.batchsz):
-                    # grids
-                    '''
-                    x_start = y_prev[b,0]
-                    x_end   = y_prev[b,2]
-                    y_start = y_prev[b,1]
-                    y_end   = y_prev[b,3]
-                    '''
-                    # NOTE: in case negative, may need to use maximum operator
-                    #x_start = tf.cond(y_prev[b,0]<0.0 or y_prev[b,0]>1.0,
-                            #lambda: 0.0, lambda: y_prev[b,0])
-                    x_start = tf.cond(
-                            tf.logical_or(y_prev[b,0]<0.0, y_prev[b,0]>1.0),
-                            lambda: tf.constant(0.0), lambda: y_prev[b,0])
-                    x_end = tf.cond(
-                            tf.logical_or(y_prev[b,2]<0.0, y_prev[b,2]>1.0),
-                            lambda: tf.constant(1.0), lambda: y_prev[b,2])
-                    x_end = tf.cond(x_end < x_start, 
-                            lambda: tf.constant(1.0), lambda: x_end)
-                    y_start = tf.cond(
-                            tf.logical_or(y_prev[b,1]<0.0, y_prev[b,1]>1.0),
-                            lambda: tf.constant(0.0), lambda: y_prev[b,1])
-                    y_end = tf.cond(
-                            tf.logical_or(y_prev[b,3]<0.0, y_prev[b,3]>1.0),
-                            lambda: tf.constant(1.0), lambda: y_prev[b,3])
-                    y_end = tf.cond(y_end < y_start, 
-                            lambda: tf.constant(1.0), lambda: y_end)
-                    
-                    grid_x, grid_y = tf.meshgrid(
-                            tf.range(x_start, x_end), tf.range(y_start, y_end))
-                    grid_x_flat = tf.reshape(grid_x, [-1])
-                    grid_y_flat = tf.reshape(grid_y, [-1])
-                    grids = tf.stack([grid_y_flat, grid_x_flat]) # NOTE: x,y order
-                    grids = tf.reshape(tf.transpose(grids), [-1, 2])
-                    grids = tf.cast(grids, tf.int32)
-                    # mask
-                    initial = tf.constant(
-                        0.0, shape=[self.cnnout['h'], self.cnnout['w']])
-                    mask = tf.Variable(initial, trainable=False)
-                    mask_subset = tf.gather_nd(mask, grids)
-                    mask_subset_adjust = mask_subset + 1.0
-                    mask_updated = tf.scatter_nd_update(
-                            mask, grids, mask_subset_adjust)
-                    masks.append(mask_updated)
-                masks = tf.expand_dims(tf.stack(masks, axis=0), 3)
-
-                # NOTE: here, I am flattening again image feature..
-                if 0:
-                    masks = tf.reshape(masks, [o.batchsz, -1])
-                    x_curr = tf.reshape(x_curr, [o.batchsz, -1])
-                    f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
-                        tf.concat_v2((h_prev, x_curr, masks), 1), W_lstm) + b_lstm, 4, 1)
-                else: # 
-                    xy_cat = tf.concat_v2((x_curr, masks), 3)
-                    # spatial convolution
-                    xy_conv = activate(conv2d(xy_cat, self.params['W_conv'], 
-                        self.params['b_conv'], [1,1,1,1]))
-                    xy_in = activate(tf.matmul(
-                        tf.reshape(xy_conv, [o.batchsz, -1]), self.params['W_in']) 
-                        + self.params['b_in'], 'relu')
-                    f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
-                        tf.concat_v2((h_prev, xy_in), 1), W_lstm) + b_lstm, 4, 1)
-            elif o.yprev_mode == 'weight':
-                # beta and gamma
-                # TODO: optimum beta?
-                s_all = tf.constant(o.frmsz ** 2, dtype=o.dtype) 
-                s_roi = (y_prev[:,2]-y_prev[:,0]) * (y_prev[:,3]-y_prev[:,1])
-                tf.assert_positive(s_roi)
-                tf.assert_greater_equal(s_all, s_roi)
-                beta = 0.95 # TODO: make it optionable
-                gamma = ((1-beta)/beta) * s_all / s_roi # NOTE: division?
-                y_prev_scale = self.cnnout['w'] / o.frmsz
-
-                x_curr_weighted = []
-                for b in range(o.batchsz):
-                    x_start = y_prev[b,0] * y_prev_scale
-                    x_end   = y_prev[b,2] * y_prev_scale
-                    y_start = y_prev[b,1] * y_prev_scale
-                    y_end   = y_prev[b,3] * y_prev_scale
-                    grid_x, grid_y = tf.meshgrid(
-                        tf.range(x_start, x_end),
-                        tf.range(y_start, y_end))
-                    grid_x_flat = tf.reshape(grid_x, [-1])
-                    grid_y_flat = tf.reshape(grid_y, [-1])
-                    # NOTE: Can't check if indices is empty or not.. problem?
-                    #tf.assert_positive(grid_x_flat.get_shape().num_elements())
-                    #tf.assert_positive(grid_y_flat.get_shape().num_elements())
-                    grids = tf.stack([grid_y_flat, grid_x_flat]) # NOTE: x,y order
-                    grids = tf.reshape(tf.transpose(grids), [-1, 2])
-                    grids = tf.cast(grids, tf.int32)
-                    initial = tf.constant(
-                        beta, shape=[self.cnnout['h'], self.cnnout['w']])
-                    mask_beta = tf.Variable(initial)
-                    mask_subset = tf.gather_nd(mask_beta, grids)
-                    mask_subset_reweight = mask_subset*gamma[b]
-                    mask_gamma = tf.scatter_nd_update(
-                        mask_beta, grids, mask_subset_reweight)
-                    x_curr_weighted.append(
-                        x_curr[b] * tf.expand_dims(mask_gamma, 2))
-                x_curr_weighted = tf.stack(x_curr_weighted, axis=0)
-
-                x_curr_weighted = tf.reshape(x_curr_weighted, [o.batchsz, -1])
-                f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
-                    tf.concat_v2((h_prev, x_curr_weighted), 1), W_lstm)+ b_lstm, 
-                    4, 1)
-            else:
-                raise ValueError('not implemented yet')
-            if o.lstmforgetbias:
-                C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
-                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
-            else:
-                C_curr = tf.sigmoid(f_curr) * C_prev + \
-                        tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
-            h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
-            return h_curr, C_curr
-
-        # get params
-        _get_lstm_params(o)
-        _get_rnnout_params(o)
-        _get_rnnin_params(o)
-
-        if self._is_train:
-            # initial states 
-            h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
-            C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # or normal init
-            y_prev = labels[:,0] # pass gt at the first frame
-
-            # unroll
-            outputs = []
-            for t in range(o.ntimesteps): # TODO: change if variable length input/out
-                # with tf.name_scope('time_{}'.format(t)):
-                h_prev, C_prev = _activate_rnncell(
-                    self.cnnout['feat'][:,t], h_prev, C_prev, y_prev, o) 
-                if t == 0: # NOTE: pass ground-truth at t=2 (if t<T)
-                    y_prev = labels[:,0]
-                else:
-                    y_prev = tf.matmul(h_prev, self.params['W_out']) \
-                        + self.params['b_out']
-                outputs.append(y_prev)
-        else: # test
-            pdb.set_trace() # WIP
-            raise ValueError('not implmented yet')
-       
-        # list to tensor
-        outputs = tf.stack(outputs, axis=1)
-        return outputs 
 
 
 class RNN_attention_s(object):
@@ -1043,8 +801,8 @@ class Model(object):
         # TODO: check by actually logging device placement!
         with tf.device('/{}:{}'.format(o.device, o.device_number)):
             # CNN and RNN
-            cnn = CNN(o) # NOTE: if not o.cnn_pretrain else CNN_pretrained()
-            rnn = RNN_basic(o) # currently developing model
+            cnn = CNN(o, is_train) # NOTE: if not o.cnn_pretrain else CNN_pretrained()
+            rnn = RNN_basic(o) # currently developing model TODO: make it optionable
 
             inputs = tf.placeholder(o.dtype, 
                     shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
@@ -1120,20 +878,6 @@ class Model(object):
                     'dbg': dbg}
             return net
 
-def load_model_deprecated(o):
-    is_train = True if o.mode == 'train' else False
-    with tf.device('/{}:{}'.format(o.device, o.device_number)):
-        if o.model == 'rnn_basic':
-            model = RNN_basic(o, is_train=is_train) 
-        elif o.model == 'rnn_attention_s':
-            model = RNN_attention_s(o, is_train=is_train)
-        elif o.model == 'rnn_attention_st':
-            model = RNN_attention_st(o, is_train=is_train)
-        elif o.model == 'rnn_attention_st_bidirectional':
-            raise ValueError('model not implemeted yet')
-        else:
-            raise ValueError('model not implemented yet or simply wrong..')
-        return model 
 
 if __name__ == '__main__':
     '''Test model 
@@ -1141,15 +885,16 @@ if __name__ == '__main__':
 
     from opts import Opts
     o = Opts()
+
     o.mode = 'train'
     o.dataset = 'ILSVRC'
-    o.batchsz = 10
     o._set_dataset_params()
 
-    #o.yprev_mode = 'concat_abs'
-    o.yprev_mode = 'concat_channel'
-    o.pass_ygt = True
-    #o.yprev_mode = 'concat_channel' # nouse, concat_abs, concat_channel, weight
+    o.batchsz = 10
+
+    o.yprev_mode = 'concat_channel' # concat_abs, concat_channel
+    o.pass_ygt = True # False, True
+
     #o.model = 'rnn_basic' # rnn_basic, rnn_attention_s, rnn_attention_st
     o.losses = ['l1'] # 'l1', 'iou', etc.
 

@@ -605,6 +605,7 @@ class Data_ILSVRC(object):
             return objids_allfrm_snp
     
         if self.objids_allfrm_snp[dstype] is None:
+            if not os.path.exists(o.path_aux): helpers.mkdir_p(o.path_aux)
             if dstype == 'train':
                 filename = os.path.join(o.path_aux, 
                     'objids_allfrm_snp_{}_{}.npy'.format(dstype, self.trainsplit))

@@ -56,6 +56,8 @@ class Opts(object):
         # model parameters - cnn (or feature extractor)
         self.cnn_pretrain       = False 
         self.cnn_model          = 'vgg' # vgg, resnet, imagenet, etc.
+        self.dropout_cnn        = False
+        self.keep_ratio_cnn     = 0.5
         # TODO: add dropout and batch norm option
 
         #----------------------------------------------------------------------
