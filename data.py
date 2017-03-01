@@ -128,9 +128,6 @@ class Data_moving_mnist(object):
         # may no need dstype, as this shuffles train data only.
         self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
 
-    def run_sanitycheck(self, batch, dataset, frmsz):
-        draw.show_dataset_batch(batch, dataset, frmsz)
-
 
 class Data_bouncing_mnist(object):
     '''
@@ -465,9 +462,6 @@ class Data_bouncing_mnist(object):
         # may no need dstype, as this shuffles train data only.
         self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
 
-    def run_sanitycheck(self, batch, dataset, frmsz):
-        draw.show_dataset_batch(batch, dataset, frmsz)
-
 
 class Data_ILSVRC(object):
     def __init__(self, o):
@@ -489,8 +483,12 @@ class Data_ILSVRC(object):
         self.idx_shuffle        = dict.fromkeys({'train', 'val', 'test'}, None)
         self.stat               = dict.fromkeys({'train', 'val', 'test'}, None)
 
+        self.exps_fulllen       = dict.fromkeys({'val'}, None)
+
         self._load_data(o)
         self._update_idx_shuffle(['train', 'val', 'test'])
+
+        self.nexps_fulllen  = len(self.exps_fulllen['val']) # used in evaluation
 
     def _load_data(self, o):
         # TODO: need to process and load test data set as well..
@@ -506,6 +504,9 @@ class Data_ILSVRC(object):
             self._update_objvalidfrms_snp(dstype)
             self._update_nexps(dstype)
             self._update_stat(dstype, o)
+
+        for dstype in ['val']: # might want to try 'train' as well..
+            self._update_list_fulllen_seq(dstype, o)
 
     def _parsexml(self, xmlfile):
         with open(xmlfile) as f:
@@ -558,6 +559,7 @@ class Data_ILSVRC(object):
                     output['Data'] = snps_data_all
                     output['Annotations'] = snps_anno_all
                 else:
+                    pdb.set_trace()
                     raise ValueError('No available option for train split')
             return output
         if self.snps[dstype] is None:
@@ -735,8 +737,67 @@ class Data_ILSVRC(object):
                 self.stat[dstype] = create_stat_global(dstype) 
                 np.save(filename, self.stat[dstype])
 
-    def get_batch(self, ib, o, dstype, shuffle_local=False):
-        def select_frms(objvalidfrms):
+    def _update_list_fulllen_seq(self, dstype, o):
+        assert(dstype=='val') # may change
+        def create_fulllen_seq():
+            # all examples (#examples = # valid objects in all videos)
+            exps = []
+            for i in range(self.nsnps[dstype]):
+                for objid in self.objids_valid_snp[dstype][i]:
+                    frms = self._select_frms(
+                            self.objvalidfrms_snp[dstype][i][objid], o, 
+                            seqtype='sparse')
+                    exp = {}
+                    exp['Data'] = self.snps[dstype]['Data'][i] 
+                    exp['Anno'] = self.snps[dstype]['Annotations'][i] 
+                    exp['objid'] = objid
+                    exp['frms'] = frms
+                    exps.append(exp)
+            return exps
+
+        if self.exps_fulllen[dstype] is None:
+            self.exps_fulllen[dstype] = create_fulllen_seq()
+
+    def _get_bndbox_from_xml(self, xmlfile, objid):
+        doc = self._parsexml(xmlfile)
+        w = np.float32(doc['annotation']['size']['width'])
+        h = np.float32(doc['annotation']['size']['height'])
+        # NOTE: Case of no object in the current frame.
+        # Either None or zeros. None becomes 'nan' when converting to numpy.
+        #bndbox = [None, None, None, None]
+        bndbox = [0, 0, 0, 0]
+        if 'object' in doc['annotation']:
+            if type(doc['annotation']['object']) is list:
+                nobjs = len(doc['annotation']['object'])
+                for i in range(nobjs):
+                    if int(doc['annotation']['object'][i]['trackid']) == objid:
+                        bndbox = [
+                            np.float32(doc['annotation']['object'][i]['bndbox']['xmin']) / w,
+                            np.float32(doc['annotation']['object'][i]['bndbox']['ymin']) / h,
+                            np.float32(doc['annotation']['object'][i]['bndbox']['xmax']) / w,
+                            np.float32(doc['annotation']['object'][i]['bndbox']['ymax']) / h]
+                        break
+            else:
+                if int(doc['annotation']['object']['trackid']) == objid:
+                    bndbox = [
+                        np.float32(doc['annotation']['object']['bndbox']['xmin']) / w,
+                        np.float32(doc['annotation']['object']['bndbox']['ymin']) / h,
+                        np.float32(doc['annotation']['object']['bndbox']['xmax']) / w,
+                        np.float32(doc['annotation']['object']['bndbox']['ymax']) / h]
+        else:
+            # NOTE: from now on, it allows returning bndbox of [0,0,0,0] 
+            # for no labeled frames.
+            pass
+            #raise ValueError('currently not allowing no labeled frames')
+        return bndbox # xyxy format
+
+    def _select_frms(self, objvalidfrms, o, seqtype=None):
+        if seqtype == 'dense':
+            '''
+            Select one sequence only from (possibly multiple) consecutive ones.
+            All frames are annotated (dense).
+            eg, [1,1,1,1,1,1,1,1,1]
+            '''
             # firstly create consecutive 1s 
             segment_minlen = 2
             consecutiveones = []
@@ -760,39 +821,24 @@ class Data_ILSVRC(object):
                 random.randint(segment_minlen, len(frms_cand)), o.ntimesteps+1)
             frm_start = random.randint(0, len(frms_cand)-frm_length)
             frms = frms_cand[frm_start:frm_start+frm_length]
-            return frms
+        elif seqtype == 'sparse':
+            '''
+            Select from first valid frame to last valid frame.
+            It is possible that some frames are missing labels (sparse).
+            eg, [1,1,1,0,0,1,0,1,1]
+            '''
+            objvalidfrms_np = np.asarray(objvalidfrms)
+            assert(objvalidfrms_np.ndim==1)
+            # first one and last one
+            frms_one = np.where(objvalidfrms_np == 1)
+            frm_start = frms_one[0][0]
+            frm_end = frms_one[0][-1]
+            frms = range(frm_start, frm_end+1)
+        else:
+            raise ValueError('not available option for seqtype.')
+        return frms
 
-        def get_bndbox_from_xml(xmlfile, objid):
-            doc = self._parsexml(xmlfile)
-            w = np.float32(doc['annotation']['size']['width'])
-            h = np.float32(doc['annotation']['size']['height'])
-            # NOTE: Case of no object in the current frame.
-            # Either None or zeros. None becomes 'nan' when converting to numpy.
-            #bndbox = [None, None, None, None]
-            bndbox = [0, 0, 0, 0]
-            if 'object' in doc['annotation']:
-                if type(doc['annotation']['object']) is list:
-                    nobjs = len(doc['annotation']['object'])
-                    for i in range(nobjs):
-                        if int(doc['annotation']['object'][i]['trackid']) == objid:
-                            bndbox = [
-                                np.float32(doc['annotation']['object'][i]['bndbox']['xmin']) / w,
-                                np.float32(doc['annotation']['object'][i]['bndbox']['ymin']) / h,
-                                np.float32(doc['annotation']['object'][i]['bndbox']['xmax']) / w,
-                                np.float32(doc['annotation']['object'][i]['bndbox']['ymax']) / h]
-                            break
-                else:
-                    if int(doc['annotation']['object']['trackid']) == objid:
-                        bndbox = [
-                            np.float32(doc['annotation']['object']['bndbox']['xmin']) / w,
-                            np.float32(doc['annotation']['object']['bndbox']['ymin']) / h,
-                            np.float32(doc['annotation']['object']['bndbox']['xmax']) / w,
-                            np.float32(doc['annotation']['object']['bndbox']['ymax']) / h]
-            else:
-                # NOTE: this case should be considered later.
-                raise ValueError('currently not allowing no labeled frames')
-            return bndbox # xyxy format
-
+    def get_batch(self, ib, o, dstype, shuffle_local=False):
         if shuffle_local: # used for evaluation during train
             idx = np.random.permutation(self.nexps[dstype])[(ib*o.batchsz):(ib+1)*o.batchsz]
         else:
@@ -803,8 +849,8 @@ class Data_ILSVRC(object):
             (o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel), 
             dtype=np.float32)
         label = np.zeros((o.batchsz, o.ntimesteps+1, o.outdim), dtype=np.float32)
-        #inputs_valid = np.zeros((o.batchsz, o.ntimesteps+1), dtype=np.int32)
-        inputs_length = np.zeros((o.batchsz), dtype=np.int32)
+        inputs_valid = np.zeros((o.batchsz, o.ntimesteps+1), dtype=np.bool)
+        #inputs_length = np.zeros((o.batchsz), dtype=np.int32)
         inputs_HW = np.zeros((o.batchsz, 2), dtype=np.float32)
 
         for ie in range(o.batchsz): # batchsz
@@ -812,7 +858,9 @@ class Data_ILSVRC(object):
             objid = random.sample(self.objids_valid_snp[dstype][idx[ie]], 1)[0]
 
             # randomly select segment of frames (t<T)
-            frms = select_frms(self.objvalidfrms_snp[dstype][idx[ie]][objid])
+            # TODO: if seqtype is not dense any more, should change 'inputs_valid' as well.
+            # self.objvalidfrms_snp should be changed as well.
+            frms = self._select_frms(self.objvalidfrms_snp[dstype][idx[ie]][objid], o, seqtype='dense')
 
             for t, frm in enumerate(frms):
                 # for x; image
@@ -821,7 +869,7 @@ class Data_ILSVRC(object):
 
                 # for y; label
                 xmlfile = self.snps[dstype]['Annotations'][idx[ie]] + '/{0:06d}.xml'.format(frm)
-                y = get_bndbox_from_xml(xmlfile, objid)
+                y = self._get_bndbox_from_xml(xmlfile, objid)
 
                 # image resize. NOTE: the best image size? need experiments
                 if not o.useresizedimg: 
@@ -830,8 +878,8 @@ class Data_ILSVRC(object):
                 else:
                     data[ie,t] = x
                 label[ie,t] = y
-            #inputs_valid[ie,:len(frms)] = 1 # NOTE: currently not sparse sequence
-            inputs_length[ie] = len(frms)
+            inputs_valid[ie,:len(frms)] = True # TODO: This should be changed if frms are sparse!
+            #inputs_length[ie] = len(frms)
             inputs_HW[ie] = x.shape[0:2]
 
         # TODO: Data augmentation
@@ -844,25 +892,73 @@ class Data_ILSVRC(object):
 
         batch = {
                 'inputs': data,
-                #'inputs_valid': inputs_valid, 
-                'inputs_length': inputs_length, 
+                'inputs_valid': inputs_valid, 
+                #'inputs_length': inputs_length, 
                 'inputs_HW': inputs_HW,
                 'labels': label,
                 'idx': idx
                 }
-
         return batch
     
+    def get_batch_fl(self, ie, o):
+        '''
+        This module loads an example in its full length, and thus is used 
+        to test for full length sequences. 
+        '''
+        dstype = 'val'
+
+        # all examples list
+        exps = self.exps_fulllen[dstype]
+
+        # input tensors 
+        frms = exps[ie]['frms']
+        data = np.zeros(
+            (1, len(frms), o.frmsz, o.frmsz, o.ninchannel), dtype=np.float32)
+        label = np.zeros((1, len(frms), o.outdim), dtype=np.float32)
+        inputs_valid = np.zeros((1, len(frms)), dtype=np.bool)
+        inputs_HW = np.zeros((1, 2), dtype=np.float32)
+
+        for t, frm in enumerate(frms): # NOTE: be careful when changing frms iterator.
+            # for x; image
+            fimg = exps[ie]['Data'] + '/{0:06d}.JPEG'.format(frm)
+            x = cv2.imread(fimg)[:,:,(2,1,0)]
+            # for y; label
+            xmlfile = exps[ie]['Anno'] + '/{0:06d}.xml'.format(frm)
+            objid = exps[ie]['objid']
+            y = self._get_bndbox_from_xml(xmlfile, objid)
+
+            # image resize. NOTE: the best image resize? need experiments
+            if not o.useresizedimg:
+                data[0,t] = cv2.resize(x, (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
+            else:
+                data[0,t] = x
+            label[0,t] = y
+
+            # if there is a labeled box, assign 1 to inputs_valid
+            if not (sum(y) == 0): 
+                inputs_valid[0,t] = True
+        inputs_HW[0] = x.shape[0:2]
+
+        # image normalization 
+        data -= self.stat[dstype]['mean']
+        data /= self.stat[dstype]['std']
+
+        batch = {
+                'inputs': data,
+                'inputs_valid': inputs_valid,
+                'inputs_HW': inputs_HW,
+                'labels': label,
+                'nfrms': len(frms)
+                }
+        return batch 
+
     def update_epoch_begin(self, dstype):
         '''Perform updates at each epoch. Whatever necessary comes into this.
         '''
         # may no need dstype, as this shuffles train data only.
         self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
 
-    def run_sanitycheck(self, batch, dataset, frmsz):
-        draw.show_dataset_batch(batch, dataset, frmsz, self.stat[dstype])
-
-    def save_resized_images(self, o):
+    def create_resized_images(self, o):
         '''
         This module performs resizing of images offline. 
         '''
@@ -885,6 +981,219 @@ class Data_ILSVRC(object):
                     cv2.imwrite(fname, x)
 
 
+class Data_OTB50(object):
+    '''
+    Some modifications are made to the original dataset.
+    1. Skating2 class has two rectangles for each of two objects respectively.
+    To make the directory structure consistent, I created Skating2_1, Skating2_2.
+    2. Human4 class has 2 labels 'groundtruth_rect.{1,2}.txt' but 1 is empty.
+    I copied 2 to 'groundtruth_rect.txt' to maintain filename consistency.
+    '''
+    def __init__(self, o):
+        self.path_data = o.path_data
+        self.nclasses =  50
+        self.nexps_fulllen = 50 # used in evaluation
+        # TODO: OTB dataset has attributes to videos. Add them.
+
+        # examples = full-length test sequences
+        self.exps = None
+        self.classes = None
+        self.stat = None
+
+        self._load_data(o)
+
+    def _load_data(self, o):
+        self._update_exceptions(o)
+        self._update_exps(o)
+        self._update_stat(o)
+
+    def _update_exceptions(self, o):
+        self.exceptions = {}
+        self.exceptions['David'] = {}
+        self.exceptions['Football1'] = {}
+        self.exceptions['Freeman3'] = {}
+        self.exceptions['Freeman4'] = {}
+        self.exceptions['David']['frms'] = range(300, 770+1)
+        self.exceptions['Football1']['frms'] = range(1, 74+1)
+        self.exceptions['Freeman3']['frms'] = range(1, 460+1)
+        self.exceptions['Freeman4']['frms'] = range(1, 283+1)
+
+    def _update_exps(self, o):
+        def create_exps():
+            # classes
+            classes = [name for name in os.listdir(self.path_data)]
+            assert(len(classes) == self.nclasses)
+            
+            # data
+            data = {}
+            for i, c in enumerate(classes):
+                data[c] = dict.fromkeys(
+                        {'images', 'labels', 'nfrms', 'HW'}, None)
+
+                # label
+                dirname = os.path.join(self.path_data, c)
+                try:
+                    label = np.loadtxt(dirname + '/groundtruth_rect.txt', delimiter=',', dtype=np.float32)
+                except:
+                    label = np.loadtxt(dirname + '/groundtruth_rect.txt', dtype=np.float32)
+                # label reformat [x1,y1,w,h] -> [x1,y1,x2,y2]
+                # TODO: double check the format
+                label[:,(2,3)] += label[:,(0,1)]
+                data[c]['labels'] = label
+
+                # nfrms: number of frames
+                data[c]['nfrms'] = data[c]['labels'].shape[0]
+
+                # images: only file names otherwise too large to hold images
+                if c in self.exceptions:
+                    frmrange = self.exceptions[c]['frms']
+                else:
+                    frmrange = range(1, data[c]['nfrms']+1)
+                if not o.useresizedimg: 
+                    data[c]['images'] = [os.path.join(dirname, 'img') 
+                        + '/{0:04d}.jpg'.format(t) for t in frmrange]
+                else:
+                    data[c]['images'] = [os.path.join(dirname, 'img_frmsz{}'.format(o.frmsz)) 
+                        + '/{0:04d}.jpg'.format(t) for t in frmrange]
+
+                # label normalization using image size
+                exampleimg = data[c]['images'][0].replace('img_frmsz{}'.format(o.frmsz) ,'img')
+                HW_ori = cv2.imread(exampleimg).shape[0:2]
+                HW_res = (o.frmsz, o.frmsz)
+                if not o.useresizedimg:
+                    assert(False)
+                    data[c]['HW'] = HW_ori
+                else:
+                    data[c]['HW'] = HW_res
+                data[c]['labels'][:,(0,2)] /= HW_ori[1]
+                data[c]['labels'][:,(1,3)] /= HW_ori[0]
+
+                assert(len(data[c]['images']) == data[c]['nfrms'])
+                assert(data[c]['labels'].shape[0] == data[c]['nfrms'])
+            return data
+
+        if self.exps is None:
+            self.exps = create_exps()
+            self.classes = self.exps.keys()
+
+    def _update_stat(self, o):
+        if self.stat is None:
+            filename = os.path.join(o.path_stat, 
+                    'meanstd_ILSVRC_frmsz_{}_train_9.npy'.format(o.frmsz))
+            self.stat = np.load(filename).tolist()
+
+    def get_batch_fl(self, ie, o):
+        assert(ie < len(self.classes))
+
+        # input tensors 
+        c = self.classes[ie]
+        nfrms = self.exps[c]['nfrms']
+        data = np.zeros(
+            (1, nfrms, o.frmsz, o.frmsz, o.ninchannel), dtype=np.float32)
+        label = np.zeros((1, nfrms, o.outdim), dtype=np.float32)
+        inputs_valid = np.zeros((1, nfrms), dtype=np.bool)
+        inputs_HW = np.zeros((1, 2), dtype=np.float32)
+
+        # in case of OTB-50, self.exps already has everything except for images
+        for t in range(nfrms):
+            # for x; image
+            x = cv2.imread(self.exps[c]['images'][t])[:,:,(2,1,0)]
+            # for y; label
+            y = self.exps[c]['labels'][t]
+
+            # image resize. NOTE: the best image resize? need experiments
+            if not o.useresizedimg:
+                data[0,t] = cv2.resize(x, (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
+            else:
+                data[0,t] = x
+            label[0,t] = y
+
+            # if there is a labeled box, assign 1 to inputs_valid
+            if not (sum(y) == 0): 
+                inputs_valid[0,t] = True
+            else:
+                raise ValueError('For OTB-50, every valid frame has GT labels.')
+        inputs_HW[0] = x.shape[0:2]
+
+        # image normalization 
+        # NOTE: use ILSVRC stat
+        data -= self.stat['mean']
+        data /= self.stat['std']
+
+        batch = {
+                'inputs': data,
+                'inputs_valid': inputs_valid,
+                'inputs_HW': inputs_HW,
+                'labels': label,
+                'nfrms': nfrms
+                }
+        return batch 
+
+    def create_resized_images(self, o):
+        '''
+        This module performs resizing of images offline. 
+        '''
+        assert(False) # it's performed already and no need to run this twice.
+        assert(o.useresizedimg == False)
+
+        for c in self.classes: #classes = #sequences = #examples
+            print 'resizing (and saving) images in {} dataset |class {}'.format(
+                    o.dataset, c)
+            for t in range(self.exps[c]['nfrms']):
+                self.exps[c]
+                img = self.exps[c]['images'][t]
+                x = cv2.resize(cv2.imread(img), 
+                        (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
+
+                # save
+                fname = img.replace('img', 'img_frmsz{}'.format(o.frmsz))
+                savedir = fname[:-9]
+                if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+                cv2.imwrite(fname, x)
+
+
+def run_sanitycheck(batch, dataset, frmsz, stat=None, fulllen=False):
+    if not fulllen:
+        draw.show_dataset_batch(batch, dataset, frmsz, stat)
+    else:
+        draw.show_dataset_batch_fulllen_seq(batch, dataset, frmsz, stat)
+
+def split_batch_fulllen_seq(batch_fl, o):
+    # split the full-length sequence in multiple segments
+    nsegments = int(np.ceil( (batch_fl['nfrms']-1)/float(o.ntimesteps) ))
+
+    data = np.zeros(
+            (nsegments, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel), 
+            dtype=np.float32)
+    label = np.zeros((nsegments, o.ntimesteps+1, o.outdim), 
+            dtype=np.float32)
+    inputs_valid = np.zeros((nsegments, o.ntimesteps+1), dtype=np.bool)
+    inputs_HW = np.zeros((nsegments, 2), dtype=np.float32)
+
+    for i in range(nsegments):
+        if batch_fl['nfrms'] > (i+1)*o.ntimesteps+1:
+            seglen = o.ntimesteps + 1
+        else:
+            seglen = (batch_fl['nfrms']-1) % o.ntimesteps
+        data[i, 0:seglen] = batch_fl['inputs'][
+                0, i*o.ntimesteps:i*o.ntimesteps + seglen]
+        label[i, 0:seglen] = batch_fl['labels'][
+                0, i*o.ntimesteps:i*o.ntimesteps + seglen]
+        inputs_valid[i, 0:seglen] = batch_fl['inputs_valid'][
+                0, i*o.ntimesteps:i*o.ntimesteps + seglen]
+        inputs_HW[i] = batch_fl['inputs_HW'][0]
+
+    batch = {
+            'inputs': data,
+            'inputs_valid': inputs_valid,
+            'inputs_HW': inputs_HW,
+            'labels': label,
+            'nfrms': batch_fl['nfrms'],
+            'nsegments': nsegments,
+            }
+    return batch 
+
+
 def load_data(o):
     if o.dataset == 'moving_mnist':
         loader = Data_moving_mnist(o)
@@ -892,6 +1201,8 @@ def load_data(o):
         loader = Data_bouncing_mnist(o)
     elif o.dataset == 'ILSVRC':
         loader = Data_ILSVRC(o)
+    elif o.dataset == 'OTB-50':
+        loader = Data_OTB50(o)
     else:
         raise ValueError('dataset not implemented yet')
     return loader
@@ -904,15 +1215,37 @@ if __name__ == '__main__':
     from opts import Opts
     o = Opts()
     o.batchsz = 20
-    o.dataset = 'ILSVRC' # moving_mnist, bouncing_mnist, ILSVRC 
+    o.dataset = 'ILSVRC' # moving_mnist, bouncing_mnist, ILSVRC, OTB-50
+    #o.dataset = 'OTB-50' # moving_mnist, bouncing_mnist, ILSVRC, OTB-50
     o.trainsplit = 0
     o._set_dataset_params()
     dstype = 'train'
     
-    #o.useresizedimg = False # NOTE: set it False if need to create resized imgs
-    loader = load_data(o)
-    batch = loader.get_batch(0, o, dstype)
-    #loader.run_sanitycheck(batch, o.dataset, o.frmsz)
-    #loader.save_resized_images(o) # to create resized images
+    #o.useresizedimg = False # NOTE: set it False to create resized imgs
+
+    test_fl = False
+    sanitycheck = False
+
+    # ILSVRC
+    if o.dataset == 'ILSVRC':
+        loader = load_data(o)
+        if test_fl: # to test full-length sequences 
+            batch_fl = loader.get_batch_fl(0, o)
+            batch = split_batch_fulllen_seq(batch_fl)
+            if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz, loader.stat[dstype], fulllen=True) 
+        else:
+            batch = loader.get_batch(0, o, dstype)
+            if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz, loader.stat[dstype])
+        #loader.create_resized_images(o) # to create resized images
+
+    # OTB-50
+    if o.dataset == 'OTB-50':
+        loader = load_data(o)
+        assert(test_fl==True) # for OTB, it's always full-length
+        batch_fl = loader.get_batch_fl(0, o)
+        batch = split_batch_fulllen_seq(batch_fl)
+        if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz, loader.stat, fulllen=True)
+        #loader.create_resized_images(o)
+
     pdb.set_trace()
 

@@ -8,7 +8,7 @@ import numpy as np
 from opts import Opts
 from evaluate import evaluate
 import data
-import model
+from model import Model
 import draw
 
 
@@ -25,6 +25,9 @@ def parse_arguments():
     parser.add_argument(
         '--dataset', help='specify the name of dataset',
         type=str, default='')
+    parser.add_argument(
+        '--trainsplit', help='specify the split of train dataset (ILSVRC)',
+        type=int, default=0)
 
     parser.add_argument(
             '--restore', help='to restore a pretrained',
@@ -39,6 +42,9 @@ def parse_arguments():
     parser.add_argument(
             '--model', help='model!',
             type=str, default='')
+    parser.add_argument(
+        '--losses', nargs='+', help='list of losses to be used',
+        type=str) # example [l1, iou]
 
     parser.add_argument(
             '--nunits', help='number of hidden units in rnn cell',
@@ -49,6 +55,12 @@ def parse_arguments():
     parser.add_argument(
             '--yprev_mode', help='way of using y_prev',
             type=str, default='')
+    parser.add_argument(
+            '--pass_ygt', help='pass gt y instead pred y during training',
+            action='store_true')
+    parser.add_argument(
+            '--pass_yinit', help='pass gt y instead pred y during training',
+            action='store_true')
 
     parser.add_argument(
             '--batchsz', help='batch size',
@@ -74,7 +86,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def test(m, loader, o, dstype):
+def test(m, loader, o, dstype, fulllen=False):
     '''
     Note that it is considered that this wrapper serves a test routine with a 
     completely trained model. If you want a on-the-fly evaluations during 
@@ -85,11 +97,17 @@ def test(m, loader, o, dstype):
     with tf.Session(config=o.tfconfig) as sess:
         saver.restore(sess, o.restore_model)
         t_start = time.time()
-        results = evaluate(sess, m, loader, o, dstype) 
+        results = evaluate(sess, m, loader, o, dstype, fulllen=fulllen) 
 
     # save results
-    savedir = os.path.join(
-            o.path_base, os.path.dirname(o.restore_model)[:-7] + '/evaluations')
+    if fulllen:
+        savedir = os.path.join(o.path_base, 
+            os.path.dirname(o.restore_model)[:-7] 
+            + '/evaluations_{}_fulllen'.format(o.dataset))
+    else:
+        savedir = os.path.join(o.path_base, 
+            os.path.dirname(o.restore_model)[:-7] 
+            + '/evaluations_{}_RNNlen'.format(o.dataset))
     if not os.path.exists(savedir): os.makedirs(savedir)
 
     # save subset of results (due to memory)
@@ -137,6 +155,8 @@ if __name__ == '__main__':
         - restore_model (e.g., ***.ckpt)
         - gpu_manctrl 
         - ntimesteps
+        - yprev_mode
+        - losses
         - (optionally) batchsz
     Note that if provided option is inconsitent with the trained model 
     (e.g., ntimesteps), it will fail to restore the model.
@@ -147,10 +167,23 @@ if __name__ == '__main__':
     o._set_gpu_config()
     o._set_dataset_params()
 
-    loader = data.load_data(o)
-    m = model.load_model(o)
+    # NOTE: other options can be passed to args or simply put here.
+    if o.dataset == 'ILSVRC':
+        dstype = 'val'
 
-    # NOTE: depending on dstype, can load a 'longer' or 'full' test sequences
-    dstype = 'test' 
-    test(m, loader, o, dstype=dstype)
+    loader = data.load_data(o)
+
+    m = Model(o)
+
+    test_fl = True
+
+    # Case: T-length sequences
+    if not test_fl:
+        dstype = 'test' 
+        test(m, loader, o, dstype=dstype)
+
+    # Case: Full-length sequences
+    else:
+        dstype = 'val' # ILSVRC
+        test(m, loader, o, dstype=dstype, fulllen=True)
 

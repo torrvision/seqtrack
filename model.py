@@ -37,10 +37,17 @@ class CNN(object):
         for i in range(self.nlayers):
             with tf.name_scope('layer_{}'.format(i)):
                 if o.yprev_mode == 'concat_channel':
-                    # two input images + 1 mask channel
-                    shape_w = [self.filtsz[i], self.filtsz[i], 
-                            o.ninchannel*2+1 if i==0 else self.nchannels[i-1], 
-                            self.nchannels[i]]
+                    if not o.pass_yinit:
+                        # two input images + 1 mask channel
+                        shape_w = [self.filtsz[i], self.filtsz[i], 
+                                o.ninchannel*2+1 if i==0 else self.nchannels[i-1], 
+                                self.nchannels[i]]
+                    else:
+                        # three input images + 2 mask channel
+                        shape_w = [self.filtsz[i], self.filtsz[i], 
+                                o.ninchannel*3+2 if i==0 else self.nchannels[i-1], 
+                                self.nchannels[i]]
+
                 elif o.yprev_mode == 'concat_abs':
                     shape_w = [self.filtsz[i], self.filtsz[i],
                             o.ninchannel if i==0 else self.nchannels[i-1],
@@ -52,34 +59,19 @@ class CNN(object):
         self.params['w_conv'] = w_conv
         self.params['b_conv'] = b_conv
 
-    def pass_onetime(self, x_curr, x_prev, y_prev, o):
+    def pass_onetime(self, x_curr, x_prev, y_prev, o, x0=None, y0=None):
         if o.yprev_mode == 'concat_channel':
-            # create mask using y_prev
-            x1 = y_prev[:,0] * o.frmsz
-            y1 = y_prev[:,1] * o.frmsz
-            x2 = y_prev[:,2] * o.frmsz
-            y2 = y_prev[:,3] * o.frmsz
-            grid_x, grid_y = tf.meshgrid(
-                    tf.range(o.frmsz, dtype=o.dtype),
-                    tf.range(o.frmsz, dtype=o.dtype))
-            # resize tensors so that they can be compared
-            x1 = tf.expand_dims(tf.expand_dims(x1,1),2)
-            x2 = tf.expand_dims(tf.expand_dims(x2,1),2)
-            y1 = tf.expand_dims(tf.expand_dims(y1,1),2)
-            y2 = tf.expand_dims(tf.expand_dims(y2,1),2)
-            grid_x = tf.tile(tf.expand_dims(grid_x,0), [o.batchsz,1,1])
-            grid_y = tf.tile(tf.expand_dims(grid_y,0), [o.batchsz,1,1])
-            # mask
-            masks = tf.logical_and(
-                tf.logical_and(tf.less_equal(x1, grid_x), 
-                    tf.less_equal(grid_x, x2)),
-                tf.logical_and(tf.less_equal(y1, grid_y), 
-                    tf.less_equal(grid_y, y2)))
-            # type and dim change so that it can be concated with x
-            masks = tf.expand_dims(tf.cast(masks, o.dtype),3)
+            if not o.pass_yinit:
+                # create masks from y_prev
+                masks = self._get_masks_from_rectangles(y_prev, o)
 
-            # input concat
-            cnnin = tf.concat_v2((x_prev, x_curr, masks), 3)
+                # input concat
+                cnnin = tf.concat_v2((x_prev, x_curr, masks), 3)
+            else:
+                masks_yprev = self._get_masks_from_rectangles(y_prev, o)
+                masks_yinit = self._get_masks_from_rectangles(y0, o)
+                cnnin = tf.concat_v2(
+                        (x0, masks_yinit, x_prev, x_curr, masks_yprev), 3)
 
             # convolutions; feed-forward
             for i in range(self.nlayers):
@@ -89,7 +81,7 @@ class CNN(object):
                 act = activate(conv, 'relu')
                 if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
                     act = tf.nn.dropout(act, o.keep_ratio_cnn)
-            return act, masks 
+            return act
         elif o.yprev_mode == 'concat_abs':
             # NOTE:  This is a test to debug concat_channel!
             # 1. For test purpose, not passing x_prev here
@@ -102,6 +94,32 @@ class CNN(object):
                 if self.is_train and o.dropout_cnn and i==1:
                     act = tf.nn.dropout(act, o.keep_ratio_cnn)
             return tf.concat_v2((tf.reshape(act, [o.batchsz, -1]), y_prev), 1)
+
+    def _get_masks_from_rectangles(self, rec, o):
+        # create mask using rec; typically rec=y_prev
+        x1 = rec[:,0] * o.frmsz
+        y1 = rec[:,1] * o.frmsz
+        x2 = rec[:,2] * o.frmsz
+        y2 = rec[:,3] * o.frmsz
+        grid_x, grid_y = tf.meshgrid(
+                tf.range(o.frmsz, dtype=o.dtype),
+                tf.range(o.frmsz, dtype=o.dtype))
+        # resize tensors so that they can be compared
+        x1 = tf.expand_dims(tf.expand_dims(x1,1),2)
+        x2 = tf.expand_dims(tf.expand_dims(x2,1),2)
+        y1 = tf.expand_dims(tf.expand_dims(y1,1),2)
+        y2 = tf.expand_dims(tf.expand_dims(y2,1),2)
+        grid_x = tf.tile(tf.expand_dims(grid_x,0), [o.batchsz,1,1])
+        grid_y = tf.tile(tf.expand_dims(grid_y,0), [o.batchsz,1,1])
+        # mask
+        masks = tf.logical_and(
+            tf.logical_and(tf.less_equal(x1, grid_x), 
+                tf.less_equal(grid_x, x2)),
+            tf.logical_and(tf.less_equal(y1, grid_y), 
+                tf.less_equal(grid_y, y2)))
+        # type and dim change so that it can be concated with x
+        masks = tf.expand_dims(tf.cast(masks, o.dtype),3)
+        return masks
 
 
 class RNN_basic(object):
@@ -179,7 +197,7 @@ class RNN_basic(object):
 
 
 class RNN_attention_s(object):
-    def __init__(self, o, is_train=False):
+    def __init__(self, o, is_train):
         self._is_train = is_train
         self.net = None
         self.cnnout = {}
@@ -422,7 +440,7 @@ class RNN_attention_s(object):
 # - y_prev is used only implicitly through hidden states (not used explicitly). 
 #------------------------------------------------------------------------------
 class RNN_attention_st(object):
-    def __init__(self, o, is_train=False):
+    def __init__(self, o, is_train):
         self._is_train = is_train
         self.net = None
         self.cnnout = {}
@@ -688,7 +706,8 @@ class RNN_attention_st(object):
         return outputs 
 
 
-def get_loss(outputs, labels, inputs_length, inputs_HW, o):
+#def get_loss(outputs, labels, inputs_length, inputs_HW, o):
+def get_loss(outputs, labels, inputs_valid, inputs_HW, o):
     # loss = tf.reduce_mean(tf.square(outputs-labels)) # previous loss 
     ''' previous L2 loss
     loss1_batch = []
@@ -717,6 +736,13 @@ def get_loss(outputs, labels, inputs_length, inputs_HW, o):
     loss = []
 
     # loss1: sum of two l1 distances for left-top and right-bottom
+    if 'l1' in o.losses: # TODO: double check
+        labels_valid = tf.boolean_mask(labels[:,1:], inputs_valid[:,1:])
+        outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
+        loss_l1 = tf.reduce_mean(tf.abs(labels_valid - outputs_valid))
+        loss.append(loss_l1)
+
+    ''' Previous way using 'inputs_length' -> now obsolete, will be deprecated
     if 'l1' in o.losses:
         loss_l1 = []
         for i in range(o.batchsz): # batchsz or # examples
@@ -724,7 +750,9 @@ def get_loss(outputs, labels, inputs_length, inputs_HW, o):
                 outputs[i, 0:inputs_length[i]-1] - labels[i, 1:inputs_length[i]])))
         loss_l1 = tf.reduce_mean(loss_l1)
         loss.append(loss_l1)
+    '''
 
+    '''
     # loss2: IoU
     if 'iou' in o.losses:
         scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
@@ -750,7 +778,7 @@ def get_loss(outputs, labels, inputs_length, inputs_HW, o):
         iou_mean = tf.reduce_mean(iou_valid)
         loss_iou = 1 - iou_mean # NOTE: Any normalization?
         loss.append(loss_iou)
-
+    '''
 
     # loss3: CLE
     # loss4: cross-entropy between probabilty maps (need to change label) 
@@ -804,17 +832,18 @@ class Model(object):
             cnn = CNN(o, is_train) # NOTE: if not o.cnn_pretrain else CNN_pretrained()
             rnn = RNN_basic(o) # currently developing model TODO: make it optionable
 
+            # placeholders
             inputs = tf.placeholder(o.dtype, 
                     shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
                     name='inputs')
-            '''
-            inputs_valid = tf.placeholder(tf.int32, 
+            inputs_valid = tf.placeholder(tf.bool, 
                     shape=[o.batchsz, o.ntimesteps+1], 
                     name='inputs_valid')
             '''
             inputs_length = tf.placeholder(tf.int32, 
                     shape=[o.batchsz], 
                     name='inputs_length')
+            '''
             inputs_HW = tf.placeholder(o.dtype, 
                     shape=[o.batchsz, 2], 
                     name='inputs_HW')
@@ -822,36 +851,61 @@ class Model(object):
                     shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
                     name='labels')
 
-            assert(is_train == True) # TODO: implement this 
+            # placeholders for initializations of full-length sequences
+            #is_firstseg = tf.placeholder(tf.bool, name='is_firstseg')
+            h_init = tf.placeholder_with_default(
+                    tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype), # NOTE: zeor or normal
+                    shape=[o.batchsz, o.nunits], name='h_init')
+            C_init = tf.placeholder_with_default(
+                    tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype), # NOTE: zeor or normal
+                    shape=[o.batchsz, o.nunits], name='C_init')
+            y_init = tf.placeholder_with_default(
+                    labels[:,0], 
+                    shape=[o.batchsz, o.outdim], name='y_init')
+            '''
+            h_init = tf.placeholder(o.dtype,
+                    shape=[o.batchsz, o.nunits], name='h_init')
+            C_init = tf.placeholder(o.dtype,
+                    shape=[o.batchsz, o.nunits], name='C_init')
+            y_init = tf.placeholder(o.dtype,
+                    shape=[o.batchsz, o.outdim], name='y_init')
+            '''
 
             # RNN unroll
             outputs = []
             rnninit = False
-            dbg = []
+            x0 = inputs[:,0]
+            y0 = labels[:,0]
             for t in range(1, o.ntimesteps+1):
                 if t==1:
-                    # TODO: In case it's 2nd or later segment of full length 
-                    # sequence, initial tensors should be changed to actual
-                    # previous tensors. Need a flag.
-                    #h_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # NOTE: or normal init
-                    #C_prev = tf.zeros([o.batchsz, o.nunits], dtype=o.dtype) # NOTE: or normal init
-                    h_prev = tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype) 
-                    C_prev = tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype) 
-                    y_prev = labels[:,0] 
+                    h_prev = h_init
+                    C_prev = C_init
+                    y_prev = y_init
+                    '''
+                    h_prev = tf.cond(is_firstseg, 
+                            lambda: tf.truncated_normal( # NOTE: or normal init
+                                [o.batchsz, o.nunits], dtype=o.dtype), 
+                            lambda: h_init)
+                    C_prev = tf.cond(is_firstseg, 
+                            lambda: tf.truncated_normal( # NOTE: or normal init
+                                [o.batchsz, o.nunits], dtype=o.dtype), 
+                            lambda: C_init)
+                    y_prev = tf.cond(is_firstseg, 
+                            lambda: labels[:,0], lambda: y_init)
+                    '''
                 else:
                     h_prev = h_curr
                     C_prev = C_curr
-                    if o.pass_ygt: # pass gt y (only for training)
+                    if o.pass_ygt and is_train: # pass gt y (only for training)
                         y_prev = labels[:,t-1]
                     else:
                         y_prev = y_curr
                 x_prev = inputs[:,t-1]
                 x_curr = inputs[:,t]
 
-                if o.yprev_mode == 'concat_channel':
-                    cnnout, masks = cnn.pass_onetime(x_curr, x_prev, y_prev, o)
-                    dbg.append([y_prev, masks])
-                elif o.yprev_mode == 'concat_abs':
+                if o.pass_yinit:
+                    cnnout = cnn.pass_onetime(x_curr, x_prev, y_prev, o, x0, y0)
+                else:
                     cnnout = cnn.pass_onetime(x_curr, x_prev, y_prev, o)
 
                 if not rnninit: rnn.update_params(cnnout, o); rnninit = True
@@ -863,19 +917,27 @@ class Model(object):
                 outputs.append(y_curr)
             outputs = tf.stack(outputs, axis=1) # list to tensor
 
-            loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
+            loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o)
+            #loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
             tf.add_to_collection('losses', loss)
             loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
             net = {
                     'inputs': inputs,
-                    #'inputs_valid': inputs_valid,
-                    'inputs_length': inputs_length,
+                    'inputs_valid': inputs_valid,
+                    #'inputs_length': inputs_length,
                     'inputs_HW': inputs_HW,
                     'labels': labels,
                     'outputs': outputs,
                     'loss': loss_total,
-                    'dbg': dbg}
+                    #'is_firstseg': is_firstseg,
+                    'h_init': h_init,
+                    'C_init': C_init,
+                    'y_init': y_init,
+                    'h_last': h_curr,
+                    'C_last': C_curr,
+                    'y_last': y_curr,
+                    }
             return net
 
 
@@ -894,6 +956,7 @@ if __name__ == '__main__':
 
     o.yprev_mode = 'concat_channel' # concat_abs, concat_channel
     o.pass_ygt = True # False, True
+    o.pass_yinit = True
 
     #o.model = 'rnn_basic' # rnn_basic, rnn_attention_s, rnn_attention_st
     o.losses = ['l1'] # 'l1', 'iou', etc.

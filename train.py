@@ -65,7 +65,8 @@ def train(m, loader, o):
 
                 fdict = {
                         m.net['inputs']: batch['inputs'],
-                        m.net['inputs_length']: batch['inputs_length'],
+                        m.net['inputs_valid']: batch['inputs_valid'],
+                        #m.net['inputs_length']: batch['inputs_length'],
                         m.net['inputs_HW']: batch['inputs_HW'],
                         m.net['labels']: batch['labels'],
                         lr: lr_epoch
@@ -75,14 +76,6 @@ def train(m, loader, o):
                     train_writer.add_summary(summary, ib)
                 else:
                     _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
-
-
-                # NOTE: debugging for mask
-                '''
-                _, dbg = sess.run([optimizer, m.net['dbg']], feed_dict=fdict)
-                draw.dbg_masks(dbg)
-                pdb.set_trace()
-                '''
 
                 # **results after every batch 
                 sys.stdout.write(

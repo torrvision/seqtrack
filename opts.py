@@ -51,13 +51,14 @@ class Opts(object):
         self.lstmforgetbias     = False
         self.yprev_mode         = '' # nouse, concat_abs, concat_spatial (later), weight
         self.pass_ygt           = False
+        self.pass_yinit         = False
 
         #----------------------------------------------------------------------
         # model parameters - cnn (or feature extractor)
         self.cnn_pretrain       = False 
         self.cnn_model          = 'vgg' # vgg, resnet, imagenet, etc.
         self.dropout_cnn        = False
-        self.keep_ratio_cnn     = 0.5
+        self.keep_ratio_cnn     = 0.25
         # TODO: add dropout and batch norm option
 
         #----------------------------------------------------------------------
@@ -135,11 +136,11 @@ class Opts(object):
         #self._save_settings()
 
     def _set_dataset_params(self):
-        if self.dataset == 'moving_mnist' or self.dataset == 'bouncing_mnist':
+        if self.dataset in ['moving_mnist', 'bouncing_mnist']:
             self.frmsz = 100 # image size (assuming square)
             self.ninchannel = 1 # number of image channels
             self.outdim = 4 # rnn final output
-        elif self.dataset == 'ILSVRC':
+        elif self.dataset in ['ILSVRC', 'OTB-50']:
             # TODO: try different frmsz
             self.frmsz = 100 # image (re)size, width and height. assuming square
             self.ninchannel = 3

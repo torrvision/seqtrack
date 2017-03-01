@@ -74,6 +74,9 @@ def parse_arguments():
     parser.add_argument(
             '--pass_ygt', help='pass gt y instead pred y during training', 
             action='store_true')
+    parser.add_argument(
+            '--pass_yinit', help='pass gt y instead pred y during training', 
+            action='store_true')
 
     parser.add_argument(
             '--dropout_cnn', help='dropout in cnn (only during train)', 
