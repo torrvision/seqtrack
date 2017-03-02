@@ -101,7 +101,7 @@ class Data_moving_mnist(object):
 
         # TODO: variable length inputs for
         # 1. online learning, 2. arbitrary training sequences 
-        inputs_length = np.ones((o.batchsz), dtype=np.int32) * (o.ntimesteps+1)
+        inputs_valid = np.ones((o.batchsz, o.ntimesteps+1), dtype=np.bool)
 
         inputs_HW = np.ones((o.batchsz, 2), dtype=np.float32) * self.frmsz
 
@@ -116,7 +116,7 @@ class Data_moving_mnist(object):
 
         batch = {
                 'inputs': vids,
-                'inputs_length': inputs_length, 
+                'inputs_valid': inputs_valid, 
                 'inputs_HW': inputs_HW, 
                 'labels': pos,
                 'digits': data['targets'][idx],
@@ -433,7 +433,7 @@ class Data_bouncing_mnist(object):
 
         # TODO: variable length inputs for
         # 1. online learning, 2. arbitrary training sequences 
-        inputs_length = np.ones((o.batchsz), dtype=np.int32) * (o.ntimesteps+1)
+        inputs_valid = np.ones((o.batchsz, o.ntimesteps+1), dtype=np.bool)
 
         inputs_HW = np.ones((o.batchsz, 2), dtype=np.float32) * self.frmsz
 
@@ -445,7 +445,7 @@ class Data_bouncing_mnist(object):
 
         batch = {
                 'inputs': data,
-                'inputs_length': inputs_length, 
+                'inputs_valid': inputs_valid, 
                 'inputs_HW': inputs_HW,
                 'labels': label,
                 'digits': data_all['targets'][idx],
@@ -850,7 +850,6 @@ class Data_ILSVRC(object):
             dtype=np.float32)
         label = np.zeros((o.batchsz, o.ntimesteps+1, o.outdim), dtype=np.float32)
         inputs_valid = np.zeros((o.batchsz, o.ntimesteps+1), dtype=np.bool)
-        #inputs_length = np.zeros((o.batchsz), dtype=np.int32)
         inputs_HW = np.zeros((o.batchsz, 2), dtype=np.float32)
 
         for ie in range(o.batchsz): # batchsz
@@ -879,7 +878,6 @@ class Data_ILSVRC(object):
                     data[ie,t] = x
                 label[ie,t] = y
             inputs_valid[ie,:len(frms)] = True # TODO: This should be changed if frms are sparse!
-            #inputs_length[ie] = len(frms)
             inputs_HW[ie] = x.shape[0:2]
 
         # TODO: Data augmentation
@@ -893,7 +891,6 @@ class Data_ILSVRC(object):
         batch = {
                 'inputs': data,
                 'inputs_valid': inputs_valid, 
-                #'inputs_length': inputs_length, 
                 'inputs_HW': inputs_HW,
                 'labels': label,
                 'idx': idx
@@ -981,31 +978,66 @@ class Data_ILSVRC(object):
                     cv2.imwrite(fname, x)
 
 
-class Data_OTB50(object):
+class Data_OTB(object):
     '''
-    Some modifications are made to the original dataset.
+    OTB-50 or OTB-100 can be loaded.
+    
+    OTB dataset doesn't really maintain consistency (so bad actually..)
+
+    Also some other modifications are made to the original dataset.
     1. Skating2 class has two rectangles for each of two objects respectively.
     To make the directory structure consistent, I created Skating2_1, Skating2_2.
     2. Human4 class has 2 labels 'groundtruth_rect.{1,2}.txt' but 1 is empty.
     I copied 2 to 'groundtruth_rect.txt' to maintain filename consistency.
+    3. Jogging class has two rectangles for each of two objects respectively.
+    To make the directory structure consistent, I created Jogging1, Jogging2.
     '''
     def __init__(self, o):
-        self.path_data = o.path_data
-        self.nclasses =  50
-        self.nexps_fulllen = 50 # used in evaluation
+        self.path_data = os.path.join(o.path_data_home, 'OTB')
+        if o.dataset == 'OTB-50':
+            self.nclasses = 50
+            self.nexps_fulllen = 50 # used in evaluation
+        elif o.dataset == 'OTB-100':
+            self.nclasses = 100
+            self.nexps_fulllen = 100 # used in evaluation
+
         # TODO: OTB dataset has attributes to videos. Add them.
 
         # examples = full-length test sequences
         self.exps = None
         self.classes = None
-        self.stat = None
+        self.stat = None # TODO: not sure if it's okay to use ILSVRC's stat
 
         self._load_data(o)
 
     def _load_data(self, o):
+        self._update_classes()
         self._update_exceptions(o)
         self._update_exps(o)
         self._update_stat(o)
+
+    def _update_classes(self):
+        OTB50 = [
+            'Basketball','Biker','Bird1','BlurBody','BlurCar2','BlurFace',
+            'BlurOwl','Bolt','Box','Car1','Car4','CarDark','CarScale',
+            'ClifBar','Couple','Crowds','David','Deer','Diving','DragonBaby',
+            'Dudek','Football','Freeman4','Girl','Human3','Human4','Human6',
+            'Human9','Ironman','Jump','Jumping','Liquor','Matrix',
+            'MotorRolling','Panda','RedTeam','Shaking','Singer2','Skating1',
+            'Skating2_1','Skating2_2','Skiing','Soccer','Surfer','Sylvester',
+            'Tiger2','Trellis','Walking','Walking2','Woman']
+        OTB100only = [
+            'Bird2','BlurCar1','BlurCar3','BlurCar4','Board','Bolt2','Boy', 
+            'Car2','Car24','Coke','Coupon','Crossing','Dancer','Dancer2',
+            'David2','David3','Dog','Dog1','Doll','FaceOcc1','FaceOcc2','Fish', 
+            'FleetFace','Football1','Freeman1','Freeman3','Girl2','Gym',
+            'Human2','Human5','Human7','Human8','Jogging1','Jogging2',
+            'KiteSurf','Lemming','Man','Mhyang','MountainBike','Rubik',
+            'Singer1','Skater','Skater2','Subway','Suv','Tiger1','Toy','Trans', 
+            'Twinnings','Vase']
+        self.classes = dict.fromkeys({'OTB-50', 'OTB-100'}, None)
+        self.classes['OTB-50'] = OTB50
+        self.classes['OTB-100'] = OTB50 + OTB100only
 
     def _update_exceptions(self, o):
         self.exceptions = {}
@@ -1013,15 +1045,21 @@ class Data_OTB50(object):
         self.exceptions['Football1'] = {}
         self.exceptions['Freeman3'] = {}
         self.exceptions['Freeman4'] = {}
+        self.exceptions['BlurCar1'] = {}
+        self.exceptions['BlurCar3'] = {}
+        self.exceptions['BlurCar4'] = {}
         self.exceptions['David']['frms'] = range(300, 770+1)
         self.exceptions['Football1']['frms'] = range(1, 74+1)
         self.exceptions['Freeman3']['frms'] = range(1, 460+1)
         self.exceptions['Freeman4']['frms'] = range(1, 283+1)
+        self.exceptions['BlurCar1']['frms'] = range(247, 988+1)
+        self.exceptions['BlurCar3']['frms'] = range(3, 359+1)
+        self.exceptions['BlurCar4']['frms'] = range(18, 397+1)
 
     def _update_exps(self, o):
         def create_exps():
             # classes
-            classes = [name for name in os.listdir(self.path_data)]
+            classes = self.classes[o.dataset]
             assert(len(classes) == self.nclasses)
             
             # data
@@ -1049,12 +1087,21 @@ class Data_OTB50(object):
                     frmrange = self.exceptions[c]['frms']
                 else:
                     frmrange = range(1, data[c]['nfrms']+1)
-                if not o.useresizedimg: 
-                    data[c]['images'] = [os.path.join(dirname, 'img') 
-                        + '/{0:04d}.jpg'.format(t) for t in frmrange]
+                
+                if c is not 'Board':
+                    if not o.useresizedimg: 
+                        data[c]['images'] = [os.path.join(dirname, 'img') 
+                            + '/{0:04d}.jpg'.format(t) for t in frmrange]
+                    else:
+                        data[c]['images'] = [os.path.join(dirname, 'img_frmsz{}'.format(o.frmsz)) 
+                            + '/{0:04d}.jpg'.format(t) for t in frmrange]
                 else:
-                    data[c]['images'] = [os.path.join(dirname, 'img_frmsz{}'.format(o.frmsz)) 
-                        + '/{0:04d}.jpg'.format(t) for t in frmrange]
+                    if not o.useresizedimg: 
+                        data[c]['images'] = [os.path.join(dirname, 'img') 
+                            + '/{0:05d}.jpg'.format(t) for t in frmrange]
+                    else:
+                        data[c]['images'] = [os.path.join(dirname, 'img_frmsz{}'.format(o.frmsz)) 
+                            + '/{0:05d}.jpg'.format(t) for t in frmrange]
 
                 # label normalization using image size
                 exampleimg = data[c]['images'][0].replace('img_frmsz{}'.format(o.frmsz) ,'img')
@@ -1074,7 +1121,6 @@ class Data_OTB50(object):
 
         if self.exps is None:
             self.exps = create_exps()
-            self.classes = self.exps.keys()
 
     def _update_stat(self, o):
         if self.stat is None:
@@ -1083,10 +1129,10 @@ class Data_OTB50(object):
             self.stat = np.load(filename).tolist()
 
     def get_batch_fl(self, ie, o):
-        assert(ie < len(self.classes))
+        assert(ie < len(self.classes[o.dataset]))
 
         # input tensors 
-        c = self.classes[ie]
+        c = self.classes[o.dataset][ie]
         nfrms = self.exps[c]['nfrms']
         data = np.zeros(
             (1, nfrms, o.frmsz, o.frmsz, o.ninchannel), dtype=np.float32)
@@ -1111,8 +1157,6 @@ class Data_OTB50(object):
             # if there is a labeled box, assign 1 to inputs_valid
             if not (sum(y) == 0): 
                 inputs_valid[0,t] = True
-            else:
-                raise ValueError('For OTB-50, every valid frame has GT labels.')
         inputs_HW[0] = x.shape[0:2]
 
         # image normalization 
@@ -1136,7 +1180,7 @@ class Data_OTB50(object):
         assert(False) # it's performed already and no need to run this twice.
         assert(o.useresizedimg == False)
 
-        for c in self.classes: #classes = #sequences = #examples
+        for c in self.classes[o.dataset]: #classes = #sequences = #examples
             print 'resizing (and saving) images in {} dataset |class {}'.format(
                     o.dataset, c)
             for t in range(self.exps[c]['nfrms']):
@@ -1201,8 +1245,8 @@ def load_data(o):
         loader = Data_bouncing_mnist(o)
     elif o.dataset == 'ILSVRC':
         loader = Data_ILSVRC(o)
-    elif o.dataset == 'OTB-50':
-        loader = Data_OTB50(o)
+    elif o.dataset in ['OTB-50', 'OTB-100']:
+        loader = Data_OTB(o)
     else:
         raise ValueError('dataset not implemented yet')
     return loader
@@ -1215,36 +1259,44 @@ if __name__ == '__main__':
     from opts import Opts
     o = Opts()
     o.batchsz = 20
-    o.dataset = 'ILSVRC' # moving_mnist, bouncing_mnist, ILSVRC, OTB-50
-    #o.dataset = 'OTB-50' # moving_mnist, bouncing_mnist, ILSVRC, OTB-50
-    o.trainsplit = 0
+
+    o.dataset = 'OTB-100' # moving_mnist, bouncing_mnist, ILSVRC, OTB-50
     o._set_dataset_params()
+
     dstype = 'train'
     
-    #o.useresizedimg = False # NOTE: set it False to create resized imgs
+    test_fl = True
 
-    test_fl = False
     sanitycheck = False
+
+    # moving_mnist
+    if o.dataset in ['moving_mnist', 'bouncing_mnist']:
+        loader = load_data(o)
+        batch = loader.get_batch(0, o, dstype)
+        if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz)
 
     # ILSVRC
     if o.dataset == 'ILSVRC':
+        o.trainsplit = 0
         loader = load_data(o)
         if test_fl: # to test full-length sequences 
             batch_fl = loader.get_batch_fl(0, o)
-            batch = split_batch_fulllen_seq(batch_fl)
+            batch = split_batch_fulllen_seq(batch_fl, o)
             if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz, loader.stat[dstype], fulllen=True) 
         else:
             batch = loader.get_batch(0, o, dstype)
             if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz, loader.stat[dstype])
+        #o.useresizedimg = False # NOTE: set it False to create resized imgs
         #loader.create_resized_images(o) # to create resized images
 
     # OTB-50
-    if o.dataset == 'OTB-50':
+    if o.dataset in ['OTB-50', 'OTB-100']:
         loader = load_data(o)
         assert(test_fl==True) # for OTB, it's always full-length
         batch_fl = loader.get_batch_fl(0, o)
-        batch = split_batch_fulllen_seq(batch_fl)
+        batch = split_batch_fulllen_seq(batch_fl, o)
         if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz, loader.stat, fulllen=True)
+        #o.useresizedimg = False # NOTE: set it False to create resized imgs
         #loader.create_resized_images(o)
 
     pdb.set_trace()

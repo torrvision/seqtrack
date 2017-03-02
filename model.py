@@ -706,7 +706,6 @@ class RNN_attention_st(object):
         return outputs 
 
 
-#def get_loss(outputs, labels, inputs_length, inputs_HW, o):
 def get_loss(outputs, labels, inputs_valid, inputs_HW, o):
     # loss = tf.reduce_mean(tf.square(outputs-labels)) # previous loss 
     ''' previous L2 loss
@@ -723,12 +722,8 @@ def get_loss(outputs, labels, inputs_valid, inputs_HW, o):
     loss_box = tf.reduce_mean(tf.stack(loss1_batch, axis=0))
     '''
 
-    # NOTE: Be careful about 'valid' length in computing losses
-    # - labels
-    # - inputs_length
-    # Examples will have a length of (RNN size - 1), so proper treatment should
-    # be made when computing losses. I.e., labels and inputs_length will be 
-    # 1 timestep longer, meaning that y0 shouldn't be used.
+    # NOTE: Be careful about length of labels and outputs. 
+    # labels and inputs_valid will be of T+1 length, and y0 shouldn't be used.
 
     assert(outputs.get_shape().as_list()[1] == o.ntimesteps)
     assert(labels.get_shape().as_list()[1] == o.ntimesteps+1)
@@ -742,19 +737,9 @@ def get_loss(outputs, labels, inputs_valid, inputs_HW, o):
         loss_l1 = tf.reduce_mean(tf.abs(labels_valid - outputs_valid))
         loss.append(loss_l1)
 
-    ''' Previous way using 'inputs_length' -> now obsolete, will be deprecated
-    if 'l1' in o.losses:
-        loss_l1 = []
-        for i in range(o.batchsz): # batchsz or # examples
-            loss_l1.append(tf.reduce_mean(tf.abs(
-                outputs[i, 0:inputs_length[i]-1] - labels[i, 1:inputs_length[i]])))
-        loss_l1 = tf.reduce_mean(loss_l1)
-        loss.append(loss_l1)
-    '''
-
-    '''
     # loss2: IoU
     if 'iou' in o.losses:
+        assert(False) # TODO: change from inputs_length to inputs_valid
         scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
             inputs_HW[:,1], inputs_HW[:,0]), axis=1)
         boxA = outputs * tf.expand_dims(scalar, 1)
@@ -763,9 +748,6 @@ def get_loss(outputs, labels, inputs_valid, inputs_HW, o):
         yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
         xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
         yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
-        #interArea = (xB - xA + 1) * (yB - yA + 1)
-        #boxAArea = (boxA[:,:,2] - boxA[:,:,0] + 1) * (boxA[:,:,3] - boxA[:,:,1] + 1) 
-        #boxBArea = (boxB[:,:,2] - boxB[:,:,0] + 1) * (boxB[:,:,3] - boxB[:,:,1] + 1) 
         interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
         boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
         boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
@@ -778,7 +760,6 @@ def get_loss(outputs, labels, inputs_valid, inputs_HW, o):
         iou_mean = tf.reduce_mean(iou_valid)
         loss_iou = 1 - iou_mean # NOTE: Any normalization?
         loss.append(loss_iou)
-    '''
 
     # loss3: CLE
     # loss4: cross-entropy between probabilty maps (need to change label) 
@@ -839,11 +820,6 @@ class Model(object):
             inputs_valid = tf.placeholder(tf.bool, 
                     shape=[o.batchsz, o.ntimesteps+1], 
                     name='inputs_valid')
-            '''
-            inputs_length = tf.placeholder(tf.int32, 
-                    shape=[o.batchsz], 
-                    name='inputs_length')
-            '''
             inputs_HW = tf.placeholder(o.dtype, 
                     shape=[o.batchsz, 2], 
                     name='inputs_HW')
@@ -852,7 +828,6 @@ class Model(object):
                     name='labels')
 
             # placeholders for initializations of full-length sequences
-            #is_firstseg = tf.placeholder(tf.bool, name='is_firstseg')
             h_init = tf.placeholder_with_default(
                     tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype), # NOTE: zeor or normal
                     shape=[o.batchsz, o.nunits], name='h_init')
@@ -862,14 +837,6 @@ class Model(object):
             y_init = tf.placeholder_with_default(
                     labels[:,0], 
                     shape=[o.batchsz, o.outdim], name='y_init')
-            '''
-            h_init = tf.placeholder(o.dtype,
-                    shape=[o.batchsz, o.nunits], name='h_init')
-            C_init = tf.placeholder(o.dtype,
-                    shape=[o.batchsz, o.nunits], name='C_init')
-            y_init = tf.placeholder(o.dtype,
-                    shape=[o.batchsz, o.outdim], name='y_init')
-            '''
 
             # RNN unroll
             outputs = []
@@ -881,18 +848,6 @@ class Model(object):
                     h_prev = h_init
                     C_prev = C_init
                     y_prev = y_init
-                    '''
-                    h_prev = tf.cond(is_firstseg, 
-                            lambda: tf.truncated_normal( # NOTE: or normal init
-                                [o.batchsz, o.nunits], dtype=o.dtype), 
-                            lambda: h_init)
-                    C_prev = tf.cond(is_firstseg, 
-                            lambda: tf.truncated_normal( # NOTE: or normal init
-                                [o.batchsz, o.nunits], dtype=o.dtype), 
-                            lambda: C_init)
-                    y_prev = tf.cond(is_firstseg, 
-                            lambda: labels[:,0], lambda: y_init)
-                    '''
                 else:
                     h_prev = h_curr
                     C_prev = C_curr
@@ -918,19 +873,16 @@ class Model(object):
             outputs = tf.stack(outputs, axis=1) # list to tensor
 
             loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o)
-            #loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
             tf.add_to_collection('losses', loss)
-            loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+            loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
 
             net = {
                     'inputs': inputs,
                     'inputs_valid': inputs_valid,
-                    #'inputs_length': inputs_length,
                     'inputs_HW': inputs_HW,
                     'labels': labels,
                     'outputs': outputs,
                     'loss': loss_total,
-                    #'is_firstseg': is_firstseg,
                     'h_init': h_init,
                     'C_init': C_init,
                     'y_init': y_init,

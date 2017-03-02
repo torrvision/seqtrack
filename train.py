@@ -61,12 +61,10 @@ def train(m, loader, o):
             for ib in range(nbatch):
                 t_batch = time.time()
                 batch = loader.get_batch(ib, o, dstype='train')
-                #loader.run_sanitycheck(batch) # TODO: run if change dataset
 
                 fdict = {
                         m.net['inputs']: batch['inputs'],
                         m.net['inputs_valid']: batch['inputs_valid'],
-                        #m.net['inputs_length']: batch['inputs_length'],
                         m.net['inputs_HW']: batch['inputs_HW'],
                         m.net['labels']: batch['labels'],
                         lr: lr_epoch

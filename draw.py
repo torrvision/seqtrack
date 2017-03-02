@@ -39,19 +39,20 @@ def show_dataset_batch(batch, dataset, frmsz, stat=None):
             if dataset == 'moving_mnist' or dataset == 'bouncing_mnist':
                 plt.title(digits[i])
             ax = plt.gca()
-            ax.add_patch(
-                Rectangle(
-                    (pos[i,t,0], pos[i,t,1]), 
-                    pos[i,t,2]-pos[i,t,0], pos[i,t,3]-pos[i,t,1],
-                    facecolor='r', edgecolor='r', fill=False))
+            if batch['inputs_valid'][i,t]:
+                ax.add_patch(
+                    Rectangle(
+                        (pos[i,t,0], pos[i,t,1]), 
+                        pos[i,t,2]-pos[i,t,0], pos[i,t,3]-pos[i,t,1],
+                        facecolor='r', edgecolor='r', fill=False))
             plt.draw()
             plt.axis('off')
         savedir = 'tmp/{}'.format(dataset)
         if not os.path.exists(savedir): helpers.mkdir_p(savedir)
         plt.savefig(savedir + '/frame{}.png'.format(t))
         plt.close()
-    os.system('convert -loop 0 -delay 30 tmp/{}/frame*.png tmp/{}/vid.gif'.\
-        format(dataset, dataset))
+    #os.system('convert -loop 0 -delay 30 tmp/{}/frame*.png tmp/{}/vid.gif'.\
+    #    format(dataset, dataset))
 
 def show_dataset_batch_fulllen_seq(batch, dataset, frmsz, stat=None):
     vids = batch['inputs']
@@ -106,8 +107,6 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
             [nbatches, o.ntimesteps, o.batchsz, o.ntimesteps+1, 4])
     inputs_valid = np.reshape(np.asarray(results['inputs_valid']), 
             [nbatches, o.ntimesteps, o.batchsz, o.ntimesteps+1])
-    #inputs_length = np.reshape(np.asarray(results['inputs_length']), 
-            #[nbatches, o.ntimesteps, o.batchsz])
 
     if o.dataset in ['moving_mnist', 'bouncing_mnist']:
         plt.gray()
@@ -124,12 +123,13 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
             # use last complete sequence (-1)
             # max(lastvalidfrm) = o.ntimesteps+1-1, because the sequence
             # length would be o.ntimesteps+1.
-            lastvalidfrm = np.max(np.where(inputs_valid[i,-1,b,:] == True))
+            #lastvalidfrm = np.max(np.where(inputs_valid[i,-1,b,:] == True))
 
             ncols = 5 
             nrows = int(np.ceil(o.ntimesteps/float(ncols))) + 1
             fig = plt.figure(figsize=(12,8))
-            for t in range(lastvalidfrm+1):
+            #for t in range(lastvalidfrm+1):
+            for t in range(o.ntimesteps+1):
                 if t == 0:
                     plt.subplot(nrows,ncols,t+1)
                 else:
@@ -144,6 +144,7 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
                     img += loader.stat[dstype]['mean']
                     plt.imshow(np.uint8(img))
                 #rectangles
+                #if inputs_valid[i,-1,b,t]:
                 ax = plt.gca()
                 box_gt = labels[i,-1,b,t] * 100 # 100 scale
                 ax.add_patch(Rectangle(
@@ -156,68 +157,6 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
                         (box_pred[0], box_pred[1]), 
                         box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
                         facecolor='b', edgecolor='b', fill=False))
-
-            '''
-            max_inputs_length = np.max(inputs_length[i,:,b]) # can be up to ntimesteps+1
-            ncols = 5 
-            nrows = int(np.ceil(o.ntimesteps/float(ncols))) + 1
-            fig = plt.figure(figsize=(12,8))
-            for t in range(max_inputs_length):
-                if t == 0:
-                    plt.subplot(nrows,ncols,t+1)
-                else:
-                    plt.subplot(nrows,ncols,t+ncols)
-                #image
-                img = inputs[i,max_inputs_length-1-1,b,t]
-                if o.dataset in ['moving_mnist', 'bouncing_mnist']:
-                    plt.imshow(np.squeeze(img, axis=2))
-                else: 
-                    # unnormalize using stat
-                    img *= loader.stat[dstype]['std']
-                    img += loader.stat[dstype]['mean']
-                    plt.imshow(np.uint8(img))
-                #rectangles
-                ax = plt.gca()
-                box_gt = labels[i,max_inputs_length-1-1,b,t] * 100 # 100 scale
-                ax.add_patch(Rectangle(
-                    (box_gt[0], box_gt[1]), 
-                    box_gt[2]-box_gt[0], box_gt[3]-box_gt[1], 
-                    facecolor='r', edgecolor='r', fill=False))
-                if t>0: #output only after frame 1
-                    box_pred = outputs[i,max_inputs_length-1-1,b,t-1] * 100
-                    ax.add_patch(Rectangle(
-                        (box_pred[0], box_pred[1]), 
-                        box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
-                        facecolor='b', edgecolor='b', fill=False))
-            '''
-
-            '''
-            for t in range(o.ntimesteps):
-                if t > np.max(inputs_length[i,:,b])-1:
-                    break
-                plt.subplot(5,o.ntimesteps/5,t+1)
-                #image
-                img = inputs[i,t,b,inputs_length[i,t,b]-1]
-                if o.dataset in ['moving_mnist', 'bouncing_mnist']:
-                    plt.imshow(np.squeeze(img, axis=2))
-                else: 
-                    # unnormalize using stat
-                    img *= loader.stat[dstype]['std']
-                    img += loader.stat[dstype]['mean']
-                    plt.imshow(np.uint8(img))
-                #rectangles
-                box_gt = labels[i,t,b,inputs_length[i,t,b]-1] * 100 # 100 scale
-                box_pred = outputs[i,t,b,inputs_length[i,t,b]-1] * 100
-                ax = plt.gca()
-                ax.add_patch(Rectangle(
-                    (box_gt[0], box_gt[1]), 
-                    box_gt[2]-box_gt[0], box_gt[3]-box_gt[1], 
-                    facecolor='r', edgecolor='r', fill=False))
-                ax.add_patch(Rectangle(
-                    (box_pred[0], box_pred[1]), 
-                    box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
-                    facecolor='b', edgecolor='b', fill=False))
-            '''
 
             savedir = os.path.join(o.path_save, 'track_results')
             if not os.path.exists(savedir): helpers.mkdir_p(savedir)
@@ -304,16 +243,4 @@ def plot_precisionplot(precision_rates, cle_representative, o, savedir):
     outfile = os.path.join(savedir, 'precisionplot.png')
     plt.savefig(outfile)
     plt.close()
-
-def dbg_masks(dbg):
-    pdb.set_trace()
-    for t in range(len(dbg)):
-        y_prev = dbg[t][0]
-        masks = dbg[t][1]
-
-        # save 
-        fig = plt.figure(figsize=(6,6))
-        ax = fig.add_subplot(111)
-        plt.imshow(np.squeeze(masks, axis=2))
-    pdb.set_trace()
 
