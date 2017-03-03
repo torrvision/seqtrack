@@ -37,7 +37,7 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
             'loss': []
             }
 
-    if not fulllen:
+    if not fulllen: # this is only used during training.
         if o.debugmode:
             nbatches = 10
         else:
@@ -93,98 +93,93 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
             batch = data.split_batch_fulllen_seq(batch_fl, o)
 
             outputs_all = []
-            #loss_exp = []
-
-            # NOTE: until implementing variable-size batchsz model, split 
-            # the batch so that it has o.batchsz shape at 1st dim.
-            nsplits = int(np.ceil(batch['nsegments'] / float(o.batchsz)))
-            for j in range(nsplits): # to fit 'batchsz' in model definition
+            for j in range(batch['nsegments']): # segments
                 t_start = time.time()
-                # batch segment
+
                 batch_seg = {}
                 for key in ['inputs', 'inputs_valid', 'inputs_HW', 'labels']:
-                    batch_seg[key] = batch[key][j*o.batchsz:(j+1)*o.batchsz]
+                    batch_seg[key] = batch[key][j][np.newaxis]
 
-                # if batch_seg is not of length=o.batchsz, zero-padding
-                batchsz_curr = batch_seg['inputs'].shape[0]
-                if batchsz_curr < o.batchsz:
-                    pad = {}
-                    pad['inputs'] = np.zeros(
-                        [o.batchsz-batchsz_curr, o.ntimesteps+1, 
-                            o.frmsz, o.frmsz, o.ninchannel], dtype=np.float32)
-                    pad['inputs_valid'] = np.zeros(
-                        [o.batchsz-batchsz_curr, o.ntimesteps+1], dtype=np.bool)
-                    pad['inputs_HW'] = np.zeros(
-                        [o.batchsz-batchsz_curr, 2], dtype=np.bool)
-                    pad['labels'] = np.zeros(
-                        [o.batchsz-batchsz_curr, o.ntimesteps+1, o.outdim], 
-                        dtype=np.bool)
-                    batch_seg['inputs'] = np.concatenate(
-                        (batch_seg['inputs'], pad['inputs']), axis=0)
-                    batch_seg['inputs_valid'] = np.concatenate(
-                        (batch_seg['inputs_valid'], pad['inputs_valid']),axis=0)
-                    batch_seg['inputs_HW'] = np.concatenate(
-                        (batch_seg['inputs_HW'], pad['inputs_HW']), axis=0)
-                    batch_seg['labels'] = np.concatenate(
-                        (batch_seg['labels'], pad['labels']), axis=0)
+                # zero padding to meet batchsz constraints in model; TODO: need to be relaxed.
+                padlen = o.batchsz - 1
+                pad = {}
+                pad['inputs'] = np.zeros(
+                    [padlen, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
+                    dtype=np.float32)
+                pad['inputs_valid'] = np.zeros(
+                    [padlen, o.ntimesteps+1], dtype=np.bool)
+                pad['inputs_HW'] = np.zeros(
+                    [padlen, 2], dtype=np.bool)
+                pad['labels'] = np.zeros(
+                    [padlen, o.ntimesteps+1, o.outdim], 
+                    dtype=np.bool)
+                batch_seg['inputs'] = np.concatenate(
+                    (batch_seg['inputs'], pad['inputs']), axis=0)
+                batch_seg['inputs_valid'] = np.concatenate(
+                    (batch_seg['inputs_valid'], pad['inputs_valid']),axis=0)
+                batch_seg['inputs_HW'] = np.concatenate(
+                    (batch_seg['inputs_HW'], pad['inputs_HW']), axis=0)
+                batch_seg['labels'] = np.concatenate(
+                    (batch_seg['labels'], pad['labels']), axis=0)
 
                 if j==0:
                     x0 = batch_seg['inputs'][:,0,:,:,:]
                     y0 = batch_seg['labels'][:,0,:]
 
-                outputs_seg = []
-                for t in range(1, o.ntimesteps+1):
-                    batch_split = get_batch_split_fortest(batch_seg, t) # this is time-wise split
-                    if j == 0: # first segment
-                        fdict = {
-                            m.net['inputs']: batch_split['inputs'],
-                            m.net['inputs_valid']: batch_split['inputs_valid'],
-                            m.net['inputs_HW']: batch_split['inputs_HW'],
-                            m.net['labels']: batch_split['labels']
-                            }
-                    else: # from second segment need to pass previous outputs
-                        fdict = {
-                            m.net['inputs']: batch_split['inputs'],
-                            m.net['inputs_valid']: batch_split['inputs_valid'],
-                            m.net['inputs_HW']: batch_split['inputs_HW'],
-                            m.net['labels']: batch_split['labels'],
-                            m.net['h_init']: h_last,
-                            m.net['C_init']: C_last,
-                            m.net['y_init']: y_last,
-                            #m.net['x0']: x0, # NOTE: worse; No use for now. 
-                            #m.net['y0']: y0  # NOTE: worse; No use for now.
-                            }
+                if j == 0: # first segment
+                    fdict = {}
+                    fdict = {
+                        m.net['inputs']: batch_seg['inputs'],
+                        m.net['inputs_valid']: batch_seg['inputs_valid'],
+                        m.net['inputs_HW']: batch_seg['inputs_HW'],
+                        m.net['labels']: batch_seg['labels']
+                        }
+                else: # from second segment need to pass previous outputs
+                    fdict = {}
+                    fdict = {
+                        m.net['inputs']: batch_seg['inputs'],
+                        m.net['inputs_valid']: batch_seg['inputs_valid'],
+                        m.net['inputs_HW']: batch_seg['inputs_HW'],
+                        m.net['labels']: batch_seg['labels'],
+                        m.net['h_init']: h_last,
+                        m.net['C_init']: C_last,
+                        m.net['y_init']: y_last,
+                        m.net['x0']: x0, # NOTE: worse; No use for now. 
+                        m.net['y0']: y0  # NOTE: worse; No use for now.
+                        }
 
-                    outputs, loss, h_last, C_last, y_last = sess.run(
-                        [m.net['outputs'], m.net['loss'], 
-                            m.net['h_last'], m.net['C_last'], m.net['y_last']],
-                        feed_dict=fdict)
+                outputs, loss, h_last, C_last, y_last, y_init = sess.run(
+                    [m.net['outputs'], m.net['loss'], 
+                        m.net['h_last'], m.net['C_last'], m.net['y_last'],
+                        m.net['y_init']],
+                    feed_dict=fdict)
+                outputs_all.append(outputs[0, :, :])
 
-                    # save outputs
-                    outputs_seg.append(outputs[:, t-1, :])
-                    # TODO: after implementing batch-agnostic model, implement this again
-                    #loss_exp.append(loss) 
+                '''Sanity check
+                print ' '
+                print y_init[0,:]
+                print batch_seg['labels'][0,0,:]
+                '''
 
                 sys.stdout.write(
                     '\r(during \'{0:s}\') passed {1:d}/{2:d} exp, {3:d}/{4:d} '\
                     'segment on [{5:s}] set.. |time: {6:.3f}'.format(o.mode, 
-                        i+1, nexps, j+1, nsplits, dstype, time.time()-t_start))
+                        i+1, nexps, j+1, batch['nsegments'], dstype, 
+                        time.time()-t_start))
                 sys.stdout.flush()
 
-                outputs_seg = np.swapaxes(np.asarray(outputs_seg), 0, 1)
-                outputs_all.append(np.reshape(outputs_seg, [-1, o.outdim]))
+            # valid outputs is -1 shorter 
             outputs_all = np.reshape(np.asarray(outputs_all), [-1, o.outdim])
-            outputs_valid = outputs_all[:batch_fl['nfrms']-1,:][np.newaxis] # valid outputs are -1 shorter 
+            outputs_all = outputs_all[:batch_fl['nfrms']-1][np.newaxis]
 
             # TODO: check if it's possible to hold data for ILSVRC as well
-            if 'idx' in batch_split: 
+            if 'idx' in batch_seg: 
                 results['idx'].append(batch_fl['idx'])
             results['inputs'].append(batch_fl['inputs'])
             results['inputs_valid'].append(batch_fl['inputs_valid'])
             results['inputs_HW'].append(batch_fl['inputs_HW'])
             results['labels'].append(batch_fl['labels'])
-            results['outputs'].append(outputs_valid)
-            #results['loss'].append(np.mean(loss_exp))
+            results['outputs'].append(outputs_all)
         print ' '
 
         results = evaluate_outputs_new(results)

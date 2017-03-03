@@ -843,6 +843,7 @@ class Model(object):
 
             # placeholders for x0 and y0. This is used for full-length sequences
             # NOTE: currently not being used since it's worse. tested for T=20
+            # TODO: This is WRONG, I am fixing this now.
             x0 = tf.placeholder_with_default(
                     inputs[:,0], 
                     shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
