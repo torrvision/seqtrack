@@ -66,11 +66,11 @@ class CNN(object):
                 masks = self._get_masks_from_rectangles(y_prev, o)
 
                 # input concat
-                cnnin = tf.concat_v2((x_prev, x_curr, masks), 3)
+                cnnin = tf.concat((x_prev, x_curr, masks), 3)
             else:
                 masks_yprev = self._get_masks_from_rectangles(y_prev, o)
                 masks_yinit = self._get_masks_from_rectangles(y0, o)
-                cnnin = tf.concat_v2(
+                cnnin = tf.concat(
                         (x0, masks_yinit, x_prev, x_curr, masks_yprev), 3)
 
             # convolutions; feed-forward
@@ -93,7 +93,7 @@ class CNN(object):
                 act = activate(conv, 'relu')
                 if self.is_train and o.dropout_cnn and i==1:
                     act = tf.nn.dropout(act, o.keep_ratio_cnn)
-            return tf.concat_v2((tf.reshape(act, [o.batchsz, -1]), y_prev), 1)
+            return tf.concat((tf.reshape(act, [o.batchsz, -1]), y_prev), 1)
 
     def _get_masks_from_rectangles(self, rec, o):
         # create mask using rec; typically rec=y_prev
@@ -183,7 +183,7 @@ class RNN_basic(object):
         xy_in = tf.reshape(cnnout, [o.batchsz, -1])
 
         f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
-            tf.concat_v2((h_prev, xy_in), 1), self.params['w_lstm']) + 
+            tf.concat((h_prev, xy_in), 1), self.params['w_lstm']) + 
             self.params['b_lstm'], 4, 1)
 
         if o.lstmforgetbias:
@@ -304,10 +304,10 @@ class RNN_attention_s(object):
 
             # mlp network # TODO: try diff nlayers, mlp size, activation
             if o.yprev_mode == 'nouse':
-                input_to_mlp = tf.concat_v2(
+                input_to_mlp = tf.concat(
                     (tf.reshape(x_curr, [o.batchsz, -1]), h_prev), 1) 
             elif o.yprev_mode == 'concat_abs':
-                input_to_mlp = tf.concat_v2(
+                input_to_mlp = tf.concat(
                     (tf.reshape(x_curr, [o.batchsz, -1]), h_prev, y_prev), 1)
             elif o.yprev_mode == 'weight':
                 # Put higher weights on the ROI of x_curr based on y_prev.
@@ -351,7 +351,7 @@ class RNN_attention_s(object):
                     x_curr_weighted.append(
                         x_curr[b] * tf.expand_dims(mask_gamma, 2))
                 x_curr_weighted = tf.stack(x_curr_weighted, axis=0)
-                input_to_mlp = tf.concat_v2(
+                input_to_mlp = tf.concat(
                     (tf.reshape(x_curr_weighted, [o.batchsz, -1]), h_prev), 1)
 
                 ''' DEPRECATED
@@ -376,7 +376,7 @@ class RNN_attention_s(object):
                 x_curr = x_curr * w_mask
                 x_curr = tf.reshape(x_curr, [o.batchsz, -1])
                 f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
-                    tf.concat_v2((h_prev, x_curr), 1), W_lstm) + b_lstm, 4, 1)
+                    tf.concat((h_prev, x_curr), 1), W_lstm) + b_lstm, 4, 1)
                 '''
             else:
                 raise ValueError('Unavailable yprev_mode.')
@@ -394,7 +394,7 @@ class RNN_attention_s(object):
 
             # LSTM (standard; no peep hole or coupled input/forget gate version)
             f_curr, i_curr, C_curr_tilda, o_curr = tf.split(
-                tf.matmul(tf.concat_v2((h_prev, z), 1), W_lstm) + b_lstm, 4, 1)
+                tf.matmul(tf.concat((h_prev, z), 1), W_lstm) + b_lstm, 4, 1)
 
             if o.lstmforgetbias:
                 C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
@@ -581,7 +581,7 @@ class RNN_attention_st(object):
             # They combined hidden and features merely by addition.
             # They used relu instead of tanh.
             # Also consider using batch norm.
-            input_to_mlp = tf.concat_v2(
+            input_to_mlp = tf.concat(
                 (tf.reshape(x_curr, [o.batchsz, -1]), h_prev), 1) 
 
             mlp1 = tf.tanh(tf.matmul(input_to_mlp, W_mlp1) + b_mlp1)
@@ -598,7 +598,7 @@ class RNN_attention_st(object):
 
             # LSTM (standard; no peep hole or coupled input/forget gate version)
             f_curr, i_curr, C_curr_tilda, o_curr = tf.split(
-                tf.matmul(tf.concat_v2((h_prev, z), 1), W_lstm) + b_lstm, 4, 1)
+                tf.matmul(tf.concat((h_prev, z), 1), W_lstm) + b_lstm, 4, 1)
 
             if o.lstmforgetbias:
                 C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
@@ -623,7 +623,7 @@ class RNN_attention_st(object):
             b_mlp1 = self.params['b_mlp1_t']
             W_mlp2 = self.params['W_mlp2_t']
             b_mlp2 = self.params['b_mlp2_t']
-            input_to_mlp = tf.concat_v2(
+            input_to_mlp = tf.concat(
                 (tf.reshape(x_curr, [o.batchsz, -1]), h_prev), 1) 
 
             mlp1 = tf.tanh(tf.matmul(input_to_mlp, W_mlp1) + b_mlp1)
@@ -660,7 +660,7 @@ class RNN_attention_st(object):
 
             # LSTM (standard; no peep hole or coupled input/forget gate version)
             f_curr, i_curr, C_curr_tilda, o_curr = tf.split(
-                tf.matmul(tf.concat_v2((h_prev, z), 1), W_lstm) + b_lstm, 4, 1)
+                tf.matmul(tf.concat((h_prev, z), 1), W_lstm) + b_lstm, 4, 1)
 
             if o.lstmforgetbias:
                 C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
