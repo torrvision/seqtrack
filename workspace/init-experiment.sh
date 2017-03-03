@@ -19,7 +19,7 @@ if ! mkdir "$dir" ; then
 	exit 1
 fi
 
-if ! cp workspace/* "$dir/" ; then
+if ! cp workspace/install/* "$dir/" ; then
 	echo 'cannot copy workspace scripts'
 	exit 1
 fi
