@@ -97,7 +97,7 @@ def test(m, loader, o, dstype, fulllen=False):
     with tf.Session(config=o.tfconfig) as sess:
         saver.restore(sess, o.restore_model)
         t_start = time.time()
-        results = evaluate(sess, m, loader, o, dstype, fulllen=fulllen) 
+        results = evaluate(sess, m, loader, o, dstype, fulllen=fulllen)
 
     # save results
     if fulllen:
@@ -127,7 +127,7 @@ def test(m, loader, o, dstype, fulllen=False):
             o, savedir)
 
     # VISUALIZE TRACKING RESULTS 
-    # TODO: not available yet.. can't hold all examples in 'results'. 
+    draw.show_track_results_fl(results, loader, o, savedir)
 
     # print
     print '-------------------------------------------------------------------'

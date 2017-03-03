@@ -813,7 +813,10 @@ class Model(object):
             cnn = CNN(o, is_train) # NOTE: if not o.cnn_pretrain else CNN_pretrained()
             rnn = RNN_basic(o) # currently developing model TODO: make it optionable
 
-            # placeholders
+            # placeholders for variable batchsz 
+            #batchsz = tf.placeholder_with_default(o.batchsz, shape=[])
+
+            # placeholders for inputs
             inputs = tf.placeholder(o.dtype, 
                     shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
                     name='inputs')
@@ -838,11 +841,20 @@ class Model(object):
                     labels[:,0], 
                     shape=[o.batchsz, o.outdim], name='y_init')
 
+            # placeholders for x0 and y0. This is used for full-length sequences
+            # NOTE: currently not being used since it's worse. tested for T=20
+            x0 = tf.placeholder_with_default(
+                    inputs[:,0], 
+                    shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
+            y0 = tf.placeholder_with_default(
+                    labels[:,0],
+                    shape=[o.batchsz, o.outdim], name='y0')
+
             # RNN unroll
             outputs = []
             rnninit = False
-            x0 = inputs[:,0]
-            y0 = labels[:,0]
+            #x0 = inputs[:,0]
+            #y0 = labels[:,0]
             for t in range(1, o.ntimesteps+1):
                 if t==1:
                     h_prev = h_init
@@ -889,6 +901,8 @@ class Model(object):
                     'h_last': h_curr,
                     'C_last': C_curr,
                     'y_last': y_curr,
+                    'x0': x0,
+                    'y0': y0
                     }
             return net
 

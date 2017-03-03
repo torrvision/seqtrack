@@ -1169,7 +1169,8 @@ class Data_OTB(object):
                 'inputs_valid': inputs_valid,
                 'inputs_HW': inputs_HW,
                 'labels': label,
-                'nfrms': nfrms
+                'nfrms': nfrms,
+                'idx': ie
                 }
         return batch 
 
@@ -1215,10 +1216,10 @@ def split_batch_fulllen_seq(batch_fl, o):
     inputs_HW = np.zeros((nsegments, 2), dtype=np.float32)
 
     for i in range(nsegments):
-        if batch_fl['nfrms'] > (i+1)*o.ntimesteps+1:
+        if (i+1)*o.ntimesteps+1 <= batch_fl['nfrms']:
             seglen = o.ntimesteps + 1
         else:
-            seglen = (batch_fl['nfrms']-1) % o.ntimesteps
+            seglen = (batch_fl['nfrms']-1) % o.ntimesteps + 1
         data[i, 0:seglen] = batch_fl['inputs'][
                 0, i*o.ntimesteps:i*o.ntimesteps + seglen]
         label[i, 0:seglen] = batch_fl['labels'][

@@ -165,6 +165,45 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
             plt.savefig(outfile)
             plt.close()
 
+def show_track_results_fl(results, loader, o, savedir):
+    assert(o.dataset in ['OTB-50', 'OTB-100'])
+
+    for i in range(len(results['inputs'])):
+        c = loader.classes[o.dataset][i]
+        print 'drawing track results for [{}]'.format(c)
+
+        savedir_track = os.path.join(savedir, 'track_results/{}'.format(c))
+        if not os.path.exists(savedir_track): os.makedirs(savedir_track)
+
+        nfrms = results['inputs'][i].shape[1]
+        for t in range(nfrms):
+            fig = plt.figure(figsize=(4,4))
+            plt.subplot(1, 1, 1)
+            #image
+            img = results['inputs'][i][0,t]
+            # unnormalize using stat
+            img *= loader.stat['std']
+            img += loader.stat['mean']
+            plt.imshow(np.uint8(img))
+            #rectangles
+            if results['inputs_valid'][i][0,t]:
+                ax = plt.gca()
+                box_gt = results['labels'][i][0,t] * o.frmsz
+                ax.add_patch(Rectangle(
+                    (box_gt[0], box_gt[1]), 
+                    box_gt[2]-box_gt[0], box_gt[3]-box_gt[1], 
+                    facecolor='r', edgecolor='r', fill=False))
+                if t>0: #output only after frame 1
+                    box_pred = results['outputs'][i][0,t-1] * o.frmsz
+                    ax.add_patch(Rectangle(
+                        (box_pred[0], box_pred[1]), 
+                        box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
+                        facecolor='b', edgecolor='b', fill=False))
+            plt.axis('off')
+            outfile = os.path.join(savedir_track, '{}.png'.format(t))
+            plt.savefig(outfile)
+            plt.close()
+
 def plot_losses(losses, o, intermediate_=False, cnt_=''): # after trainingj
     if not intermediate_:
         fig = plt.figure(figsize=(12,8))
