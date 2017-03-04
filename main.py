@@ -26,9 +26,12 @@ def parse_arguments():
     parser.add_argument(
             '--dataset', help='specify the name of dataset',
             type=str, default='')
-    #parser.add_argument(
-            #'--path_data_home', help='location of datasets',
-            #type=str, default='')
+    parser.add_argument(
+            '--path_data_home', help='location of datasets',
+            type=str, default='')
+    parser.add_argument('--useresizedimg', dest='useresizedimg', action='store_true')
+    parser.add_argument('--no-useresizedimg', dest='useresizedimg', action='store_false')
+    parser.set_defaults(useresizedimg=True)
     parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
             type=int, default=0)
