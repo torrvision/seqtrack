@@ -24,6 +24,7 @@ def show_dataset_batch(batch, dataset, frmsz, stat=None):
         assert(stat is not None)
 
     for t in range(vids.shape[1]): # timesteps
+        print 'drawing batch examples, time: {}'.format(t)
         fig = plt.figure(figsize=(12,12))
         for i in range(vids.shape[0]): # batch
             plt.subplot(5,5,i+1)
@@ -95,18 +96,17 @@ def show_dataset_batch_fulllen_seq(batch, dataset, frmsz, stat=None):
         plt.savefig(savedir + '/seg{}.png'.format(i))
         plt.close()
 
-def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
+def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
     nbatches = results['nbatches']
-    idx = np.reshape(np.asarray(results['idx']), 
-            [nbatches, o.ntimesteps, o.batchsz])
+    idx = np.reshape(np.asarray(results['idx']), [nbatches, o.batchsz])
     inputs = np.reshape(np.asarray(results['inputs']),
-            [nbatches, o.ntimesteps, o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel])
+        [nbatches, o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel])
     outputs = np.reshape(np.asarray(results['outputs']), 
-            [nbatches, o.ntimesteps, o.batchsz, o.ntimesteps, 4])
+        [nbatches, o.batchsz, o.ntimesteps, o.outdim])
     labels = np.reshape(np.asarray(results['labels']), 
-            [nbatches, o.ntimesteps, o.batchsz, o.ntimesteps+1, 4])
+        [nbatches, o.batchsz, o.ntimesteps+1, o.outdim])
     inputs_valid = np.reshape(np.asarray(results['inputs_valid']), 
-            [nbatches, o.ntimesteps, o.batchsz, o.ntimesteps+1])
+        [nbatches, o.batchsz, o.ntimesteps+1])
 
     if o.dataset in ['moving_mnist', 'bouncing_mnist']:
         plt.gray()
@@ -120,22 +120,16 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
             if cnt > nlimit:
                 return 
 
-            # use last complete sequence (-1)
-            # max(lastvalidfrm) = o.ntimesteps+1-1, because the sequence
-            # length would be o.ntimesteps+1.
-            #lastvalidfrm = np.max(np.where(inputs_valid[i,-1,b,:] == True))
-
             ncols = 5 
             nrows = int(np.ceil(o.ntimesteps/float(ncols))) + 1
             fig = plt.figure(figsize=(12,8))
-            #for t in range(lastvalidfrm+1):
             for t in range(o.ntimesteps+1):
                 if t == 0:
                     plt.subplot(nrows,ncols,t+1)
                 else:
                     plt.subplot(nrows,ncols,t+ncols)
                 #image
-                img = inputs[i, -1, b, t]
+                img = inputs[i, b, t]
                 if o.dataset in ['moving_mnist', 'bouncing_mnist']:
                     plt.imshow(np.squeeze(img, axis=2))
                 else: 
@@ -144,35 +138,41 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=100):
                     img += loader.stat[dstype]['mean']
                     plt.imshow(np.uint8(img))
                 #rectangles
-                #if inputs_valid[i,-1,b,t]:
-                ax = plt.gca()
-                box_gt = labels[i,-1,b,t] * 100 # 100 scale
-                ax.add_patch(Rectangle(
-                    (box_gt[0], box_gt[1]), 
-                    box_gt[2]-box_gt[0], box_gt[3]-box_gt[1], 
-                    facecolor='r', edgecolor='r', fill=False))
-                if t>0: #output only after frame 1
-                    box_pred = outputs[i,-1,b,t-1] * 100
+                if inputs_valid[i,b,t]:
+                    ax = plt.gca()
+                    box_gt = labels[i,b,t] * 100 # 100 scale
                     ax.add_patch(Rectangle(
-                        (box_pred[0], box_pred[1]), 
-                        box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
-                        facecolor='b', edgecolor='b', fill=False))
+                        (box_gt[0], box_gt[1]), 
+                        box_gt[2]-box_gt[0], box_gt[3]-box_gt[1], 
+                        facecolor='r', edgecolor='r', fill=False))
+                    if t>0: #output only after frame 1
+                        box_pred = outputs[i,b,t-1] * 100
+                        ax.add_patch(Rectangle(
+                            (box_pred[0], box_pred[1]), 
+                            box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
+                            facecolor='b', edgecolor='b', fill=False))
 
             savedir = os.path.join(o.path_save, 'track_results')
             if not os.path.exists(savedir): helpers.mkdir_p(savedir)
-            outfile = os.path.join(
-                savedir, 'iteration_{}_{}_idx{}.png'.format(iteration, dstype, idx[i,0,b]))
+            outfile = os.path.join(savedir, 
+                'iteration_{}_{}_idx{}.png'.format(iteration, dstype, idx[i,b]))
             plt.savefig(outfile)
             plt.close()
 
 def show_track_results_fl(results, loader, o, savedir):
-    assert(o.dataset in ['OTB-50', 'OTB-100'])
 
     for i in range(len(results['inputs'])):
-        c = loader.classes[o.dataset][i]
-        print 'drawing track results for [{}]'.format(c)
-
-        savedir_track = os.path.join(savedir, 'track_results/{}'.format(c))
+        if o.dataset in ['OTB-50', 'OTB-100']:
+            c = loader.classes[o.dataset][i]
+            print 'drawing track results for {} [{}]'.format(o.dataset,c)
+            savedir_track = os.path.join(savedir, 'track_results/{}'.format(c))
+        elif o.dataset == 'ILSVRC':
+            print 'drawing track results for {} [exp{}]'.format(
+                    o.dataset, results['idx'][i])
+            savedir_track = os.path.join(
+                    savedir, 'track_results/exp{}'.format(results['idx'][i]))
+        else:
+            raise ValueError('no available dataset..')
         if not os.path.exists(savedir_track): os.makedirs(savedir_track)
 
         nfrms = results['inputs'][i].shape[1]
@@ -182,8 +182,12 @@ def show_track_results_fl(results, loader, o, savedir):
             #image
             img = results['inputs'][i][0,t]
             # unnormalize using stat
-            img *= loader.stat['std']
-            img += loader.stat['mean']
+            if o.dataset in ['OTB-50', 'OTB-100']:
+                img *= loader.stat['std']
+                img += loader.stat['mean']
+            elif o.dataset in ['ILSVRC']:
+                img *= loader.stat['val']['std'] # NOTE: no good reason for 'val'
+                img += loader.stat['val']['mean']
             plt.imshow(np.uint8(img))
             #rectangles
             if results['inputs_valid'][i][0,t]:

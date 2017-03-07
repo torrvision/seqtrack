@@ -43,14 +43,13 @@ class Opts(object):
         #----------------------------------------------------------------------
         # model parameters - rnn
         self.cell_type          = 'LSTM' 
-        self.nunits             = 300 
+        self.nunits             = 512
         self.ntimesteps         = 20
         self.rnn_nlayers        = 1
         self.dropout_rnn        = False
         self.keep_ratio         = 0.5
         self.lstmforgetbias     = False
         self.yprev_mode         = '' # nouse, concat_abs, concat_spatial (later), weight
-        self.pass_ygt           = False
         self.pass_yinit         = False
 
         #----------------------------------------------------------------------
@@ -58,7 +57,7 @@ class Opts(object):
         self.cnn_pretrain       = False 
         self.cnn_model          = 'vgg' # vgg, resnet, imagenet, etc.
         self.dropout_cnn        = False
-        self.keep_ratio_cnn     = 0.25
+        self.keep_ratio_cnn     = 0.1
         # TODO: add dropout and batch norm option
 
         #----------------------------------------------------------------------

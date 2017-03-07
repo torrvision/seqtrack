@@ -834,6 +834,30 @@ class Data_ILSVRC(object):
             frm_start = frms_one[0][0]
             frm_end = frms_one[0][-1]
             frms = range(frm_start, frm_end+1)
+        elif seqtype == 'sampling': 
+            '''
+            Sampling k number of 1s from first 1 to last 1.
+            It consists of only 1s (no sparse), but is sampled from long range.
+            Example outputs can be [1,1,1,1,1,1].
+            '''
+            # 1. get selection range (= first one and last one)
+            objvalidfrms_np = np.asarray(objvalidfrms)
+            frms_one = np.where(objvalidfrms_np == 1)[0]
+            frm_start = frms_one[0]
+            frm_end = frms_one[-1]
+            # 2. get possible min and max (max <= o.ntimesteps+1; min >= 2)
+            minlen = 2
+            maxlen = min(frm_end-frm_start+1, o.ntimesteps+1)
+            # 3. decide length k (sampling number; min <= k <= max)
+            #k = np.random.randint(minlen, maxlen+1, 1)[0]
+            # NOTE: if k is in [min,max], it results in too many <T+1 sequences.
+            # But I think I need a lot more samples that is of length T+1.
+            # So, I stick to have k=T+1 if possible, but change later if necessary. 
+            k = maxlen
+            # 4. sample k uniformly, using randperm
+            indices = np.random.randint(0, frms_one.size, k)
+            # 5. find frames 
+            frms = frms_one[np.sort(indices)].tolist()
         else:
             raise ValueError('not available option for seqtype.')
         return frms
@@ -856,19 +880,15 @@ class Data_ILSVRC(object):
             # randomly select an object
             objid = random.sample(self.objids_valid_snp[dstype][idx[ie]], 1)[0]
 
-            # randomly select segment of frames (t<T)
-            # TODO: if seqtype is not dense any more, should change 'inputs_valid' as well.
+            # randomly select segment of frames (<=T+1)
+            # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
             # self.objvalidfrms_snp should be changed as well.
-            frms = self._select_frms(self.objvalidfrms_snp[dstype][idx[ie]][objid], o, seqtype='dense')
+            frms = self._select_frms(self.objvalidfrms_snp[dstype][idx[ie]][objid], o, seqtype='sampling')
 
             for t, frm in enumerate(frms):
                 # for x; image
                 fimg = self.snps[dstype]['Data'][idx[ie]] + '/{0:06d}.JPEG'.format(frm)
                 x = cv2.imread(fimg)[:,:,(2,1,0)]
-
-                # for y; label
-                xmlfile = self.snps[dstype]['Annotations'][idx[ie]] + '/{0:06d}.xml'.format(frm)
-                y = self._get_bndbox_from_xml(xmlfile, objid)
 
                 # image resize. NOTE: the best image size? need experiments
                 if not o.useresizedimg: 
@@ -876,8 +896,12 @@ class Data_ILSVRC(object):
                         interpolation=cv2.INTER_AREA)
                 else:
                     data[ie,t] = x
+
+                # for y; label
+                xmlfile = self.snps[dstype]['Annotations'][idx[ie]] + '/{0:06d}.xml'.format(frm)
+                y = self._get_bndbox_from_xml(xmlfile, objid)
                 label[ie,t] = y
-            inputs_valid[ie,:len(frms)] = True # TODO: This should be changed if frms are sparse!
+            inputs_valid[ie,:len(frms)] = True # TODO: This should be changed if frms are sparse! (no gt)
             inputs_HW[ie] = x.shape[0:2]
 
         # TODO: Data augmentation
@@ -945,7 +969,8 @@ class Data_ILSVRC(object):
                 'inputs_valid': inputs_valid,
                 'inputs_HW': inputs_HW,
                 'labels': label,
-                'nfrms': len(frms)
+                'nfrms': len(frms),
+                'idx': ie
                 }
         return batch 
 
@@ -1235,6 +1260,7 @@ def split_batch_fulllen_seq(batch_fl, o):
             'labels': label,
             'nfrms': batch_fl['nfrms'],
             'nsegments': nsegments,
+            'idx': batch_fl['idx']
             }
     return batch 
 
@@ -1260,15 +1286,16 @@ if __name__ == '__main__':
     from opts import Opts
     o = Opts()
     o.batchsz = 20
+    o.ntimesteps = 80
 
-    o.dataset = 'OTB-100' # moving_mnist, bouncing_mnist, ILSVRC, OTB-50
+    o.dataset = 'ILSVRC' # moving_mnist, bouncing_mnist, ILSVRC, OTB-50
     o._set_dataset_params()
 
     dstype = 'train'
     
-    test_fl = True
+    test_fl = False
 
-    sanitycheck = False
+    sanitycheck = True
 
     # moving_mnist
     if o.dataset in ['moving_mnist', 'bouncing_mnist']:
