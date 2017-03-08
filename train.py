@@ -63,13 +63,14 @@ def train(m, loader, o):
                 batch = loader.get_batch(ib, o, dstype='train')
 
                 fdict = {
-                        m.net['firstseg']: True,
                         m.net['inputs']: batch['inputs'],
                         m.net['inputs_valid']: batch['inputs_valid'],
                         m.net['inputs_HW']: batch['inputs_HW'],
                         m.net['labels']: batch['labels'],
                         lr: lr_epoch
                         }
+                if 'firstseg' in m.net:
+                    fdict[m.net['firstseg']] = True
                 if ib % 10 == 0:
                     _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
                     train_writer.add_summary(summary, ib)
@@ -78,7 +79,7 @@ def train(m, loader, o):
 
                 # **results after every batch 
                 sys.stdout.write(
-                        '\rep {0:d}/{1:d}, batch {2:d}/{3:d} '
+                        '\nep {0:d}/{1:d}, batch {2:d}/{3:d} '
                         '(BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'\
                                 .format(
                                     ie+1, nepoch, ib+1, nbatch, o.batchsz,
