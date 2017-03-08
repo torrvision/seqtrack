@@ -51,29 +51,27 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
         for ib in range(nbatches):
             t_start = time.time()
             batch = loader.get_batch(ib, o, dstype, shuffle_local=shuffle_local)
-            # process each time step one by one
-            for t in range(1, o.ntimesteps+1): # inputs has o.ntimesteps+1 length
-                batch_split = get_batch_split_fortest(batch, t) # this is time-wise split
 
-                fdict = {
-                    m.net['inputs']: batch_split['inputs'],
-                    m.net['inputs_valid']: batch_split['inputs_valid'],
-                    m.net['inputs_HW']: batch_split['inputs_HW'],
-                    m.net['labels']: batch_split['labels']
-                    }
+            fdict = {
+                m.net['inputs']: batch['inputs'],
+                m.net['inputs_valid']: batch['inputs_valid'],
+                m.net['inputs_HW']: batch['inputs_HW'],
+                m.net['labels']: batch['labels']
+                }
 
-                outputs, loss = sess.run(
-                        [m.net['outputs'], m.net['loss']], feed_dict=fdict)
+            outputs, loss = sess.run(
+                    [m.net['outputs'], m.net['loss']], feed_dict=fdict)
 
-                if 'idx' in batch_split: 
-                    results['idx'].append(batch_split['idx'])
-                if hold_inputs:
-                    results['inputs'].append(batch_split['inputs']) # no memory 
-                results['inputs_valid'].append(batch_split['inputs_valid'])
-                results['inputs_HW'].append(batch_split['inputs_HW'])
-                results['labels'].append(batch_split['labels'])
-                results['outputs'].append(outputs)
-                results['loss'].append(loss)
+            if 'idx' in batch: 
+                results['idx'].append(batch['idx'])
+            if hold_inputs:
+                results['inputs'].append(batch['inputs']) # no memory 
+            results['inputs_valid'].append(batch['inputs_valid'])
+            results['inputs_HW'].append(batch['inputs_HW'])
+            results['labels'].append(batch['labels'])
+            results['outputs'].append(outputs)
+            results['loss'].append(loss)
+
             sys.stdout.write(
                     '\r(during \'{0:s}\') passed {1:d}/{2:d}th batch on '\
                         '[{3:s}] set.. |time: {4:.3f}'.format(
@@ -144,22 +142,15 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
                         m.net['h_init']: h_last,
                         m.net['C_init']: C_last,
                         m.net['y_init']: y_last,
-                        m.net['x0']: x0, # NOTE: worse; No use for now. 
-                        m.net['y0']: y0  # NOTE: worse; No use for now.
+                        m.net['x0']: x0,
+                        m.net['y0']: y0
                         }
 
-                outputs, loss, h_last, C_last, y_last, y_init = sess.run(
+                outputs, loss, h_last, C_last, y_last = sess.run(
                     [m.net['outputs'], m.net['loss'], 
-                        m.net['h_last'], m.net['C_last'], m.net['y_last'],
-                        m.net['y_init']],
+                        m.net['h_last'], m.net['C_last'], m.net['y_last']],
                     feed_dict=fdict)
                 outputs_all.append(outputs[0, :, :])
-
-                '''Sanity check
-                print ' '
-                print y_init[0,:]
-                print batch_seg['labels'][0,0,:]
-                '''
 
                 sys.stdout.write(
                     '\r(during \'{0:s}\') passed {1:d}/{2:d} exp, {3:d}/{4:d} '\
@@ -180,6 +171,7 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
             results['inputs_HW'].append(batch_fl['inputs_HW'])
             results['labels'].append(batch_fl['labels'])
             results['outputs'].append(outputs_all)
+            results['idx'].append(batch_fl['idx'])
         print ' '
 
         results = evaluate_outputs_new(results)

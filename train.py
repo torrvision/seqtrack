@@ -63,6 +63,7 @@ def train(m, loader, o):
                 batch = loader.get_batch(ib, o, dstype='train')
 
                 fdict = {
+                        m.net['firstseg']: True,
                         m.net['inputs']: batch['inputs'],
                         m.net['inputs_valid']: batch['inputs_valid'],
                         m.net['inputs_HW']: batch['inputs_HW'],
@@ -107,10 +108,10 @@ def train(m, loader, o):
                     val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
                     evals = {
                         'train': evaluate(sess, m, loader, o, 'train', 
-                            np.maximum(int(np.floor(50/o.batchsz)), 1), 
+                            np.maximum(int(np.floor(100/o.batchsz)), 1), 
                             hold_inputs=True, shuffle_local=True),
                         val_: evaluate(sess, m, loader, o, val_, 
-                            np.maximum(int(np.floor(50/o.batchsz)), 1), 
+                            np.maximum(int(np.floor(100/o.batchsz)), 1), 
                             hold_inputs=True, shuffle_local=True)}
                     # check losses on train and val set
                     losses['interm_eval_subset_train'] = np.append(

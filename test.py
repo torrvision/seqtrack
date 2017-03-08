@@ -79,6 +79,10 @@ def parse_arguments():
             '--gpu_frac', help='fraction of gpu memory',
             type=float, default=0.4)
 
+    parser.add_argument(
+            '--draw_track', help='draw (and save) tracking results',
+            action='store_true')
+
     args = parser.parse_args()
 
     # print help and args
@@ -86,7 +90,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def test(m, loader, o, dstype, fulllen=False):
+def test(m, loader, o, dstype, fulllen=False, draw_track=False):
     '''
     Note that it is considered that this wrapper serves a test routine with a 
     completely trained model. If you want a on-the-fly evaluations during 
@@ -120,15 +124,6 @@ def test(m, loader, o, dstype, fulllen=False):
     results_partial['cle_representative'] = results['cle_representative']
     np.save(savedir + '/results_partial.npy', results_partial)
 
-    # Plot success and precision plots
-    draw.plot_successplot(results['success_rates'], results['auc'], o, savedir)
-    draw.plot_precisionplot(
-            results['precision_rates'], results['cle_representative'], 
-            o, savedir)
-
-    # VISUALIZE TRACKING RESULTS 
-    draw.show_track_results_fl(results, loader, o, savedir)
-
     # print
     print '-------------------------------------------------------------------'
     print 'Evaluation finished (time: {0:.3f}).'.format(time.time()-t_start)
@@ -144,6 +139,15 @@ def test(m, loader, o, dstype, fulllen=False):
     print 'cle_representative: {0:.3f}'.format(results['cle_representative'])
     print 'results and plots are saved at {}'.format(savedir)
     print '-------------------------------------------------------------------'
+
+    # Plot success and precision plots
+    draw.plot_successplot(results['success_rates'], results['auc'], o, savedir)
+    draw.plot_precisionplot(
+        results['precision_rates'], results['cle_representative'], o, savedir)
+
+    # VISUALIZE TRACKING RESULTS 
+    if draw_track:
+        draw.show_track_results_fl(results, loader, o, savedir)
 
 
 if __name__ == '__main__':
@@ -185,5 +189,5 @@ if __name__ == '__main__':
     # Case: Full-length sequences
     else:
         dstype = 'val' # ILSVRC
-        test(m, loader, o, dstype=dstype, fulllen=True)
+        test(m, loader, o, dstype=dstype, fulllen=True, draw_track=args.draw_track)
 

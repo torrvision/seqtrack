@@ -1,12 +1,12 @@
 import pdb
 import argparse
+import tensorflow as tf
 
 from opts           import Opts
 import data
-#import model
-from model          import Model
+import model
 from train          import train
-from test           import test
+
 
 
 
@@ -64,7 +64,7 @@ def parse_arguments():
             type=str, default='LSTM')
     parser.add_argument(
             '--nunits', help='number of hidden units in rnn cell',
-            type=int, default=300)
+            type=int, default=512)
     parser.add_argument(
             '--ntimesteps', help='number of time steps for rnn',
             type=int, default=20)
@@ -74,9 +74,6 @@ def parse_arguments():
     parser.add_argument(
             '--yprev_mode', help='way of using y_prev',
             type=str, default='')
-    parser.add_argument(
-            '--pass_ygt', help='pass gt y instead pred y during training', 
-            action='store_true')
     parser.add_argument(
             '--pass_yinit', help='pass gt y instead pred y during training', 
             action='store_true')
@@ -129,13 +126,10 @@ if __name__ == "__main__":
 
     loader = data.load_data(o)
 
-    #m = model.load_model(o)
-    m = Model(o)
+    m = model.load_model(o)
 
-    if o.mode == 'train':
-        train(m, loader, o)
-    else:
-        raise ValueError ('Use this only for train. test script is elsewhere.')
+    assert(o.mode == 'train')
+    train(m, loader, o)
 
     print '**Saved in the following directory.'
     print o.path_save
