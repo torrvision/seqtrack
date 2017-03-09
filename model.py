@@ -1140,18 +1140,19 @@ class NonRecur(object):
         # learnable parameters; CNN params shared across all time steps
         w_conv = []
         b_conv = []
+        # Previous image and current image.
+        num_in = o.ninchannel*2
+        if o.yprev_mode == 'concat_channel':
+            num_in += 1
+        if o.pass_yinit:
+            # extra input image + mask
+            num_in += o.ninchannel + 1
         for i in range(self.nlayers):
             with tf.name_scope('layer_{}'.format(i)):
-                if not o.pass_yinit:
-                    # two input images + 1 mask channel
-                    shape_w = [self.filtsz[i], self.filtsz[i], 
-                            o.ninchannel*2+1 if i==0 else self.nchannels[i-1], 
-                            self.nchannels[i]]
-                else:
-                    # three input images + 2 mask channel
-                    shape_w = [self.filtsz[i], self.filtsz[i], 
-                            o.ninchannel*3+2 if i==0 else self.nchannels[i-1], 
-                            self.nchannels[i]]
+                # two input images + 1 mask channel
+                shape_w = [self.filtsz[i], self.filtsz[i], 
+                        num_in if i==0 else self.nchannels[i-1], 
+                        self.nchannels[i]]
                 shape_b = [self.nchannels[i]]
                 w_conv.append(get_weight_variable(shape_w,name_='w',wd=o.wd))
                 b_conv.append(get_bias_variable(shape_b,name_='b',wd=o.wd))
@@ -1159,10 +1160,11 @@ class NonRecur(object):
         self.params['b_conv'] = b_conv
 
     def _update_params_fc(self, x, o):
+        # TODO: Assert that in_dim is known (static).
         in_dim = x.shape[-1]
-        # TODO: Assert that in_dim is known.
-        print 'in_dim:', in_dim
+        # TODO: Make this a parameter.
         m = 256
+        # TODO: Variable number of layers?
         with tf.variable_scope('fc', reuse=False):
             w1 = tf.get_variable('w1', shape=(in_dim, m), dtype=tf.float32, initializer=None)
             b1 = tf.get_variable('b1', shape=(m,), initializer=tf.zeros_initializer(dtype=tf.float32))
@@ -1170,17 +1172,18 @@ class NonRecur(object):
             b2 = tf.get_variable('b2', shape=(o.outdim,), initializer=tf.zeros_initializer(dtype=tf.float32))
 
     def _pass_cnn(self, x_curr, x_prev, y_prev, o, x0=None, y0=None):
+        masks_yprev = get_masks_from_rectangles(y_prev, o)
+        masks_yinit = get_masks_from_rectangles(y0, o)
         if not o.pass_yinit:
-            # create masks from y_prev
-            masks = get_masks_from_rectangles(y_prev, o)
-
-            # input concat
-            cnnin = tf.concat((x_prev, x_curr, masks), 3)
+            if o.yprev_mode == 'concat_channel':
+                cnnin = tf.concat((x_prev, x_curr, masks), 3)
+            else:
+                cnnin = tf.concat((x_prev, x_curr), 3)
         else:
-            masks_yprev = get_masks_from_rectangles(y_prev, o)
-            masks_yinit = get_masks_from_rectangles(y0, o)
-            cnnin = tf.concat(
-                    (x0, masks_yinit, x_prev, x_curr, masks_yprev), 3)
+            if o.yprev_mode == 'concat_channel':
+                cnnin = tf.concat((x0, masks_yinit, x_prev, x_curr, masks_yprev), 3)
+            else:
+                cnnin = tf.concat((x0, masks_yinit, x_prev, x_curr), 3)
 
         # convolutions; feed-forward
         for i in range(self.nlayers):

@@ -77,7 +77,7 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # save (save training results), load (test), resume (keep training)
-        self.path_base          = os.path.dirname(__file__)
+        self.path_base          = ''
         self.path_data          = ''
         self.path_data_home     = '/home/namhoon/data' \
                                 if socket.gethostname()=='namhoon-PC' \
