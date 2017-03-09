@@ -16,12 +16,14 @@ def train(m, loader, o):
     train_opts = _init_train_settings(m, loader, o)
     nepoch          = train_opts['nepoch']
     nbatch          = train_opts['nbatch']
+    nbatch_val      = train_opts['nbatch_val']
     lr_recipe       = train_opts['lr_recipe']
     losses          = train_opts['losses']
     iteration       = train_opts['iteration']
     ep_start        = train_opts['ep_start']
     resume_model    = train_opts['resume_model']
     optimizer       = train_opts['optimizer']
+    global_step_var = train_opts['global_step']
     lr              = train_opts['lr']
 
     saver = tf.train.Saver()
@@ -29,7 +31,6 @@ def train(m, loader, o):
     tf.summary.scalar('loss', m.net['loss'])
     # tf.summary.histogram('output', m.net['outputs'])
     summary_op = tf.summary.merge_all()
-
 
     '''
     config = tf.ConfigProto()
@@ -44,9 +45,11 @@ def train(m, loader, o):
         sess.run(tf.global_variables_initializer()) 
 
         path_summary_train = os.path.join(o.path_summary, 'train')
-        if not os.path.exists(path_summary_train): 
-            helpers.mkdir_p(path_summary_train)
+        path_summary_val = os.path.join(o.path_summary, 'val')
+        # if not os.path.exists(path_summary_train): 
+        #     helpers.mkdir_p(path_summary_train)
         train_writer = tf.summary.FileWriter(path_summary_train, sess.graph)
+        val_writer = tf.summary.FileWriter(path_summary_val)
         #train_writer = tf.summary.FileWriter(os.path.join(o.path_logs, 'train'), sess.graph)
 
         if o.resume: 
@@ -55,9 +58,11 @@ def train(m, loader, o):
         for ie in range(ep_start, nepoch):
             t_epoch = time.time()
             loader.update_epoch_begin('train')
+            loader.update_epoch_begin('val')
             lr_epoch = lr_recipe[ie] if o.lr_update else o.lr
 
             loss_curr_ep = np.array([], dtype=np.float32) # for avg epoch loss
+            ib_val = 0
             for ib in range(nbatch):
                 t_batch = time.time()
                 batch = loader.get_batch(ib, o, dstype='train')
@@ -71,9 +76,11 @@ def train(m, loader, o):
                         }
                 if 'firstseg' in m.net:
                     fdict[m.net['firstseg']] = True
+
+                global_step = global_step_var.eval()
                 if ib % 10 == 0:
                     _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
-                    train_writer.add_summary(summary, ib)
+                    train_writer.add_summary(summary, global_step)
                 else:
                     _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
 
@@ -153,6 +160,33 @@ def train(m, loader, o):
                         resume['losses'] = losses
                         resume['model'] = saved_model
                         np.save(o.path_save + '/resume.npy', resume)
+
+                # Evaluate validation error.
+                # Do a validation batch if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
+                if ib * nbatch_val >= ib_val * nbatch:
+                    t_batch = time.time()
+                    batch = loader.get_batch(ib_val, o, dstype='val')
+                    fdict = {
+                            m.net['inputs']: batch['inputs'],
+                            m.net['inputs_valid']: batch['inputs_valid'],
+                            m.net['inputs_HW']: batch['inputs_HW'],
+                            m.net['labels']: batch['labels'],
+                            lr: lr_epoch
+                            }
+                    _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
+                    val_writer.add_summary(summary, global_step)
+                    ib_val += 1
+
+                    # **results after every batch 
+                    sys.stdout.write(
+                            '\nVAL: ep {0:d}/{1:d}, batch {2:d}/{3:d} '
+                            '(BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'\
+                                    .format(
+                                        ie+1, nepoch, ib+1, nbatch, o.batchsz,
+                                        loss, time.time()-t_batch))
+                    sys.stdout.flush()
+
+
             print ' '
             print 'ep {0:d}/{1:d} (EPOCH) |time:{2:.2f}'.format(
                     ie+1, nepoch, time.time()-t_epoch)
@@ -222,17 +256,19 @@ def _init_train_settings(m, loader, o):
     lr_recipe = _get_lr_recipe()
 
     # optimizer
-    optimizer, lr = _get_optimizer(m, o)
+    optimizer, global_step, lr = _get_optimizer(m, o)
 
     train_opts = {
             'nepoch': o.nepoch if not o.debugmode else 2,
             'nbatch': loader.nexps['train']/o.batchsz if not o.debugmode else 300,
+            'nbatch_val': loader.nexps['val']/o.batchsz if not o.debugmode else 300,
             'lr_recipe': lr_recipe,
             'losses': losses,
             'iteration': iteration,
             'ep_start': ep_start,
             'resume_model': resume_model,
             'optimizer': optimizer,
+            'global_step': global_step,
             'lr': lr
             }
     return train_opts
@@ -251,20 +287,21 @@ def _get_lr_recipe():
     return lr_recipe
 
 def _get_optimizer(m, o):
+    global_step = tf.Variable(0, name='global_step', trainable=False)
     lr = tf.placeholder(o.dtype, shape=[])
     if o.optimizer == 'sgd':
         optimizer = tf.train.GradientDescentOptimizer(lr).minimize(\
-                m.net['loss'])
+                m.net['loss'], global_step=global_step)
     elif o.optimizer == 'momentum':
         optimizer = tf.train.MomentumOptimizer(lr, 0.9).minimize(\
-                m.net['loss'])
+                m.net['loss'], global_step=global_step)
     elif o.optimizer == 'rmsprop':
         optimizer = tf.train.RMSPropOptimizer(learning_rate=lr).minimize(\
-                m.net['loss'])
+                m.net['loss'], global_step=global_step)
     elif o.optimizer == 'adam':
         optimizer = tf.train.AdamOptimizer(learning_rate=lr).minimize(\
-                m.net['loss'])
+                m.net['loss'], global_step=global_step)
     else:
         raise ValueError('optimizer not implemented or simply wrong.')
-    return optimizer, lr
+    return optimizer, global_step, lr
 
