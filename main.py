@@ -29,6 +29,7 @@ def parse_arguments():
     parser.add_argument(
             '--path_data_home', help='location of datasets',
             type=str, default='')
+    parser.add_argument('--path_save_home', help='location to save models')
     parser.add_argument('--useresizedimg', dest='useresizedimg', action='store_true')
     parser.add_argument('--no-useresizedimg', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)
@@ -115,7 +116,7 @@ def parse_arguments():
 
     # print help and args
     if args.verbose: print args
-    return parser.parse_args()
+    return args
 
 if __name__ == "__main__":
     # parameter settings

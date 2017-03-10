@@ -77,7 +77,7 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # save (save training results), load (test), resume (keep training)
-        self.path_base          = ''
+        self.path_base          = os.path.dirname(__file__) # Take aux/ and stat/ from source dir.
         self.path_data          = ''
         self.path_data_home     = '/home/namhoon/data' \
                                 if socket.gethostname()=='namhoon-PC' \
@@ -85,7 +85,7 @@ class Opts(object):
         self.path_aux           = os.path.join(self.path_base, 'aux')
         self.path_stat          = os.path.join(self.path_base, 'stat')
         self.nosave             = False
-        self.path_save          = ''
+        self.path_save_home     = None
         self.restore            = False 
         self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
@@ -93,7 +93,7 @@ class Opts(object):
         #self.path_logs          = './logs'
         # 'logs' directory reserved for saving system level logs (being used in
         # a shell script)
-        self.path_summary       = os.path.join(self.path_base, 'summary')
+        self.path_summary       = 'summary'
 
         #----------------------------------------------------------------------
         # custom libraries
@@ -174,11 +174,12 @@ class Opts(object):
 
     def _set_save_directory(self):
         if self.nosave:
-            self.path_save = os.path.join(self.path_base, 'tmp/'+self.exectime)
+            self.path_save_home = os.path.join(self.path_base, 'tmp')
         else:
-            #self.path_save = os.path.join(self.path_base, 'save/'+self.exectime) 
-            self.path_save = os.path.join(self.path_data_home, 
-                    'save/'+self.exectime) 
+            if self.path_save_home is None:
+                # Default is data/save/
+                self.path_save_home = os.path.join(self.path_data_home, 'save')
+        self.path_save = os.path.join(self.path_save_home, self.exectime) 
 
     def _print_settings(self):
         '''Print current parameter settings 
