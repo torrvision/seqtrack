@@ -141,7 +141,8 @@ class Opts(object):
             self.outdim = 4 # rnn final output
         elif self.dataset in ['ILSVRC', 'OTB-50', 'OTB-100']:
             # TODO: try different frmsz
-            self.frmsz = 100 # image (re)size, width and height. assuming square
+            if not self.frmsz:
+                self.frmsz = 100 # image (re)size, width and height. assuming square
             self.ninchannel = 3
             self.outdim = 4 # rnn final output
         else:

@@ -717,10 +717,12 @@ class Data_ILSVRC(object):
                         dstype, i+1, self.nsnps[dstype])
                 imglist = glob.glob(snp+'/*.JPEG')
                 xs = []
-                for j in imglist:
-                    # NOTE: perform resize image!
-                    xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
-                        (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+                # for j in imglist:
+                #     # NOTE: perform resize image!
+                #     xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
+                #         (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+                # Lazy method: Read a single image, do not resize.
+                xs.append(cv2.imread(imglist[len(imglist)/2])[:,:,(2,1,0)])
                 means.append(np.mean(xs))
                 stds.append(np.std(xs))
             mean = np.mean(means)
@@ -913,9 +915,11 @@ class Data_ILSVRC(object):
         # 1. data augmentation (rotation, scaling, translation)
         # 2. data perturbation.. 
 
-        # image normalization 
-        data -= self.stat[dstype]['mean']
-        data /= self.stat[dstype]['std']
+        # # image normalization 
+        # data -= self.stat[dstype]['mean']
+        # data /= self.stat[dstype]['std']
+        # Do not use different normalization for training and testing!
+        # Moved this to model() so that it is saved with the graph.
 
         # (masked and centered) target patch
         x0 = np.copy(data[:,0])
@@ -986,9 +990,11 @@ class Data_ILSVRC(object):
                 inputs_valid[0,t] = True
         inputs_HW[0] = x.shape[0:2]
 
-        # image normalization 
-        data -= self.stat[dstype]['mean']
-        data /= self.stat[dstype]['std']
+        # # image normalization 
+        # data -= self.stat[dstype]['mean']
+        # data /= self.stat[dstype]['std']
+        # Do not use different normalization for training and testing!
+        # Moved this to model() so that it is saved with the graph.
 
         batch = {
                 'inputs': data,
@@ -1210,10 +1216,11 @@ class Data_OTB(object):
                 inputs_valid[0,t] = True
         inputs_HW[0] = x.shape[0:2]
 
-        # image normalization 
-        # NOTE: use ILSVRC stat
-        data -= self.stat['mean']
-        data /= self.stat['std']
+        # # image normalization 
+        # # NOTE: use ILSVRC stat
+        # data -= self.stat['mean']
+        # data /= self.stat['std']
+        # Moved this to model() so that it is saved with the graph.
 
         batch = {
                 'inputs': data,

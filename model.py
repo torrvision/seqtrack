@@ -5,7 +5,7 @@ import os
 import numpy as np
 
 
-def make_input_placeholders(o):
+def make_input_placeholders(o, stat=None):
     # placeholders for inputs
     inputs = tf.placeholder(o.dtype,
             shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel],
@@ -39,6 +39,11 @@ def make_input_placeholders(o):
     target = tf.placeholder(o.dtype,
             shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
             name='target')
+
+    if stat:
+        inputs = (inputs - stat['mean']) / stat['std']
+        x0     = (x0     - stat['mean']) / stat['std']
+        target = (target - stat['mean']) / stat['std']
 
     return {
             'inputs':       inputs,
@@ -725,12 +730,12 @@ def get_masks_from_rectangles(rec, o):
 
 
 class RNN_basic(object):
-    def __init__(self, o):
+    def __init__(self, o, stat=None):
         self.is_train = True if o.mode == 'train' else False
 
         self.params = {}
         self._update_params_cnn(o)
-        self.net = self._load_model(o) 
+        self.net = self._load_model(o, stat=stat) 
 
     def _update_params_cnn(self, o):
         # non-learnable params; dataset dependent
@@ -845,16 +850,25 @@ class RNN_basic(object):
         h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
         return h_curr, C_curr
 
-    def _load_model(self, o):
+    def _load_model(self, o, stat=None):
         net = make_input_placeholders(o)
-        inputs       = net['inputs']
+        inputs_raw   = net['inputs']
         inputs_valid = net['inputs_valid']
         inputs_HW    = net['inputs_HW']
         labels       = net['labels']
         y_init       = net['y_init']
-        x0           = net['x0']
+        x0_raw       = net['x0']
         y0           = net['y0']
-        target       = net['target']
+        target_raw   = net['target']
+
+        if stat:
+            inputs = (inputs_raw - stat['mean']) / stat['std']
+            x0     = (x0_raw     - stat['mean']) / stat['std']
+            target = (target_raw - stat['mean']) / stat['std']
+        else:
+            inputs = inputs_raw
+            x0     = x0_raw
+            target = target_raw
 
         # # placeholders for inputs
         # inputs = tf.placeholder(o.dtype, 
@@ -949,11 +963,11 @@ class RNN_basic(object):
 
 
 class RNN_new(object):
-    def __init__(self, o):
+    def __init__(self, o, stat=None):
         self.is_train = True if o.mode == 'train' else False
 
         self.params = self._update_params(o)
-        self.net = self._load_model(o) 
+        self.net = self._load_model(o, stat=stat) 
 
     def _update_params(self, o):
         # cnn params (depends kernel size and strides at each layer)
@@ -1153,16 +1167,25 @@ class RNN_new(object):
         output = conv2d(h, self.params['out']['w'], self.params['out']['b'])
         return output
 
-    def _load_model(self, o):
+    def _load_model(self, o, stat=None):
         net = make_input_placeholders(o)
-        inputs       = net['inputs']
+        inputs_raw   = net['inputs']
         inputs_valid = net['inputs_valid']
         inputs_HW    = net['inputs_HW']
         labels       = net['labels']
         y_init       = net['y_init']
-        x0           = net['x0']
+        x0_raw       = net['x0']
         y0           = net['y0']
-        target       = net['target']
+        target_raw   = net['target']
+
+        if stat:
+            inputs = (inputs_raw - stat['mean']) / stat['std']
+            x0     = (x0_raw     - stat['mean']) / stat['std']
+            target = (target_raw - stat['mean']) / stat['std']
+        else:
+            inputs = inputs_raw
+            x0     = x0_raw
+            target = target_raw
 
         # # placeholders for inputs
         # inputs = tf.placeholder(o.dtype, 
@@ -1244,11 +1267,11 @@ class RNN_new(object):
 
         # net = {
         net.update({
-                'target': target, 
-                'inputs': inputs,
-                'inputs_valid': inputs_valid,
-                'inputs_HW': inputs_HW,
-                'labels': labels,
+                # 'target': target, 
+                # 'inputs': inputs,
+                # 'inputs_valid': inputs_valid,
+                # 'inputs_HW': inputs_HW,
+                # 'labels': labels,
                 'outputs': outputs,
                 'loss': loss_total,
                 'h_init': h_init,
@@ -1261,11 +1284,11 @@ class RNN_new(object):
 
 
 class NonRecur(object):
-    def __init__(self, o):
+    def __init__(self, o, stat=None):
         self.is_train = True if o.mode == 'train' else False
         self.params = {}
         self._update_params_cnn(o)
-        self.net = self._load_model(o) 
+        self.net = self._load_model(o, stat=stat) 
 
     def _update_params_cnn(self, o):
         # non-learnable params; dataset dependent
@@ -1353,16 +1376,25 @@ class NonRecur(object):
         y = tf.matmul(h1, w2) + b2
         return y
 
-    def _load_model(self, o):
+    def _load_model(self, o, stat=None):
         net = make_input_placeholders(o)
-        inputs       = net['inputs']
+        inputs_raw   = net['inputs']
         inputs_valid = net['inputs_valid']
         inputs_HW    = net['inputs_HW']
         labels       = net['labels']
         y_init       = net['y_init']
-        x0           = net['x0']
+        x0_raw       = net['x0']
         y0           = net['y0']
-        target       = net['target']
+        target_raw   = net['target']
+
+        if stat:
+            inputs = (inputs_raw - stat['mean']) / stat['std']
+            x0     = (x0_raw     - stat['mean']) / stat['std']
+            target = (target_raw - stat['mean']) / stat['std']
+        else:
+            inputs = inputs_raw
+            x0     = x0_raw
+            target = target_raw
 
         # # placeholders for inputs
         # inputs = tf.placeholder(o.dtype, 
@@ -1425,27 +1457,27 @@ class NonRecur(object):
 
         # net = {
         net.update({
-                'inputs': inputs,
-                'inputs_valid': inputs_valid,
-                'inputs_HW': inputs_HW,
-                'labels': labels,
+                # 'inputs': inputs,
+                # 'inputs_valid': inputs_valid,
+                # 'inputs_HW': inputs_HW,
+                # 'labels': labels,
                 'outputs': outputs,
                 'loss': loss_total,
-                'y_init': y_init,
+                # 'y_init': y_init,
                 'y_last': y_curr,
-                'x0': x0,
-                'y0': y0,
+                # 'x0': x0,
+                # 'y0': y0,
                 })
         return net
 
 
-def load_model(o):
+def load_model(o, stat=None):
     if o.model == 'RNN_basic':
-        model = RNN_basic(o)
+        model = RNN_basic(o, stat=stat)
     elif o.model == 'RNN_new':
-        model = RNN_new(o)
+        model = RNN_new(o, stat=stat)
     elif o.model == 'CNN':
-        model = NonRecur(o)
+        model = NonRecur(o, stat=stat)
     else:
         raise ValueError ('model not available')
     return model

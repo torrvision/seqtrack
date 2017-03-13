@@ -27,11 +27,12 @@ def parse_arguments():
             '--dataset', help='specify the name of dataset',
             type=str, default='')
     parser.add_argument(
+            '--frmsz', help='size of a square image', type=int, default=100)
+    parser.add_argument(
             '--path_data_home', help='location of datasets',
             type=str, default='')
     parser.add_argument('--path_save_home', help='location to save models')
-    parser.add_argument('--useresizedimg', dest='useresizedimg', action='store_true')
-    parser.add_argument('--no-useresizedimg', dest='useresizedimg', action='store_false')
+    parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)
     parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
@@ -126,8 +127,7 @@ if __name__ == "__main__":
     o.initialize()
 
     loader = data.load_data(o)
-
-    m = model.load_model(o)
+    m = model.load_model(o, stat=loader.stat['train'])
 
     assert(o.mode == 'train')
     train(m, loader, o)
