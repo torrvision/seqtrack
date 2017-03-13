@@ -53,7 +53,7 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
             batch = loader.get_batch(ib, o, dstype, shuffle_local=shuffle_local)
 
             fdict = {
-                m.net['firstseg']: True, # this is no fulllen routine
+                # m.net['firstseg']: True, # this is no fulllen routine
                 m.net['inputs']: batch['inputs'],
                 m.net['inputs_valid']: batch['inputs_valid'],
                 m.net['inputs_HW']: batch['inputs_HW'],
