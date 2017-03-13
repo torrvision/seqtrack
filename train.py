@@ -29,6 +29,7 @@ def train(m, loader, o):
     SUMMARY_PERIOD = 10
     VAL_PERIOD = 10
 
+    init_op = tf.global_variables_initializer()
     saver = tf.train.Saver()
 
     tf.summary.scalar('loss', m.net['loss'])
@@ -45,7 +46,17 @@ def train(m, loader, o):
     t_total = time.time()
     t_iteration = time.time()
     with tf.Session(config=o.tfconfig) as sess:
-        sess.run(tf.global_variables_initializer()) 
+        # Either initialize or restore model.
+        if o.resume:
+            # TODO: Use tf.train.latest_checkpoint()
+            print "restore model: {}".format(resume_model)
+            saver.restore(sess, resume_model)
+            print "restore  {}".format(resume_model)
+        else:
+            sess.run(init_op)
+
+        global_step = global_step_var.eval()
+        print 'global step:', global_step
 
         path_summary_train = os.path.join(o.path_summary, 'train')
         path_summary_val = os.path.join(o.path_summary, 'val')
@@ -55,9 +66,6 @@ def train(m, loader, o):
         val_writer = tf.summary.FileWriter(path_summary_val)
         #train_writer = tf.summary.FileWriter(os.path.join(o.path_logs, 'train'), sess.graph)
 
-        if o.resume: 
-            saver.restore(sess, resume_model)
-        
         for ie in range(ep_start, nepoch):
             t_epoch = time.time()
             loader.update_epoch_begin('train')
@@ -99,6 +107,7 @@ def train(m, loader, o):
                 loss_curr_ep = np.append(loss_curr_ep, loss) 
                 losses['interm'] = np.append(losses['interm'], loss)
 
+                # TODO: Replace iteration with global_step (saved with graph).
                 iteration += 1
                 # **after a certain iteration, perform the followings
                 # - record and plot the loss

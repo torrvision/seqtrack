@@ -41,7 +41,7 @@ def parse_arguments():
             '--nosave', help='no need to save results?', 
             action='store_true') 
     parser.add_argument(
-            '--restore', help='to restore a pretrained', 
+            '--restore', help='to load a pretrained model (for test)',
             action='store_true')
     parser.add_argument(
             '--restore_model', help='model to restore', 
@@ -50,7 +50,7 @@ def parse_arguments():
             '--resume', help='to resume training',
             action='store_true')
     parser.add_argument(
-            '--resume_data', help='data to resume',
+            '--resume_data', help='data to resume i.e. save/{time}/resume.npy',
             type=str)
 
     parser.add_argument(
