@@ -2,6 +2,7 @@ import pdb
 import numpy as np
 import cPickle as pickle
 import gzip
+import json
 
 # packages for bouncing mnist
 import h5py
@@ -610,15 +611,19 @@ class Data_ILSVRC(object):
             if not os.path.exists(o.path_aux): helpers.mkdir_p(o.path_aux)
             if dstype == 'train':
                 filename = os.path.join(o.path_aux, 
-                    'objids_allfrm_snp_{}_{}.npy'.format(dstype, self.trainsplit))
+                    'objids_allfrm_snp_{}_{}.json'.format(dstype, self.trainsplit))
             else:
                 filename = os.path.join(o.path_aux, 
-                    'objids_allfrm_snp_{}.npy'.format(dstype))
+                    'objids_allfrm_snp_{}.json'.format(dstype))
             if os.path.exists(filename):
-                self.objids_allfrm_snp[dstype] = np.load(filename).tolist()
+                # self.objids_allfrm_snp[dstype] = np.load(filename).tolist()
+                with open(filename, 'r') as f:
+                    self.objids_allfrm_snp[dstype] = json.load(f)
             else: # if no file, create and also save
                 self.objids_allfrm_snp[dstype] = extract_objids_allfrm_snp(dstype)
-                np.save(filename, self.objids_allfrm_snp[dstype])
+                # np.save(filename, self.objids_allfrm_snp[dstype])
+                with open(filename, 'w') as f:
+                    json.dump(self.objids_allfrm_snp[dstype], f)
 
     def _update_objids_snp(self, dstype):
         assert(self.objids_allfrm_snp[dstype] is not None) # obtain from 'objids_allfrm_snp'
