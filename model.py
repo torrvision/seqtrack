@@ -2,6 +2,9 @@ import pdb
 import tensorflow as tf
 import os
 
+import numpy as np
+
+
 class RNN_attention_s(object):
     def __init__(self, o, is_train):
         self._is_train = is_train
@@ -512,65 +515,88 @@ class RNN_attention_st(object):
         return outputs 
 
 
-def get_loss(outputs, labels, inputs_valid, inputs_HW, o):
-    # loss = tf.reduce_mean(tf.square(outputs-labels)) # previous loss 
-    ''' previous L2 loss
-    loss1_batch = []
-    for i in range(labels.get_shape().as_list()[0]): # batchsz or # examples
-        sq = tf.square(
-                outputs[i,:inputs_length[i]]-labels[i,:inputs_length[i]])
-        # NOTE: here it's mean over timesteps. If only want to have a loss for
-        # the last time step, it should be changed.
-        mean_of_l2_sum = tf.reduce_mean(tf.add(
-            tf.sqrt(tf.add(sq[:,0],sq[:,1])), 
-            tf.sqrt(tf.add(sq[:,2],sq[:,3]))))
-        loss1_batch.append(mean_of_l2_sum)
-    loss_box = tf.reduce_mean(tf.stack(loss1_batch, axis=0))
-    '''
-
+def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype):
     # NOTE: Be careful about length of labels and outputs. 
     # labels and inputs_valid will be of T+1 length, and y0 shouldn't be used.
-
     assert(outputs.get_shape().as_list()[1] == o.ntimesteps)
     assert(labels.get_shape().as_list()[1] == o.ntimesteps+1)
 
     loss = []
+    
+    if outtype == 'rectangle':
+        # loss1: sum of two l1 distances for left-top and right-bottom
+        if 'l1' in o.losses: # TODO: double check
+            labels_valid = tf.boolean_mask(labels[:,1:], inputs_valid[:,1:])
+            outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
+            loss_l1 = tf.reduce_mean(tf.abs(labels_valid - outputs_valid))
+            loss.append(loss_l1)
 
-    # loss1: sum of two l1 distances for left-top and right-bottom
-    if 'l1' in o.losses: # TODO: double check
-        labels_valid = tf.boolean_mask(labels[:,1:], inputs_valid[:,1:])
+        # loss2: IoU
+        if 'iou' in o.losses:
+            assert(False) # TODO: change from inputs_length to inputs_valid
+            scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
+                inputs_HW[:,1], inputs_HW[:,0]), axis=1)
+            boxA = outputs * tf.expand_dims(scalar, 1)
+            boxB = labels[:,1:,:] * tf.expand_dims(scalar, 1)
+            xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
+            yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
+            xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
+            yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
+            interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
+            boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
+            boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
+            # TODO: CHECK tf.div or tf.divide
+            #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
+            iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
+            iou_valid = []
+            for i in range(o.batchsz):
+                iou_valid.append(iou[i, :inputs_length[i]-1])
+            iou_mean = tf.reduce_mean(iou_valid)
+            loss_iou = 1 - iou_mean # NOTE: Any normalization?
+            loss.append(loss_iou)
+
+    elif outtype == 'heatmap':
+        # First of all, need to convert labels into heat maps
+        labels_heatmap = convert_rec_to_heatmap(labels, o)
+
+        # valid labels and outputs
+        labels_valid = tf.boolean_mask(labels_heatmap[:,1:], inputs_valid[:,1:])
         outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
-        loss_l1 = tf.reduce_mean(tf.abs(labels_valid - outputs_valid))
-        loss.append(loss_l1)
 
-    # loss2: IoU
-    if 'iou' in o.losses:
-        assert(False) # TODO: change from inputs_length to inputs_valid
-        scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
-            inputs_HW[:,1], inputs_HW[:,0]), axis=1)
-        boxA = outputs * tf.expand_dims(scalar, 1)
-        boxB = labels[:,1:,:] * tf.expand_dims(scalar, 1)
-        xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
-        yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
-        xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
-        yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
-        interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
-        boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
-        boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
-        # TODO: CHECK tf.div or tf.divide
-        #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
-        iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
-        iou_valid = []
-        for i in range(o.batchsz):
-            iou_valid.append(iou[i, :inputs_length[i]-1])
-        iou_mean = tf.reduce_mean(iou_valid)
-        loss_iou = 1 - iou_mean # NOTE: Any normalization?
-        loss.append(loss_iou)
-
-    # loss3: CLE
-    # loss4: cross-entropy between probabilty maps (need to change label) 
+        # loss1: cross-entropy between probabilty maps (need to change label) 
+        if 'ce' in o.losses: 
+            labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
+            outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
+            loss_ce = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+                    labels=labels_flat, logits=outputs_flat))
+            loss.append(loss_ce)
+        
+        # loss2: tf's l2 (without sqrt)
+        if 'l2' in o.losses:
+            labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
+            outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
+            outputs_softmax = tf.nn.softmax(outputs_flat)
+            loss_l2 = tf.nn.l2_loss(labels_flat - outputs_softmax)
+            loss.append(loss_l2)
 
     return tf.reduce_sum(loss)
+
+def convert_rec_to_heatmap(rec, o):
+    '''Create heatmap from rectangle
+    Args:
+        rec: [batchsz x ntimesteps+1] ground-truth rectangle labels
+    Return:
+        heatmap: [batchsz x ntimesteps+1 x o.frmsz x o.frmsz x 1]
+    '''
+    masks = []
+    for t in range(o.ntimesteps+1):
+        masks.append(get_masks_from_rectangles(rec[:,t], o))
+    masks = tf.stack(masks, axis=1)
+    # normalize
+    masks_sum = tf.reshape(tf.reduce_sum(masks, axis=[2,3,4]),
+            [o.batchsz, o.ntimesteps+1, 1, 1, 1])
+    heatmap = tf.divide(masks, masks_sum)
+    return heatmap
 
 # weight variable; created variables are new and will not be shared.
 def get_weight_variable(
@@ -589,7 +615,13 @@ def get_bias_variable(shape_, value=0.1, trainable_=True, name_=None, wd=0.0):
     tf.add_to_collection('losses', weight_decay)
     return var
 
-def conv2d(x, w, b, strides_):
+def get_variable_with_initial(initial_, trainable_=True, name_=None, wd=0.0):
+    var = tf.Variable(initial_value=initial_, trainable=trainable_, name=name_) 
+    weight_decay = tf.nn.l2_loss(var) * wd
+    tf.add_to_collection('losses', weight_decay)
+    return var
+
+def conv2d(x, w, b, strides_=[1,1,1,1]):
     return tf.nn.conv2d(x, w, strides=strides_, padding='SAME') + b
 
 def activate(input_, activation_='relu'):
@@ -839,203 +871,212 @@ class RNN_basic(object):
         return net
 
 
-class RNN_a(object):
+class RNN_new(object):
     def __init__(self, o):
         self.is_train = True if o.mode == 'train' else False
 
-        self.params = {}
-        self._update_params_cnn(o)
+        self.params = self._update_params(o)
         self.net = self._load_model(o) 
 
-    def _update_params_cnn(self, o):
-        # non-learnable params; dataset dependent
-        if o.dataset in ['moving_mnist', 'bouncing_mnist']: # easy datasets
-            self.nlayers = 2
-            self.nchannels = [16, 16]
-            self.filtsz = [3, 3]
-            self.strides = [3, 3]
-        else: # ILSVRC or other data set of natural images 
+    def _update_params(self, o):
+        # cnn params (depends kernel size and strides at each layer)
+        with tf.variable_scope('cnn'):
+            cnn = {}
+
             # TODO: potentially a lot of room for improvement here
-            self.nlayers = 3
-            self.nchannels = [16, 32, 64]
-            self.filtsz = [7, 5, 3]
-            self.strides = [3, 2, 1]
-        assert(self.nlayers == len(self.nchannels))
-        assert(self.nlayers == len(self.filtsz))
-        assert(self.nlayers == len(self.strides))
+            cnn['nlayers'] = 3
+            cnn['layer'] = []
+            cnn['layer'].append({'filtsz': 7, 'st': 3, 'chin': 3, 'chout': 16})
+            cnn['layer'].append({'filtsz': 5, 'st': 2, 'chin': 16, 'chout': 32})
+            cnn['layer'].append({'filtsz': 3, 'st': 1, 'chin': 32, 'chout': 64})
 
-        # learnable parameters; TODO: add name or variable scope
+            # compute cnn output sizes
+            h, w = o.frmsz, o.frmsz
+            for i in range(cnn['nlayers']):
+                h = int(np.ceil(h / float(cnn['layer'][i]['st'])))
+                w = int(np.ceil(w / float(cnn['layer'][i]['st'])))
+                cnn['layer'][i].update({'out_h': h, 'out_w': w})
 
-        # CNN for RNN input images; shared across all time steps
-        w_conv = []
-        b_conv = []
-        for i in range(self.nlayers):
-            # only one input image
-            shape_w = [self.filtsz[i], self.filtsz[i], 
-                    o.ninchannel if i==0 else self.nchannels[i-1], 
-                    self.nchannels[i]]
-            shape_b = [self.nchannels[i]]
-            w_conv.append(get_weight_variable(shape_w, name_='w', wd=o.wd))
-            b_conv.append(get_bias_variable(shape_b, name_='b', wd=o.wd))
-        self.params['w_conv'] = w_conv
-        self.params['b_conv'] = b_conv
+            # CNN for RNN input images; shared across all time steps
+            for i in range(cnn['nlayers']):
+                shape_w = [cnn['layer'][i]['filtsz'], cnn['layer'][i]['filtsz'], 
+                        cnn['layer'][i]['chin'], cnn['layer'][i]['chout']]
+                shape_b = [cnn['layer'][i]['chout']]
+                cnn['layer'][i].update({'w': get_weight_variable(
+                    shape_w, name_='w{}'.format(i), wd=o.wd) })
+                cnn['layer'][i].update({'b': get_bias_variable(
+                    shape_b, name_='b{}'.format(i), wd=o.wd) })
 
         # 1x1 CNN params; used before putting cnn features to RNN cell
-        self.params['w_cellin1'] = get_weight_variable(
-                [1, 1, self.nchannels[-1], self.nchannels[-1]/2], 
-                name_='w_cellin1', wd=o.wd)
-        self.params['b_cellin1'] = get_bias_variable(
-                [self.nchannels[-1]/2], name_='b_cellin1', wd=o.wd)
-        self.params['w_cellin2'] = get_weight_variable(
-                [1, 1, self.nchannels[-1]/2, self.nchannels[-1]/4], 
-                name_='w_cellin2', wd=o.wd)
-        self.params['b_cellin2'] = get_bias_variable(
-                [self.nchannels[-1]/4], name_='b_cellin2', wd=o.wd)
+        with tf.variable_scope('cnn_1x1'):
+            cnn_1x1 = {}
+            cnn_1x1['nlayers'] = 2
+            cnn_1x1['layer'] = []
+            for i in range(cnn_1x1['nlayers']):
+                chin = cnn['layer'][-1]['chout']/pow(2,i)
+                chout = cnn['layer'][-1]['chout']/pow(2,i+1)
+                cnn_1x1['layer'].append({
+                    'w': get_weight_variable([1, 1, chin, chout], 
+                        name_='w{}'.format(i), wd=o.wd),
+                    'b': get_bias_variable([chout], 
+                        name_='b{}'.format(i), wd=o.wd),
+                    'chout': chout})
+        # Conv lstm params
+        with tf.variable_scope('lstm'):
+            lstm = {}
+            gates = ['i', 'f' , 'c' , 'o']
+            for gate in gates:
+                lstm['w_x{}'.format(gate)] = get_weight_variable(
+                        [3, 3, cnn_1x1['layer'][-1]['chout'], 
+                        cnn_1x1['layer'][-1]['chout']],
+                        name_='w_x{}'.format(gate), wd=o.wd)
+                lstm['w_h{}'.format(gate)] = get_weight_variable(
+                        [3,3,cnn_1x1['layer'][-1]['chout'], 
+                        cnn_1x1['layer'][-1]['chout']],
+                        name_='w_h{}'.format(gate), wd=o.wd)
+                lstm['b_{}'.format(gate)] = get_weight_variable(
+                    [cnn_1x1['layer'][-1]['chout']], 
+                    name_='b_{}'.format(gate), wd=o.wd)
+                    
+        # upsample filter, initialize with bilinear upsample weights
+        # NOTE: #layers may need to be at least the size change occurs in cnnin
+        def get_bilinear_upsample_weights(filtsz, channels):
+            '''Create weights matrix for transposed convolution with 
+            bilinear filter initialization.
+            '''
+            factor = (filtsz+ 1) / float(2)
+            if filtsz % 2 == 1:
+                center = factor - 1
+            else:
+                center = factor - 0.5
+            og = np.ogrid[:filtsz, :filtsz]
+            upsample_kernel = (1-abs(og[0]-center)/factor) \
+                    * (1-abs(og[1]-center)/factor)
+            weights = np.zeros((filtsz, filtsz, channels, channels), 
+                    dtype=np.float32)
+            for i in xrange(channels):
+                weights[:, :, i, i] = upsample_kernel
+            return weights
 
-        # CNN for initial target image (x0)
-        # TODO: many options 
-        # 1. crop x0 (before or after) based on y0
-        # 2. concat x0 with y0
-        # 3. multiply x0 with a binary mask created based on y0
-        # for now, I am doing 2.
-        w_conv_target = []
-        b_conv_target = []
-        for i in range(self.nlayers):
-            # only one input image
-            shape_w = [self.filtsz[i], self.filtsz[i], 
-                    o.ninchannel+1 if i==0 else self.nchannels[i-1], 
-                    self.nchannels[i]]
-            shape_b = [self.nchannels[i]]
-            w_conv_target.append(get_weight_variable(shape_w, name_='w', wd=o.wd))
-            b_conv_target.append(get_bias_variable(shape_b, name_='b', wd=o.wd))
-        self.params['w_conv_target'] = w_conv_target
-        self.params['b_conv_target'] = b_conv_target
+        # NOTE: try different number of upsamplings
+        with tf.variable_scope('cnn_deconv'):
+            cnn_deconv = {}
+            cnn_deconv['layer'] = []
+            cnn_deconv['layer'].append(
+                get_variable_with_initial(get_bilinear_upsample_weights(
+                    cnn['layer'][1]['filtsz'], cnn_1x1['layer'][-1]['chout'])))
+            cnn_deconv['layer'].append(
+                get_variable_with_initial(get_bilinear_upsample_weights(
+                    cnn['layer'][0]['filtsz'], cnn_1x1['layer'][-1]['chout'])))
 
-    def _update_params_rnn(self, cnnout, o):
-        # cnn params
-        cnnout_shape = cnnout.get_shape().as_list()
-        self.params['cnn_h'] = cnnout_shape[1]
-        self.params['cnn_w'] = cnnout_shape[2]
-        self.params['cnn_c'] = cnnout_shape[3]
-        self.params['cnn_featdim'] = cnnout_shape[1]*cnnout_shape[2]*cnnout_shape[3]
+        # regression for y; (1x1 convolutions reducing channels to 1)
+        with tf.variable_scope('out'):
+            out = {}
+            out['w'] = get_weight_variable(
+                [1, 1, cnn_1x1['layer'][-1]['chout'], 1], name_='w', wd=o.wd)
+            out['b'] = get_bias_variable([1], name_='b', wd=o.wd)
 
-        # lstm params
-        shape_w = [o.nunits+self.params['cnn_featdim']/2/2, o.nunits*4] # 2 1x1 conv
-        shape_b = [o.nunits*4]
-        self.params['w_lstm'] = get_weight_variable(
-                shape_w, name_='w_lstm', wd=o.wd)
-        self.params['b_lstm'] = get_bias_variable(
-                shape_b, name_='w_lstm', wd=o.wd)
+        # return params
+        params = {}
+        params['cnn'] = cnn
+        params['cnn_1x1'] = cnn_1x1
+        params['lstm'] = lstm
+        params['cnn_deconv'] = cnn_deconv
+        params['out'] = out
+        return params
 
-        # rnnout params 
-        self.params['w_out1'] = get_weight_variable(
-                [o.nunits, o.nunits/2], name_='w_out1', wd=o.wd)
-        self.params['b_out1'] = get_weight_variable(
-                [o.nunits/2], name_='b_out1', wd=o.wd)
-        self.params['w_out2'] = get_weight_variable(
-                [o.nunits/2, o.outdim], name_='w_out2', wd=o.wd)
-        self.params['b_out2'] = get_weight_variable(
-                [o.outdim], name_='b_out2', wd=o.wd)
-
-    def _update_params_sim(self, o):
-        shape_w = [o.nunits, self.params['cnn_c']] 
-        shape_b = [self.params['cnn_c']]
-        self.params['w_sim'] = get_weight_variable(
-                shape_w, name_='w_sim', wd=o.wd)
-        self.params['b_sim'] = get_bias_variable(
-                shape_b, name_='b_sim', wd=o.wd)
-
-    def _pass_cnn(self, x_curr, o):
-        cnnin = x_curr
-        for i in range(self.nlayers):
+    def _pass_cnn(self, cnnin, o):
+        for i in range(self.params['cnn']['nlayers']):
             x = cnnin if i==0 else act
-            conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], 
-                    [1,self.strides[i],self.strides[i],1])
+            conv = conv2d(x, 
+                self.params['cnn']['layer'][i]['w'], 
+                self.params['cnn']['layer'][i]['b'], 
+                [1, self.params['cnn']['layer'][i]['st'], 
+                    self.params['cnn']['layer'][i]['st'], 1])
             act = activate(conv, 'relu')
-        # TODO: can add dropout here
-        #if self.is_train and o.dropout_cnn:
-        #    act = tf.nn.dropout(act, o.keep_ratio_cnn)
+            # TODO: can add dropout here
             if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
                 act = tf.nn.dropout(act, o.keep_ratio_cnn)
         return act
 
-    def _pass_cnn_target(self, x0, y0, o):
-        # create a binary mask based on y0
-        masks = get_masks_from_rectangles(y0, o)
-        cnnin = tf.concat_v2((x0, masks),3)
-        
-        # convolutions
-        for i in range(self.nlayers):
-            x = cnnin if i==0 else act
-            conv = conv2d(x, self.params['w_conv_target'][i], 
-                    self.params['b_conv_target'][i], 
-                    [1,self.strides[i],self.strides[i],1])
+    def _depthwise_convolution(self, search, filt, o):
+        # similar to siamese
+        scoremap = []
+        for i in range(o.batchsz):
+            searchimg = tf.expand_dims(search[i],0)
+            filtimg = tf.expand_dims(filt[i],3)
+            scoremap.append(
+                tf.nn.depthwise_conv2d(searchimg, filtimg, [1,1,1,1], 'SAME'))
+        scoremap = tf.squeeze(tf.stack(scoremap, axis=0), squeeze_dims=1)
+        return scoremap
+
+    def _pass_cnn_1x1s(self, scoremap, o):
+        for i in range(self.params['cnn_1x1']['nlayers']):
+            x = scoremap if i==0 else act
+            conv = conv2d(x, 
+                    self.params['cnn_1x1']['layer'][i]['w'],
+                    self.params['cnn_1x1']['layer'][i]['b']) 
             act = activate(conv, 'relu')
-        # TODO: can add dropout here
-
-        # following fc layer; it needs to match the dimension of C
-        act_flat = tf.reshape(act, [o.batchsz, -1])
-        act_shape = act.get_shape().as_list()
-        shape_w_fc_target = [reduce(lambda x, y: x*y, act_shape[1:4]), o.nunits]
-        shape_b_fc_target = [o.nunits]
-        self.params['w_fc_target'] = get_weight_variable(
-                shape_w_fc_target, name_='w_fc_target', wd=o.wd)
-        self.params['b_fc_target'] = get_bias_variable(
-                shape_b_fc_target, name_='b_fc_target', wd=o.wd)
-        feat = activate(tf.matmul(act_flat, self.params['w_fc_target']) 
-                + self.params['b_fc_target'], 'relu')
-        return feat
-
-    def _pass_cnn_1x1s(self, cnnin, o):
-        conv1 = conv2d(cnnin, 
-            self.params['w_cellin1'], self.params['b_cellin1'], [1,1,1,1])
-        act1 = activate(conv1, 'relu')
-        conv2 = conv2d(conv1, 
-            self.params['w_cellin2'], self.params['b_cellin2'], [1,1,1,1])
-        act2 = activate(conv2, 'relu')
         # TODO: can add dropout here 
-        return act2
+        return act
 
-    def _pass_rnn(self, cellin, h_prev, C_prev, o):
-        cellin = tf.reshape(cellin, [o.batchsz, -1]) # flatten
+    def _pass_rnn(self, cellin, h_prev, c_prev, o):
+        ''' ConvLSTM
+        1. h and c have the same dimension as x (padding can be used)
+        2. no peephole connection
+        '''
+        it = activate(
+            conv2d(cellin, self.params['lstm']['w_xi'], self.params['lstm']['b_i']) +
+            conv2d(h_prev, self.params['lstm']['w_hi'], self.params['lstm']['b_i']), 
+            'sigmoid')
+        ft = activate(
+            conv2d(cellin, self.params['lstm']['w_xf'], self.params['lstm']['b_f']) +
+            conv2d(h_prev, self.params['lstm']['w_hf'], self.params['lstm']['b_f']), 
+            'sigmoid')
+        ct_tilda = activate(
+            conv2d(cellin, self.params['lstm']['w_xc'], self.params['lstm']['b_c']) +
+            conv2d(h_prev, self.params['lstm']['w_hc'], self.params['lstm']['b_c']), 
+            'tanh')
+        ct = (ft * c_prev) + (it * ct_tilda)
+        ot = activate(
+            conv2d(cellin, self.params['lstm']['w_xo'], self.params['lstm']['b_o']) +
+            conv2d(h_prev, self.params['lstm']['w_ho'], self.params['lstm']['b_o']), 
+            'sigmoid')
+        ht = ot * activate(ct, 'tanh')
+        return ht, ct
 
-        f_curr, i_curr, C_curr_tilda, o_curr = tf.split(tf.matmul(
-            tf.concat_v2((h_prev, cellin), 1), self.params['w_lstm']) + 
-            self.params['b_lstm'], 4, 1)
+    def _pass_deconvolution(self, h, o):
+        # transposed convolution (or fractionally strided convolution). 
+        # (a.k.a. deconvolution, but wrong)
+        # bilinear resampling kernel is used at initialization.
+        # 3 layers and activations in between.
+        deconv1 = tf.nn.conv2d_transpose(
+            h, self.params['cnn_deconv']['layer'][0],
+            output_shape=[o.batchsz, 
+                self.params['cnn']['layer'][0]['out_h'], 
+                self.params['cnn']['layer'][0]['out_w'], 
+                self.params['cnn_1x1']['layer'][-1]['chout']], 
+            strides=[1, 
+                self.params['cnn']['layer'][1]['st'], 
+                self.params['cnn']['layer'][1]['st'], 1])
+        act_deconv1 = activate(deconv1, 'relu')
 
-        if o.lstmforgetbias:
-            C_curr = tf.sigmoid(f_curr + 1.0) * C_prev + \
-                    tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
-        else:
-            C_curr = tf.sigmoid(f_curr) * C_prev + \
-                    tf.sigmoid(i_curr) * tf.tanh(C_curr_tilda) 
-        h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
-        return h_curr, C_curr
+        deconv2 = tf.nn.conv2d_transpose(
+            deconv1, self.params['cnn_deconv']['layer'][1],
+            output_shape=[o.batchsz, o.frmsz, o.frmsz,
+                self.params['cnn_1x1']['layer'][-1]['chout']], 
+            strides=[1, 
+                self.params['cnn']['layer'][0]['st'], 
+                self.params['cnn']['layer'][0]['st'], 1])
+        act_deconv2 = activate(deconv2, 'relu')
 
-    def _pass_spatial_attention(self, C_prev, cnnout):
-        # fc layer for C_prev to meet the dimension with features  
-        context = tf.matmul(C_prev, self.params['w_sim']) + self.params['b_sim']
+        return act_deconv2
 
-        # similarity 
-        context = tf.expand_dims(tf.expand_dims(context,axis=1),axis=1)
-        dotprod = tf.reduce_sum(context*cnnout, axis=3)
-        context_norm = tf.sqrt(tf.reduce_sum(tf.pow(context,2),3))
-        feat_norm = tf.sqrt(tf.reduce_sum(tf.pow(cnnout, 2), 3))
-        e = tf.div(dotprod, (context_norm * feat_norm))
-
-        # attention weight alpha
-        alpha = tf.nn.softmax(e)
-        
-        # compute (expected) attention overlayed context vector z
-        # TODO: check other approaches
-        z = tf.expand_dims(alpha, 3) * cnnout
-        return z
+    def _project_output(self, h):
+        output = conv2d(h, self.params['out']['w'], self.params['out']['b'])
+        return output
 
     def _load_model(self, o):
-        # indicator whether it's the first segment of fulllength sequence
-        #firstseg = tf.placeholder_with_default(False, shape=[], name='firstseg')
-        firstseg = tf.placeholder(tf.bool, name='firstseg')
-
         # placeholders for inputs
         inputs = tf.placeholder(o.dtype, 
                 shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
@@ -1051,53 +1092,71 @@ class RNN_a(object):
                 name='labels')
 
         # placeholders for initializations of full-length sequences
+        # NOTE: currently, h and c have the same dimension as input to ConvLSTM
+        cnnh = self.params['cnn']['layer'][-1]['out_h']
+        cnnw = self.params['cnn']['layer'][-1]['out_w']
+        cnnch = self.params['cnn_1x1']['layer'][-1]['chout']
         h_init = tf.placeholder_with_default(
-                tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype), # NOTE: zero or normal
-                shape=[o.batchsz, o.nunits], name='h_init')
-        C_init = tf.placeholder_with_default(
-                tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype), # NOTE: zero or normal
-                shape=[o.batchsz, o.nunits], name='C_init')
-        # NOTE: make sure to feed C_last to C_init if it's not first segment.
+            tf.truncated_normal([o.batchsz, cnnh, cnnw, cnnch], dtype=o.dtype), 
+            shape=[o.batchsz, cnnh, cnnw, cnnch], name='h_init')
+        c_init = tf.placeholder_with_default(
+            tf.truncated_normal([o.batchsz, cnnh, cnnw, cnnch], dtype=o.dtype), 
+            shape=[o.batchsz, cnnh, cnnw, cnnch], name='c_init')
 
-        # extract target feature from {x0,y0} for C; only used if firstseg
-        targetfeat = self._pass_cnn_target(inputs[:,0], labels[:,0], o)
+        # placeholders for x0 and y0. This is used for full-length sequences
+        # NOTE: when it's not first segment, you should always feed x0, y0
+        # otherwise it will use GT as default. It will be wrong then.
+        #x0 = tf.placeholder_with_default(
+        #        inputs[:,0], 
+        #        shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
+        #y0 = tf.placeholder_with_default(
+        #        labels[:,0],
+        #        shape=[o.batchsz, o.outdim], name='y0')
 
-        # C_init. Due to tf's weird behavior of 'global_variables_initializer',
-        # I can't use condition flow without firstseg being True. 
-        C_init = tf.cond(firstseg, lambda: targetfeat, lambda: C_init)
+        # NOTE: when it's not first segment, be careful what is passed to target.
+        # Make sure to pass x0, not the first frame of every segments.
+        target = tf.placeholder(o.dtype, 
+                shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], 
+                name='target')
+
 
         # RNN unroll
         outputs = []
         for t in range(1, o.ntimesteps+1):
             if t==1:
                 h_prev = h_init
-                C_prev = C_init
+                c_prev = c_init
             else:
                 h_prev = h_curr
-                C_prev = C_curr
+                c_prev = c_curr
             x_curr = inputs[:,t]
 
-            cnnout = self._pass_cnn(x_curr, o)
-            if t==1: # some shared params need to be updated here
-                self._update_params_rnn(cnnout, o) 
-                self._update_params_sim(o)
+            # siamese
+            feat_x0 = self._pass_cnn(target, o)
+            feat_xt = self._pass_cnn(x_curr, o)
+            scoremap = self._depthwise_convolution(feat_xt, feat_x0, o)
+            scoremap = self._pass_cnn_1x1s(scoremap, o)
 
-            cnnout = self._pass_spatial_attention(C_prev, cnnout)
+            # ConvLSTM (try convGRU)
+            h_curr, c_curr = self._pass_rnn(scoremap, h_prev, c_prev, o)
 
-            cnnout = self._pass_cnn_1x1s(cnnout, o)
+            # regress output heatmap using deconvolution layers (transpose of conv)
+            h_deconv = self._pass_deconvolution(h_curr, o)
+            y_curr = self._project_output(h_deconv)
 
-            h_curr, C_curr = self._pass_rnn(cnnout, h_prev, C_prev, o)
+            # TODO: debugging nan
+            dbg = tf.reduce_sum(tf.cast(tf.is_nan(c_curr), dtype=o.dtype)) 
+            #dbg = tf.Print(dbg, [dbg], 'dbg:')
 
-            h_out = tf.matmul(h_curr, self.params['w_out1']) + self.params['b_out1']
-            y_curr = tf.matmul(h_out, self.params['w_out2']) + self.params['b_out2']
             outputs.append(y_curr)
         outputs = tf.stack(outputs, axis=1) # list to tensor
 
-        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o)
+        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'heatmap')
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
 
         net = {
+                'target': target, 
                 'inputs': inputs,
                 'inputs_valid': inputs_valid,
                 'inputs_HW': inputs_HW,
@@ -1105,10 +1164,10 @@ class RNN_a(object):
                 'outputs': outputs,
                 'loss': loss_total,
                 'h_init': h_init,
-                'C_init': C_init,
+                'c_init': c_init,
                 'h_last': h_curr,
-                'C_last': C_curr,
-                'firstseg': firstseg,
+                'c_last': c_curr,
+                'dbg': dbg
                 }
         return net
 
@@ -1279,8 +1338,8 @@ class NonRecur(object):
 def load_model(o):
     if o.model == 'RNN_basic':
         model = RNN_basic(o)
-    elif o.model == 'RNN_a':
-        model = RNN_a(o)
+    elif o.model == 'RNN_new':
+        model = RNN_new(o)
     elif o.model == 'CNN':
         model = NonRecur(o)
     else:
@@ -1302,14 +1361,14 @@ if __name__ == '__main__':
 
     o.losses = ['l1'] # 'l1', 'iou', etc.
 
-    o.model = 'RNN_a' # RNN_basic, RNN_a 
+    o.model = 'RNN_new' # RNN_basic, RNN_a 
 
     if o.model == 'RNN_basic':
-        o.yprev_mode = 'concat_channel' # concat_abs, concat_channel
         o.pass_yinit = True
         m = RNN_basic(o)
-    elif o.model == 'RNN_a':
-        m = RNN_a(o)
+    elif o.model == 'RNN_new':
+        o.losses = ['ce', 'l2']
+        m = RNN_new(o)
 
     pdb.set_trace()
 

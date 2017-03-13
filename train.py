@@ -4,7 +4,7 @@ import numpy as np
 import tensorflow as tf
 import time
 import os
-#import os.path
+import os.path
 
 import draw
 from evaluate import evaluate
@@ -79,21 +79,20 @@ def train(m, loader, o):
                 batch = loader.get_batch(ib, o, dstype='train')
 
                 fdict = {
+                        m.net['target']: batch['target'],
                         m.net['inputs']: batch['inputs'],
                         m.net['inputs_valid']: batch['inputs_valid'],
                         m.net['inputs_HW']: batch['inputs_HW'],
                         m.net['labels']: batch['labels'],
                         lr: lr_epoch
                         }
-                if 'firstseg' in m.net:
-                    fdict[m.net['firstseg']] = True
 
                 global_step = global_step_var.eval()
                 if ib % SUMMARY_PERIOD == 0:
-                    _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
+                    _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
                     train_writer.add_summary(summary, global_step)
                 else:
-                    _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
+                    _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
 
                 # **results after every batch 
                 sys.stdout.write(
@@ -175,12 +174,12 @@ def train(m, loader, o):
 
                 # Evaluate validation error.
                 if ib % VAL_PERIOD == 0:
-                    # Do a validation batch only if (ib / nbatch) >= (ib_val / nbatch_val),
-                    # or equivalently
+                    # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         t_batch = time.time()
                         batch = loader.get_batch(ib_val, o, dstype='val')
                         fdict = {
+                                m.net['target']: batch['target'],
                                 m.net['inputs']: batch['inputs'],
                                 m.net['inputs_valid']: batch['inputs_valid'],
                                 m.net['inputs_HW']: batch['inputs_HW'],

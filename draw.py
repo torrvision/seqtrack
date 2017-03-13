@@ -10,6 +10,39 @@ from matplotlib.patches import Rectangle
 import helpers
 
 
+def show_masks(masks, dataset):
+    if masks.shape[0] > 25:
+        masks = masks[:25]
+
+    fig = plt.figure(figsize=(8,8))
+    for i in range(masks.shape[0]):
+        plt.subplot(5,5,i+1)
+        plt.imshow(np.squeeze(masks[i]))
+        plt.draw()
+        plt.axis('off')
+    savedir = 'tmp/{}_masks'.format(dataset)
+    if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+    plt.savefig(savedir + '/masks.png')
+    plt.close()
+
+def show_target(x0, dataset, stat):
+    if x0.shape[0] > 25:
+        x0 = x0[:25]
+
+    fig = plt.figure(figsize=(8,8))
+    for i in range(x0.shape[0]):
+        plt.subplot(5,5,i+1)
+        img = x0[i]
+        img *= stat['std']
+        img += stat['mean']
+        plt.imshow(np.uint8(img))
+        plt.draw()
+        plt.axis('off')
+    savedir = 'tmp/{}_x0'.format(dataset)
+    if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+    plt.savefig(savedir + '/examples.png')
+    plt.close()
+
 def show_dataset_batch(batch, dataset, frmsz, stat=None):
     vids = batch['inputs']
     if vids.shape[0] > 25: 
