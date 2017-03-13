@@ -616,9 +616,14 @@ def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype):
         if 'ce' in o.losses: 
             labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
             outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
-            loss_ce = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
-                    labels=labels_flat, logits=outputs_flat))
-            loss.append(loss_ce)
+            assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
+            with tf.control_dependencies([assert_finite(outputs_valid)]):
+                outputs_valid = tf.identity(outputs_valid)
+            loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=labels_flat, logits=outputs_flat)
+            # Wrap with assertion that loss is finite.
+            with tf.control_dependencies([assert_finite(loss_ce)]):
+                loss_ce = tf.identity(loss_ce)
+            loss.append(tf.reduce_mean(loss_ce))
         
         # loss2: tf's l2 (without sqrt)
         if 'l2' in o.losses:
@@ -691,6 +696,13 @@ def get_masks_from_rectangles(rec, o):
     y1 = rec[:,1] * o.frmsz
     x2 = rec[:,2] * o.frmsz
     y2 = rec[:,3] * o.frmsz
+    # Ensure that x2-x1 > 1
+    xc, xs = 0.5*(x1 + x2), x2-x1
+    yc, ys = 0.5*(y1 + y2), y2-y1
+    xs = tf.maximum(1.0, xs)
+    ys = tf.maximum(1.0, ys)
+    x1, x2 = xc-xs/2, xc+xs/2
+    y1, y2 = yc-ys/2, yc+ys/2
     grid_x, grid_y = tf.meshgrid(
             tf.range(o.frmsz, dtype=o.dtype),
             tf.range(o.frmsz, dtype=o.dtype))
