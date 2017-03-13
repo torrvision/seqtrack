@@ -912,7 +912,28 @@ class Data_ILSVRC(object):
         data -= self.stat[dstype]['mean']
         data /= self.stat[dstype]['std']
 
+        # (masked and centered) target patch
+        x0 = np.copy(data[:,0])
+        y0 = np.copy(label[:,0])
+        masks = get_masks_from_rectangles(y0, o)
+        x0_mask = x0 * masks
+        x0_center = np.zeros_like(x0_mask, dtype=np.float32)
+        for i in range(o.batchsz):
+            # shift the target to the center
+            rec = y0[i] * o.frmsz
+            width = (rec[2]-rec[0])
+            height = (rec[3]-rec[1])
+            shift_x = int((o.frmsz/2) - (rec[0]) - (width/2))
+            shift_y = int((o.frmsz/2) - (rec[1]) - (height/2))
+            x0_shift_x = np.roll(x0_mask[i], shift_x, axis=1)
+            x0_center[i] = np.roll(x0_shift_x, shift_y, axis=0)
+
+        # test visualization
+        #draw.show_target(x0_center, o.dataset, self.stat[dstype])
+        #draw.show_masks(masks, o.dataset)
+
         batch = {
+                'target': x0_center, #NOTE: Be careful for full-length case!!!
                 'inputs': data,
                 'inputs_valid': inputs_valid, 
                 'inputs_HW': inputs_HW,
@@ -1221,6 +1242,29 @@ class Data_OTB(object):
                 if not os.path.exists(savedir): helpers.mkdir_p(savedir)
                 cv2.imwrite(fname, x)
 
+def get_masks_from_rectangles(rec, o):
+    # create mask using rec; typically rec=y_prev
+    x1 = rec[:,0] * o.frmsz
+    y1 = rec[:,1] * o.frmsz
+    x2 = rec[:,2] * o.frmsz
+    y2 = rec[:,3] * o.frmsz
+    grid_x, grid_y = np.meshgrid(np.arange(o.frmsz), np.arange(o.frmsz))
+    # resize tensors so that they can be compared
+    x1 = np.expand_dims(np.expand_dims(x1,1),2)
+    x2 = np.expand_dims(np.expand_dims(x2,1),2)
+    y1 = np.expand_dims(np.expand_dims(y1,1),2)
+    y2 = np.expand_dims(np.expand_dims(y2,1),2)
+    grid_x = np.tile(np.expand_dims(grid_x,0), [o.batchsz,1,1])
+    grid_y = np.tile(np.expand_dims(grid_y,0), [o.batchsz,1,1])
+    # mask
+    masks = np.logical_and(
+        np.logical_and(np.less_equal(x1, grid_x), 
+            np.less_equal(grid_x, x2)),
+        np.logical_and(np.less_equal(y1, grid_y), 
+            np.less_equal(grid_y, y2)))
+    # type and dim change so that it can be concated with x (add channel dim)
+    masks = np.expand_dims(masks.astype(np.float32),3)
+    return masks
 
 def run_sanitycheck(batch, dataset, frmsz, stat=None, fulllen=False):
     if not fulllen:
@@ -1285,8 +1329,8 @@ if __name__ == '__main__':
 
     from opts import Opts
     o = Opts()
-    o.batchsz = 20
-    o.ntimesteps = 80
+    o.batchsz = 10
+    o.ntimesteps = 20
 
     o.dataset = 'ILSVRC' # moving_mnist, bouncing_mnist, ILSVRC, OTB-50
     o._set_dataset_params()
@@ -1295,7 +1339,7 @@ if __name__ == '__main__':
     
     test_fl = False
 
-    sanitycheck = True
+    sanitycheck = False
 
     # moving_mnist
     if o.dataset in ['moving_mnist', 'bouncing_mnist']:
