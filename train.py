@@ -89,10 +89,12 @@ def train(m, loader, o):
 
                 global_step = global_step_var.eval()
                 if ib % SUMMARY_PERIOD == 0:
-                    _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
+                    # _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
+                    _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
                     train_writer.add_summary(summary, global_step)
                 else:
-                    _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
+                    # _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
+                    _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
 
                 # **results after every batch 
                 sys.stdout.write(

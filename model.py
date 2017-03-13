@@ -5,6 +5,55 @@ import os
 import numpy as np
 
 
+def make_input_placeholders(o):
+    # placeholders for inputs
+    inputs = tf.placeholder(o.dtype,
+            shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel],
+            name='inputs')
+    inputs_valid = tf.placeholder(tf.bool,
+            shape=[o.batchsz, o.ntimesteps+1],
+            name='inputs_valid')
+    inputs_HW = tf.placeholder(o.dtype,
+            shape=[o.batchsz, 2],
+            name='inputs_HW')
+    labels = tf.placeholder(o.dtype,
+            shape=[o.batchsz, o.ntimesteps+1, o.outdim],
+            name='labels')
+
+    # placeholders for initializations of full-length sequences
+    y_init = tf.placeholder_with_default(
+            labels[:,0],
+            shape=[o.batchsz, o.outdim], name='y_init')
+
+    # placeholders for x0 and y0. This is used for full-length sequences
+    # NOTE: when it's not first segment, you should always feed x0, y0
+    # otherwise it will use GT as default. It will be wrong then.
+    x0 = tf.placeholder_with_default(
+            inputs[:,0],
+            shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
+    y0 = tf.placeholder_with_default(
+            labels[:,0],
+            shape=[o.batchsz, o.outdim], name='y0')
+    # NOTE: when it's not first segment, be careful what is passed to target.
+    # Make sure to pass x0, not the first frame of every segments.
+    target = tf.placeholder(o.dtype,
+            shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
+            name='target')
+
+    return {
+            'inputs':       inputs,
+            'inputs_valid': inputs_valid,
+            'inputs_HW':    inputs_HW,
+            'labels':       labels,
+           #'outputs':      outputs,
+           #'loss':         loss_total,
+            'y_init':       y_init,
+           #'y_last':       y_curr,
+            'x0':           x0,
+            'y0':           y0,
+            'target':       target,
+            }
+
 class RNN_attention_s(object):
     def __init__(self, o, is_train):
         self._is_train = is_train
@@ -41,7 +90,7 @@ class RNN_attention_s(object):
         # RNN
         outputs = self._rnn_pass(labels, o)
  
-        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
+        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o, 'rectangle')
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
@@ -284,7 +333,7 @@ class RNN_attention_st(object):
         # RNN
         outputs = self._rnn_pass(labels, o)
 
-        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
+        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o, 'rectangle')
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
@@ -785,19 +834,29 @@ class RNN_basic(object):
         return h_curr, C_curr
 
     def _load_model(self, o):
-        # placeholders for inputs
-        inputs = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
-                name='inputs')
-        inputs_valid = tf.placeholder(tf.bool, 
-                shape=[o.batchsz, o.ntimesteps+1], 
-                name='inputs_valid')
-        inputs_HW = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, 2], 
-                name='inputs_HW')
-        labels = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
-                name='labels')
+        net = make_input_placeholders(o)
+        inputs       = net['inputs']
+        inputs_valid = net['inputs_valid']
+        inputs_HW    = net['inputs_HW']
+        labels       = net['labels']
+        y_init       = net['y_init']
+        x0           = net['x0']
+        y0           = net['y0']
+        target       = net['target']
+
+        # # placeholders for inputs
+        # inputs = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='inputs')
+        # inputs_valid = tf.placeholder(tf.bool, 
+        #         shape=[o.batchsz, o.ntimesteps+1], 
+        #         name='inputs_valid')
+        # inputs_HW = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, 2], 
+        #         name='inputs_HW')
+        # labels = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
+        #         name='labels')
 
         # placeholders for initializations of full-length sequences
         h_init = tf.placeholder_with_default(
@@ -806,19 +865,24 @@ class RNN_basic(object):
         C_init = tf.placeholder_with_default(
                 tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype), # NOTE: zeor or normal
                 shape=[o.batchsz, o.nunits], name='C_init')
-        y_init = tf.placeholder_with_default(
-                labels[:,0], 
-                shape=[o.batchsz, o.outdim], name='y_init')
+        # y_init = tf.placeholder_with_default(
+        #         labels[:,0], 
+        #         shape=[o.batchsz, o.outdim], name='y_init')
 
-        # placeholders for x0 and y0. This is used for full-length sequences
-        # NOTE: when it's not first segment, you should always feed x0, y0
-        # otherwise it will use GT as default. It will be wrong then.
-        x0 = tf.placeholder_with_default(
-                inputs[:,0], 
-                shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
-        y0 = tf.placeholder_with_default(
-                labels[:,0],
-                shape=[o.batchsz, o.outdim], name='y0')
+        # # placeholders for x0 and y0. This is used for full-length sequences
+        # # NOTE: when it's not first segment, you should always feed x0, y0
+        # # otherwise it will use GT as default. It will be wrong then.
+        # x0 = tf.placeholder_with_default(
+        #         inputs[:,0], 
+        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
+        # y0 = tf.placeholder_with_default(
+        #         labels[:,0],
+        #         shape=[o.batchsz, o.outdim], name='y0')
+        # # NOTE: when it's not first segment, be careful what is passed to target.
+        # # Make sure to pass x0, not the first frame of every segments.
+        # target = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='target')
 
         # RNN unroll
         outputs = []
@@ -852,22 +916,23 @@ class RNN_basic(object):
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
 
-        net = {
-                'inputs': inputs,
-                'inputs_valid': inputs_valid,
-                'inputs_HW': inputs_HW,
-                'labels': labels,
+        # net = {
+        net.update({
+                # 'inputs': inputs,
+                # 'inputs_valid': inputs_valid,
+                # 'inputs_HW': inputs_HW,
+                # 'labels': labels,
                 'outputs': outputs,
                 'loss': loss_total,
                 'h_init': h_init,
                 'C_init': C_init,
-                'y_init': y_init,
+                # 'y_init': y_init,
                 'h_last': h_curr,
                 'C_last': C_curr,
                 'y_last': y_curr,
-                'x0': x0,
-                'y0': y0
-                }
+                # 'x0': x0,
+                # 'y0': y0
+                })
         return net
 
 
@@ -1077,19 +1142,29 @@ class RNN_new(object):
         return output
 
     def _load_model(self, o):
-        # placeholders for inputs
-        inputs = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
-                name='inputs')
-        inputs_valid = tf.placeholder(tf.bool, 
-                shape=[o.batchsz, o.ntimesteps+1], 
-                name='inputs_valid')
-        inputs_HW = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, 2], 
-                name='inputs_HW')
-        labels = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
-                name='labels')
+        net = make_input_placeholders(o)
+        inputs       = net['inputs']
+        inputs_valid = net['inputs_valid']
+        inputs_HW    = net['inputs_HW']
+        labels       = net['labels']
+        y_init       = net['y_init']
+        x0           = net['x0']
+        y0           = net['y0']
+        target       = net['target']
+
+        # # placeholders for inputs
+        # inputs = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='inputs')
+        # inputs_valid = tf.placeholder(tf.bool, 
+        #         shape=[o.batchsz, o.ntimesteps+1], 
+        #         name='inputs_valid')
+        # inputs_HW = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, 2], 
+        #         name='inputs_HW')
+        # labels = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
+        #         name='labels')
 
         # placeholders for initializations of full-length sequences
         # NOTE: currently, h and c have the same dimension as input to ConvLSTM
@@ -1113,11 +1188,11 @@ class RNN_new(object):
         #        labels[:,0],
         #        shape=[o.batchsz, o.outdim], name='y0')
 
-        # NOTE: when it's not first segment, be careful what is passed to target.
-        # Make sure to pass x0, not the first frame of every segments.
-        target = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], 
-                name='target')
+        # # NOTE: when it's not first segment, be careful what is passed to target.
+        # # Make sure to pass x0, not the first frame of every segments.
+        # target = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='target')
 
 
         # RNN unroll
@@ -1155,7 +1230,8 @@ class RNN_new(object):
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
 
-        net = {
+        # net = {
+        net.update({
                 'target': target, 
                 'inputs': inputs,
                 'inputs_valid': inputs_valid,
@@ -1168,7 +1244,7 @@ class RNN_new(object):
                 'h_last': h_curr,
                 'c_last': c_curr,
                 'dbg': dbg
-                }
+                })
         return net
 
 
@@ -1266,34 +1342,49 @@ class NonRecur(object):
         return y
 
     def _load_model(self, o):
-        # placeholders for inputs
-        inputs = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
-                name='inputs')
-        inputs_valid = tf.placeholder(tf.bool, 
-                shape=[o.batchsz, o.ntimesteps+1], 
-                name='inputs_valid')
-        inputs_HW = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, 2], 
-                name='inputs_HW')
-        labels = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
-                name='labels')
+        net = make_input_placeholders(o)
+        inputs       = net['inputs']
+        inputs_valid = net['inputs_valid']
+        inputs_HW    = net['inputs_HW']
+        labels       = net['labels']
+        y_init       = net['y_init']
+        x0           = net['x0']
+        y0           = net['y0']
+        target       = net['target']
 
-        # placeholders for initializations of full-length sequences
-        y_init = tf.placeholder_with_default(
-                labels[:,0], 
-                shape=[o.batchsz, o.outdim], name='y_init')
+        # # placeholders for inputs
+        # inputs = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='inputs')
+        # inputs_valid = tf.placeholder(tf.bool, 
+        #         shape=[o.batchsz, o.ntimesteps+1], 
+        #         name='inputs_valid')
+        # inputs_HW = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, 2], 
+        #         name='inputs_HW')
+        # labels = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
+        #         name='labels')
 
-        # placeholders for x0 and y0. This is used for full-length sequences
-        # NOTE: when it's not first segment, you should always feed x0, y0
-        # otherwise it will use GT as default. It will be wrong then.
-        x0 = tf.placeholder_with_default(
-                inputs[:,0], 
-                shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
-        y0 = tf.placeholder_with_default(
-                labels[:,0],
-                shape=[o.batchsz, o.outdim], name='y0')
+        # # placeholders for initializations of full-length sequences
+        # y_init = tf.placeholder_with_default(
+        #         labels[:,0], 
+        #         shape=[o.batchsz, o.outdim], name='y_init')
+
+        # # placeholders for x0 and y0. This is used for full-length sequences
+        # # NOTE: when it's not first segment, you should always feed x0, y0
+        # # otherwise it will use GT as default. It will be wrong then.
+        # x0 = tf.placeholder_with_default(
+        #         inputs[:,0], 
+        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
+        # y0 = tf.placeholder_with_default(
+        #         labels[:,0],
+        #         shape=[o.batchsz, o.outdim], name='y0')
+        # # NOTE: when it's not first segment, be careful what is passed to target.
+        # # Make sure to pass x0, not the first frame of every segments.
+        # target = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='target')
 
         # RNN unroll
         outputs = []
@@ -1316,11 +1407,12 @@ class NonRecur(object):
 
         outputs = tf.stack(outputs, axis=1) # list to tensor
 
-        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o)
+        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle')
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
 
-        net = {
+        # net = {
+        net.update({
                 'inputs': inputs,
                 'inputs_valid': inputs_valid,
                 'inputs_HW': inputs_HW,
@@ -1331,7 +1423,7 @@ class NonRecur(object):
                 'y_last': y_curr,
                 'x0': x0,
                 'y0': y0,
-                }
+                })
         return net
 
 
