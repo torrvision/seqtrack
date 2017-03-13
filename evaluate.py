@@ -54,6 +54,7 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
 
             fdict = {
                 # m.net['firstseg']: True, # this is no fulllen routine
+                m.net['target']: batch['target'],
                 m.net['inputs']: batch['inputs'],
                 m.net['inputs_valid']: batch['inputs_valid'],
                 m.net['inputs_HW']: batch['inputs_HW'],
