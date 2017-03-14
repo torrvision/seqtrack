@@ -33,7 +33,7 @@ def train(m, loader, o):
     summary_op = tf.summary.merge_all()
 
     def process_batch(batch, optimize=True, writer=None, write_summary=False):
-        names = ['target_raw', 'inputs_raw', 'inputs_valid', 'inputs_HW', 'labels']
+        names = ['target_raw', 'inputs_raw', 'x0_raw', 'y0', 'inputs_valid', 'inputs_HW', 'labels']
         fdict = {m.net[name]: batch[name] for name in names}
         if optimize:
             fdict.update({
@@ -54,7 +54,7 @@ def train(m, loader, o):
                 loss, summary = sess.run([m.net['loss'], summary_op], feed_dict=fdict)
             else:
                 loss = sess.run([m.net['loss']], feed_dict=fdict)
-        duration = time.time() - start
+        dur = time.time() - start
 
         if write_summary:
             writer.add_summary(summary, global_step_var.eval())
@@ -65,7 +65,7 @@ def train(m, loader, o):
         # print '[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
         #     ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, time.time()-t_batch)
         # ib_val += 1
-        return loss, duration
+        return loss, dur
 
 
     '''
@@ -109,7 +109,9 @@ def train(m, loader, o):
             for ib in range(nbatch):
                 global_step = global_step_var.eval()
                 # Take a training step.
+                start = time.time()
                 batch = loader.get_batch(ib, o, dstype='train')
+                load_dur = time.time() - start
                 # t_batch = time.time()
                 # fdict = {
                 #         m.net['target']: batch['target'],
@@ -126,7 +128,7 @@ def train(m, loader, o):
                 # else:
                 #     # _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
                 #     _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
-                loss, duration = process_batch(batch, optimize=True, writer=train_writer,
+                loss, dur = process_batch(batch, optimize=True, writer=train_writer,
                     write_summary=(ib % o.summary_period == 0))
                 # **results after every batch 
                 # sys.stdout.write(
@@ -136,8 +138,8 @@ def train(m, loader, o):
                 #                     ie+1, nepoch, ib+1, nbatch, o.batchsz,
                 #                     loss, time.time()-t_batch))
                 # sys.stdout.flush()
-                print 'ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
-                    ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, duration)
+                print 'ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f} ({7:.2f})'.format(
+                    ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
                 losses['batch'] = np.append(losses['batch'], loss)
                 loss_curr_ep = np.append(loss_curr_ep, loss) 
                 losses['interm'] = np.append(losses['interm'], loss)
@@ -146,10 +148,12 @@ def train(m, loader, o):
                 if ib % o.val_period == 0:
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
+                        start = time.time()
                         batch = loader.get_batch(ib_val, o, dstype='val')
-                        loss, duration = process_batch(batch, optimize=False, writer=val_writer, write_summary=True)
-                        print '[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
-                            ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, duration)
+                        load_dur = time.time() - start
+                        loss, dur = process_batch(batch, optimize=False, writer=val_writer, write_summary=True)
+                        print '[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f} ({7:.2f})'.format(
+                            ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
                         ib_val += 1
 
                 # TODO: Replace iteration with global_step (saved with graph).

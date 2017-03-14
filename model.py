@@ -1,8 +1,11 @@
 import pdb
 import tensorflow as tf
+from tensorflow.contrib import slim
 import os
 
 import numpy as np
+
+import cnnutil
 
 
 def make_input_placeholders(o, stat=None):
@@ -704,8 +707,15 @@ def get_variable_with_initial(initial_, trainable_=True, name_=None, wd=0.0):
     tf.add_to_collection('losses', weight_decay)
     return var
 
-def conv2d(x, w, b, strides_=[1,1,1,1]):
-    return tf.nn.conv2d(x, w, strides=strides_, padding='SAME') + b
+def conv2d(x, w, b, stride=1, padding='SAME'):
+    x = tf.nn.conv2d(x, w, strides=(1, stride, stride, 1), padding=padding)
+    x = tf.nn.bias_add(x, b)
+    return x
+
+def max_pool(x, support=3, stride=2, padding='SAME'):
+    return tf.nn.max_pool(x, ksize=(1, support, support, 1),
+                             strides=(1, stride, stride, 1),
+                             padding=padding)
 
 def activate(input_, activation_='relu'):
     if activation_ == 'relu':
@@ -725,13 +735,7 @@ def get_masks_from_rectangles(rec, o):
     y1 = rec[:,1] * o.frmsz
     x2 = rec[:,2] * o.frmsz
     y2 = rec[:,3] * o.frmsz
-    # Ensure that x2-x1 > 1
-    xc, xs = 0.5*(x1 + x2), x2-x1
-    yc, ys = 0.5*(y1 + y2), y2-y1
-    xs = tf.maximum(1.0, xs)
-    ys = tf.maximum(1.0, ys)
-    x1, x2 = xc-xs/2, xc+xs/2
-    y1, y2 = yc-ys/2, yc+ys/2
+    x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, 1.0)
     grid_x, grid_y = tf.meshgrid(
             tf.range(o.frmsz, dtype=o.dtype),
             tf.range(o.frmsz, dtype=o.dtype))
@@ -751,6 +755,16 @@ def get_masks_from_rectangles(rec, o):
     # type and dim change so that it can be concated with x
     masks = tf.expand_dims(tf.cast(masks, o.dtype),3)
     return masks
+
+def enforce_min_size(x1, y1, x2, y2, min=1.0):
+    # Ensure that x2-x1 > 1
+    xc, xs = 0.5*(x1 + x2), x2-x1
+    yc, ys = 0.5*(y1 + y2), y2-y1
+    xs = tf.maximum(min, xs)
+    ys = tf.maximum(min, ys)
+    x1, x2 = xc-xs/2, xc+xs/2
+    y1, y2 = yc-ys/2, yc+ys/2
+    return x1, y1, x2, y2
 
 
 class RNN_basic(object):
@@ -847,8 +861,7 @@ class RNN_basic(object):
         # convolutions; feed-forward
         for i in range(self.nlayers):
             x = cnnin if i==0 else act
-            conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], 
-                    [1,self.strides[i],self.strides[i],1])
+            conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], stride=self.strides[i])
             act = activate(conv, 'relu')
             if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
                 act = tf.nn.dropout(act, o.keep_ratio_cnn)
@@ -1289,6 +1302,152 @@ class RNN_new(object):
         return net
 
 
+def make_cnn(layers, wd):
+    weights, bias = [], []
+    for i, layer in enumerate(layers):
+        shape_w = [layer['filtsz'], layer['filtsz'], layer['chin'], layer['chout']]
+        shape_b = [layer['chout']]
+        weights.append(get_weight_variable(shape_w, name_='w{}'.format(i), wd=wd))
+        bias.append(get_bias_variable(shape_b, name_='b{}'.format(i), wd=wd))
+
+    def cnn(x, name='cnn'):
+        with tf.name_scope(name) as scope:
+            for i, layer in enumerate(layers):
+                x = conv2d(x, weights[i], bias[i], stride=layer['st'])
+                x = activate(x, 'relu')
+                if layer['pool']:
+                    x = max_pool(x)
+                # # TODO: can add dropout here
+                # if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
+                #     act = tf.nn.dropout(act, o.keep_ratio_cnn)
+            return tf.identity(x, scope)
+
+    return cnn
+
+def make_conv_lstm(num_ch, wd, conv_support=3):
+    # Conv lstm params
+    lstm = {}
+    gates = ['i', 'f' , 'c' , 'o']
+    for gate in gates:
+        lstm['w_x{}'.format(gate)] = get_weight_variable(
+                [conv_support, conv_support, num_ch, num_ch],
+                name_='w_x{}'.format(gate), wd=wd)
+        lstm['w_h{}'.format(gate)] = get_weight_variable(
+                [conv_support, conv_support, num_ch, num_ch],
+                name_='w_h{}'.format(gate), wd=wd)
+        lstm['b_{}'.format(gate)] = get_weight_variable(
+                [num_ch],
+                name_='b_{}'.format(gate), wd=wd)
+
+    def conv_lstm(x, h_prev, c_prev, name='conv_lstm'):
+        ''' ConvLSTM
+        1. h and c have the same dimension as x (padding can be used)
+        2. no peephole connection
+        '''
+        with tf.name_scope(name) as scope:
+            it = activate(
+                conv2d(x, lstm['w_xi'], lstm['b_i']) +
+                conv2d(h_prev, lstm['w_hi'], lstm['b_i']),
+                'sigmoid')
+            ft = activate(
+                conv2d(x, lstm['w_xf'], lstm['b_f']) +
+                conv2d(h_prev, lstm['w_hf'], lstm['b_f']),
+                'sigmoid')
+            ct_tilda = activate(
+                conv2d(x, lstm['w_xc'], lstm['b_c']) +
+                conv2d(h_prev, lstm['w_hc'], lstm['b_c']),
+                'tanh')
+            ct = (ft * c_prev) + (it * ct_tilda)
+            ot = activate(
+                conv2d(x, lstm['w_xo'], lstm['b_o']) +
+                conv2d(h_prev, lstm['w_ho'], lstm['b_o']),
+                'sigmoid')
+            ht = ot * activate(ct, 'tanh')
+            return ht, ct
+
+    return conv_lstm
+
+
+class RNN_conv_asymm(object):
+    def __init__(self, o, stat=None):
+        self.is_train = True if o.mode == 'train' else False
+        # self.params = self._update_params(o)
+        self.net = self._load_model(o, stat=stat)
+
+    def _load_model(self, o, stat=None):
+        net = make_input_placeholders(o, stat)
+        inputs = net['inputs']
+        x0     = net['x0']
+        y0     = net['y0']
+        masks = get_masks_from_rectangles(y0, o)
+        init = tf.concat([x0, masks], axis=3)
+
+        lstm_dim = 64
+        with tf.variable_scope('frame_cnn'):
+            frame_cnn = make_cnn(
+                [{'filtsz': 7, 'st': 2, 'chin': 3, 'chout': 16, 'pool': True},
+                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
+                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
+                wd=o.wd)
+        with tf.variable_scope('init_h_cnn'):
+            init_h_cnn = make_cnn(
+                [{'filtsz': 7, 'st': 2, 'chin': 4, 'chout': 16, 'pool': True},
+                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
+                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
+                wd=o.wd)
+        with tf.variable_scope('init_c_cnn'):
+            init_c_cnn = make_cnn(
+                [{'filtsz': 7, 'st': 2, 'chin': 4, 'chout': 16, 'pool': True},
+                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
+                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
+                wd=o.wd)
+        with tf.variable_scope('conv_lstm'):
+            conv_lstm = make_conv_lstm(num_ch=64, wd=o.wd)
+        with tf.variable_scope('out_cnn'):
+            out_cnn = make_cnn(
+                [{'filtsz': 3, 'st': 1, 'chin': lstm_dim, 'chout': 128, 'pool': True},
+                 {'filtsz': 3, 'st': 1, 'chin': 128, 'chout': 256, 'pool': True}],
+                wd=o.wd)
+        with tf.variable_scope('predict'):
+            predict_weight = get_weight_variable([4*4*256, 4], wd=o.wd)
+            predict_bias = get_bias_variable([4], wd=o.wd)
+
+        outputs = []
+        ht = init_h_cnn(init, name='init_h_cnn')
+        ct = init_c_cnn(init, name='init_c_cnn')
+        # These tensors can be fed manually for longer sequences.
+        h_init = ht
+        c_init = ct
+        for t in range(1, o.ntimesteps+1):
+            xt = inputs[:, t]
+            rt = frame_cnn(xt)
+            ht, ct = conv_lstm(rt, ht, ct)
+            zt = out_cnn(ht)
+            yt = tf.matmul(tf.reshape(zt, [o.batchsz, 4*4*256]), predict_weight) + predict_bias
+            outputs.append(yt)
+        outputs = tf.stack(outputs, axis=1) # list to tensor
+
+        field = cnnutil.find_rf(xt, rt)
+        print 'CNN receptive field:'
+        print '  size:', field.rect.size()
+        print '  center offset:', field.rect.int_center()
+        print '  stride:', field.stride
+
+        loss = get_loss(outputs, net['labels'], net['inputs_valid'], net['inputs_HW'], o, 'rectangle')
+        tf.add_to_collection('losses', loss)
+        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+
+        net.update({
+            'outputs': outputs,
+            'loss':    loss_total,
+            'h_init':  h_init,
+            'c_init':  c_init,
+            'h_last':  ht,
+            'c_last':  yt,
+        })
+        return net
+
+
 class NonRecur(object):
     def __init__(self, o, stat=None):
         self.is_train = True if o.mode == 'train' else False
@@ -1364,8 +1523,7 @@ class NonRecur(object):
         # convolutions; feed-forward
         for i in range(self.nlayers):
             x = cnnin if i==0 else act
-            conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], 
-                    [1,self.strides[i],self.strides[i],1])
+            conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], stride=self.strides[i])
             act = activate(conv, 'relu')
             if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
                 act = tf.nn.dropout(act, o.keep_ratio_cnn)
@@ -1473,6 +1631,8 @@ def load_model(o, stat=None):
         model = RNN_basic(o, stat=stat)
     elif o.model == 'RNN_new':
         model = RNN_new(o, stat=stat)
+    elif o.model == 'RNN_conv_asymm':
+        model = RNN_conv_asymm(o, stat=stat)
     elif o.model == 'CNN':
         model = NonRecur(o, stat=stat)
     else:
