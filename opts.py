@@ -94,6 +94,8 @@ class Opts(object):
         # 'logs' directory reserved for saving system level logs (being used in
         # a shell script)
         self.path_summary       = 'summary'
+        self.summary_period     = 10
+        self.val_period         = 10
 
         #----------------------------------------------------------------------
         # custom libraries

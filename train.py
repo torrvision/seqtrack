@@ -12,7 +12,6 @@ import helpers
 
 
 def train(m, loader, o):
-
     train_opts = _init_train_settings(m, loader, o)
     nepoch          = train_opts['nepoch']
     nbatch          = train_opts['nbatch']
@@ -26,15 +25,53 @@ def train(m, loader, o):
     global_step_var = train_opts['global_step']
     lr              = train_opts['lr']
 
-    SUMMARY_PERIOD = 10
-    VAL_PERIOD = 10
-
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver()
 
     tf.summary.scalar('loss', m.net['loss'])
     # tf.summary.histogram('output', m.net['outputs'])
     summary_op = tf.summary.merge_all()
+
+    def process_batch(batch, optimize=True, writer=None, write_summary=False):
+        fdict = {
+            m.net['target']:       batch['target'],
+            m.net['inputs']:       batch['inputs'],
+            m.net['inputs_valid']: batch['inputs_valid'],
+            m.net['inputs_HW']:    batch['inputs_HW'],
+            m.net['labels']:       batch['labels'],
+        }
+        if optimize:
+            fdict.update({
+                lr: lr_epoch,
+            })
+
+        start = time.time()
+        summary = None
+        if optimize:
+            if write_summary:
+                # _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
+                _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
+            else:
+                # _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
+                _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
+        else:
+            if write_summary:
+                loss, summary = sess.run([m.net['loss'], summary_op], feed_dict=fdict)
+            else:
+                loss = sess.run([m.net['loss']], feed_dict=fdict)
+        duration = time.time() - start
+
+        if write_summary:
+            writer.add_summary(summary, global_step_var.eval())
+
+        # prefix = '' if mode == 'train' else '[{}] '.format(mode)
+        # print prefix + 'ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
+        #     ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, time.time()-t_batch, prefix)
+        # print '[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
+        #     ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, time.time()-t_batch)
+        # ib_val += 1
+        return loss, duration
+
 
     '''
     config = tf.ConfigProto()
@@ -75,38 +112,50 @@ def train(m, loader, o):
             loss_curr_ep = np.array([], dtype=np.float32) # for avg epoch loss
             ib_val = 0
             for ib in range(nbatch):
-                t_batch = time.time()
-                batch = loader.get_batch(ib, o, dstype='train')
-
-                fdict = {
-                        m.net['target']: batch['target'],
-                        m.net['inputs']: batch['inputs'],
-                        m.net['inputs_valid']: batch['inputs_valid'],
-                        m.net['inputs_HW']: batch['inputs_HW'],
-                        m.net['labels']: batch['labels'],
-                        lr: lr_epoch
-                        }
-
                 global_step = global_step_var.eval()
-                if ib % SUMMARY_PERIOD == 0:
-                    # _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
-                    _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
-                    train_writer.add_summary(summary, global_step)
-                else:
-                    # _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
-                    _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
-
+                # Take a training step.
+                batch = loader.get_batch(ib, o, dstype='train')
+                # t_batch = time.time()
+                # fdict = {
+                #         m.net['target']: batch['target'],
+                #         m.net['inputs']: batch['inputs'],
+                #         m.net['inputs_valid']: batch['inputs_valid'],
+                #         m.net['inputs_HW']: batch['inputs_HW'],
+                #         m.net['labels']: batch['labels'],
+                #         lr: lr_epoch
+                #         }
+                # if ib % o.summary_period == 0:
+                #     # _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
+                #     _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
+                #     train_writer.add_summary(summary, global_step)
+                # else:
+                #     # _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
+                #     _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
+                loss, duration = process_batch(batch, optimize=True, writer=train_writer,
+                    write_summary=(ib % o.summary_period == 0))
                 # **results after every batch 
-                sys.stdout.write(
-                        '\nep {0:d}/{1:d}, batch {2:d}/{3:d} '
-                        '(BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'\
-                                .format(
-                                    ie+1, nepoch, ib+1, nbatch, o.batchsz,
-                                    loss, time.time()-t_batch))
-                sys.stdout.flush()
+                # sys.stdout.write(
+                #         '\nep {0:d}/{1:d}, batch {2:d}/{3:d} '
+                #         '(BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'\
+                #                 .format(
+                #                     ie+1, nepoch, ib+1, nbatch, o.batchsz,
+                #                     loss, time.time()-t_batch))
+                # sys.stdout.flush()
+                print 'ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
+                    ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, duration)
                 losses['batch'] = np.append(losses['batch'], loss)
                 loss_curr_ep = np.append(loss_curr_ep, loss) 
                 losses['interm'] = np.append(losses['interm'], loss)
+
+                # Evaluate validation error.
+                if ib % o.val_period == 0:
+                    # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
+                    if ib * nbatch_val >= ib_val * nbatch:
+                        batch = loader.get_batch(ib_val, o, dstype='val')
+                        loss, duration = process_batch(batch, optimize=False, writer=val_writer, write_summary=True)
+                        print '[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
+                            ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, duration)
+                        ib_val += 1
 
                 # TODO: Replace iteration with global_step (saved with graph).
                 iteration += 1
@@ -173,32 +222,6 @@ def train(m, loader, o):
                         resume['losses'] = losses
                         resume['model'] = saved_model
                         np.save(o.path_save + '/resume.npy', resume)
-
-                # Evaluate validation error.
-                if ib % VAL_PERIOD == 0:
-                    # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
-                    if ib * nbatch_val >= ib_val * nbatch:
-                        t_batch = time.time()
-                        batch = loader.get_batch(ib_val, o, dstype='val')
-                        fdict = {
-                                m.net['target']: batch['target'],
-                                m.net['inputs']: batch['inputs'],
-                                m.net['inputs_valid']: batch['inputs_valid'],
-                                m.net['inputs_HW']: batch['inputs_HW'],
-                                m.net['labels']: batch['labels'],
-                                }
-                        loss, summary = sess.run([m.net['loss'], summary_op], feed_dict=fdict)
-                        val_writer.add_summary(summary, global_step)
-                        ib_val += 1
-
-                        # **results after every batch 
-                        sys.stdout.write(
-                                '\nVAL: ep {0:d}/{1:d}, batch {2:d}/{3:d} '
-                                '(BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'\
-                                        .format(
-                                            ie+1, nepoch, ib+1, nbatch, o.batchsz,
-                                            loss, time.time()-t_batch))
-                        sys.stdout.flush()
 
 
             print ' '
