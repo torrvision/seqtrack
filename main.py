@@ -26,9 +26,14 @@ def parse_arguments():
     parser.add_argument(
             '--dataset', help='specify the name of dataset',
             type=str, default='')
-    #parser.add_argument(
-            #'--path_data_home', help='location of datasets',
-            #type=str, default='')
+    parser.add_argument(
+            '--frmsz', help='size of a square image', type=int, default=100)
+    parser.add_argument(
+            '--path_data_home', help='location of datasets',
+            type=str, default='')
+    parser.add_argument('--path_save_home', help='location to save models')
+    parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
+    parser.set_defaults(useresizedimg=True)
     parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
             type=int, default=0)
@@ -37,7 +42,7 @@ def parse_arguments():
             '--nosave', help='no need to save results?', 
             action='store_true') 
     parser.add_argument(
-            '--restore', help='to restore a pretrained', 
+            '--restore', help='to load a pretrained model (for test)',
             action='store_true')
     parser.add_argument(
             '--restore_model', help='model to restore', 
@@ -46,7 +51,7 @@ def parse_arguments():
             '--resume', help='to resume training',
             action='store_true')
     parser.add_argument(
-            '--resume_data', help='data to resume',
+            '--resume_data', help='data to resume i.e. save/{time}/resume.npy',
             type=str)
 
     parser.add_argument(
@@ -112,7 +117,7 @@ def parse_arguments():
 
     # print help and args
     if args.verbose: print args
-    return parser.parse_args()
+    return args
 
 if __name__ == "__main__":
     # parameter settings
@@ -122,8 +127,7 @@ if __name__ == "__main__":
     o.initialize()
 
     loader = data.load_data(o)
-
-    m = model.load_model(o)
+    m = model.load_model(o, stat=loader.stat['train'])
 
     assert(o.mode == 'train')
     train(m, loader, o)

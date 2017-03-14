@@ -1,9 +1,90 @@
 import pdb
 import tensorflow as tf
+from tensorflow.contrib import slim
 import os
 
 import numpy as np
 
+import cnnutil
+
+
+def make_input_placeholders(o, stat=None):
+    '''
+    Feed images to 'inputs_raw', 'x0_raw', etc.
+    Compute functions of 'inputs', 'x0', etc.
+    '''
+
+    # placeholders for inputs
+    inputs_raw = tf.placeholder(o.dtype,
+            shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel],
+            name='inputs_raw')
+    inputs_valid = tf.placeholder(tf.bool,
+            shape=[o.batchsz, o.ntimesteps+1],
+            name='inputs_valid')
+    inputs_HW = tf.placeholder(o.dtype,
+            shape=[o.batchsz, 2],
+            name='inputs_HW')
+    labels = tf.placeholder(o.dtype,
+            shape=[o.batchsz, o.ntimesteps+1, o.outdim],
+            name='labels')
+
+    # placeholders for initializations of full-length sequences
+    # y_init = tf.placeholder_with_default(
+    #         labels[:,0],
+    #         shape=[o.batchsz, o.outdim], name='y_init')
+    y_init = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y_init')
+
+    # placeholders for x0 and y0. This is used for full-length sequences
+    # NOTE: when it's not first segment, you should always feed x0, y0
+    # otherwise it will use GT as default. It will be wrong then.
+    # x0_raw = tf.placeholder_with_default(
+    #         inputs_raw[:,0],
+    #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0_raw')
+    # y0 = tf.placeholder_with_default(o.dtype
+    #         labels[:,0],
+    #         shape=[o.batchsz, o.outdim], name='y0')
+    x0_raw = tf.placeholder(o.dtype,
+            shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
+            name='x0_raw')
+    y0 = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y0')
+    # NOTE: when it's not first segment, be careful what is passed to target.
+    # Make sure to pass x0, not the first frame of every segments.
+    target_raw = tf.placeholder(o.dtype,
+            shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
+            name='target_raw')
+
+    assert(stat is not None)
+    with tf.name_scope('image_stats') as scope:
+        if stat:
+            mean = tf.constant(stat['mean'], o.dtype, name='mean')
+            std  = tf.constant(stat['std'],  o.dtype, name='std')
+        else:
+            mean = tf.constant(0.0, o.dtype, name='mean')
+            std  = tf.constant(1.0, o.dtype, name='std')
+    inputs = whiten(inputs_raw, mean, std, name='inputs')
+    x0     = whiten(x0_raw,     mean, std, name='x0')
+    target = whiten(target_raw, mean, std, name='target')
+
+    return {
+            'inputs_raw':   inputs_raw,
+            'inputs':       inputs,
+            'inputs_valid': inputs_valid,
+            'inputs_HW':    inputs_HW,
+            'labels':       labels,
+           #'outputs':      outputs,
+           #'loss':         loss_total,
+            'y_init':       y_init,
+           #'y_last':       y_curr,
+            'x0_raw':       x0_raw,
+            'x0':           x0,
+            'y0':           y0,
+            'target_raw':   target_raw,
+            'target':       target,
+            }
+
+def whiten(x, mean, std, name='whiten'):
+    with tf.name_scope(name) as scope:
+        return tf.divide(x - mean, std, name=scope)
 
 class RNN_attention_s(object):
     def __init__(self, o, is_train):
@@ -41,7 +122,7 @@ class RNN_attention_s(object):
         # RNN
         outputs = self._rnn_pass(labels, o)
  
-        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
+        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o, 'rectangle')
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
@@ -284,7 +365,7 @@ class RNN_attention_st(object):
         # RNN
         outputs = self._rnn_pass(labels, o)
 
-        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o)
+        loss = get_loss(outputs, labels, inputs_length, inputs_HW, o, 'rectangle')
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
 
@@ -567,9 +648,14 @@ def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype):
         if 'ce' in o.losses: 
             labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
             outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
-            loss_ce = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
-                    labels=labels_flat, logits=outputs_flat))
-            loss.append(loss_ce)
+            assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
+            with tf.control_dependencies([assert_finite(outputs_valid)]):
+                outputs_valid = tf.identity(outputs_valid)
+            loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=labels_flat, logits=outputs_flat)
+            # Wrap with assertion that loss is finite.
+            with tf.control_dependencies([assert_finite(loss_ce)]):
+                loss_ce = tf.identity(loss_ce)
+            loss.append(tf.reduce_mean(loss_ce))
         
         # loss2: tf's l2 (without sqrt)
         if 'l2' in o.losses:
@@ -621,8 +707,15 @@ def get_variable_with_initial(initial_, trainable_=True, name_=None, wd=0.0):
     tf.add_to_collection('losses', weight_decay)
     return var
 
-def conv2d(x, w, b, strides_=[1,1,1,1]):
-    return tf.nn.conv2d(x, w, strides=strides_, padding='SAME') + b
+def conv2d(x, w, b, stride=1, padding='SAME'):
+    x = tf.nn.conv2d(x, w, strides=(1, stride, stride, 1), padding=padding)
+    x = tf.nn.bias_add(x, b)
+    return x
+
+def max_pool(x, support=3, stride=2, padding='SAME'):
+    return tf.nn.max_pool(x, ksize=(1, support, support, 1),
+                             strides=(1, stride, stride, 1),
+                             padding=padding)
 
 def activate(input_, activation_='relu'):
     if activation_ == 'relu':
@@ -642,6 +735,7 @@ def get_masks_from_rectangles(rec, o):
     y1 = rec[:,1] * o.frmsz
     x2 = rec[:,2] * o.frmsz
     y2 = rec[:,3] * o.frmsz
+    x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, 1.0)
     grid_x, grid_y = tf.meshgrid(
             tf.range(o.frmsz, dtype=o.dtype),
             tf.range(o.frmsz, dtype=o.dtype))
@@ -662,14 +756,24 @@ def get_masks_from_rectangles(rec, o):
     masks = tf.expand_dims(tf.cast(masks, o.dtype),3)
     return masks
 
+def enforce_min_size(x1, y1, x2, y2, min=1.0):
+    # Ensure that x2-x1 > 1
+    xc, xs = 0.5*(x1 + x2), x2-x1
+    yc, ys = 0.5*(y1 + y2), y2-y1
+    xs = tf.maximum(min, xs)
+    ys = tf.maximum(min, ys)
+    x1, x2 = xc-xs/2, xc+xs/2
+    y1, y2 = yc-ys/2, yc+ys/2
+    return x1, y1, x2, y2
+
 
 class RNN_basic(object):
-    def __init__(self, o):
+    def __init__(self, o, stat=None):
         self.is_train = True if o.mode == 'train' else False
 
         self.params = {}
         self._update_params_cnn(o)
-        self.net = self._load_model(o) 
+        self.net = self._load_model(o, stat=stat) 
 
     def _update_params_cnn(self, o):
         # non-learnable params; dataset dependent
@@ -757,8 +861,7 @@ class RNN_basic(object):
         # convolutions; feed-forward
         for i in range(self.nlayers):
             x = cnnin if i==0 else act
-            conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], 
-                    [1,self.strides[i],self.strides[i],1])
+            conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], stride=self.strides[i])
             act = activate(conv, 'relu')
             if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
                 act = tf.nn.dropout(act, o.keep_ratio_cnn)
@@ -784,20 +887,30 @@ class RNN_basic(object):
         h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
         return h_curr, C_curr
 
-    def _load_model(self, o):
-        # placeholders for inputs
-        inputs = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
-                name='inputs')
-        inputs_valid = tf.placeholder(tf.bool, 
-                shape=[o.batchsz, o.ntimesteps+1], 
-                name='inputs_valid')
-        inputs_HW = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, 2], 
-                name='inputs_HW')
-        labels = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
-                name='labels')
+    def _load_model(self, o, stat=None):
+        net = make_input_placeholders(o, stat)
+        inputs       = net['inputs']
+        inputs_valid = net['inputs_valid']
+        inputs_HW    = net['inputs_HW']
+        labels       = net['labels']
+        y_init       = net['y_init']
+        x0           = net['x0']
+        y0           = net['y0']
+        target       = net['target']
+
+        # # placeholders for inputs
+        # inputs = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='inputs')
+        # inputs_valid = tf.placeholder(tf.bool, 
+        #         shape=[o.batchsz, o.ntimesteps+1], 
+        #         name='inputs_valid')
+        # inputs_HW = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, 2], 
+        #         name='inputs_HW')
+        # labels = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
+        #         name='labels')
 
         # placeholders for initializations of full-length sequences
         h_init = tf.placeholder_with_default(
@@ -806,19 +919,24 @@ class RNN_basic(object):
         C_init = tf.placeholder_with_default(
                 tf.truncated_normal([o.batchsz, o.nunits], dtype=o.dtype), # NOTE: zeor or normal
                 shape=[o.batchsz, o.nunits], name='C_init')
-        y_init = tf.placeholder_with_default(
-                labels[:,0], 
-                shape=[o.batchsz, o.outdim], name='y_init')
+        # y_init = tf.placeholder_with_default(
+        #         labels[:,0], 
+        #         shape=[o.batchsz, o.outdim], name='y_init')
 
-        # placeholders for x0 and y0. This is used for full-length sequences
-        # NOTE: when it's not first segment, you should always feed x0, y0
-        # otherwise it will use GT as default. It will be wrong then.
-        x0 = tf.placeholder_with_default(
-                inputs[:,0], 
-                shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
-        y0 = tf.placeholder_with_default(
-                labels[:,0],
-                shape=[o.batchsz, o.outdim], name='y0')
+        # # placeholders for x0 and y0. This is used for full-length sequences
+        # # NOTE: when it's not first segment, you should always feed x0, y0
+        # # otherwise it will use GT as default. It will be wrong then.
+        # x0 = tf.placeholder_with_default(
+        #         inputs[:,0], 
+        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
+        # y0 = tf.placeholder_with_default(
+        #         labels[:,0],
+        #         shape=[o.batchsz, o.outdim], name='y0')
+        # # NOTE: when it's not first segment, be careful what is passed to target.
+        # # Make sure to pass x0, not the first frame of every segments.
+        # target = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='target')
 
         # RNN unroll
         outputs = []
@@ -852,31 +970,32 @@ class RNN_basic(object):
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
 
-        net = {
-                'inputs': inputs,
-                'inputs_valid': inputs_valid,
-                'inputs_HW': inputs_HW,
-                'labels': labels,
+        # net = {
+        net.update({
+                # 'inputs': inputs,
+                # 'inputs_valid': inputs_valid,
+                # 'inputs_HW': inputs_HW,
+                # 'labels': labels,
                 'outputs': outputs,
                 'loss': loss_total,
                 'h_init': h_init,
                 'C_init': C_init,
-                'y_init': y_init,
+                # 'y_init': y_init,
                 'h_last': h_curr,
                 'C_last': C_curr,
                 'y_last': y_curr,
-                'x0': x0,
-                'y0': y0
-                }
+                # 'x0': x0,
+                # 'y0': y0
+                })
         return net
 
 
 class RNN_new(object):
-    def __init__(self, o):
+    def __init__(self, o, stat=None):
         self.is_train = True if o.mode == 'train' else False
 
         self.params = self._update_params(o)
-        self.net = self._load_model(o) 
+        self.net = self._load_model(o, stat=stat) 
 
     def _update_params(self, o):
         # cnn params (depends kernel size and strides at each layer)
@@ -1076,20 +1195,30 @@ class RNN_new(object):
         output = conv2d(h, self.params['out']['w'], self.params['out']['b'])
         return output
 
-    def _load_model(self, o):
-        # placeholders for inputs
-        inputs = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
-                name='inputs')
-        inputs_valid = tf.placeholder(tf.bool, 
-                shape=[o.batchsz, o.ntimesteps+1], 
-                name='inputs_valid')
-        inputs_HW = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, 2], 
-                name='inputs_HW')
-        labels = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
-                name='labels')
+    def _load_model(self, o, stat=None):
+        net = make_input_placeholders(o, stat)
+        inputs       = net['inputs']
+        inputs_valid = net['inputs_valid']
+        inputs_HW    = net['inputs_HW']
+        labels       = net['labels']
+        y_init       = net['y_init']
+        x0           = net['x0']
+        y0           = net['y0']
+        target       = net['target']
+
+        # # placeholders for inputs
+        # inputs = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='inputs')
+        # inputs_valid = tf.placeholder(tf.bool, 
+        #         shape=[o.batchsz, o.ntimesteps+1], 
+        #         name='inputs_valid')
+        # inputs_HW = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, 2], 
+        #         name='inputs_HW')
+        # labels = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
+        #         name='labels')
 
         # placeholders for initializations of full-length sequences
         # NOTE: currently, h and c have the same dimension as input to ConvLSTM
@@ -1113,11 +1242,11 @@ class RNN_new(object):
         #        labels[:,0],
         #        shape=[o.batchsz, o.outdim], name='y0')
 
-        # NOTE: when it's not first segment, be careful what is passed to target.
-        # Make sure to pass x0, not the first frame of every segments.
-        target = tf.placeholder(o.dtype, 
-                shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], 
-                name='target')
+        # # NOTE: when it's not first segment, be careful what is passed to target.
+        # # Make sure to pass x0, not the first frame of every segments.
+        # target = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='target')
 
 
         # RNN unroll
@@ -1155,12 +1284,13 @@ class RNN_new(object):
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
 
-        net = {
-                'target': target, 
-                'inputs': inputs,
-                'inputs_valid': inputs_valid,
-                'inputs_HW': inputs_HW,
-                'labels': labels,
+        # net = {
+        net.update({
+                # 'target': target, 
+                # 'inputs': inputs,
+                # 'inputs_valid': inputs_valid,
+                # 'inputs_HW': inputs_HW,
+                # 'labels': labels,
                 'outputs': outputs,
                 'loss': loss_total,
                 'h_init': h_init,
@@ -1168,15 +1298,343 @@ class RNN_new(object):
                 'h_last': h_curr,
                 'c_last': c_curr,
                 'dbg': dbg
-                }
+                })
         return net
 
 
-def load_model(o):
+def make_cnn(layers, wd):
+    weights, bias = [], []
+    for i, layer in enumerate(layers):
+        shape_w = [layer['filtsz'], layer['filtsz'], layer['chin'], layer['chout']]
+        shape_b = [layer['chout']]
+        weights.append(get_weight_variable(shape_w, name_='w{}'.format(i), wd=wd))
+        bias.append(get_bias_variable(shape_b, name_='b{}'.format(i), wd=wd))
+
+    def cnn(x, name='cnn'):
+        with tf.name_scope(name) as scope:
+            for i, layer in enumerate(layers):
+                x = conv2d(x, weights[i], bias[i], stride=layer['st'])
+                x = activate(x, 'relu')
+                if layer['pool']:
+                    x = max_pool(x)
+                # # TODO: can add dropout here
+                # if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
+                #     act = tf.nn.dropout(act, o.keep_ratio_cnn)
+            return tf.identity(x, scope)
+
+    return cnn
+
+def make_conv_lstm(num_ch, wd, conv_support=3):
+    # Conv lstm params
+    lstm = {}
+    gates = ['i', 'f' , 'c' , 'o']
+    for gate in gates:
+        lstm['w_x{}'.format(gate)] = get_weight_variable(
+                [conv_support, conv_support, num_ch, num_ch],
+                name_='w_x{}'.format(gate), wd=wd)
+        lstm['w_h{}'.format(gate)] = get_weight_variable(
+                [conv_support, conv_support, num_ch, num_ch],
+                name_='w_h{}'.format(gate), wd=wd)
+        lstm['b_{}'.format(gate)] = get_weight_variable(
+                [num_ch],
+                name_='b_{}'.format(gate), wd=wd)
+
+    def conv_lstm(x, h_prev, c_prev, name='conv_lstm'):
+        ''' ConvLSTM
+        1. h and c have the same dimension as x (padding can be used)
+        2. no peephole connection
+        '''
+        with tf.name_scope(name) as scope:
+            it = activate(
+                conv2d(x, lstm['w_xi'], lstm['b_i']) +
+                conv2d(h_prev, lstm['w_hi'], lstm['b_i']),
+                'sigmoid')
+            ft = activate(
+                conv2d(x, lstm['w_xf'], lstm['b_f']) +
+                conv2d(h_prev, lstm['w_hf'], lstm['b_f']),
+                'sigmoid')
+            ct_tilda = activate(
+                conv2d(x, lstm['w_xc'], lstm['b_c']) +
+                conv2d(h_prev, lstm['w_hc'], lstm['b_c']),
+                'tanh')
+            ct = (ft * c_prev) + (it * ct_tilda)
+            ot = activate(
+                conv2d(x, lstm['w_xo'], lstm['b_o']) +
+                conv2d(h_prev, lstm['w_ho'], lstm['b_o']),
+                'sigmoid')
+            ht = ot * activate(ct, 'tanh')
+            return ht, ct
+
+    return conv_lstm
+
+
+class RNN_conv_asymm(object):
+    def __init__(self, o, stat=None):
+        self.is_train = True if o.mode == 'train' else False
+        # self.params = self._update_params(o)
+        self.net = self._load_model(o, stat=stat)
+
+    def _load_model(self, o, stat=None):
+        net = make_input_placeholders(o, stat)
+        inputs = net['inputs']
+        x0     = net['x0']
+        y0     = net['y0']
+        masks = get_masks_from_rectangles(y0, o)
+        init = tf.concat([x0, masks], axis=3)
+
+        lstm_dim = 64
+        with tf.variable_scope('frame_cnn'):
+            frame_cnn = make_cnn(
+                [{'filtsz': 7, 'st': 2, 'chin': 3, 'chout': 16, 'pool': True},
+                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
+                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
+                wd=o.wd)
+        with tf.variable_scope('init_h_cnn'):
+            init_h_cnn = make_cnn(
+                [{'filtsz': 7, 'st': 2, 'chin': 4, 'chout': 16, 'pool': True},
+                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
+                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
+                wd=o.wd)
+        with tf.variable_scope('init_c_cnn'):
+            init_c_cnn = make_cnn(
+                [{'filtsz': 7, 'st': 2, 'chin': 4, 'chout': 16, 'pool': True},
+                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
+                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
+                wd=o.wd)
+        with tf.variable_scope('conv_lstm'):
+            conv_lstm = make_conv_lstm(num_ch=64, wd=o.wd)
+        with tf.variable_scope('out_cnn'):
+            out_cnn = make_cnn(
+                [{'filtsz': 3, 'st': 1, 'chin': lstm_dim, 'chout': 128, 'pool': True},
+                 {'filtsz': 3, 'st': 1, 'chin': 128, 'chout': 256, 'pool': True}],
+                wd=o.wd)
+        with tf.variable_scope('predict'):
+            predict_weight = get_weight_variable([4*4*256, 4], wd=o.wd)
+            predict_bias = get_bias_variable([4], wd=o.wd)
+
+        outputs = []
+        ht = init_h_cnn(init, name='init_h_cnn')
+        ct = init_c_cnn(init, name='init_c_cnn')
+        # These tensors can be fed manually for longer sequences.
+        h_init = ht
+        c_init = ct
+        for t in range(1, o.ntimesteps+1):
+            xt = inputs[:, t]
+            rt = frame_cnn(xt)
+            ht, ct = conv_lstm(rt, ht, ct)
+            zt = out_cnn(ht)
+            yt = tf.matmul(tf.reshape(zt, [o.batchsz, 4*4*256]), predict_weight) + predict_bias
+            outputs.append(yt)
+        outputs = tf.stack(outputs, axis=1) # list to tensor
+
+        field = cnnutil.find_rf(xt, rt)
+        print 'CNN receptive field:'
+        print '  size:', field.rect.size()
+        print '  center offset:', field.rect.int_center()
+        print '  stride:', field.stride
+
+        loss = get_loss(outputs, net['labels'], net['inputs_valid'], net['inputs_HW'], o, 'rectangle')
+        tf.add_to_collection('losses', loss)
+        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+
+        net.update({
+            'outputs': outputs,
+            'loss':    loss_total,
+            'h_init':  h_init,
+            'c_init':  c_init,
+            'h_last':  ht,
+            'c_last':  yt,
+        })
+        return net
+
+
+class NonRecur(object):
+    def __init__(self, o, stat=None):
+        self.is_train = True if o.mode == 'train' else False
+        self.params = {}
+        self._update_params_cnn(o)
+        self.net = self._load_model(o, stat=stat) 
+
+    def _update_params_cnn(self, o):
+        # non-learnable params; dataset dependent
+        if o.dataset in ['moving_mnist', 'bouncing_mnist']: # easy datasets
+            self.nlayers = 2
+            self.nchannels = [16, 16]
+            self.filtsz = [3, 3]
+            self.strides = [3, 3]
+        else: # ILSVRC or other data set of natural images 
+            # TODO: potentially a lot of room for improvement here
+            self.nlayers = 3
+            self.nchannels = [16, 32, 64]
+            self.filtsz = [7, 5, 3]
+            self.strides = [3, 2, 1]
+        assert(self.nlayers == len(self.nchannels))
+        assert(self.nlayers == len(self.filtsz))
+        assert(self.nlayers == len(self.strides))
+
+        # learnable parameters; CNN params shared across all time steps
+        w_conv = []
+        b_conv = []
+        # Previous image and current image.
+        num_in = o.ninchannel*2
+        if o.yprev_mode == 'concat_channel':
+            num_in += 1
+        if o.pass_yinit:
+            # extra input image + mask
+            num_in += o.ninchannel + 1
+        for i in range(self.nlayers):
+            with tf.name_scope('layer_{}'.format(i)):
+                # two input images + 1 mask channel
+                shape_w = [self.filtsz[i], self.filtsz[i], 
+                        num_in if i==0 else self.nchannels[i-1], 
+                        self.nchannels[i]]
+                shape_b = [self.nchannels[i]]
+                w_conv.append(get_weight_variable(shape_w,name_='w',wd=o.wd))
+                b_conv.append(get_bias_variable(shape_b,name_='b',wd=o.wd))
+        self.params['w_conv'] = w_conv
+        self.params['b_conv'] = b_conv
+
+    def _update_params_fc(self, x, o):
+        # TODO: Assert that in_dim is known (static).
+        in_dim = x.shape[-1]
+        # TODO: Make this a parameter.
+        m = 256
+        # TODO: Variable number of layers?
+        with tf.variable_scope('fc', reuse=False):
+            w1 = tf.get_variable('w1', shape=(in_dim, m), dtype=tf.float32, initializer=None)
+            b1 = tf.get_variable('b1', shape=(m,), initializer=tf.zeros_initializer(dtype=tf.float32))
+            w2 = tf.get_variable('w2', shape=(m, o.outdim), dtype=tf.float32, initializer=None)
+            b2 = tf.get_variable('b2', shape=(o.outdim,), initializer=tf.zeros_initializer(dtype=tf.float32))
+
+    def _pass_cnn(self, x_curr, x_prev, y_prev, o, x0=None, y0=None):
+        masks_yprev = get_masks_from_rectangles(y_prev, o)
+        masks_yinit = get_masks_from_rectangles(y0, o)
+        if not o.pass_yinit:
+            if o.yprev_mode == 'concat_channel':
+                cnnin = tf.concat((x_prev, x_curr, masks), 3)
+            else:
+                cnnin = tf.concat((x_prev, x_curr), 3)
+        else:
+            if o.yprev_mode == 'concat_channel':
+                cnnin = tf.concat((x0, masks_yinit, x_prev, x_curr, masks_yprev), 3)
+            else:
+                cnnin = tf.concat((x0, masks_yinit, x_prev, x_curr), 3)
+
+        # convolutions; feed-forward
+        for i in range(self.nlayers):
+            x = cnnin if i==0 else act
+            conv = conv2d(x, self.params['w_conv'][i], self.params['b_conv'][i], stride=self.strides[i])
+            act = activate(conv, 'relu')
+            if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
+                act = tf.nn.dropout(act, o.keep_ratio_cnn)
+        return act
+
+    def _pass_fc(self, x, o):
+        with tf.variable_scope('fc', reuse=True):
+            w1 = tf.get_variable('w1')
+            b1 = tf.get_variable('b1')
+            w2 = tf.get_variable('w2')
+            b2 = tf.get_variable('b2')
+
+        h1 = tf.nn.relu(tf.matmul(x, w1) + b1)
+        y = tf.matmul(h1, w2) + b2
+        return y
+
+    def _load_model(self, o, stat=None):
+        net = make_input_placeholders(o, stat)
+        inputs       = net['inputs']
+        inputs_valid = net['inputs_valid']
+        inputs_HW    = net['inputs_HW']
+        labels       = net['labels']
+        y_init       = net['y_init']
+        x0           = net['x0']
+        y0           = net['y0']
+        target       = net['target']
+
+        # # placeholders for inputs
+        # inputs = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='inputs')
+        # inputs_valid = tf.placeholder(tf.bool, 
+        #         shape=[o.batchsz, o.ntimesteps+1], 
+        #         name='inputs_valid')
+        # inputs_HW = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, 2], 
+        #         name='inputs_HW')
+        # labels = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
+        #         name='labels')
+
+        # # placeholders for initializations of full-length sequences
+        # y_init = tf.placeholder_with_default(
+        #         labels[:,0], 
+        #         shape=[o.batchsz, o.outdim], name='y_init')
+
+        # # placeholders for x0 and y0. This is used for full-length sequences
+        # # NOTE: when it's not first segment, you should always feed x0, y0
+        # # otherwise it will use GT as default. It will be wrong then.
+        # x0 = tf.placeholder_with_default(
+        #         inputs[:,0], 
+        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
+        # y0 = tf.placeholder_with_default(
+        #         labels[:,0],
+        #         shape=[o.batchsz, o.outdim], name='y0')
+        # # NOTE: when it's not first segment, be careful what is passed to target.
+        # # Make sure to pass x0, not the first frame of every segments.
+        # target = tf.placeholder(o.dtype, 
+        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], 
+        #         name='target')
+
+        # RNN unroll
+        outputs = []
+        fc_init = False
+        for t in range(1, o.ntimesteps+1):
+            if t==1:
+                y_prev = y_init
+            else:
+                y_prev = y_curr
+            x_prev = inputs[:,t-1]
+            x_curr = inputs[:,t]
+
+            feat = self._pass_cnn(x_curr, x_prev, y_prev, o, x0, y0)
+            feat = tf.reshape(feat, [o.batchsz, -1])
+            if not fc_init:
+                self._update_params_fc(feat, o)
+                fc_init = True
+            y_curr = self._pass_fc(feat, o)
+            outputs.append(y_curr)
+
+        outputs = tf.stack(outputs, axis=1) # list to tensor
+
+        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle')
+        tf.add_to_collection('losses', loss)
+        loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
+
+        # net = {
+        net.update({
+                # 'inputs': inputs,
+                # 'inputs_valid': inputs_valid,
+                # 'inputs_HW': inputs_HW,
+                # 'labels': labels,
+                'outputs': outputs,
+                'loss': loss_total,
+                # 'y_init': y_init,
+                'y_last': y_curr,
+                # 'x0': x0,
+                # 'y0': y0,
+                })
+        return net
+
+
+def load_model(o, stat=None):
     if o.model == 'RNN_basic':
-        model = RNN_basic(o)
+        model = RNN_basic(o, stat=stat)
     elif o.model == 'RNN_new':
-        model = RNN_new(o)
+        model = RNN_new(o, stat=stat)
+    elif o.model == 'RNN_conv_asymm':
+        model = RNN_conv_asymm(o, stat=stat)
+    elif o.model == 'CNN':
+        model = NonRecur(o, stat=stat)
     else:
         raise ValueError ('model not available')
     return model

@@ -4,8 +4,7 @@ data
 tmp
 save
 logs
-*.sh
 testscripts
 env/
 summary
-aux
+aux/*.npy

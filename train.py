@@ -4,7 +4,7 @@ import numpy as np
 import tensorflow as tf
 import time
 import os
-#import os.path
+import os.path
 
 import draw
 from evaluate import evaluate
@@ -12,23 +12,60 @@ import helpers
 
 
 def train(m, loader, o):
-
     train_opts = _init_train_settings(m, loader, o)
     nepoch          = train_opts['nepoch']
     nbatch          = train_opts['nbatch']
+    nbatch_val      = train_opts['nbatch_val']
     lr_recipe       = train_opts['lr_recipe']
     losses          = train_opts['losses']
     iteration       = train_opts['iteration']
     ep_start        = train_opts['ep_start']
     resume_model    = train_opts['resume_model']
     optimizer       = train_opts['optimizer']
+    global_step_var = train_opts['global_step']
     lr              = train_opts['lr']
 
+    init_op = tf.global_variables_initializer()
     saver = tf.train.Saver()
 
     tf.summary.scalar('loss', m.net['loss'])
     # tf.summary.histogram('output', m.net['outputs'])
     summary_op = tf.summary.merge_all()
+
+    def process_batch(batch, optimize=True, writer=None, write_summary=False):
+        names = ['target_raw', 'inputs_raw', 'x0_raw', 'y0', 'inputs_valid', 'inputs_HW', 'labels']
+        fdict = {m.net[name]: batch[name] for name in names}
+        if optimize:
+            fdict.update({
+                lr: lr_epoch,
+            })
+
+        start = time.time()
+        summary = None
+        if optimize:
+            if write_summary:
+                # _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
+                _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
+            else:
+                # _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
+                _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
+        else:
+            if write_summary:
+                loss, summary = sess.run([m.net['loss'], summary_op], feed_dict=fdict)
+            else:
+                loss = sess.run([m.net['loss']], feed_dict=fdict)
+        dur = time.time() - start
+
+        if write_summary:
+            writer.add_summary(summary, global_step_var.eval())
+
+        # prefix = '' if mode == 'train' else '[{}] '.format(mode)
+        # print prefix + 'ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
+        #     ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, time.time()-t_batch, prefix)
+        # print '[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
+        #     ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, time.time()-t_batch)
+        # ib_val += 1
+        return loss, dur
 
 
     '''
@@ -41,53 +78,85 @@ def train(m, loader, o):
     t_total = time.time()
     t_iteration = time.time()
     with tf.Session(config=o.tfconfig) as sess:
-        sess.run(tf.global_variables_initializer()) 
+        # Either initialize or restore model.
+        if o.resume:
+            # TODO: Use tf.train.latest_checkpoint()
+            print "restore model: {}".format(resume_model)
+            saver.restore(sess, resume_model)
+            print "restore  {}".format(resume_model)
+        else:
+            sess.run(init_op)
+
+        global_step = global_step_var.eval()
+        print 'global step:', global_step
 
         path_summary_train = os.path.join(o.path_summary, 'train')
-        if not os.path.exists(path_summary_train): 
-            helpers.mkdir_p(path_summary_train)
+        path_summary_val = os.path.join(o.path_summary, 'val')
+        # if not os.path.exists(path_summary_train): 
+        #     helpers.mkdir_p(path_summary_train)
         train_writer = tf.summary.FileWriter(path_summary_train, sess.graph)
+        val_writer = tf.summary.FileWriter(path_summary_val)
         #train_writer = tf.summary.FileWriter(os.path.join(o.path_logs, 'train'), sess.graph)
 
-        if o.resume: 
-            saver.restore(sess, resume_model)
-        
         for ie in range(ep_start, nepoch):
             t_epoch = time.time()
             loader.update_epoch_begin('train')
+            loader.update_epoch_begin('val')
             lr_epoch = lr_recipe[ie] if o.lr_update else o.lr
 
             loss_curr_ep = np.array([], dtype=np.float32) # for avg epoch loss
+            ib_val = 0
             for ib in range(nbatch):
-                t_batch = time.time()
+                global_step = global_step_var.eval()
+                # Take a training step.
+                start = time.time()
                 batch = loader.get_batch(ib, o, dstype='train')
-
-                fdict = {
-                        m.net['target']: batch['target'],
-                        m.net['inputs']: batch['inputs'],
-                        m.net['inputs_valid']: batch['inputs_valid'],
-                        m.net['inputs_HW']: batch['inputs_HW'],
-                        m.net['labels']: batch['labels'],
-                        lr: lr_epoch
-                        }
-                if ib % 10 == 0:
-                    _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
-                    train_writer.add_summary(summary, ib)
-                else:
-                    _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
-
+                load_dur = time.time() - start
+                # t_batch = time.time()
+                # fdict = {
+                #         m.net['target']: batch['target'],
+                #         m.net['inputs']: batch['inputs'],
+                #         m.net['inputs_valid']: batch['inputs_valid'],
+                #         m.net['inputs_HW']: batch['inputs_HW'],
+                #         m.net['labels']: batch['labels'],
+                #         lr: lr_epoch
+                #         }
+                # if ib % o.summary_period == 0:
+                #     # _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
+                #     _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
+                #     train_writer.add_summary(summary, global_step)
+                # else:
+                #     # _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
+                #     _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
+                loss, dur = process_batch(batch, optimize=True, writer=train_writer,
+                    write_summary=(ib % o.summary_period == 0))
                 # **results after every batch 
-                sys.stdout.write(
-                        '\rep {0:d}/{1:d}, batch {2:d}/{3:d} '
-                        '(BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'\
-                                .format(
-                                    ie+1, nepoch, ib+1, nbatch, o.batchsz,
-                                    loss, time.time()-t_batch))
-                sys.stdout.flush()
+                # sys.stdout.write(
+                #         '\nep {0:d}/{1:d}, batch {2:d}/{3:d} '
+                #         '(BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'\
+                #                 .format(
+                #                     ie+1, nepoch, ib+1, nbatch, o.batchsz,
+                #                     loss, time.time()-t_batch))
+                # sys.stdout.flush()
+                print 'ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f} ({7:.2f})'.format(
+                    ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
                 losses['batch'] = np.append(losses['batch'], loss)
                 loss_curr_ep = np.append(loss_curr_ep, loss) 
                 losses['interm'] = np.append(losses['interm'], loss)
 
+                # Evaluate validation error.
+                if ib % o.val_period == 0:
+                    # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
+                    if ib * nbatch_val >= ib_val * nbatch:
+                        start = time.time()
+                        batch = loader.get_batch(ib_val, o, dstype='val')
+                        load_dur = time.time() - start
+                        loss, dur = process_batch(batch, optimize=False, writer=val_writer, write_summary=True)
+                        print '[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f} ({7:.2f})'.format(
+                            ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
+                        ib_val += 1
+
+                # TODO: Replace iteration with global_step (saved with graph).
                 iteration += 1
                 # **after a certain iteration, perform the followings
                 # - record and plot the loss
@@ -152,6 +221,8 @@ def train(m, loader, o):
                         resume['losses'] = losses
                         resume['model'] = saved_model
                         np.save(o.path_save + '/resume.npy', resume)
+
+
             print ' '
             print 'ep {0:d}/{1:d} (EPOCH) |time:{2:.2f}'.format(
                     ie+1, nepoch, time.time()-t_epoch)
@@ -221,17 +292,19 @@ def _init_train_settings(m, loader, o):
     lr_recipe = _get_lr_recipe()
 
     # optimizer
-    optimizer, lr = _get_optimizer(m, o)
+    optimizer, global_step, lr = _get_optimizer(m, o)
 
     train_opts = {
             'nepoch': o.nepoch if not o.debugmode else 2,
             'nbatch': loader.nexps['train']/o.batchsz if not o.debugmode else 300,
+            'nbatch_val': loader.nexps['val']/o.batchsz if not o.debugmode else 300,
             'lr_recipe': lr_recipe,
             'losses': losses,
             'iteration': iteration,
             'ep_start': ep_start,
             'resume_model': resume_model,
             'optimizer': optimizer,
+            'global_step': global_step,
             'lr': lr
             }
     return train_opts
@@ -250,20 +323,21 @@ def _get_lr_recipe():
     return lr_recipe
 
 def _get_optimizer(m, o):
+    global_step = tf.Variable(0, name='global_step', trainable=False)
     lr = tf.placeholder(o.dtype, shape=[])
     if o.optimizer == 'sgd':
         optimizer = tf.train.GradientDescentOptimizer(lr).minimize(\
-                m.net['loss'])
+                m.net['loss'], global_step=global_step)
     elif o.optimizer == 'momentum':
         optimizer = tf.train.MomentumOptimizer(lr, 0.9).minimize(\
-                m.net['loss'])
+                m.net['loss'], global_step=global_step)
     elif o.optimizer == 'rmsprop':
         optimizer = tf.train.RMSPropOptimizer(learning_rate=lr).minimize(\
-                m.net['loss'])
+                m.net['loss'], global_step=global_step)
     elif o.optimizer == 'adam':
         optimizer = tf.train.AdamOptimizer(learning_rate=lr).minimize(\
-                m.net['loss'])
+                m.net['loss'], global_step=global_step)
     else:
         raise ValueError('optimizer not implemented or simply wrong.')
-    return optimizer, lr
+    return optimizer, global_step, lr
 

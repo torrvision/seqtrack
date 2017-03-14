@@ -2,6 +2,7 @@ import pdb
 import numpy as np
 import cPickle as pickle
 import gzip
+import json
 
 # packages for bouncing mnist
 import h5py
@@ -610,15 +611,19 @@ class Data_ILSVRC(object):
             if not os.path.exists(o.path_aux): helpers.mkdir_p(o.path_aux)
             if dstype == 'train':
                 filename = os.path.join(o.path_aux, 
-                    'objids_allfrm_snp_{}_{}.npy'.format(dstype, self.trainsplit))
+                    'objids_allfrm_snp_{}_{}.json'.format(dstype, self.trainsplit))
             else:
                 filename = os.path.join(o.path_aux, 
-                    'objids_allfrm_snp_{}.npy'.format(dstype))
+                    'objids_allfrm_snp_{}.json'.format(dstype))
             if os.path.exists(filename):
-                self.objids_allfrm_snp[dstype] = np.load(filename).tolist()
+                # self.objids_allfrm_snp[dstype] = np.load(filename).tolist()
+                with open(filename, 'r') as f:
+                    self.objids_allfrm_snp[dstype] = json.load(f)
             else: # if no file, create and also save
                 self.objids_allfrm_snp[dstype] = extract_objids_allfrm_snp(dstype)
-                np.save(filename, self.objids_allfrm_snp[dstype])
+                # np.save(filename, self.objids_allfrm_snp[dstype])
+                with open(filename, 'w') as f:
+                    json.dump(self.objids_allfrm_snp[dstype], f)
 
     def _update_objids_snp(self, dstype):
         assert(self.objids_allfrm_snp[dstype] is not None) # obtain from 'objids_allfrm_snp'
@@ -712,10 +717,12 @@ class Data_ILSVRC(object):
                         dstype, i+1, self.nsnps[dstype])
                 imglist = glob.glob(snp+'/*.JPEG')
                 xs = []
-                for j in imglist:
-                    # NOTE: perform resize image!
-                    xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
-                        (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+                # for j in imglist:
+                #     # NOTE: perform resize image!
+                #     xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
+                #         (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+                # Lazy method: Read a single image, do not resize.
+                xs.append(cv2.imread(imglist[len(imglist)/2])[:,:,(2,1,0)])
                 means.append(np.mean(xs))
                 stds.append(np.std(xs))
             mean = np.mean(means)
@@ -908,15 +915,19 @@ class Data_ILSVRC(object):
         # 1. data augmentation (rotation, scaling, translation)
         # 2. data perturbation.. 
 
-        # image normalization 
-        data -= self.stat[dstype]['mean']
-        data /= self.stat[dstype]['std']
+        # # image normalization 
+        # data -= self.stat[dstype]['mean']
+        # data /= self.stat[dstype]['std']
+        # Do not use different normalization for training and testing!
+        # Moved this to model() so that it is saved with the graph.
 
         # (masked and centered) target patch
         x0 = np.copy(data[:,0])
         y0 = np.copy(label[:,0])
         masks = get_masks_from_rectangles(y0, o)
-        x0_mask = x0 * masks
+        # Mask object, fill rest with mean of training set.
+        # TODO: Construct target within TensorFlow graph to ensure that means match.
+        x0_mask = x0*masks + self.stat['train']['mean']*(1-masks)
         x0_center = np.zeros_like(x0_mask, dtype=np.float32)
         for i in range(o.batchsz):
             # shift the target to the center
@@ -933,12 +944,14 @@ class Data_ILSVRC(object):
         #draw.show_masks(masks, o.dataset)
 
         batch = {
-                'target': x0_center, #NOTE: Be careful for full-length case!!!
-                'inputs': data,
+                'target_raw':   x0_center, #NOTE: Be careful for full-length case!!!
+                'inputs_raw':   data,
                 'inputs_valid': inputs_valid, 
-                'inputs_HW': inputs_HW,
-                'labels': label,
-                'idx': idx
+                'inputs_HW':    inputs_HW,
+                'labels':       label,
+                'x0_raw':       x0,
+                'y0':           y0, #NOTE: Be careful for full-length case!!!
+                'idx':          idx
                 }
         return batch
     
@@ -981,9 +994,11 @@ class Data_ILSVRC(object):
                 inputs_valid[0,t] = True
         inputs_HW[0] = x.shape[0:2]
 
-        # image normalization 
-        data -= self.stat[dstype]['mean']
-        data /= self.stat[dstype]['std']
+        # # image normalization 
+        # data -= self.stat[dstype]['mean']
+        # data /= self.stat[dstype]['std']
+        # Do not use different normalization for training and testing!
+        # Moved this to model() so that it is saved with the graph.
 
         batch = {
                 'inputs': data,
@@ -1205,10 +1220,11 @@ class Data_OTB(object):
                 inputs_valid[0,t] = True
         inputs_HW[0] = x.shape[0:2]
 
-        # image normalization 
-        # NOTE: use ILSVRC stat
-        data -= self.stat['mean']
-        data /= self.stat['std']
+        # # image normalization 
+        # # NOTE: use ILSVRC stat
+        # data -= self.stat['mean']
+        # data /= self.stat['std']
+        # Moved this to model() so that it is saved with the graph.
 
         batch = {
                 'inputs': data,
