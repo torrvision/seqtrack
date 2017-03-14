@@ -52,14 +52,16 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
             t_start = time.time()
             batch = loader.get_batch(ib, o, dstype, shuffle_local=shuffle_local)
 
-            fdict = {
-                # m.net['firstseg']: True, # this is no fulllen routine
-                m.net['target']: batch['target'],
-                m.net['inputs']: batch['inputs'],
-                m.net['inputs_valid']: batch['inputs_valid'],
-                m.net['inputs_HW']: batch['inputs_HW'],
-                m.net['labels']: batch['labels']
-                }
+            # fdict = {
+            #     # m.net['firstseg']: True, # this is no fulllen routine
+            #     m.net['target']: batch['target'],
+            #     m.net['inputs']: batch['inputs'],
+            #     m.net['inputs_valid']: batch['inputs_valid'],
+            #     m.net['inputs_HW']: batch['inputs_HW'],
+            #     m.net['labels']: batch['labels']
+            #     }
+            names = ['target_raw', 'inputs_raw', 'x0_raw', 'y0', 'inputs_valid', 'inputs_HW', 'labels']
+            fdict = {m.net[name]: batch[name] for name in names}
 
             outputs, loss = sess.run(
                     [m.net['outputs'], m.net['loss']], feed_dict=fdict)

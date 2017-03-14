@@ -925,7 +925,9 @@ class Data_ILSVRC(object):
         x0 = np.copy(data[:,0])
         y0 = np.copy(label[:,0])
         masks = get_masks_from_rectangles(y0, o)
-        x0_mask = x0 * masks
+        # Mask object, fill rest with mean of training set.
+        # TODO: Construct target within TensorFlow graph to ensure that means match.
+        x0_mask = x0*masks + self.stat['train']['mean']*(1-masks)
         x0_center = np.zeros_like(x0_mask, dtype=np.float32)
         for i in range(o.batchsz):
             # shift the target to the center
@@ -942,12 +944,14 @@ class Data_ILSVRC(object):
         #draw.show_masks(masks, o.dataset)
 
         batch = {
-                'target': x0_center, #NOTE: Be careful for full-length case!!!
-                'inputs': data,
+                'target_raw':   x0_center, #NOTE: Be careful for full-length case!!!
+                'inputs_raw':   data,
                 'inputs_valid': inputs_valid, 
-                'inputs_HW': inputs_HW,
-                'labels': label,
-                'idx': idx
+                'inputs_HW':    inputs_HW,
+                'labels':       label,
+                'x0_raw':       x0,
+                'y0':           y0, #NOTE: Be careful for full-length case!!!
+                'idx':          idx
                 }
         return batch
     

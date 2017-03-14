@@ -33,13 +33,8 @@ def train(m, loader, o):
     summary_op = tf.summary.merge_all()
 
     def process_batch(batch, optimize=True, writer=None, write_summary=False):
-        fdict = {
-            m.net['target']:       batch['target'],
-            m.net['inputs']:       batch['inputs'],
-            m.net['inputs_valid']: batch['inputs_valid'],
-            m.net['inputs_HW']:    batch['inputs_HW'],
-            m.net['labels']:       batch['labels'],
-        }
+        names = ['target_raw', 'inputs_raw', 'inputs_valid', 'inputs_HW', 'labels']
+        fdict = {m.net[name]: batch[name] for name in names}
         if optimize:
             fdict.update({
                 lr: lr_epoch,

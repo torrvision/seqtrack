@@ -6,10 +6,15 @@ import numpy as np
 
 
 def make_input_placeholders(o, stat=None):
+    '''
+    Feed images to 'inputs_raw', 'x0_raw', etc.
+    Compute functions of 'inputs', 'x0', etc.
+    '''
+
     # placeholders for inputs
-    inputs = tf.placeholder(o.dtype,
+    inputs_raw = tf.placeholder(o.dtype,
             shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel],
-            name='inputs')
+            name='inputs_raw')
     inputs_valid = tf.placeholder(tf.bool,
             shape=[o.batchsz, o.ntimesteps+1],
             name='inputs_valid')
@@ -21,31 +26,44 @@ def make_input_placeholders(o, stat=None):
             name='labels')
 
     # placeholders for initializations of full-length sequences
-    y_init = tf.placeholder_with_default(
-            labels[:,0],
-            shape=[o.batchsz, o.outdim], name='y_init')
+    # y_init = tf.placeholder_with_default(
+    #         labels[:,0],
+    #         shape=[o.batchsz, o.outdim], name='y_init')
+    y_init = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y_init')
 
     # placeholders for x0 and y0. This is used for full-length sequences
     # NOTE: when it's not first segment, you should always feed x0, y0
     # otherwise it will use GT as default. It will be wrong then.
-    x0 = tf.placeholder_with_default(
-            inputs[:,0],
-            shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
-    y0 = tf.placeholder_with_default(
-            labels[:,0],
-            shape=[o.batchsz, o.outdim], name='y0')
+    # x0_raw = tf.placeholder_with_default(
+    #         inputs_raw[:,0],
+    #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0_raw')
+    # y0 = tf.placeholder_with_default(o.dtype
+    #         labels[:,0],
+    #         shape=[o.batchsz, o.outdim], name='y0')
+    x0_raw = tf.placeholder(o.dtype,
+            shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
+            name='x0_raw')
+    y0 = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y0')
     # NOTE: when it's not first segment, be careful what is passed to target.
     # Make sure to pass x0, not the first frame of every segments.
-    target = tf.placeholder(o.dtype,
+    target_raw = tf.placeholder(o.dtype,
             shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
-            name='target')
+            name='target_raw')
 
-    if stat:
-        inputs = (inputs - stat['mean']) / stat['std']
-        x0     = (x0     - stat['mean']) / stat['std']
-        target = (target - stat['mean']) / stat['std']
+    assert(stat is not None)
+    with tf.name_scope('image_stats') as scope:
+        if stat:
+            mean = tf.constant(stat['mean'], o.dtype, name='mean')
+            std  = tf.constant(stat['std'],  o.dtype, name='std')
+        else:
+            mean = tf.constant(0.0, o.dtype, name='mean')
+            std  = tf.constant(1.0, o.dtype, name='std')
+    inputs = whiten(inputs_raw, mean, std, name='inputs')
+    x0     = whiten(x0_raw,     mean, std, name='x0')
+    target = whiten(target_raw, mean, std, name='target')
 
     return {
+            'inputs_raw':   inputs_raw,
             'inputs':       inputs,
             'inputs_valid': inputs_valid,
             'inputs_HW':    inputs_HW,
@@ -54,10 +72,16 @@ def make_input_placeholders(o, stat=None):
            #'loss':         loss_total,
             'y_init':       y_init,
            #'y_last':       y_curr,
+            'x0_raw':       x0_raw,
             'x0':           x0,
             'y0':           y0,
+            'target_raw':   target_raw,
             'target':       target,
             }
+
+def whiten(x, mean, std, name='whiten'):
+    with tf.name_scope(name) as scope:
+        return tf.divide(x - mean, std, name=scope)
 
 class RNN_attention_s(object):
     def __init__(self, o, is_train):
@@ -851,24 +875,15 @@ class RNN_basic(object):
         return h_curr, C_curr
 
     def _load_model(self, o, stat=None):
-        net = make_input_placeholders(o)
-        inputs_raw   = net['inputs']
+        net = make_input_placeholders(o, stat)
+        inputs       = net['inputs']
         inputs_valid = net['inputs_valid']
         inputs_HW    = net['inputs_HW']
         labels       = net['labels']
         y_init       = net['y_init']
-        x0_raw       = net['x0']
+        x0           = net['x0']
         y0           = net['y0']
-        target_raw   = net['target']
-
-        if stat:
-            inputs = (inputs_raw - stat['mean']) / stat['std']
-            x0     = (x0_raw     - stat['mean']) / stat['std']
-            target = (target_raw - stat['mean']) / stat['std']
-        else:
-            inputs = inputs_raw
-            x0     = x0_raw
-            target = target_raw
+        target       = net['target']
 
         # # placeholders for inputs
         # inputs = tf.placeholder(o.dtype, 
@@ -1168,24 +1183,15 @@ class RNN_new(object):
         return output
 
     def _load_model(self, o, stat=None):
-        net = make_input_placeholders(o)
-        inputs_raw   = net['inputs']
+        net = make_input_placeholders(o, stat)
+        inputs       = net['inputs']
         inputs_valid = net['inputs_valid']
         inputs_HW    = net['inputs_HW']
         labels       = net['labels']
         y_init       = net['y_init']
-        x0_raw       = net['x0']
+        x0           = net['x0']
         y0           = net['y0']
-        target_raw   = net['target']
-
-        if stat:
-            inputs = (inputs_raw - stat['mean']) / stat['std']
-            x0     = (x0_raw     - stat['mean']) / stat['std']
-            target = (target_raw - stat['mean']) / stat['std']
-        else:
-            inputs = inputs_raw
-            x0     = x0_raw
-            target = target_raw
+        target       = net['target']
 
         # # placeholders for inputs
         # inputs = tf.placeholder(o.dtype, 
@@ -1377,24 +1383,15 @@ class NonRecur(object):
         return y
 
     def _load_model(self, o, stat=None):
-        net = make_input_placeholders(o)
-        inputs_raw   = net['inputs']
+        net = make_input_placeholders(o, stat)
+        inputs       = net['inputs']
         inputs_valid = net['inputs_valid']
         inputs_HW    = net['inputs_HW']
         labels       = net['labels']
         y_init       = net['y_init']
-        x0_raw       = net['x0']
+        x0           = net['x0']
         y0           = net['y0']
-        target_raw   = net['target']
-
-        if stat:
-            inputs = (inputs_raw - stat['mean']) / stat['std']
-            x0     = (x0_raw     - stat['mean']) / stat['std']
-            target = (target_raw - stat['mean']) / stat['std']
-        else:
-            inputs = inputs_raw
-            x0     = x0_raw
-            target = target_raw
+        target       = net['target']
 
         # # placeholders for inputs
         # inputs = tf.placeholder(o.dtype, 
