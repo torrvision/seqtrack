@@ -8,6 +8,10 @@ fi
 root="$1"
 name="$2"
 
+# Move to parent directory of script.
+scriptdir="$( dirname "${BASH_SOURCE[0]}" )"
+src="$(dirname "$scriptdir")"
+
 date=$(date +%Y-%m-%d)
 fullname="$date-$name"
 
@@ -19,19 +23,19 @@ if ! mkdir "$dir" ; then
 	exit 1
 fi
 
-if ! cp workspace/install/* "$dir/" ; then
+if ! cp $src/workspace/install/* "$dir/" ; then
 	echo 'cannot copy workspace scripts'
 	exit 1
 fi
-if ! git log -1 --format="%H" >"$dir/commit.txt" ; then
+if ! (cd $src && git log -1 --format="%H") >"$dir/commit.txt" ; then
 	echo 'cannot get git commit'
 	exit 1
 fi
-if ! git config --get remote.origin.url >"$dir/remote.txt" ; then
+if ! (cd $src && git config --get remote.origin.url) >"$dir/remote.txt" ; then
 	echo 'cannot get git remote url'
 	exit 1
 fi
-if ! env/bin/pip freeze >"$dir/requirements.txt" ; then
+if ! (cd $src && env/bin/pip freeze) >"$dir/requirements.txt" ; then
 	echo 'cannot get pip requirements'
 	exit 1
 fi
