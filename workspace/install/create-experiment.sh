@@ -9,7 +9,7 @@ if ! git clone "$remote" repo ; then
 fi
 
 if ! ( cd repo && git checkout "$commit" ) ; then
-	echo 'cannot checkout commit'
+	echo 'cannot checkout commit (make sure it is pushed)'
 	exit 1
 fi
 

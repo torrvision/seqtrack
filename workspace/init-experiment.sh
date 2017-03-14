@@ -9,8 +9,9 @@ root="$1"
 name="$2"
 
 # Move to parent directory of script.
-scriptdir="$( dirname "${BASH_SOURCE[0]}" )"
-src="$(dirname "$scriptdir")"
+script_file="$( realpath "${BASH_SOURCE[0]}" )"
+script_dir="$( dirname "$script_file" )"
+src="$( dirname "$script_dir" )"
 
 date=$(date +%Y-%m-%d)
 fullname="$date-$name"
