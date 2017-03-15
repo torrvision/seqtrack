@@ -520,7 +520,7 @@ class Data_ILSVRC(object):
             if dstype is 'test': # Only data exists. No annotations available. 
                 path_snp_data = os.path.join(
                     self.path_data, '{}/VID/{}'.format(self.datadirname, dstype))
-                snps = os.listdir(path_snp_data)
+                snps = sorted(os.listdir(path_snp_data))
                 snps_data = [path_snp_data + '/' + snp for snp in snps]
                 output['Data'] = snps_data
             elif dstype is 'val': 
@@ -528,7 +528,7 @@ class Data_ILSVRC(object):
                     self.path_data, '{}/VID/{}'.format(self.datadirname, dstype))
                 path_snp_anno = os.path.join(
                     self.path_data, 'Annotations/VID/{}'.format(dstype))
-                snps = os.listdir(path_snp_data)
+                snps = sorted(os.listdir(path_snp_data))
                 snps_data = [path_snp_data + '/' + snp for snp in snps]
                 snps_anno = [path_snp_anno + '/' + snp for snp in snps]
                 output['Data'] = snps_data
@@ -539,7 +539,7 @@ class Data_ILSVRC(object):
                         '{0:s}/VID/train/ILSVRC2015_VID_train_{1:04d}'.format(self.datadirname, self.trainsplit))
                     path_snp_anno = os.path.join(self.path_data, 
                         'Annotations/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(self.trainsplit))
-                    snps = os.listdir(path_snp_data)
+                    snps = sorted(os.listdir(path_snp_data))
                     snps_data = [path_snp_data + '/' + snp for snp in snps]
                     snps_anno = [path_snp_anno + '/' + snp for snp in snps]
                     output['Data'] = snps_data
@@ -552,7 +552,7 @@ class Data_ILSVRC(object):
                             '{0:s}/VID/train/ILSVRC2015_VID_train_{1:04d}'.format(self.datadirname, i))
                         path_snp_anno = os.path.join(self.path_data, 
                             'Annotations/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(i))
-                        snps = os.listdir(path_snp_data)
+                        snps = sorted(os.listdir(path_snp_data))
                         snps_data = [path_snp_data + '/' + snp for snp in snps]
                         snps_anno = [path_snp_anno + '/' + snp for snp in snps]
                         snps_data_all.extend(snps_data)
@@ -694,7 +694,7 @@ class Data_ILSVRC(object):
             for i, snp in enumerate(self.snps[dstype]['Data']):
                 print 'computing mean and std in snippet of {}, {}/{}'.format(
                         dstype, i+1, self.nsnps[dstype])
-                imglist = glob.glob(snp+'/*.JPEG')
+                imglist = sorted(glob.glob(snp+'/*.JPEG'))
                 xs = []
                 for j in imglist:
                     # NOTE: perform resize image!
@@ -715,7 +715,7 @@ class Data_ILSVRC(object):
             for i, snp in enumerate(self.snps[dstype]['Data']):
                 print 'computing mean and std in snippet of {}, {}/{}'.format(
                         dstype, i+1, self.nsnps[dstype])
-                imglist = glob.glob(snp+'/*.JPEG')
+                imglist = sorted(glob.glob(snp+'/*.JPEG'))
                 xs = []
                 # for j in imglist:
                 #     # NOTE: perform resize image!
@@ -1029,7 +1029,7 @@ class Data_ILSVRC(object):
                 savedir = snp.replace('Data', 'Data_frmsz{}'.format(o.frmsz))
                 if not os.path.exists(savedir): helpers.mkdir_p(savedir)
 
-                imglist = glob.glob(snp+'/*.JPEG')
+                imglist = sorted(glob.glob(snp+'/*.JPEG'))
                 for img in imglist:
                     # image read and resize
                     x = cv2.resize(cv2.imread(img), 
