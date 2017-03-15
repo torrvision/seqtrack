@@ -4,7 +4,6 @@ import numpy as np
 import tensorflow as tf
 import time
 import os
-import os.path
 
 import draw
 from evaluate import evaluate
@@ -12,18 +11,13 @@ import helpers
 
 
 def train(m, loader, o):
-    train_opts = _init_train_settings(m, loader, o)
-    nepoch          = train_opts['nepoch']
-    nbatch          = train_opts['nbatch']
-    nbatch_val      = train_opts['nbatch_val']
-    lr_recipe       = train_opts['lr_recipe']
-    losses          = train_opts['losses']
-    iteration       = train_opts['iteration']
-    ep_start        = train_opts['ep_start']
-    resume_model    = train_opts['resume_model']
-    optimizer       = train_opts['optimizer']
-    global_step_var = train_opts['global_step']
-    lr              = train_opts['lr']
+    # (manual) learning rate recipe
+    lr_recipe = _get_lr_recipe()
+    optimizer, global_step_var, lr = _get_optimizer(m, o)
+
+    nepoch     = o.nepoch if not o.debugmode else 2
+    nbatch     = loader.nexps['train']/o.batchsz if not o.debugmode else 30
+    nbatch_val = loader.nexps['val']/o.batchsz if not o.debugmode else 30
 
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver()
@@ -32,22 +26,19 @@ def train(m, loader, o):
     # tf.summary.histogram('output', m.net['outputs'])
     summary_op = tf.summary.merge_all()
 
-    def process_batch(batch, optimize=True, writer=None, write_summary=False):
+    def process_batch(batch, step, optimize=True, writer=None, write_summary=False):
         names = ['target_raw', 'inputs_raw', 'x0_raw', 'y0', 'inputs_valid', 'inputs_HW', 'labels']
         fdict = {m.net[name]: batch[name] for name in names}
         if optimize:
             fdict.update({
                 lr: lr_epoch,
             })
-
         start = time.time()
         summary = None
         if optimize:
             if write_summary:
-                # _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
                 _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
             else:
-                # _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
                 _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
         else:
             if write_summary:
@@ -55,94 +46,91 @@ def train(m, loader, o):
             else:
                 loss = sess.run([m.net['loss']], feed_dict=fdict)
         dur = time.time() - start
-
         if write_summary:
-            writer.add_summary(summary, global_step_var.eval())
-
-        # prefix = '' if mode == 'train' else '[{}] '.format(mode)
-        # print prefix + 'ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
-        #     ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, time.time()-t_batch, prefix)
-        # print '[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'.format(
-        #     ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, time.time()-t_batch)
-        # ib_val += 1
+            writer.add_summary(summary, global_step=step)
         return loss, dur
 
 
-    '''
-    config = tf.ConfigProto()
-    config.allow_soft_placement = True
-    config.gpu_options.allow_growth = True
-    config.gpu_options.per_process_gpu_memory_fraction = o.gpu_frac
-    with tf.Session(config=config if o.gpu_manctrl else None) as sess:
-    '''
     t_total = time.time()
-    t_iteration = time.time()
     with tf.Session(config=o.tfconfig) as sess:
         # Either initialize or restore model.
         if o.resume:
-            # TODO: Use tf.train.latest_checkpoint()
-            print "restore model: {}".format(resume_model)
-            saver.restore(sess, resume_model)
-            print "restore  {}".format(resume_model)
+            model_file = tf.train.latest_checkpoint(o.path_ckpt)
+            print "restore: {}".format(model_file)
+            saver.restore(sess, model_file)
         else:
             sess.run(init_op)
 
-        global_step = global_step_var.eval()
-        print 'global step:', global_step
 
         path_summary_train = os.path.join(o.path_summary, 'train')
         path_summary_val = os.path.join(o.path_summary, 'val')
-        # if not os.path.exists(path_summary_train): 
-        #     helpers.mkdir_p(path_summary_train)
         train_writer = tf.summary.FileWriter(path_summary_train, sess.graph)
         val_writer = tf.summary.FileWriter(path_summary_val)
-        #train_writer = tf.summary.FileWriter(os.path.join(o.path_logs, 'train'), sess.graph)
 
-        for ie in range(ep_start, nepoch):
+        while True: # Loop over epochs
+            global_step = global_step_var.eval() # Number of steps taken.
+            if global_step >= nepoch * nbatch:
+                break
+            ie = global_step / nbatch
             t_epoch = time.time()
             loader.update_epoch_begin('train')
             loader.update_epoch_begin('val')
             lr_epoch = lr_recipe[ie] if o.lr_update else o.lr
 
-            loss_curr_ep = np.array([], dtype=np.float32) # for avg epoch loss
             ib_val = 0
-            for ib in range(nbatch):
-                global_step = global_step_var.eval()
+            for ib in range(nbatch): # Loop over batches in epoch.
+                global_step = global_step_var.eval() # Number of steps taken.
+
+                if not o.nosave:
+                    period_ckpt = o.period_ckpt if not o.debugmode else 40
+                    if global_step > 0 and global_step % period_ckpt == 0: # save intermediate model
+                        if not os.path.isdir(o.path_ckpt):
+                            os.makedirs(o.path_ckpt)
+                        fname = os.path.join(o.path_ckpt, 'iteration{}.ckpt'.format(global_step))
+                        # saved_model = saver.save(sess, fname)
+                        saver.save(sess, fname)
+
+                # # **after a certain iteration, perform the followings
+                # # - evaluate on train/test/val set
+                # # - print results (loss, eval resutls, time, etc.)
+                # if global_step % (o.period_assess if not o.debugmode else 20) == 0: # save intermediate model
+                #     print ' '
+                #     # evaluate
+                #     val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
+                #     evals = {
+                #         'train': evaluate(sess, m, loader, o, 'train',
+                #             np.maximum(int(np.floor(100/o.batchsz)), 1),
+                #             hold_inputs=True, shuffle_local=True),
+                #         val_: evaluate(sess, m, loader, o, val_,
+                #             np.maximum(int(np.floor(100/o.batchsz)), 1),
+                #             hold_inputs=True, shuffle_local=True)}
+                #     # visualize tracking results examples
+                #     draw.show_track_results(
+                #         evals['train'], loader, 'train', o, global_step,nlimit=20)
+                #     draw.show_track_results(
+                #         evals[val_], loader, val_, o, global_step,nlimit=20)
+                #     # print results
+                #     print 'ep {:d}/{:d} (STEP-{:d}) '\
+                #         '|(train/{:s}) IOU: {:.3f}/{:.3f}, '\
+                #         'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} '.format(
+                #         ie+1, nepoch, global_step+1, val_,
+                #         evals['train']['iou_mean'], evals[val_]['iou_mean'],
+                #         evals['train']['auc'],      evals[val_]['auc'],
+                #         evals['train']['cle_mean'], evals[val_]['cle_mean'])
+
                 # Take a training step.
                 start = time.time()
                 batch = loader.get_batch(ib, o, dstype='train')
                 load_dur = time.time() - start
-                # t_batch = time.time()
-                # fdict = {
-                #         m.net['target']: batch['target'],
-                #         m.net['inputs']: batch['inputs'],
-                #         m.net['inputs_valid']: batch['inputs_valid'],
-                #         m.net['inputs_HW']: batch['inputs_HW'],
-                #         m.net['labels']: batch['labels'],
-                #         lr: lr_epoch
-                #         }
-                # if ib % o.summary_period == 0:
-                #     # _, loss, summary, _ = sess.run([optimizer, m.net['loss'], summary_op, m.net['dbg']], feed_dict=fdict)
-                #     _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
-                #     train_writer.add_summary(summary, global_step)
-                # else:
-                #     # _, loss, _ = sess.run([optimizer, m.net['loss'], m.net['dbg']], feed_dict=fdict)
-                #     _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
-                loss, dur = process_batch(batch, optimize=True, writer=train_writer,
+
+                loss, dur = process_batch(batch, step=global_step, optimize=True,
+                    writer=train_writer,
                     write_summary=(ib % o.summary_period == 0))
-                # **results after every batch 
-                # sys.stdout.write(
-                #         '\nep {0:d}/{1:d}, batch {2:d}/{3:d} '
-                #         '(BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f}'\
-                #                 .format(
-                #                     ie+1, nepoch, ib+1, nbatch, o.batchsz,
-                #                     loss, time.time()-t_batch))
-                # sys.stdout.flush()
-                print 'ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f} ({7:.2f})'.format(
+
+                # **results after every batch
+                print ('ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
+                    '|loss:{5:.5f} |time:{6:.2f} ({7:.2f})').format(
                     ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
-                losses['batch'] = np.append(losses['batch'], loss)
-                loss_curr_ep = np.append(loss_curr_ep, loss) 
-                losses['interm'] = np.append(losses['interm'], loss)
 
                 # Evaluate validation error.
                 if ib % o.val_period == 0:
@@ -151,168 +139,25 @@ def train(m, loader, o):
                         start = time.time()
                         batch = loader.get_batch(ib_val, o, dstype='val')
                         load_dur = time.time() - start
-                        loss, dur = process_batch(batch, optimize=False, writer=val_writer, write_summary=True)
-                        print '[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) |loss:{5:.5f} |time:{6:.2f} ({7:.2f})'.format(
+                        loss, dur = process_batch(batch, step=global_step, optimize=False,
+                            writer=val_writer, write_summary=True)
+                        print ('[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
+                            '|loss:{5:.5f} |time:{6:.2f} ({7:.2f})').format(
                             ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
                         ib_val += 1
 
-                # TODO: Replace iteration with global_step (saved with graph).
-                iteration += 1
-                # **after a certain iteration, perform the followings
-                # - record and plot the loss
-                # - evaluate on train/test/val set
-                # - check eval losses on train and val sets
-                # - print results (loss, eval resutls, time, etc.)
-                # - save the model and resume info 
-                assess_period = 20000/o.batchsz
-                if iteration % (assess_period if not o.debugmode else 20) == 0: # save intermediate model
-                    print ' '
-                    # record and plot (intermediate) loss
-                    loss_interm_avg = np.mean(losses['interm'])
-                    losses['interm_avg'] = np.append(
-                            losses['interm_avg'], loss_interm_avg)
-                    losses['interm'] = np.array([], dtype=np.float32)
-                    draw.plot_losses(losses, o, True, str(iteration))
-                    # evaluate
-                    val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
-                    evals = {
-                        'train': evaluate(sess, m, loader, o, 'train', 
-                            np.maximum(int(np.floor(100/o.batchsz)), 1), 
-                            hold_inputs=True, shuffle_local=True),
-                        val_: evaluate(sess, m, loader, o, val_, 
-                            np.maximum(int(np.floor(100/o.batchsz)), 1), 
-                            hold_inputs=True, shuffle_local=True)}
-                    # check losses on train and val set
-                    losses['interm_eval_subset_train'] = np.append(
-                            losses['interm_eval_subset_train'],
-                            np.mean(evals['train']['loss']))
-                    losses['interm_eval_subset_val'] = np.append(
-                            losses['interm_eval_subset_val'],
-                            np.mean(evals[val_]['loss']))
-                    draw.plot_losses_train_val(
-                            losses['interm_eval_subset_train'],
-                            losses['interm_eval_subset_val'],
-                            o, str(iteration))
-                    # visualize tracking results examples
-                    draw.show_track_results(
-                        evals['train'], loader, 'train', o, iteration,nlimit=20)
-                    draw.show_track_results(
-                        evals[val_], loader, val_, o, iteration,nlimit=20)
-                    # print results
-                    print 'ep {0:d}/{1:d} (ITERATION-{2:d}) |loss: {3:.5f} '\
-                        '|(train/{4:s}) IOU: {5:.3f}/{6:.3f}, '\
-                        'AUC: {7:.3f}/{8:.3f}, CLE: {9:.3f}/{10:.3f} '\
-                        '|time:{11:.2f}'.format(
-                        ie+1, nepoch, iteration, loss_interm_avg, val_, 
-                        evals['train']['iou_mean'], evals[val_]['iou_mean'], 
-                        evals['train']['auc'], evals[val_]['auc'], 
-                        evals['train']['cle_mean'], evals[val_]['cle_mean'], 
-                        time.time()-t_iteration)
-                    t_iteration = time.time() 
-                    # save model and resume info
-                    if not o.nosave:
-                        savedir = os.path.join(o.path_save, 'models')
-                        if not os.path.exists(savedir): helpers.mkdir_p(savedir)
-                        saved_model = saver.save(sess, os.path.join(
-                            savedir, 'iteration{}.ckpt'.format(iteration)))
-                        resume = {}
-                        resume['ie'] = ie
-                        resume['iteration'] = iteration
-                        resume['losses'] = losses
-                        resume['model'] = saved_model
-                        np.save(o.path_save + '/resume.npy', resume)
-
-
-            print ' '
             print 'ep {0:d}/{1:d} (EPOCH) |time:{2:.2f}'.format(
                     ie+1, nepoch, time.time()-t_epoch)
-
-            '''Not using below as performing evaluation at iterations
-            # **after every epoch, perform the followings
-            # - record the loss
-            # - plot losses
-            # - evaluate on train/test/val set
-            # - print results (loss, eval results, time, etc.)
-            # - save the model
-            # - save resume 
-            losses['epoch'] = np.append(losses['epoch'], np.mean(loss_curr_ep))
-            draw.plot_losses(losses, o) # TODO: change this. batch loss too long
-            val_name = 'test' if o.dataset == 'bouncing_mnist' else 'val'
-            eval_results = {
-                    'train': evaluate(sess, m, loader, o, 'train', 0.01),
-                    val_name: evaluate(sess, m, loader, o, val_name, 0.01)
-                    }
-            print 'ep {0:d}/{1:d} (EPOCH) |loss:{2:.5f} |(train/{3:s}) '\
-                    'IOU: {4:.3f}/{5:.3f}, AUC: {6:.3f}/{7:.3f}, '\
-                    'CLE: {8:.3f}/{9:.3f} |time:{10:.2f}'.format(
-                    ie+1, nepoch, losses['epoch'][-1], val_name,
-                    eval_results['train']['iou'], eval_results[val_name]['iou'], 
-                    eval_results['train']['auc'], eval_results[val_name]['auc'], 
-                    eval_results['train']['cle'], eval_results[val_name]['cle'], 
-                    time.time()-t_epoch)
-
-            if not o.nosave:
-                save_path = saver.save(sess, 
-                        o.path_model+'/ep{}.ckpt'.format(ie))
-                resume = {}
-                resume['ie'] = ie
-                resume['iteration'] = iteration 
-                resume['losses'] = losses
-                resume['model'] = o.path_model+'/ep{}.ckpt'.format(ie)
-                np.save(o.path_save + '/resume.npy', resume)
-            '''
 
         # **training finished
         print '\ntraining finished! ------------------------------------------'
         print 'total time elapsed: {0:.2f}'.format(time.time()-t_total)
-        
 
-def _init_train_settings(m, loader, o):
-    # resuming experiments
-    if o.resume: 
-        resume = np.load(o.resume_data).item()
-        losses          = resume['losses']
-        iteration       = resume['iteration']
-        ep_start        = resume['ie'] + 1
-        resume_model    = resume['model']
-    else:
-        losses = {
-                'batch': np.array([], dtype=np.float32),
-                'epoch': np.array([], dtype=np.float32),
-                'interm': np.array([], dtype=np.float32),
-                'interm_avg': np.array([], dtype=np.float32),
-                'interm_eval_subset_train': np.array([], dtype=np.float32),
-                'interm_eval_subset_val': np.array([], dtype=np.float32)
-                }
-        iteration = 0
-        resume_model = None
-        ep_start = 0
-
-    # (manual) learning rate recipe
-    lr_recipe = _get_lr_recipe()
-
-    # optimizer
-    optimizer, global_step, lr = _get_optimizer(m, o)
-
-    train_opts = {
-            'nepoch': o.nepoch if not o.debugmode else 2,
-            'nbatch': loader.nexps['train']/o.batchsz if not o.debugmode else 300,
-            'nbatch_val': loader.nexps['val']/o.batchsz if not o.debugmode else 300,
-            'lr_recipe': lr_recipe,
-            'losses': losses,
-            'iteration': iteration,
-            'ep_start': ep_start,
-            'resume_model': resume_model,
-            'optimizer': optimizer,
-            'global_step': global_step,
-            'lr': lr
-            }
-    return train_opts
 
 def _get_lr_recipe():
     # TODO: may need a different recipe; also consider exponential decay
     # (previous) lr_epoch = o.lr*(0.1**np.floor(float(ie)/(nepoch/2))) \
-            #if o.lr_update else o.lr 
+            #if o.lr_update else o.lr
     # manual learning rate recipe
     lr_recipe = np.zeros([100], dtype=np.float32)
     for i in range(lr_recipe.shape[0]):
@@ -340,4 +185,3 @@ def _get_optimizer(m, o):
     else:
         raise ValueError('optimizer not implemented or simply wrong.')
     return optimizer, global_step, lr
-

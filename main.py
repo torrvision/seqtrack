@@ -30,8 +30,9 @@ def parse_arguments():
             '--frmsz', help='size of a square image', type=int, default=100)
     parser.add_argument(
             '--path_data_home', help='location of datasets',
-            type=str, default='')
-    parser.add_argument('--path_save_home', help='location to save models')
+            type=str, default='./data')
+    # parser.add_argument('--path_ckpt', help='location to save training checkpoints')
+    # parser.add_argument('--path_output', help='location to write results')
     parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)
     parser.add_argument(
@@ -131,7 +132,3 @@ if __name__ == "__main__":
 
     assert(o.mode == 'train')
     train(m, loader, o)
-
-    print '**Saved in the following directory.'
-    print o.path_save
-

@@ -1110,8 +1110,7 @@ class RNN_new(object):
             conv = conv2d(x, 
                 self.params['cnn']['layer'][i]['w'], 
                 self.params['cnn']['layer'][i]['b'], 
-                [1, self.params['cnn']['layer'][i]['st'], 
-                    self.params['cnn']['layer'][i]['st'], 1])
+                stride=self.params['cnn']['layer'][i]['st'])
             act = activate(conv, 'relu')
             # TODO: can add dropout here
             if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer

@@ -185,7 +185,7 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
                             box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
                             facecolor='b', edgecolor='b', fill=False))
 
-            savedir = os.path.join(o.path_save, 'track_results')
+            savedir = os.path.join(o.path_output, 'track_results')
             if not os.path.exists(savedir): helpers.mkdir_p(savedir)
             outfile = os.path.join(savedir, 
                 'iteration_{}_{}_idx{}.png'.format(iteration, dstype, idx[i,b]))
@@ -258,7 +258,7 @@ def plot_losses(losses, o, intermediate_=False, cnt_=''): # after trainingj
                 losses['interm_avg'], '-o')
         ax1.set_title('average intermediate loss')
 
-    savedir = os.path.join(o.path_save, 'losses')
+    savedir = os.path.join(o.path_output, 'losses')
     if not os.path.exists(savedir): helpers.mkdir_p(savedir)
     outfile = os.path.join(savedir, '{}.png'.format(cnt_))
     plt.savefig(outfile)
@@ -271,7 +271,7 @@ def plot_losses_train_val(loss_train, loss_val, o, cnt_):
     ax1.plot(np.arange(loss_val.shape[0]), loss_val, 'r-o')
     ax1.set_title('average intermediate loss for evaluation subsets')
 
-    savedir = os.path.join(o.path_save, 'losses_evalsubset')
+    savedir = os.path.join(o.path_output, 'losses_evalsubset')
     if not os.path.exists(savedir): helpers.mkdir_p(savedir)
     outfile = os.path.join(savedir, '{}.png'.format(cnt_))
     plt.savefig(outfile)

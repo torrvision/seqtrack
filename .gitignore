@@ -7,4 +7,5 @@ logs
 testscripts
 env/
 summary
+output
 aux/*.npy

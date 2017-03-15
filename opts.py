@@ -77,15 +77,16 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # save (save training results), load (test), resume (keep training)
-        self.path_base          = os.path.dirname(__file__) # Take aux/ and stat/ from source dir.
-        self.path_data          = ''
-        self.path_data_home     = '/home/namhoon/data' \
-                                if socket.gethostname()=='namhoon-PC' \
-                                else '/mnt/data/namhoon'
-        self.path_aux           = os.path.join(self.path_base, 'aux')
-        self.path_stat          = os.path.join(self.path_base, 'stat')
+        self.path_src           = os.path.dirname(__file__) # Take aux/ and stat/ from source dir.
+        self.path_aux           = os.path.join(self.path_src, 'aux')
+        self.path_stat          = os.path.join(self.path_src, 'stat')
+        self.path_data_home     = './data'
+        self.path_data          = '' # This is set later e.g. {path_data_home}/ILSVRC
         self.nosave             = False
-        self.path_save_home     = None
+        self.path_ckpt          = './ckpt'
+        self.period_ckpt        = 10000
+        self.period_assess      = self.period_ckpt
+        self.path_output        = './output'
         self.restore            = False 
         self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
@@ -93,7 +94,7 @@ class Opts(object):
         #self.path_logs          = './logs'
         # 'logs' directory reserved for saving system level logs (being used in
         # a shell script)
-        self.path_summary       = 'summary'
+        self.path_summary       = './summary'
         self.summary_period     = 10
         self.val_period         = 10
 
@@ -129,12 +130,8 @@ class Opts(object):
         np.random.seed(self.seed_global) # checked! 
         random.seed(self.seed_global)
         self._run_sanitycheck()
-        #self._create_save_directories()
-        self._set_save_directory()
         self._set_gpu_config()
         self._set_dataset_params()
-        #self._print_settings()
-        #self._save_settings()
 
     def _set_dataset_params(self):
         if self.dataset in ['moving_mnist', 'bouncing_mnist']:
@@ -172,27 +169,6 @@ class Opts(object):
                     and self.restore and self.restore_model is not None) or 
                 (self.mode=='train' 
                     and not self.restore and self.restore_model is None))
-        assert((not self.resume and self.resume_data is None) or
-                (self.resume and self.resume_data is not None))
-
-    def _set_save_directory(self):
-        if self.nosave:
-            self.path_save_home = os.path.join(self.path_base, 'tmp')
-        else:
-            if self.path_save_home is None:
-                # Default is data/save/
-                self.path_save_home = os.path.join(self.path_data_home, 'save')
-        self.path_save = os.path.join(self.path_save_home, self.exectime) 
-
-    def _print_settings(self):
-        '''Print current parameter settings 
-        '''
-        # TODO: implement this function
-    
-    def _save_settings(self):
-        '''Save current parameter settings
-        '''
-        # TODO: implement this function
 
 
 if __name__ == '__main__':
