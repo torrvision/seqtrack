@@ -25,7 +25,8 @@ def show_masks(masks, dataset):
     plt.savefig(savedir + '/masks.png')
     plt.close()
 
-def show_target(x0, dataset, stat):
+# def show_target(x0, dataset, stat):
+def show_target(x0, dataset):
     if x0.shape[0] > 25:
         x0 = x0[:25]
 
@@ -33,8 +34,8 @@ def show_target(x0, dataset, stat):
     for i in range(x0.shape[0]):
         plt.subplot(5,5,i+1)
         img = x0[i]
-        img *= stat['std']
-        img += stat['mean']
+        # img *= stat['std']
+        # img += stat['mean']
         plt.imshow(np.uint8(img))
         plt.draw()
         plt.axis('off')
@@ -43,8 +44,9 @@ def show_target(x0, dataset, stat):
     plt.savefig(savedir + '/examples.png')
     plt.close()
 
-def show_dataset_batch(batch, dataset, frmsz, stat=None):
-    vids = batch['inputs']
+# def show_dataset_batch(batch, dataset, frmsz, stat=None):
+def show_dataset_batch(batch, dataset, frmsz):
+    vids = batch['inputs_raw']
     if vids.shape[0] > 25: 
         vids = vids[:25] # only draws less than 25 
     pos = batch['labels']
@@ -53,8 +55,8 @@ def show_dataset_batch(batch, dataset, frmsz, stat=None):
     if dataset in ['moving_mnist', 'bouncing_mnist']:
         digits = batch['digits']
         plt.gray()
-    else:
-        assert(stat is not None)
+    # else:
+    #     assert(stat is not None)
 
     for t in range(vids.shape[1]): # timesteps
         print 'drawing batch examples, time: {}'.format(t)
@@ -66,8 +68,8 @@ def show_dataset_batch(batch, dataset, frmsz, stat=None):
             else:
                 # unnormalize using stat
                 img = vids[i,t]
-                img *= stat['std']
-                img += stat['mean']
+                # img *= stat['std']
+                # img += stat['mean']
                 plt.imshow(np.uint8(img))
 
             if dataset == 'moving_mnist' or dataset == 'bouncing_mnist':
@@ -88,8 +90,9 @@ def show_dataset_batch(batch, dataset, frmsz, stat=None):
     #os.system('convert -loop 0 -delay 30 tmp/{}/frame*.png tmp/{}/vid.gif'.\
     #    format(dataset, dataset))
 
-def show_dataset_batch_fulllen_seq(batch, dataset, frmsz, stat=None):
-    vids = batch['inputs']
+# def show_dataset_batch_fulllen_seq(batch, dataset, frmsz, stat=None):
+def show_dataset_batch_fulllen_seq(batch, dataset, frmsz):
+    vids = batch['inputs_raw']
     if vids.shape[0] > 25: 
         vids = vids[:25] # only draws less than 25 
     pos = batch['labels']
@@ -98,8 +101,8 @@ def show_dataset_batch_fulllen_seq(batch, dataset, frmsz, stat=None):
     if dataset in ['moving_mnist', 'bouncing_mnist']:
         digits = batch['digits']
         plt.gray()
-    else:
-        assert(stat is not None)
+    # else:
+    #     assert(stat is not None)
 
     for i in range(vids.shape[0]): # segments
         fig = plt.figure(figsize=(12,8))
@@ -113,8 +116,8 @@ def show_dataset_batch_fulllen_seq(batch, dataset, frmsz, stat=None):
             else:
                 # unnormalize using stat
                 img = vids[i,t]
-                img *= stat['std']
-                img += stat['mean']
+                # img *= stat['std']
+                # img += stat['mean']
                 plt.imshow(np.uint8(img))
             ax = plt.gca()
             ax.add_patch(
@@ -132,7 +135,7 @@ def show_dataset_batch_fulllen_seq(batch, dataset, frmsz, stat=None):
 def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
     nbatches = results['nbatches']
     idx = np.reshape(np.asarray(results['idx']), [nbatches, o.batchsz])
-    inputs = np.reshape(np.asarray(results['inputs']),
+    inputs = np.reshape(np.asarray(results['inputs_raw']),
         [nbatches, o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel])
     outputs = np.reshape(np.asarray(results['outputs']), 
         [nbatches, o.batchsz, o.ntimesteps, o.outdim])
@@ -167,8 +170,8 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
                     plt.imshow(np.squeeze(img, axis=2))
                 else: 
                     # unnormalize using stat
-                    img *= loader.stat[dstype]['std']
-                    img += loader.stat[dstype]['mean']
+                    # img *= loader.stat[dstype]['std']
+                    # img += loader.stat[dstype]['mean']
                     plt.imshow(np.uint8(img))
                 #rectangles
                 if inputs_valid[i,b,t]:
@@ -194,7 +197,7 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
 
 def show_track_results_fl(results, loader, o, savedir):
 
-    for i in range(len(results['inputs'])):
+    for i in range(len(results['inputs_raw'])):
         if o.dataset in ['OTB-50', 'OTB-100']:
             c = loader.classes[o.dataset][i]
             print 'drawing track results for {} [{}]'.format(o.dataset,c)
@@ -208,19 +211,19 @@ def show_track_results_fl(results, loader, o, savedir):
             raise ValueError('no available dataset..')
         if not os.path.exists(savedir_track): os.makedirs(savedir_track)
 
-        nfrms = results['inputs'][i].shape[1]
+        nfrms = results['inputs_raw'][i].shape[1]
         for t in range(nfrms):
             fig = plt.figure(figsize=(4,4))
             plt.subplot(1, 1, 1)
             #image
-            img = results['inputs'][i][0,t]
-            # unnormalize using stat
-            if o.dataset in ['OTB-50', 'OTB-100']:
-                img *= loader.stat['std']
-                img += loader.stat['mean']
-            elif o.dataset in ['ILSVRC']:
-                img *= loader.stat['val']['std'] # NOTE: no good reason for 'val'
-                img += loader.stat['val']['mean']
+            img = results['inputs_raw'][i][0,t]
+            # # unnormalize using stat
+            # if o.dataset in ['OTB-50', 'OTB-100']:
+            #     img *= loader.stat['std']
+            #     img += loader.stat['mean']
+            # elif o.dataset in ['ILSVRC']:
+            #     img *= loader.stat['val']['std'] # NOTE: no good reason for 'val'
+            #     img += loader.stat['val']['mean']
             plt.imshow(np.uint8(img))
             #rectangles
             if results['inputs_valid'][i][0,t]:

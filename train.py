@@ -90,33 +90,33 @@ def train(m, loader, o):
                         # saved_model = saver.save(sess, fname)
                         saver.save(sess, fname)
 
-                # # **after a certain iteration, perform the followings
-                # # - evaluate on train/test/val set
-                # # - print results (loss, eval resutls, time, etc.)
-                # if global_step % (o.period_assess if not o.debugmode else 20) == 0: # save intermediate model
-                #     print ' '
-                #     # evaluate
-                #     val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
-                #     evals = {
-                #         'train': evaluate(sess, m, loader, o, 'train',
-                #             np.maximum(int(np.floor(100/o.batchsz)), 1),
-                #             hold_inputs=True, shuffle_local=True),
-                #         val_: evaluate(sess, m, loader, o, val_,
-                #             np.maximum(int(np.floor(100/o.batchsz)), 1),
-                #             hold_inputs=True, shuffle_local=True)}
-                #     # visualize tracking results examples
-                #     draw.show_track_results(
-                #         evals['train'], loader, 'train', o, global_step,nlimit=20)
-                #     draw.show_track_results(
-                #         evals[val_], loader, val_, o, global_step,nlimit=20)
-                #     # print results
-                #     print 'ep {:d}/{:d} (STEP-{:d}) '\
-                #         '|(train/{:s}) IOU: {:.3f}/{:.3f}, '\
-                #         'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} '.format(
-                #         ie+1, nepoch, global_step+1, val_,
-                #         evals['train']['iou_mean'], evals[val_]['iou_mean'],
-                #         evals['train']['auc'],      evals[val_]['auc'],
-                #         evals['train']['cle_mean'], evals[val_]['cle_mean'])
+                # **after a certain iteration, perform the followings
+                # - evaluate on train/test/val set
+                # - print results (loss, eval resutls, time, etc.)
+                if global_step % (o.period_assess if not o.debugmode else 20) == 0: # save intermediate model
+                    print ' '
+                    # evaluate
+                    val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
+                    evals = {
+                        'train': evaluate(sess, m, loader, o, 'train',
+                            np.maximum(int(np.floor(100/o.batchsz)), 1),
+                            hold_inputs=True, shuffle_local=True),
+                        val_: evaluate(sess, m, loader, o, val_,
+                            np.maximum(int(np.floor(100/o.batchsz)), 1),
+                            hold_inputs=True, shuffle_local=True)}
+                    # visualize tracking results examples
+                    draw.show_track_results(
+                        evals['train'], loader, 'train', o, global_step,nlimit=20)
+                    draw.show_track_results(
+                        evals[val_], loader, val_, o, global_step,nlimit=20)
+                    # print results
+                    print 'ep {:d}/{:d} (STEP-{:d}) '\
+                        '|(train/{:s}) IOU: {:.3f}/{:.3f}, '\
+                        'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} '.format(
+                        ie+1, nepoch, global_step+1, val_,
+                        evals['train']['iou_mean'], evals[val_]['iou_mean'],
+                        evals['train']['auc'],      evals[val_]['auc'],
+                        evals['train']['cle_mean'], evals[val_]['cle_mean'])
 
                 # Take a training step.
                 start = time.time()

@@ -27,15 +27,15 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
     #   forward-pass should run multiple times.
     #--------------------------------------------------------------------------
 
-    results = {
-            'idx': [], 
-            'inputs': [], # TOO large to have in memory
-            'inputs_valid': [], 
-            'inputs_HW': [], 
-            'labels': [], 
-            'outputs': [],
-            'loss': []
-            }
+    # results = {
+    #         'idx': [], 
+    #         'inputs_valid': [], 
+    #         'inputs_HW': [], 
+    #         'labels': [], 
+    #         'outputs': [],
+    #         'loss': []
+    #         }
+    results = {}
 
     if not fulllen: # this is only used during training.
         if o.debugmode:
@@ -66,15 +66,23 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
             outputs, loss = sess.run(
                     [m.net['outputs'], m.net['loss']], feed_dict=fdict)
 
-            if 'idx' in batch: 
-                results['idx'].append(batch['idx'])
+            # if 'idx' in batch: 
+            #     results['idx'].append(batch['idx'])
+            # if hold_inputs:
+            #     results['inputs'].append(batch['inputs']) # no memory 
+            # results['inputs_valid'].append(batch['inputs_valid'])
+            # results['inputs_HW'].append(batch['inputs_HW'])
+            # results['labels'].append(batch['labels'])
+            # results['outputs'].append(outputs)
+            # results['loss'].append(loss)
+            keys = ['idx', 'inputs_valid', 'inputs_HW', 'labels']
             if hold_inputs:
-                results['inputs'].append(batch['inputs']) # no memory 
-            results['inputs_valid'].append(batch['inputs_valid'])
-            results['inputs_HW'].append(batch['inputs_HW'])
-            results['labels'].append(batch['labels'])
-            results['outputs'].append(outputs)
-            results['loss'].append(loss)
+                keys.append('inputs_raw')
+            for k in keys:
+                if k in batch:
+                    results.setdefault(k, []).append(batch[k])
+            results.setdefault('outputs', []).append(outputs)
+            results.setdefault('loss', []).append(loss)
 
             sys.stdout.write(
                     '\r(during \'{0:s}\') passed {1:d}/{2:d}th batch on '\
