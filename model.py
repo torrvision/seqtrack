@@ -7,6 +7,20 @@ import numpy as np
 
 import cnnutil
 
+# Model interface:
+#
+# Inputs:
+# inputs_raw -- Images for frames {t .. t+T}.
+# inputs_valid -- Boolean for frames {t .. t+T}.
+# inputs_HW -- Dimension of video.
+# labels -- Location of object in frames {t .. t+T}.
+# x0_raw -- Image for frame 0 (perhaps t != 0).
+# y0 -- Location of object in frame 0.
+# target_raw -- Image of object in frame 0, centered and masked.
+#
+# A model may also define a collection of state variables.
+# The state variables will be fed only when the segment is being continued
+# from a previous segment.
 
 def make_input_placeholders(o, stat=None):
     '''
@@ -1301,72 +1315,6 @@ class RNN_new(object):
         return net
 
 
-def make_cnn(layers, wd):
-    weights, bias = [], []
-    for i, layer in enumerate(layers):
-        shape_w = [layer['filtsz'], layer['filtsz'], layer['chin'], layer['chout']]
-        shape_b = [layer['chout']]
-        weights.append(get_weight_variable(shape_w, name_='w{}'.format(i), wd=wd))
-        bias.append(get_bias_variable(shape_b, name_='b{}'.format(i), wd=wd))
-
-    def cnn(x, name='cnn'):
-        with tf.name_scope(name) as scope:
-            for i, layer in enumerate(layers):
-                x = conv2d(x, weights[i], bias[i], stride=layer['st'])
-                x = activate(x, 'relu')
-                if layer['pool']:
-                    x = max_pool(x)
-                # # TODO: can add dropout here
-                # if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
-                #     act = tf.nn.dropout(act, o.keep_ratio_cnn)
-            return tf.identity(x, scope)
-
-    return cnn
-
-def make_conv_lstm(num_ch, wd, conv_support=3):
-    # Conv lstm params
-    lstm = {}
-    gates = ['i', 'f' , 'c' , 'o']
-    for gate in gates:
-        lstm['w_x{}'.format(gate)] = get_weight_variable(
-                [conv_support, conv_support, num_ch, num_ch],
-                name_='w_x{}'.format(gate), wd=wd)
-        lstm['w_h{}'.format(gate)] = get_weight_variable(
-                [conv_support, conv_support, num_ch, num_ch],
-                name_='w_h{}'.format(gate), wd=wd)
-        lstm['b_{}'.format(gate)] = get_weight_variable(
-                [num_ch],
-                name_='b_{}'.format(gate), wd=wd)
-
-    def conv_lstm(x, h_prev, c_prev, name='conv_lstm'):
-        ''' ConvLSTM
-        1. h and c have the same dimension as x (padding can be used)
-        2. no peephole connection
-        '''
-        with tf.name_scope(name) as scope:
-            it = activate(
-                conv2d(x, lstm['w_xi'], lstm['b_i']) +
-                conv2d(h_prev, lstm['w_hi'], lstm['b_i']),
-                'sigmoid')
-            ft = activate(
-                conv2d(x, lstm['w_xf'], lstm['b_f']) +
-                conv2d(h_prev, lstm['w_hf'], lstm['b_f']),
-                'sigmoid')
-            ct_tilda = activate(
-                conv2d(x, lstm['w_xc'], lstm['b_c']) +
-                conv2d(h_prev, lstm['w_hc'], lstm['b_c']),
-                'tanh')
-            ct = (ft * c_prev) + (it * ct_tilda)
-            ot = activate(
-                conv2d(x, lstm['w_xo'], lstm['b_o']) +
-                conv2d(h_prev, lstm['w_ho'], lstm['b_o']),
-                'sigmoid')
-            ht = ot * activate(ct, 'tanh')
-            return ht, ct
-
-    return conv_lstm
-
-
 class RNN_conv_asymm(object):
     def __init__(self, o, stat=None):
         self.is_train = True if o.mode == 'train' else False
@@ -1379,52 +1327,85 @@ class RNN_conv_asymm(object):
         x0     = net['x0']
         y0     = net['y0']
         masks = get_masks_from_rectangles(y0, o)
-        init = tf.concat([x0, masks], axis=3)
+        init_input = tf.concat([x0, masks], axis=3)
+
+        def input_cnn(x, num_outputs, name='input_cnn'):
+            with tf.name_scope(name):
+                with slim.arg_scope([slim.conv2d, slim.max_pool2d], padding='SAME'):
+                    with slim.arg_scope([slim.conv2d],
+                                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                        x = slim.conv2d(x, 16, kernel_size=7, stride=2, scope='conv1')
+                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool1')
+                        x = slim.conv2d(x, 32, kernel_size=5, stride=1, scope='conv2')
+                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool2')
+                        x = slim.conv2d(x, num_outputs, kernel_size=3, stride=1, scope='conv3')
+                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool3')
+            return x
+
+        def conv_lstm(x, h_prev, c_prev, state_dim, name='conv_lstm'):
+            with tf.name_scope(name) as scope:
+                with slim.arg_scope([slim.conv2d],
+                                    num_outputs=state_dim,
+                                    kernel_size=3,
+                                    padding='SAME',
+                                    activation_fn=None,
+                                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                    i = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
+                                      slim.conv2d(h_prev, scope='hi', biases_initializer=None))
+                    f = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
+                                      slim.conv2d(h_prev, scope='hf', biases_initializer=None))
+                    y = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
+                                      slim.conv2d(h_prev, scope='ho', biases_initializer=None))
+                    c_tilde = tf.nn.tanh(slim.conv2d(x, scope='xc') +
+                                         slim.conv2d(h_prev, scope='hc', biases_initializer=None))
+                    c = (f * c_prev) + (i * c_tilde)
+                    h = y * tf.nn.tanh(c)
+            return h, c
+
+        def output_cnn(x, name='output_cnn'):
+            with tf.name_scope(name):
+                with slim.arg_scope([slim.conv2d, slim.max_pool2d], padding='SAME'):
+                    with slim.arg_scope([slim.conv2d, slim.fully_connected],
+                                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                        x = slim.conv2d(x, 128, kernel_size=3, stride=2, scope='conv1')
+                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool1')
+                        x = slim.conv2d(x, 256, kernel_size=3, stride=1, scope='conv2')
+                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool2')
+                        x = slim.flatten(x)
+                        x = slim.fully_connected(x, 4, scope='predict')
+            return x
 
         lstm_dim = 64
-        with tf.variable_scope('frame_cnn'):
-            frame_cnn = make_cnn(
-                [{'filtsz': 7, 'st': 2, 'chin': 3, 'chout': 16, 'pool': True},
-                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
-                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
-                wd=o.wd)
-        with tf.variable_scope('init_h_cnn'):
-            init_h_cnn = make_cnn(
-                [{'filtsz': 7, 'st': 2, 'chin': 4, 'chout': 16, 'pool': True},
-                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
-                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
-                wd=o.wd)
-        with tf.variable_scope('init_c_cnn'):
-            init_c_cnn = make_cnn(
-                [{'filtsz': 7, 'st': 2, 'chin': 4, 'chout': 16, 'pool': True},
-                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
-                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
-                wd=o.wd)
-        with tf.variable_scope('conv_lstm'):
-            conv_lstm = make_conv_lstm(num_ch=64, wd=o.wd)
-        with tf.variable_scope('out_cnn'):
-            out_cnn = make_cnn(
-                [{'filtsz': 3, 'st': 1, 'chin': lstm_dim, 'chout': 128, 'pool': True},
-                 {'filtsz': 3, 'st': 1, 'chin': 128, 'chout': 256, 'pool': True}],
-                wd=o.wd)
-        with tf.variable_scope('predict'):
-            predict_weight = get_weight_variable([4*4*256, 4], wd=o.wd)
-            predict_bias = get_bias_variable([4], wd=o.wd)
+        # At start of sequence, compute hidden state from first example.
+        # Feed (h_init, c_init) to resume tracking from previous state.
+        # Do NOT feed (h_init, c_init) when starting new sequence.
+        with tf.name_scope('h_init') as scope:
+            with tf.variable_scope('h_init'):
+                h_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
+        with tf.name_scope('c_init') as scope:
+            with tf.variable_scope('c_init'):
+                c_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
 
         outputs = []
-        ht = init_h_cnn(init, name='init_h_cnn')
-        ct = init_c_cnn(init, name='init_c_cnn')
-        # These tensors can be fed manually for longer sequences.
-        h_init = ht
-        c_init = ct
+        ht, ct = h_init, c_init
         for t in range(1, o.ntimesteps+1):
             xt = inputs[:, t]
-            rt = frame_cnn(xt)
-            ht, ct = conv_lstm(rt, ht, ct)
-            zt = out_cnn(ht)
-            yt = tf.matmul(tf.reshape(zt, [o.batchsz, 4*4*256]), predict_weight) + predict_bias
+            with tf.name_scope('frame_cnn_{}'.format(t)) as scope:
+                with tf.variable_scope('frame_cnn', reuse=(t > 1)):
+                    # Pass name scope from above, otherwise makes new name scope
+                    # within name scope created by variable scope.
+                    rt = input_cnn(xt, num_outputs=lstm_dim, name=scope)
+            with tf.name_scope('conv_lstm_{}'.format(t)) as scope:
+                with tf.variable_scope('conv_lstm', reuse=(t > 1)):
+                    ht, ct = conv_lstm(rt, ht, ct, state_dim=lstm_dim, name=scope)
+            with tf.name_scope('out_cnn_{}'.format(t)) as scope:
+                with tf.variable_scope('out_cnn', reuse=(t > 1)):
+                    yt = output_cnn(ht, name=scope)
             outputs.append(yt)
+            # tf.get_variable_scope().reuse_variables()
         outputs = tf.stack(outputs, axis=1) # list to tensor
+        h_last, c_last = ht, ct
+        state_vars = [(h_init, h_last), (c_init, c_last)]
 
         field = cnnutil.find_rf(xt, rt)
         print 'CNN receptive field:'
