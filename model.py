@@ -610,76 +610,84 @@ class RNN_attention_st(object):
         return outputs 
 
 
-def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype):
-    # NOTE: Be careful about length of labels and outputs. 
-    # labels and inputs_valid will be of T+1 length, and y0 shouldn't be used.
-    assert(outputs.get_shape().as_list()[1] == o.ntimesteps)
-    assert(labels.get_shape().as_list()[1] == o.ntimesteps+1)
+def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype, name='loss'):
+    with tf.name_scope(name) as scope:
+        # NOTE: Be careful about length of labels and outputs. 
+        # labels and inputs_valid will be of T+1 length, and y0 shouldn't be used.
+        assert(outputs.get_shape().as_list()[1] == o.ntimesteps)
+        assert(labels.get_shape().as_list()[1] == o.ntimesteps+1)
 
-    loss = []
-    
-    if outtype == 'rectangle':
-        # loss1: sum of two l1 distances for left-top and right-bottom
-        if 'l1' in o.losses: # TODO: double check
-            labels_valid = tf.boolean_mask(labels[:,1:], inputs_valid[:,1:])
-            outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
-            loss_l1 = tf.reduce_mean(tf.abs(labels_valid - outputs_valid))
-            loss.append(loss_l1)
-
-        # loss2: IoU
-        if 'iou' in o.losses:
-            assert(False) # TODO: change from inputs_length to inputs_valid
-            scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
-                inputs_HW[:,1], inputs_HW[:,0]), axis=1)
-            boxA = outputs * tf.expand_dims(scalar, 1)
-            boxB = labels[:,1:,:] * tf.expand_dims(scalar, 1)
-            xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
-            yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
-            xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
-            yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
-            interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
-            boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
-            boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
-            # TODO: CHECK tf.div or tf.divide
-            #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
-            iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
-            iou_valid = []
-            for i in range(o.batchsz):
-                iou_valid.append(iou[i, :inputs_length[i]-1])
-            iou_mean = tf.reduce_mean(iou_valid)
-            loss_iou = 1 - iou_mean # NOTE: Any normalization?
-            loss.append(loss_iou)
-
-    elif outtype == 'heatmap':
-        # First of all, need to convert labels into heat maps
-        labels_heatmap = convert_rec_to_heatmap(labels, o)
-
-        # valid labels and outputs
-        labels_valid = tf.boolean_mask(labels_heatmap[:,1:], inputs_valid[:,1:])
-        outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
-
-        # loss1: cross-entropy between probabilty maps (need to change label) 
-        if 'ce' in o.losses: 
-            labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
-            outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
-            assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
-            with tf.control_dependencies([assert_finite(outputs_valid)]):
-                outputs_valid = tf.identity(outputs_valid)
-            loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=labels_flat, logits=outputs_flat)
-            # Wrap with assertion that loss is finite.
-            with tf.control_dependencies([assert_finite(loss_ce)]):
-                loss_ce = tf.identity(loss_ce)
-            loss.append(tf.reduce_mean(loss_ce))
+        losses = dict()
         
-        # loss2: tf's l2 (without sqrt)
-        if 'l2' in o.losses:
-            labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
-            outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
-            outputs_softmax = tf.nn.softmax(outputs_flat)
-            loss_l2 = tf.nn.l2_loss(labels_flat - outputs_softmax)
-            loss.append(loss_l2)
+        if outtype == 'rectangle':
+            # loss1: sum of two l1 distances for left-top and right-bottom
+            if 'l1' in o.losses: # TODO: double check
+                labels_valid = tf.boolean_mask(labels[:,1:], inputs_valid[:,1:])
+                outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
+                loss_l1 = tf.reduce_mean(tf.abs(labels_valid - outputs_valid))
+                losses['l1'] = loss_l1
 
-    return tf.reduce_sum(loss)
+            # loss2: IoU
+            if 'iou' in o.losses:
+                assert(False) # TODO: change from inputs_length to inputs_valid
+                scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
+                    inputs_HW[:,1], inputs_HW[:,0]), axis=1)
+                boxA = outputs * tf.expand_dims(scalar, 1)
+                boxB = labels[:,1:,:] * tf.expand_dims(scalar, 1)
+                xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
+                yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
+                xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
+                yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
+                interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
+                boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
+                boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
+                # TODO: CHECK tf.div or tf.divide
+                #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
+                iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
+                iou_valid = []
+                for i in range(o.batchsz):
+                    iou_valid.append(iou[i, :inputs_length[i]-1])
+                iou_mean = tf.reduce_mean(iou_valid)
+                loss_iou = 1 - iou_mean # NOTE: Any normalization?
+                losses['iou'] = loss_iou
+
+        elif outtype == 'heatmap':
+            # First of all, need to convert labels into heat maps
+            labels_heatmap = convert_rec_to_heatmap(labels, o)
+
+            # valid labels and outputs
+            labels_valid = tf.boolean_mask(labels_heatmap[:,1:], inputs_valid[:,1:])
+            outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
+
+            # loss1: cross-entropy between probabilty maps (need to change label) 
+            if 'ce' in o.losses: 
+                labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
+                outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
+                assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
+                with tf.control_dependencies([assert_finite(outputs_valid)]):
+                    outputs_valid = tf.identity(outputs_valid)
+                loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=labels_flat, logits=outputs_flat)
+                # Wrap with assertion that loss is finite.
+                with tf.control_dependencies([assert_finite(loss_ce)]):
+                    loss_ce = tf.identity(loss_ce)
+                loss_ce = tf.reduce_mean(loss_ce)
+                losses['ce'] = loss_ce
+
+            # loss2: tf's l2 (without sqrt)
+            if 'l2' in o.losses:
+                labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
+                outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
+                outputs_softmax = tf.nn.softmax(outputs_flat)
+                loss_l2 = tf.nn.l2_loss(labels_flat - outputs_softmax)
+                losses['l2'] = loss_l2
+
+        total = tf.add_n(losses.values(), name=scope)
+
+        with tf.name_scope('summary'):
+            for name, loss in losses.iteritems():
+                tf.summary.scalar(name, loss)
+            tf.summary.scalar('total', total)
+        return total
 
 def convert_rec_to_heatmap(rec, o):
     '''Create heatmap from rectangle
