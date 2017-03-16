@@ -176,13 +176,13 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
                 #rectangles
                 if inputs_valid[i,b,t]:
                     ax = plt.gca()
-                    box_gt = labels[i,b,t] * 100 # 100 scale
+                    box_gt = labels[i,b,t] * o.frmsz # 100 scale
                     ax.add_patch(Rectangle(
                         (box_gt[0], box_gt[1]), 
                         box_gt[2]-box_gt[0], box_gt[3]-box_gt[1], 
                         facecolor='r', edgecolor='r', fill=False))
                     if t>0: #output only after frame 1
-                        box_pred = outputs[i,b,t-1] * 100
+                        box_pred = outputs[i,b,t-1] * o.frmsz
                         ax.add_patch(Rectangle(
                             (box_pred[0], box_pred[1]), 
                             box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
