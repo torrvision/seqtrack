@@ -72,7 +72,7 @@ class Opts(object):
         # self.lr                 = 0.0001
         # self.lr_update          = False
         self.lr_init            = 1e-3
-        self.lr_decay_rate      = 0.1
+        self.lr_decay_rate      = 1 # No decay.
         self.lr_decay_steps     = 10000
         self.wd                 = 0.0 # weight decay for regularization
         self.grad_clip          = False

@@ -14,13 +14,13 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='rnn tracking - main script')
 
     parser.add_argument(
-            '--verbose', help='print arguments', 
+            '--verbose', help='print arguments',
             action='store_true')
     parser.add_argument(
-            '--mode', help='choose mode (train, test)', 
+            '--mode', help='choose mode (train, test)',
             type=str, default='')
     parser.add_argument(
-            '--debugmode', help='used for debugging', 
+            '--debugmode', help='used for debugging',
             action='store_true')
 
     parser.add_argument(
@@ -40,14 +40,14 @@ def parse_arguments():
             type=int, default=0)
 
     parser.add_argument(
-            '--nosave', help='no need to save results?', 
-            action='store_true') 
+            '--nosave', help='no need to save results?',
+            action='store_true')
     parser.add_argument(
             '--restore', help='to load a pretrained model (for test)',
             action='store_true')
     parser.add_argument(
-            '--restore_model', help='model to restore', 
-            type=str) 
+            '--restore_model', help='model to restore',
+            type=str)
     parser.add_argument(
             '--resume', help='to resume training',
             action='store_true')
@@ -72,46 +72,55 @@ def parse_arguments():
             '--ntimesteps', help='number of time steps for rnn',
             type=int, default=20)
     parser.add_argument(
-            '--dropout_rnn', help='set dropout for rnn', 
+            '--dropout_rnn', help='set dropout for rnn',
             action='store_true')
     parser.add_argument(
             '--yprev_mode', help='way of using y_prev',
             type=str, default='')
     parser.add_argument(
-            '--pass_yinit', help='pass gt y instead pred y during training', 
+            '--pass_yinit', help='pass gt y instead pred y during training',
             action='store_true')
 
     parser.add_argument(
-            '--dropout_cnn', help='dropout in cnn (only during train)', 
+            '--dropout_cnn', help='dropout in cnn (only during train)',
             action='store_true')
 
     parser.add_argument(
-            '--nepoch', help='number of epochs', 
+            '--nepoch', help='number of epochs',
             type=int, default=20)
     parser.add_argument(
-            '--batchsz', help='batch size', 
+            '--batchsz', help='batch size',
             type=int, default=1)
     parser.add_argument(
             '--optimizer', help='optimizer to train the model',
             type=str, default='adam')
+    parser.add_argument(
+            '--lr_init', help='initial learning rate',
+            type=float, default=1e-3)
+    parser.add_argument(
+            '--lr_decay_rate', help='geometric step for learning rate decay',
+            type=float, default=1)
+    parser.add_argument(
+            '--lr_decay_steps', help='period for decaying learning rate',
+            type=int, default=10000)
     # parser.add_argument(
-    #         '--lr', help='learning rate', 
+    #         '--lr', help='learning rate',
     #         type=float, default=0.0001)
     # parser.add_argument(
-    #         '--lr_update', help='adaptive learning rate', 
+    #         '--lr_update', help='adaptive learning rate',
     #         action='store_true')
     parser.add_argument(
-            '--wd', help='weight decay', 
+            '--wd', help='weight decay',
             type=float, default=1e-3)
 
     parser.add_argument(
-            '--device_number', help='gpu number for manual assignment', 
+            '--device_number', help='gpu number for manual assignment',
             type=int, default=0)
     parser.add_argument(
-            '--gpu_manctrl', help='control gpu memory manual', 
+            '--gpu_manctrl', help='control gpu memory manual',
             action='store_true')
     parser.add_argument(
-            '--gpu_frac', help='fraction of gpu memory', 
+            '--gpu_frac', help='fraction of gpu memory',
             type=float, default=0.4)
 
     args = parser.parse_args()
