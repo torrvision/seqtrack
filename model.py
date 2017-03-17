@@ -138,7 +138,7 @@ class RNN_attention_s(object):
  
         loss = get_loss(outputs, labels, inputs_length, inputs_HW, o, 'rectangle')
         tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+        loss_total = tf.reduce_sum(tf.get_collection('losses'), name='loss_total')
 
         net = {
                 'inputs': inputs,
@@ -381,7 +381,7 @@ class RNN_attention_st(object):
 
         loss = get_loss(outputs, labels, inputs_length, inputs_HW, o, 'rectangle')
         tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+        loss_total = tf.reduce_sum(tf.get_collection('losses'), name='loss_total')
 
         net = {
                 'inputs': inputs,
@@ -681,13 +681,11 @@ def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype, name='loss'):
                 loss_l2 = tf.nn.l2_loss(labels_flat - outputs_softmax)
                 losses['l2'] = loss_l2
 
-        total = tf.add_n(losses.values(), name=scope)
-
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
                 tf.summary.scalar(name, loss)
-            tf.summary.scalar('total', total)
-        return total
+
+        return tf.reduce_sum(losses.values(), name=scope)
 
 def convert_rec_to_heatmap(rec, o):
     '''Create heatmap from rectangle
@@ -990,7 +988,7 @@ class RNN_basic(object):
 
         loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o)
         tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
+        loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
 
         # net = {
         net.update({
@@ -1303,7 +1301,7 @@ class RNN_new(object):
 
         loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'heatmap')
         tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
+        loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
 
         # net = {
         net.update({
@@ -1421,9 +1419,18 @@ class RNN_conv_asymm(object):
         print '  center offset:', field.rect.int_center()
         print '  stride:', field.stride
 
-        loss = get_loss(outputs, net['labels'], net['inputs_valid'], net['inputs_HW'], o, 'rectangle')
-        tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+        with tf.name_scope('loss'):
+            loss_pred = get_loss(outputs, net['labels'], net['inputs_valid'], net['inputs_HW'], o,
+                                 outtype='rectangle',
+                                 name='pred')
+            loss_reg = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+            loss_total = loss_pred + loss_reg
+            # tf.add_to_collection('losses', loss)
+            # loss_total = tf.reduce_sum(tf.get_collection('losses'), name='loss_total')
+            with tf.name_scope('summary'):
+                tf.summary.scalar('pred', loss_pred)
+                tf.summary.scalar('reg', loss_reg)
+                tf.summary.scalar('total', loss_total)
 
         net.update({
             'outputs': outputs,
@@ -1596,7 +1603,7 @@ class NonRecur(object):
 
         loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle')
         tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
+        loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
 
         # net = {
         net.update({

@@ -11,20 +11,18 @@ import helpers
 
 
 def train(m, loader, o):
+    optimizer, global_step_var, lr = _get_optimizer(m.net['loss'], o)
+
     # (manual) learning rate recipe
     lr_recipe = _get_lr_recipe()
-    optimizer, global_step_var, lr = _get_optimizer(m, o)
 
     nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = loader.nexps['train']/o.batchsz if not o.debugmode else 30
     nbatch_val = loader.nexps['val']/o.batchsz if not o.debugmode else 30
 
     init_op = tf.global_variables_initializer()
-    saver = tf.train.Saver()
-
-    tf.summary.scalar('loss', m.net['loss'])
-    # tf.summary.histogram('output', m.net['outputs'])
     summary_op = tf.summary.merge_all()
+    saver = tf.train.Saver()
 
     def process_batch(batch, step, optimize=True, writer=None, write_summary=False):
         names = ['target_raw', 'inputs_raw', 'x0_raw', 'y0', 'inputs_valid', 'inputs_HW', 'labels']
@@ -93,7 +91,8 @@ def train(m, loader, o):
                 # **after a certain iteration, perform the followings
                 # - evaluate on train/test/val set
                 # - print results (loss, eval resutls, time, etc.)
-                if global_step % (o.period_assess if not o.debugmode else 20) == 0: # save intermediate model
+                period_assess = o.period_assess if not o.debugmode else 20
+                if global_step > 0 and global_step % period_assess == 0: # evaluate model
                     print ' '
                     # evaluate
                     val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
@@ -167,21 +166,21 @@ def _get_lr_recipe():
             lr_recipe[i] = lr_recipe[4]
     return lr_recipe
 
-def _get_optimizer(m, o):
+def _get_optimizer(loss, o):
     global_step = tf.Variable(0, name='global_step', trainable=False)
     lr = tf.placeholder(o.dtype, shape=[])
     if o.optimizer == 'sgd':
         optimizer = tf.train.GradientDescentOptimizer(lr).minimize(\
-                m.net['loss'], global_step=global_step)
+                loss, global_step=global_step)
     elif o.optimizer == 'momentum':
         optimizer = tf.train.MomentumOptimizer(lr, 0.9).minimize(\
-                m.net['loss'], global_step=global_step)
+                loss, global_step=global_step)
     elif o.optimizer == 'rmsprop':
         optimizer = tf.train.RMSPropOptimizer(learning_rate=lr).minimize(\
-                m.net['loss'], global_step=global_step)
+                loss, global_step=global_step)
     elif o.optimizer == 'adam':
         optimizer = tf.train.AdamOptimizer(learning_rate=lr).minimize(\
-                m.net['loss'], global_step=global_step)
+                loss, global_step=global_step)
     else:
         raise ValueError('optimizer not implemented or simply wrong.')
     return optimizer, global_step, lr

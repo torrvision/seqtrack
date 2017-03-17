@@ -102,7 +102,7 @@ def parse_arguments():
             action='store_true')
     parser.add_argument(
             '--wd', help='weight decay', 
-            type=float, default=0.0)
+            type=float, default=1e-3)
 
     parser.add_argument(
             '--device_number', help='gpu number for manual assignment', 
