@@ -94,12 +94,12 @@ def parse_arguments():
     parser.add_argument(
             '--optimizer', help='optimizer to train the model',
             type=str, default='adam')
-    parser.add_argument(
-            '--lr', help='learning rate', 
-            type=float, default=0.0001)
-    parser.add_argument(
-            '--lr_update', help='adaptive learning rate', 
-            action='store_true')
+    # parser.add_argument(
+    #         '--lr', help='learning rate', 
+    #         type=float, default=0.0001)
+    # parser.add_argument(
+    #         '--lr_update', help='adaptive learning rate', 
+    #         action='store_true')
     parser.add_argument(
             '--wd', help='weight decay', 
             type=float, default=1e-3)

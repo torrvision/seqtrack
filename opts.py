@@ -69,8 +69,11 @@ class Opts(object):
         self.nepoch             = 20
         self.batchsz            = 1
         self.optimizer          = 'adam' # sgd, adam, rmsprop
-        self.lr                 = 0.0001
-        self.lr_update          = False
+        # self.lr                 = 0.0001
+        # self.lr_update          = False
+        self.lr_init            = 1e-3
+        self.lr_decay_rate      = 0.1
+        self.lr_decay_steps     = 10000
         self.wd                 = 0.0 # weight decay for regularization
         self.grad_clip          = False
         self.max_grad_norm      = 5.0
