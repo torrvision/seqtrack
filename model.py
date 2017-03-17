@@ -986,9 +986,16 @@ class RNN_basic(object):
             outputs.append(y_curr)
         outputs = tf.stack(outputs, axis=1) # list to tensor
 
-        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o)
-        tf.add_to_collection('losses', loss)
-        loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+        # loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o)
+        # tf.add_to_collection('losses', loss)
+        # loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+        with tf.name_scope('loss'):
+            loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle', name='pred')
+            tf.add_to_collection('losses', loss)
+            loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+            with tf.name_scope('summary'):
+                tf.summary.scalar('pred', loss)
+                tf.summary.scalar('total', loss_total)
 
         # net = {
         net.update({
@@ -1299,9 +1306,16 @@ class RNN_new(object):
             outputs.append(y_curr)
         outputs = tf.stack(outputs, axis=1) # list to tensor
 
-        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'heatmap')
-        tf.add_to_collection('losses', loss)
-        loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+        # loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'heatmap')
+        # tf.add_to_collection('losses', loss)
+        # loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+        with tf.name_scope('loss'):
+            loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'heatmap', name='pred')
+            tf.add_to_collection('losses', loss)
+            loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+            with tf.name_scope('summary'):
+                tf.summary.scalar('pred', loss)
+                tf.summary.scalar('total', loss_total)
 
         # net = {
         net.update({
@@ -1601,9 +1615,16 @@ class NonRecur(object):
 
         outputs = tf.stack(outputs, axis=1) # list to tensor
 
-        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle')
-        tf.add_to_collection('losses', loss)
-        loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+        # loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle')
+        # tf.add_to_collection('losses', loss)
+        # loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+        with tf.name_scope('loss'):
+            loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle', name='pred')
+            tf.add_to_collection('losses', loss)
+            loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+            with tf.name_scope('summary'):
+                tf.summary.scalar('pred', loss)
+                tf.summary.scalar('total', loss_total)
 
         # net = {
         net.update({
