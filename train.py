@@ -21,7 +21,10 @@ def train(m, loader, o):
     nbatch_val = loader.nexps['val']/o.batchsz if not o.debugmode else 30
 
     init_op = tf.global_variables_initializer()
-    summary_op = tf.summary.merge_all()
+    summary_var_eval = tf.summary.merge_all()
+    # Optimization summary might include gradients, learning rate, etc.
+    summary_var_opt = tf.summary.merge([summary_var_eval,
+        tf.summary.scalar('lr', lr)])
     saver = tf.train.Saver()
 
     def process_batch(batch, step, optimize=True, writer=None, write_summary=False):
@@ -35,12 +38,12 @@ def train(m, loader, o):
         summary = None
         if optimize:
             if write_summary:
-                _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
+                _, loss, summary = sess.run([optimizer, m.net['loss'], summary_var_opt], feed_dict=fdict)
             else:
                 _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
         else:
             if write_summary:
-                loss, summary = sess.run([m.net['loss'], summary_op], feed_dict=fdict)
+                loss, summary = sess.run([m.net['loss'], summary_var_eval], feed_dict=fdict)
             else:
                 loss = sess.run([m.net['loss']], feed_dict=fdict)
         dur = time.time() - start
