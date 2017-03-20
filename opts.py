@@ -100,6 +100,8 @@ class Opts(object):
         self.path_summary       = './summary'
         self.summary_period     = 10
         self.val_period         = 10
+        self.activ_histogram    = False
+        self.param_histogram    = True
 
         #----------------------------------------------------------------------
         # custom libraries

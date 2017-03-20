@@ -1364,9 +1364,10 @@ class RNN_conv_asymm(object):
                         x = slim.conv2d(x, num_outputs, kernel_size=3, stride=1, scope='conv3')
                         layers['conv3'] = x
                         x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool3')
-                        with tf.name_scope('summary'):
-                            for k, v in layers.iteritems():
-                                tf.summary.histogram(k, v)
+                        if o.activ_histogram:
+                            with tf.name_scope('summary'):
+                                for k, v in layers.iteritems():
+                                    tf.summary.histogram(k, v)
             return x
 
         def conv_lstm(x, h_prev, c_prev, state_dim, name='conv_lstm'):
@@ -1388,9 +1389,10 @@ class RNN_conv_asymm(object):
                     c = (f * c_prev) + (i * c_tilde)
                     h = y * tf.nn.tanh(c)
                     layers = {'i': i, 'f': f, 'o': y, 'c_tilde': c, 'c': c, 'h': h}
-                    with tf.name_scope('summary'):
-                        for k, v in layers.iteritems():
-                            tf.summary.histogram(k, v)
+                    if o.activ_histogram:
+                        with tf.name_scope('summary'):
+                            for k, v in layers.iteritems():
+                                tf.summary.histogram(k, v)
             return h, c
 
         def output_cnn(x, name='output_cnn'):
@@ -1408,9 +1410,10 @@ class RNN_conv_asymm(object):
                         x = slim.flatten(x)
                         x = slim.fully_connected(x, 4, scope='predict')
                         layers['predict'] = x
-                        with tf.name_scope('summary'):
-                            for k, v in layers.iteritems():
-                                tf.summary.histogram(k, v)
+                        if o.activ_histogram:
+                            with tf.name_scope('summary'):
+                                for k, v in layers.iteritems():
+                                    tf.summary.histogram(k, v)
             return x
 
         lstm_dim = 64
@@ -1445,8 +1448,9 @@ class RNN_conv_asymm(object):
         h_last, c_last = ht, ct
         state_vars = [(h_init, h_last), (c_init, c_last)]
 
-        for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
-            tf.summary.histogram(v.name, v)
+        if o.param_histogram:
+            for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
+                tf.summary.histogram(v.name, v)
 
         field = cnnutil.find_rf(xt, rt)
         print 'CNN receptive field:'
