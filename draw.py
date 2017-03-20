@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 import helpers
+from evaluate import convert_heatmap_to_rec
 
 
 def show_masks(masks, dataset):
@@ -132,14 +133,23 @@ def show_dataset_batch_fulllen_seq(batch, dataset, frmsz, stat=None):
 def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
     nbatches = results['nbatches']
     idx = np.reshape(np.asarray(results['idx']), [nbatches, o.batchsz])
-    inputs = np.reshape(np.asarray(results['inputs']),
-        [nbatches, o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel])
-    outputs = np.reshape(np.asarray(results['outputs']), 
-        [nbatches, o.batchsz, o.ntimesteps, o.outdim])
+    #inputs = np.reshape(np.asarray(results['inputs']),
+    #    [nbatches, o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel])
+    #outputs = np.reshape(np.asarray(results['outputs']), 
+    #    [nbatches, o.batchsz, o.ntimesteps, o.outdim])
     labels = np.reshape(np.asarray(results['labels']), 
         [nbatches, o.batchsz, o.ntimesteps+1, o.outdim])
     inputs_valid = np.reshape(np.asarray(results['inputs_valid']), 
         [nbatches, o.batchsz, o.ntimesteps+1])
+    inputs_HW = np.reshape(np.asarray(results['inputs_HW']),
+        [nbatches, o.batchsz, 2])
+    # The way of using stat is changed, so inputs_raw.
+    inputs_raw = np.reshape(np.asarray(results['inputs_raw']),
+        [nbatches, o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel])
+    # output is a form of heatmap
+    outputs = np.reshape(np.asarray(results['outputs']), 
+        [nbatches, o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, 1])
+    outputs_rec = convert_heatmap_to_rec(outputs, inputs_HW)
 
     if o.dataset in ['moving_mnist', 'bouncing_mnist']:
         plt.gray()
@@ -162,15 +172,16 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
                 else:
                     plt.subplot(nrows,ncols,t+ncols)
                 #image
-                img = inputs[i, b, t]
+                #img = inputs[i, b, t]
+                img = inputs_raw[i, b, t]
                 if o.dataset in ['moving_mnist', 'bouncing_mnist']:
                     plt.imshow(np.squeeze(img, axis=2))
                 else: 
                     # unnormalize using stat
-                    img *= loader.stat[dstype]['std']
-                    img += loader.stat[dstype]['mean']
+                    #img *= loader.stat[dstype]['std']
+                    #img += loader.stat[dstype]['mean']
                     plt.imshow(np.uint8(img))
-                #rectangles
+                # rectangles
                 if inputs_valid[i,b,t]:
                     ax = plt.gca()
                     box_gt = labels[i,b,t] * 100 # 100 scale
@@ -179,11 +190,14 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
                         box_gt[2]-box_gt[0], box_gt[3]-box_gt[1], 
                         facecolor='r', edgecolor='r', fill=False))
                     if t>0: #output only after frame 1
-                        box_pred = outputs[i,b,t-1] * 100
+                        #box_pred = outputs[i,b,t-1] * 100
+                        box_pred = outputs_rec[i,b,t-1] * 100
                         ax.add_patch(Rectangle(
                             (box_pred[0], box_pred[1]), 
                             box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
                             facecolor='b', edgecolor='b', fill=False))
+                # heatmap
+                plt.imshow(np.squeeze(outputs[i, b, t-1]), cmap='jet', alpha=0.3)
 
             savedir = os.path.join(o.path_output, 'track_results')
             if not os.path.exists(savedir): helpers.mkdir_p(savedir)

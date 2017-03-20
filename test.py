@@ -70,12 +70,6 @@ def parse_arguments():
             type=float, default=0.0)
 
     parser.add_argument(
-            '--device_number', help='gpu number for manual assignment',
-            type=int, default=0)
-    parser.add_argument(
-            '--gpu_manctrl', help='control gpu memory manual',
-            action='store_true')
-    parser.add_argument(
             '--gpu_frac', help='fraction of gpu memory',
             type=float, default=0.4)
 
@@ -157,7 +151,6 @@ if __name__ == '__main__':
         - dataset (e.g., bouncing_mnist)
         - model (e.g., rnn_attention_st)
         - restore_model (e.g., ***.ckpt)
-        - gpu_manctrl 
         - ntimesteps
         - yprev_mode
         - losses

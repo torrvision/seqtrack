@@ -678,11 +678,7 @@ def convert_rec_to_heatmap(rec, o):
     for t in range(o.ntimesteps+1):
         masks.append(get_masks_from_rectangles(rec[:,t], o))
     masks = tf.stack(masks, axis=1)
-    # normalize
-    masks_sum = tf.reshape(tf.reduce_sum(masks, axis=[2,3,4]),
-            [o.batchsz, o.ntimesteps+1, 1, 1, 1])
-    heatmap = tf.divide(masks, masks_sum)
-    return heatmap
+    return masks
 
 # weight variable; created variables are new and will not be shared.
 def get_weight_variable(
@@ -1040,6 +1036,7 @@ class RNN_new(object):
                     'b': get_bias_variable([chout], 
                         name_='b{}'.format(i), wd=o.wd),
                     'chout': chout})
+
         # Conv lstm params
         with tf.variable_scope('lstm'):
             lstm = {}
@@ -1195,29 +1192,13 @@ class RNN_new(object):
         return output
 
     def _load_model(self, o, stat=None):
+        # placeholders
         net = make_input_placeholders(o, stat)
         inputs       = net['inputs']
         inputs_valid = net['inputs_valid']
         inputs_HW    = net['inputs_HW']
         labels       = net['labels']
-        y_init       = net['y_init']
-        x0           = net['x0']
-        y0           = net['y0']
         target       = net['target']
-
-        # # placeholders for inputs
-        # inputs = tf.placeholder(o.dtype, 
-        #         shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel], 
-        #         name='inputs')
-        # inputs_valid = tf.placeholder(tf.bool, 
-        #         shape=[o.batchsz, o.ntimesteps+1], 
-        #         name='inputs_valid')
-        # inputs_HW = tf.placeholder(o.dtype, 
-        #         shape=[o.batchsz, 2], 
-        #         name='inputs_HW')
-        # labels = tf.placeholder(o.dtype, 
-        #         shape=[o.batchsz, o.ntimesteps+1, o.outdim], 
-        #         name='labels')
 
         # placeholders for initializations of full-length sequences
         # NOTE: currently, h and c have the same dimension as input to ConvLSTM
@@ -1231,25 +1212,10 @@ class RNN_new(object):
             tf.truncated_normal([o.batchsz, cnnh, cnnw, cnnch], dtype=o.dtype), 
             shape=[o.batchsz, cnnh, cnnw, cnnch], name='c_init')
 
-        # placeholders for x0 and y0. This is used for full-length sequences
-        # NOTE: when it's not first segment, you should always feed x0, y0
-        # otherwise it will use GT as default. It will be wrong then.
-        #x0 = tf.placeholder_with_default(
-        #        inputs[:,0], 
-        #        shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0')
-        #y0 = tf.placeholder_with_default(
-        #        labels[:,0],
-        #        shape=[o.batchsz, o.outdim], name='y0')
-
-        # # NOTE: when it's not first segment, be careful what is passed to target.
-        # # Make sure to pass x0, not the first frame of every segments.
-        # target = tf.placeholder(o.dtype, 
-        #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], 
-        #         name='target')
-
 
         # RNN unroll
         outputs = []
+        dbg = []
         for t in range(1, o.ntimesteps+1):
             if t==1:
                 h_prev = h_init
@@ -1271,11 +1237,6 @@ class RNN_new(object):
             # regress output heatmap using deconvolution layers (transpose of conv)
             h_deconv = self._pass_deconvolution(h_curr, o)
             y_curr = self._project_output(h_deconv)
-
-            # TODO: debugging nan
-            dbg = tf.reduce_sum(tf.cast(tf.is_nan(c_curr), dtype=o.dtype)) 
-            #dbg = tf.Print(dbg, [dbg], 'dbg:')
-
             outputs.append(y_curr)
         outputs = tf.stack(outputs, axis=1) # list to tensor
 
@@ -1283,13 +1244,7 @@ class RNN_new(object):
         tf.add_to_collection('losses', loss)
         loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
 
-        # net = {
         net.update({
-                # 'target': target, 
-                # 'inputs': inputs,
-                # 'inputs_valid': inputs_valid,
-                # 'inputs_HW': inputs_HW,
-                # 'labels': labels,
                 'outputs': outputs,
                 'loss': loss_total,
                 'h_init': h_init,
@@ -1655,12 +1610,16 @@ if __name__ == '__main__':
 
     o.model = 'RNN_new' # RNN_basic, RNN_a 
 
+    # data setting (since the model requires stat, I need this to test)
+    import data
+    loader = data.load_data(o)
+
     if o.model == 'RNN_basic':
         o.pass_yinit = True
         m = RNN_basic(o)
     elif o.model == 'RNN_new':
         o.losses = ['ce', 'l2']
-        m = RNN_new(o)
+        m = RNN_new(o, loader.stat['train'])
 
     pdb.set_trace()
 

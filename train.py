@@ -78,6 +78,7 @@ def train(m, loader, o):
             lr_epoch = lr_recipe[ie] if o.lr_update else o.lr
 
             ib_val = 0
+            loss_ep = []
             for ib in range(nbatch): # Loop over batches in epoch.
                 global_step = global_step_var.eval() # Number of steps taken.
 
@@ -90,33 +91,31 @@ def train(m, loader, o):
                         # saved_model = saver.save(sess, fname)
                         saver.save(sess, fname)
 
-                # # **after a certain iteration, perform the followings
-                # # - evaluate on train/test/val set
-                # # - print results (loss, eval resutls, time, etc.)
-                # if global_step % (o.period_assess if not o.debugmode else 20) == 0: # save intermediate model
-                #     print ' '
-                #     # evaluate
-                #     val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
-                #     evals = {
-                #         'train': evaluate(sess, m, loader, o, 'train',
-                #             np.maximum(int(np.floor(100/o.batchsz)), 1),
-                #             hold_inputs=True, shuffle_local=True),
-                #         val_: evaluate(sess, m, loader, o, val_,
-                #             np.maximum(int(np.floor(100/o.batchsz)), 1),
-                #             hold_inputs=True, shuffle_local=True)}
-                #     # visualize tracking results examples
-                #     draw.show_track_results(
-                #         evals['train'], loader, 'train', o, global_step,nlimit=20)
-                #     draw.show_track_results(
-                #         evals[val_], loader, val_, o, global_step,nlimit=20)
-                #     # print results
-                #     print 'ep {:d}/{:d} (STEP-{:d}) '\
-                #         '|(train/{:s}) IOU: {:.3f}/{:.3f}, '\
-                #         'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} '.format(
-                #         ie+1, nepoch, global_step+1, val_,
-                #         evals['train']['iou_mean'], evals[val_]['iou_mean'],
-                #         evals['train']['auc'],      evals[val_]['auc'],
-                #         evals['train']['cle_mean'], evals[val_]['cle_mean'])
+                # periodic assessment (success & precision rates, visualizations)
+                if global_step % (o.period_assess if not o.debugmode else 20) == 0: # save intermediate model
+                    # evaluate
+                    val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
+                    evals = {
+                        'train': evaluate(sess, m, loader, o, 'train',
+                            np.maximum(int(np.floor(100/o.batchsz)), 1),
+                            hold_inputs=True, shuffle_local=True),
+                        val_: evaluate(sess, m, loader, o, val_,
+                            np.maximum(int(np.floor(100/o.batchsz)), 1),
+                            hold_inputs=True, shuffle_local=True)}
+                    # visualize tracking results examples
+                    draw.show_track_results(
+                        evals['train'], loader, 'train', o, global_step,nlimit=20)
+                    draw.show_track_results(
+                        evals[val_], loader, val_, o, global_step,nlimit=20)
+                    # print results
+                    print 'ep {:d}/{:d} (GLOBAL_STEP-{:d}) '\
+                        '|(train/{:s}) loss: {:.4f}/{:.4f}, IOU: {:.3f}/{:.3f}, '\
+                        'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} '.format(
+                        ie+1, nepoch, global_step+1, val_,
+                        np.mean(evals['train']['loss']), np.mean(evals[val_]['loss']),
+                        evals['train']['iou_mean'], evals[val_]['iou_mean'],
+                        evals['train']['auc'],      evals[val_]['auc'],
+                        evals['train']['cle_mean'], evals[val_]['cle_mean'])
 
                 # Take a training step.
                 start = time.time()
@@ -125,15 +124,17 @@ def train(m, loader, o):
 
                 loss, dur = process_batch(batch, step=global_step, optimize=True,
                     writer=train_writer,
-                    write_summary=(ib % o.summary_period == 0))
+                    write_summary=(ib % o.period_summary == 0))
+                loss_ep.append(loss)
 
                 # **results after every batch
-                print ('ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
-                    '|loss:{5:.5f} |time:{6:.2f} ({7:.2f})').format(
-                    ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
+                if o.verbose_train:
+                    print ('ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
+                        '|loss:{5:.5f} |time:{6:.2f} ({7:.2f})').format(
+                        ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
 
                 # Evaluate validation error.
-                if ib % o.val_period == 0:
+                if ib % o.period_summary == 0:
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
@@ -141,13 +142,14 @@ def train(m, loader, o):
                         load_dur = time.time() - start
                         loss, dur = process_batch(batch, step=global_step, optimize=False,
                             writer=val_writer, write_summary=True)
-                        print ('[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
-                            '|loss:{5:.5f} |time:{6:.2f} ({7:.2f})').format(
-                            ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
+                        if o.verbose_train:
+                            print ('[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
+                                '|loss:{5:.5f} |time:{6:.2f} ({7:.2f})').format(
+                                ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
                         ib_val += 1
 
-            print 'ep {0:d}/{1:d} (EPOCH) |time:{2:.2f}'.format(
-                    ie+1, nepoch, time.time()-t_epoch)
+            print 'ep {:d}/{:d} (EPOCH) |loss: {:.4f}, time:{:.2f}'.format(
+                    ie+1, nepoch, np.mean(loss_ep), time.time()-t_epoch)
 
         # **training finished
         print '\ntraining finished! ------------------------------------------'

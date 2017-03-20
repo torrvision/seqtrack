@@ -14,6 +14,7 @@ class Opts(object):
         '''
         #----------------------------------------------------------------------
         # settings 
+        self.verbose_train      = False
         self.mode               = '' # 'train' or 'test'
         self.debugmode          = False # True or False
         self.seed_global        = 9
@@ -25,7 +26,7 @@ class Opts(object):
         # data set specific parameters 
         # TODO: only params that need to change; otherwise put it in data class
         self.dataset            = '' # (bouncing_mnist, etc.)
-        self.trainsplit         = None # 0,1,2,3 or 9 for all train sets
+        self.trainsplit         = 0 # 0,1,2,3 or 9 for all train sets
         self.frmsz              = None
         self.ninchannel         = None
         self.outdim             = None
@@ -61,10 +62,6 @@ class Opts(object):
         # TODO: add dropout and batch norm option
 
         #----------------------------------------------------------------------
-        # model parameters - NTM
-        
-
-        #----------------------------------------------------------------------
         # training policies
         self.nepoch             = 20
         self.batchsz            = 1
@@ -84,19 +81,15 @@ class Opts(object):
         self.path_data          = '' # This is set later e.g. {path_data_home}/ILSVRC
         self.nosave             = False
         self.path_ckpt          = './ckpt'
-        self.period_ckpt        = 10000
-        self.period_assess      = self.period_ckpt
         self.path_output        = './output'
+        self.path_summary       = './summary'
         self.restore            = False 
         self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
         self.resume_data        = None
-        #self.path_logs          = './logs'
-        # 'logs' directory reserved for saving system level logs (being used in
-        # a shell script)
-        self.path_summary       = './summary'
-        self.summary_period     = 10
-        self.val_period         = 10
+        self.period_ckpt        = 10000
+        self.period_assess      = self.period_ckpt
+        self.period_summary     = 10
 
         #----------------------------------------------------------------------
         # custom libraries
@@ -106,10 +99,8 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # device memory allocation 
-        self.device             = 'gpu' # cpu or gpu; Don't change it for now
-        self.device_number      = 0 # TODO: not working on local machine
-        self.gpu_manctrl        = False
-        self.gpu_frac           = 0.4 # TODO: is this optimal value? 
+        self.gpu_manctrl        = True # set it always True and control gpu_frac
+        self.gpu_frac           = 0.4 # option for memory allocation
 
     
     def update_by_sysarg(self, args):
