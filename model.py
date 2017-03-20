@@ -7,6 +7,20 @@ import numpy as np
 
 import cnnutil
 
+# Model interface:
+#
+# Inputs:
+# inputs_raw -- Images for frames {t .. t+T}.
+# inputs_valid -- Boolean for frames {t .. t+T}.
+# inputs_HW -- Dimension of video.
+# labels -- Location of object in frames {t .. t+T}.
+# x0_raw -- Image for frame 0 (perhaps t != 0).
+# y0 -- Location of object in frame 0.
+# target_raw -- Image of object in frame 0, centered and masked.
+#
+# A model may also define a collection of state variables.
+# The state variables will be fed only when the segment is being continued
+# from a previous segment.
 
 def make_input_placeholders(o, stat=None):
     '''
@@ -124,7 +138,7 @@ class RNN_attention_s(object):
  
         loss = get_loss(outputs, labels, inputs_length, inputs_HW, o, 'rectangle')
         tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+        loss_total = tf.reduce_sum(tf.get_collection('losses'), name='loss_total')
 
         net = {
                 'inputs': inputs,
@@ -367,7 +381,7 @@ class RNN_attention_st(object):
 
         loss = get_loss(outputs, labels, inputs_length, inputs_HW, o, 'rectangle')
         tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+        loss_total = tf.reduce_sum(tf.get_collection('losses'), name='loss_total')
 
         net = {
                 'inputs': inputs,
@@ -596,76 +610,82 @@ class RNN_attention_st(object):
         return outputs 
 
 
-def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype):
-    # NOTE: Be careful about length of labels and outputs. 
-    # labels and inputs_valid will be of T+1 length, and y0 shouldn't be used.
-    assert(outputs.get_shape().as_list()[1] == o.ntimesteps)
-    assert(labels.get_shape().as_list()[1] == o.ntimesteps+1)
+def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype, name='loss'):
+    with tf.name_scope(name) as scope:
+        # NOTE: Be careful about length of labels and outputs. 
+        # labels and inputs_valid will be of T+1 length, and y0 shouldn't be used.
+        assert(outputs.get_shape().as_list()[1] == o.ntimesteps)
+        assert(labels.get_shape().as_list()[1] == o.ntimesteps+1)
 
-    loss = []
-    
-    if outtype == 'rectangle':
-        # loss1: sum of two l1 distances for left-top and right-bottom
-        if 'l1' in o.losses: # TODO: double check
-            labels_valid = tf.boolean_mask(labels[:,1:], inputs_valid[:,1:])
-            outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
-            loss_l1 = tf.reduce_mean(tf.abs(labels_valid - outputs_valid))
-            loss.append(loss_l1)
-
-        # loss2: IoU
-        if 'iou' in o.losses:
-            assert(False) # TODO: change from inputs_length to inputs_valid
-            scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
-                inputs_HW[:,1], inputs_HW[:,0]), axis=1)
-            boxA = outputs * tf.expand_dims(scalar, 1)
-            boxB = labels[:,1:,:] * tf.expand_dims(scalar, 1)
-            xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
-            yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
-            xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
-            yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
-            interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
-            boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
-            boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
-            # TODO: CHECK tf.div or tf.divide
-            #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
-            iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
-            iou_valid = []
-            for i in range(o.batchsz):
-                iou_valid.append(iou[i, :inputs_length[i]-1])
-            iou_mean = tf.reduce_mean(iou_valid)
-            loss_iou = 1 - iou_mean # NOTE: Any normalization?
-            loss.append(loss_iou)
-
-    elif outtype == 'heatmap':
-        # First of all, need to convert labels into heat maps
-        labels_heatmap = convert_rec_to_heatmap(labels, o)
-
-        # valid labels and outputs
-        labels_valid = tf.boolean_mask(labels_heatmap[:,1:], inputs_valid[:,1:])
-        outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
-
-        # loss1: cross-entropy between probabilty maps (need to change label) 
-        if 'ce' in o.losses: 
-            labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
-            outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
-            assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
-            with tf.control_dependencies([assert_finite(outputs_valid)]):
-                outputs_valid = tf.identity(outputs_valid)
-            loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=labels_flat, logits=outputs_flat)
-            # Wrap with assertion that loss is finite.
-            with tf.control_dependencies([assert_finite(loss_ce)]):
-                loss_ce = tf.identity(loss_ce)
-            loss.append(tf.reduce_mean(loss_ce))
+        losses = dict()
         
-        # loss2: tf's l2 (without sqrt)
-        if 'l2' in o.losses:
-            labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
-            outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
-            outputs_softmax = tf.nn.softmax(outputs_flat)
-            loss_l2 = tf.nn.l2_loss(labels_flat - outputs_softmax)
-            loss.append(loss_l2)
+        if outtype == 'rectangle':
+            # loss1: sum of two l1 distances for left-top and right-bottom
+            if 'l1' in o.losses: # TODO: double check
+                labels_valid = tf.boolean_mask(labels[:,1:], inputs_valid[:,1:])
+                outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
+                loss_l1 = tf.reduce_mean(tf.abs(labels_valid - outputs_valid))
+                losses['l1'] = loss_l1
 
-    return tf.reduce_sum(loss)
+            # loss2: IoU
+            if 'iou' in o.losses:
+                assert(False) # TODO: change from inputs_length to inputs_valid
+                scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
+                    inputs_HW[:,1], inputs_HW[:,0]), axis=1)
+                boxA = outputs * tf.expand_dims(scalar, 1)
+                boxB = labels[:,1:,:] * tf.expand_dims(scalar, 1)
+                xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
+                yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
+                xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
+                yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
+                interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
+                boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
+                boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
+                # TODO: CHECK tf.div or tf.divide
+                #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
+                iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
+                iou_valid = []
+                for i in range(o.batchsz):
+                    iou_valid.append(iou[i, :inputs_length[i]-1])
+                iou_mean = tf.reduce_mean(iou_valid)
+                loss_iou = 1 - iou_mean # NOTE: Any normalization?
+                losses['iou'] = loss_iou
+
+        elif outtype == 'heatmap':
+            # First of all, need to convert labels into heat maps
+            labels_heatmap = convert_rec_to_heatmap(labels, o)
+
+            # valid labels and outputs
+            labels_valid = tf.boolean_mask(labels_heatmap[:,1:], inputs_valid[:,1:])
+            outputs_valid = tf.boolean_mask(outputs, inputs_valid[:,1:])
+
+            # loss1: cross-entropy between probabilty maps (need to change label) 
+            if 'ce' in o.losses: 
+                labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
+                outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
+                assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
+                with tf.control_dependencies([assert_finite(outputs_valid)]):
+                    outputs_valid = tf.identity(outputs_valid)
+                loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=labels_flat, logits=outputs_flat)
+                # Wrap with assertion that loss is finite.
+                with tf.control_dependencies([assert_finite(loss_ce)]):
+                    loss_ce = tf.identity(loss_ce)
+                loss_ce = tf.reduce_mean(loss_ce)
+                losses['ce'] = loss_ce
+
+            # loss2: tf's l2 (without sqrt)
+            if 'l2' in o.losses:
+                labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
+                outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
+                outputs_softmax = tf.nn.softmax(outputs_flat)
+                loss_l2 = tf.nn.l2_loss(labels_flat - outputs_softmax)
+                losses['l2'] = loss_l2
+
+        with tf.name_scope('summary'):
+            for name, loss in losses.iteritems():
+                tf.summary.scalar(name, loss)
+
+        return tf.reduce_sum(losses.values(), name=scope)
 
 def convert_rec_to_heatmap(rec, o):
     '''Create heatmap from rectangle
@@ -962,9 +982,16 @@ class RNN_basic(object):
             outputs.append(y_curr)
         outputs = tf.stack(outputs, axis=1) # list to tensor
 
-        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o)
-        tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
+        # loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o)
+        # tf.add_to_collection('losses', loss)
+        # loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+        with tf.name_scope('loss'):
+            loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle', name='pred')
+            tf.add_to_collection('losses', loss)
+            loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+            with tf.name_scope('summary'):
+                tf.summary.scalar('pred', loss)
+                tf.summary.scalar('total', loss_total)
 
         # net = {
         net.update({
@@ -1240,9 +1267,16 @@ class RNN_new(object):
             outputs.append(y_curr)
         outputs = tf.stack(outputs, axis=1) # list to tensor
 
-        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'heatmap')
-        tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
+        # loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'heatmap')
+        # tf.add_to_collection('losses', loss)
+        # loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+        with tf.name_scope('loss'):
+            loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'heatmap', name='pred')
+            tf.add_to_collection('losses', loss)
+            loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+            with tf.name_scope('summary'):
+                tf.summary.scalar('pred', loss)
+                tf.summary.scalar('total', loss_total)
 
         net.update({
                 'outputs': outputs,
@@ -1254,72 +1288,6 @@ class RNN_new(object):
                 'dbg': dbg
                 })
         return net
-
-
-def make_cnn(layers, wd):
-    weights, bias = [], []
-    for i, layer in enumerate(layers):
-        shape_w = [layer['filtsz'], layer['filtsz'], layer['chin'], layer['chout']]
-        shape_b = [layer['chout']]
-        weights.append(get_weight_variable(shape_w, name_='w{}'.format(i), wd=wd))
-        bias.append(get_bias_variable(shape_b, name_='b{}'.format(i), wd=wd))
-
-    def cnn(x, name='cnn'):
-        with tf.name_scope(name) as scope:
-            for i, layer in enumerate(layers):
-                x = conv2d(x, weights[i], bias[i], stride=layer['st'])
-                x = activate(x, 'relu')
-                if layer['pool']:
-                    x = max_pool(x)
-                # # TODO: can add dropout here
-                # if self.is_train and o.dropout_cnn and i==1: # NOTE: maybe only at 2nd layer
-                #     act = tf.nn.dropout(act, o.keep_ratio_cnn)
-            return tf.identity(x, scope)
-
-    return cnn
-
-def make_conv_lstm(num_ch, wd, conv_support=3):
-    # Conv lstm params
-    lstm = {}
-    gates = ['i', 'f' , 'c' , 'o']
-    for gate in gates:
-        lstm['w_x{}'.format(gate)] = get_weight_variable(
-                [conv_support, conv_support, num_ch, num_ch],
-                name_='w_x{}'.format(gate), wd=wd)
-        lstm['w_h{}'.format(gate)] = get_weight_variable(
-                [conv_support, conv_support, num_ch, num_ch],
-                name_='w_h{}'.format(gate), wd=wd)
-        lstm['b_{}'.format(gate)] = get_weight_variable(
-                [num_ch],
-                name_='b_{}'.format(gate), wd=wd)
-
-    def conv_lstm(x, h_prev, c_prev, name='conv_lstm'):
-        ''' ConvLSTM
-        1. h and c have the same dimension as x (padding can be used)
-        2. no peephole connection
-        '''
-        with tf.name_scope(name) as scope:
-            it = activate(
-                conv2d(x, lstm['w_xi'], lstm['b_i']) +
-                conv2d(h_prev, lstm['w_hi'], lstm['b_i']),
-                'sigmoid')
-            ft = activate(
-                conv2d(x, lstm['w_xf'], lstm['b_f']) +
-                conv2d(h_prev, lstm['w_hf'], lstm['b_f']),
-                'sigmoid')
-            ct_tilda = activate(
-                conv2d(x, lstm['w_xc'], lstm['b_c']) +
-                conv2d(h_prev, lstm['w_hc'], lstm['b_c']),
-                'tanh')
-            ct = (ft * c_prev) + (it * ct_tilda)
-            ot = activate(
-                conv2d(x, lstm['w_xo'], lstm['b_o']) +
-                conv2d(h_prev, lstm['w_ho'], lstm['b_o']),
-                'sigmoid')
-            ht = ot * activate(ct, 'tanh')
-            return ht, ct
-
-    return conv_lstm
 
 
 class RNN_conv_asymm(object):
@@ -1334,52 +1302,110 @@ class RNN_conv_asymm(object):
         x0     = net['x0']
         y0     = net['y0']
         masks = get_masks_from_rectangles(y0, o)
-        init = tf.concat([x0, masks], axis=3)
+        init_input = tf.concat([x0, masks], axis=3)
+
+        def input_cnn(x, num_outputs, name='input_cnn'):
+            with tf.name_scope(name):
+                with slim.arg_scope([slim.conv2d, slim.max_pool2d], padding='SAME'):
+                    with slim.arg_scope([slim.conv2d],
+                                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                        layers = {}
+                        x = slim.conv2d(x, 16, kernel_size=7, stride=2, scope='conv1')
+                        layers['conv1'] = x
+                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool1')
+                        x = slim.conv2d(x, 32, kernel_size=5, stride=1, scope='conv2')
+                        layers['conv2'] = x
+                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool2')
+                        x = slim.conv2d(x, num_outputs, kernel_size=3, stride=1, scope='conv3')
+                        layers['conv3'] = x
+                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool3')
+                        if o.activ_histogram:
+                            with tf.name_scope('summary'):
+                                for k, v in layers.iteritems():
+                                    tf.summary.histogram(k, v)
+            return x
+
+        def conv_lstm(x, h_prev, c_prev, state_dim, name='conv_lstm'):
+            with tf.name_scope(name) as scope:
+                with slim.arg_scope([slim.conv2d],
+                                    num_outputs=state_dim,
+                                    kernel_size=3,
+                                    padding='SAME',
+                                    activation_fn=None,
+                                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                    i = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
+                                      slim.conv2d(h_prev, scope='hi', biases_initializer=None))
+                    f = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
+                                      slim.conv2d(h_prev, scope='hf', biases_initializer=None))
+                    y = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
+                                      slim.conv2d(h_prev, scope='ho', biases_initializer=None))
+                    c_tilde = tf.nn.tanh(slim.conv2d(x, scope='xc') +
+                                         slim.conv2d(h_prev, scope='hc', biases_initializer=None))
+                    c = (f * c_prev) + (i * c_tilde)
+                    h = y * tf.nn.tanh(c)
+                    layers = {'i': i, 'f': f, 'o': y, 'c_tilde': c, 'c': c, 'h': h}
+                    if o.activ_histogram:
+                        with tf.name_scope('summary'):
+                            for k, v in layers.iteritems():
+                                tf.summary.histogram(k, v)
+            return h, c
+
+        def output_cnn(x, name='output_cnn'):
+            with tf.name_scope(name):
+                with slim.arg_scope([slim.conv2d, slim.max_pool2d], padding='SAME'):
+                    with slim.arg_scope([slim.conv2d, slim.fully_connected],
+                                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                        layers = {}
+                        x = slim.conv2d(x, 128, kernel_size=3, stride=2, scope='conv1')
+                        layers['conv1'] = x
+                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool1')
+                        x = slim.conv2d(x, 256, kernel_size=3, stride=1, scope='conv2')
+                        layers['conv2'] = x
+                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool2')
+                        x = slim.flatten(x)
+                        x = slim.fully_connected(x, 4, scope='predict')
+                        layers['predict'] = x
+                        if o.activ_histogram:
+                            with tf.name_scope('summary'):
+                                for k, v in layers.iteritems():
+                                    tf.summary.histogram(k, v)
+            return x
 
         lstm_dim = 64
-        with tf.variable_scope('frame_cnn'):
-            frame_cnn = make_cnn(
-                [{'filtsz': 7, 'st': 2, 'chin': 3, 'chout': 16, 'pool': True},
-                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
-                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
-                wd=o.wd)
-        with tf.variable_scope('init_h_cnn'):
-            init_h_cnn = make_cnn(
-                [{'filtsz': 7, 'st': 2, 'chin': 4, 'chout': 16, 'pool': True},
-                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
-                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
-                wd=o.wd)
-        with tf.variable_scope('init_c_cnn'):
-            init_c_cnn = make_cnn(
-                [{'filtsz': 7, 'st': 2, 'chin': 4, 'chout': 16, 'pool': True},
-                 {'filtsz': 5, 'st': 1, 'chin': 16, 'chout': 32, 'pool': True},
-                 {'filtsz': 3, 'st': 1, 'chin': 32, 'chout': lstm_dim, 'pool': True}],
-                wd=o.wd)
-        with tf.variable_scope('conv_lstm'):
-            conv_lstm = make_conv_lstm(num_ch=64, wd=o.wd)
-        with tf.variable_scope('out_cnn'):
-            out_cnn = make_cnn(
-                [{'filtsz': 3, 'st': 1, 'chin': lstm_dim, 'chout': 128, 'pool': True},
-                 {'filtsz': 3, 'st': 1, 'chin': 128, 'chout': 256, 'pool': True}],
-                wd=o.wd)
-        with tf.variable_scope('predict'):
-            predict_weight = get_weight_variable([4*4*256, 4], wd=o.wd)
-            predict_bias = get_bias_variable([4], wd=o.wd)
+        # At start of sequence, compute hidden state from first example.
+        # Feed (h_init, c_init) to resume tracking from previous state.
+        # Do NOT feed (h_init, c_init) when starting new sequence.
+        with tf.name_scope('h_init') as scope:
+            with tf.variable_scope('h_init'):
+                h_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
+        with tf.name_scope('c_init') as scope:
+            with tf.variable_scope('c_init'):
+                c_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
 
         outputs = []
-        ht = init_h_cnn(init, name='init_h_cnn')
-        ct = init_c_cnn(init, name='init_c_cnn')
-        # These tensors can be fed manually for longer sequences.
-        h_init = ht
-        c_init = ct
+        ht, ct = h_init, c_init
         for t in range(1, o.ntimesteps+1):
             xt = inputs[:, t]
-            rt = frame_cnn(xt)
-            ht, ct = conv_lstm(rt, ht, ct)
-            zt = out_cnn(ht)
-            yt = tf.matmul(tf.reshape(zt, [o.batchsz, 4*4*256]), predict_weight) + predict_bias
+            with tf.name_scope('frame_cnn_{}'.format(t)) as scope:
+                with tf.variable_scope('frame_cnn', reuse=(t > 1)):
+                    # Pass name scope from above, otherwise makes new name scope
+                    # within name scope created by variable scope.
+                    rt = input_cnn(xt, num_outputs=lstm_dim, name=scope)
+            with tf.name_scope('conv_lstm_{}'.format(t)) as scope:
+                with tf.variable_scope('conv_lstm', reuse=(t > 1)):
+                    ht, ct = conv_lstm(rt, ht, ct, state_dim=lstm_dim, name=scope)
+            with tf.name_scope('out_cnn_{}'.format(t)) as scope:
+                with tf.variable_scope('out_cnn', reuse=(t > 1)):
+                    yt = output_cnn(ht, name=scope)
             outputs.append(yt)
+            # tf.get_variable_scope().reuse_variables()
         outputs = tf.stack(outputs, axis=1) # list to tensor
+        h_last, c_last = ht, ct
+        state_vars = [(h_init, h_last), (c_init, c_last)]
+
+        if o.param_histogram:
+            for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
+                tf.summary.histogram(v.name, v)
 
         field = cnnutil.find_rf(xt, rt)
         print 'CNN receptive field:'
@@ -1387,9 +1413,18 @@ class RNN_conv_asymm(object):
         print '  center offset:', field.rect.int_center()
         print '  stride:', field.stride
 
-        loss = get_loss(outputs, net['labels'], net['inputs_valid'], net['inputs_HW'], o, 'rectangle')
-        tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'), name='loss_total')
+        with tf.name_scope('loss'):
+            loss_pred = get_loss(outputs, net['labels'], net['inputs_valid'], net['inputs_HW'], o,
+                                 outtype='rectangle',
+                                 name='pred')
+            loss_reg = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+            loss_total = loss_pred + loss_reg
+            # tf.add_to_collection('losses', loss)
+            # loss_total = tf.reduce_sum(tf.get_collection('losses'), name='loss_total')
+            with tf.name_scope('summary'):
+                tf.summary.scalar('pred', loss_pred)
+                tf.summary.scalar('reg', loss_reg)
+                tf.summary.scalar('total', loss_total)
 
         net.update({
             'outputs': outputs,
@@ -1560,9 +1595,16 @@ class NonRecur(object):
 
         outputs = tf.stack(outputs, axis=1) # list to tensor
 
-        loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle')
-        tf.add_to_collection('losses', loss)
-        loss_total = tf.add_n(tf.get_collection('losses'),name='loss_total')
+        # loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle')
+        # tf.add_to_collection('losses', loss)
+        # loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+        with tf.name_scope('loss'):
+            loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'rectangle', name='pred')
+            tf.add_to_collection('losses', loss)
+            loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
+            with tf.name_scope('summary'):
+                tf.summary.scalar('pred', loss)
+                tf.summary.scalar('total', loss_total)
 
         # net = {
         net.update({

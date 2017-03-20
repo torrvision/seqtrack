@@ -66,8 +66,11 @@ class Opts(object):
         self.nepoch             = 20
         self.batchsz            = 1
         self.optimizer          = 'adam' # sgd, adam, rmsprop
-        self.lr                 = 0.0001
-        self.lr_update          = False
+        # self.lr                 = 0.0001
+        # self.lr_update          = False
+        self.lr_init            = 1e-3
+        self.lr_decay_rate      = 1 # No decay.
+        self.lr_decay_steps     = 10000
         self.wd                 = 0.0 # weight decay for regularization
         self.grad_clip          = False
         self.max_grad_norm      = 5.0
@@ -89,7 +92,9 @@ class Opts(object):
         self.resume_data        = None
         self.period_ckpt        = 10000
         self.period_assess      = self.period_ckpt
-        self.period_summary     = 10
+        self.period_summary     = 10 # NL->JV: changed XXX_period-> period_XXX
+        self.activ_histogram    = False
+        self.param_histogram    = True
 
         #----------------------------------------------------------------------
         # custom libraries

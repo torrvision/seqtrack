@@ -12,7 +12,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='rnn tracking - main script')
 
     parser.add_argument(
-            '--verbose', help='print arguments', 
+            '--verbose', help='print arguments',
             action='store_true')
     parser.add_argument(
             '--verbose_train', help='print train losses during train', 
@@ -21,7 +21,7 @@ def parse_arguments():
             '--mode', help='choose mode (train, test)', 
             type=str, default='')
     parser.add_argument(
-            '--debugmode', help='used for debugging', 
+            '--debugmode', help='used for debugging',
             action='store_true')
 
     parser.add_argument(
@@ -30,6 +30,7 @@ def parse_arguments():
     parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
             type=int, default=0)
+
     parser.add_argument(
             '--frmsz', help='size of a square image', type=int, default=100)
     # NOTE: (NL) any reason to have two arguments for this option?
@@ -53,37 +54,46 @@ def parse_arguments():
             '--ntimesteps', help='number of time steps for rnn',
             type=int, default=20)
     parser.add_argument(
-            '--dropout_rnn', help='set dropout for rnn', 
+            '--dropout_rnn', help='set dropout for rnn',
             action='store_true')
     parser.add_argument(
             '--yprev_mode', help='way of using y_prev',
             type=str, default='')
     parser.add_argument(
-            '--pass_yinit', help='pass gt y instead pred y during training', 
+            '--pass_yinit', help='pass gt y instead pred y during training',
             action='store_true')
 
     parser.add_argument(
-            '--dropout_cnn', help='dropout in cnn (only during train)', 
+            '--dropout_cnn', help='dropout in cnn (only during train)',
             action='store_true')
 
     parser.add_argument(
-            '--nepoch', help='number of epochs', 
+            '--nepoch', help='number of epochs',
             type=int, default=20)
     parser.add_argument(
-            '--batchsz', help='batch size', 
+            '--batchsz', help='batch size',
             type=int, default=1)
     parser.add_argument(
             '--optimizer', help='optimizer to train the model',
             type=str, default='adam')
     parser.add_argument(
-            '--lr', help='learning rate', 
-            type=float, default=0.0001)
+            '--lr_init', help='initial learning rate',
+            type=float, default=1e-3)
     parser.add_argument(
-            '--lr_update', help='adaptive learning rate', 
-            action='store_true')
+            '--lr_decay_rate', help='geometric step for learning rate decay',
+            type=float, default=1)
     parser.add_argument(
-            '--wd', help='weight decay', 
-            type=float, default=0.0)
+            '--lr_decay_steps', help='period for decaying learning rate',
+            type=int, default=10000)
+    # parser.add_argument(
+    #         '--lr', help='learning rate',
+    #         type=float, default=0.0001)
+    # parser.add_argument(
+    #         '--lr_update', help='adaptive learning rate',
+    #         action='store_true')
+    parser.add_argument(
+            '--wd', help='weight decay',
+            type=float, default=1e-3)
 
     parser.add_argument(
             '--path_data_home', help='location of datasets',

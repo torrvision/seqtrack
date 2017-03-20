@@ -119,7 +119,7 @@ def _operation_rf(op):
         rect = _filter_rect_padding(filter_size, op.get_attr('padding'))
         stride = np.array(map(int, op.get_attr('strides')[1:3]))
         return ReceptiveField(rect, stride)
-    elif op.type in {'BiasAdd', 'Relu', 'Identity'}:
+    elif op.type in {'BiasAdd', 'Relu', 'Identity', 'HistogramSummary'}:
         return identity_rf()
     elif op.type in {'Reshape'}:
         return None

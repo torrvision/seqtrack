@@ -11,38 +11,48 @@ import helpers
 
 
 def train(m, loader, o):
-    # (manual) learning rate recipe
-    lr_recipe = _get_lr_recipe()
-    optimizer, global_step_var, lr = _get_optimizer(m, o)
-
     nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = loader.nexps['train']/o.batchsz if not o.debugmode else 30
     nbatch_val = loader.nexps['val']/o.batchsz if not o.debugmode else 30
 
-    init_op = tf.global_variables_initializer()
-    saver = tf.train.Saver()
+    global_step_var = tf.Variable(0, name='global_step', trainable=False)
+    # lr = init * decay^(step)
+    #    = init * decay^(step / period * period / decay_steps)
+    #    = init * [decay^(period / decay_steps)]^(step / period)
+    lr = tf.train.exponential_decay(o.lr_init, global_step_var,
+                                    decay_steps=o.lr_decay_steps,
+                                    decay_rate=o.lr_decay_rate,
+                                    staircase=True)
+    optimizer = _get_optimizer(lr, o)
+    optimize_op = optimizer.minimize(m.net['loss'], global_step=global_step_var)
 
-    tf.summary.scalar('loss', m.net['loss'])
-    # tf.summary.histogram('output', m.net['outputs'])
-    summary_op = tf.summary.merge_all()
+    # # (manual) learning rate recipe
+    # lr_recipe = _get_lr_recipe()
+
+    init_op = tf.global_variables_initializer()
+    summary_var_eval = tf.summary.merge_all()
+    # Optimization summary might include gradients, learning rate, etc.
+    summary_var_opt = tf.summary.merge([summary_var_eval,
+        tf.summary.scalar('lr', lr)])
+    saver = tf.train.Saver()
 
     def process_batch(batch, step, optimize=True, writer=None, write_summary=False):
         names = ['target_raw', 'inputs_raw', 'x0_raw', 'y0', 'inputs_valid', 'inputs_HW', 'labels']
         fdict = {m.net[name]: batch[name] for name in names}
-        if optimize:
-            fdict.update({
-                lr: lr_epoch,
-            })
+        # if optimize:
+        #     fdict.update({
+        #         lr: lr_epoch,
+        #     })
         start = time.time()
         summary = None
         if optimize:
             if write_summary:
-                _, loss, summary = sess.run([optimizer, m.net['loss'], summary_op], feed_dict=fdict)
+                _, loss, summary = sess.run([optimize_op, m.net['loss'], summary_var_opt], feed_dict=fdict)
             else:
-                _, loss = sess.run([optimizer, m.net['loss']], feed_dict=fdict)
+                _, loss = sess.run([optimize_op, m.net['loss']], feed_dict=fdict)
         else:
             if write_summary:
-                loss, summary = sess.run([m.net['loss'], summary_op], feed_dict=fdict)
+                loss, summary = sess.run([m.net['loss'], summary_var_eval], feed_dict=fdict)
             else:
                 loss = sess.run([m.net['loss']], feed_dict=fdict)
         dur = time.time() - start
@@ -75,7 +85,7 @@ def train(m, loader, o):
             t_epoch = time.time()
             loader.update_epoch_begin('train')
             loader.update_epoch_begin('val')
-            lr_epoch = lr_recipe[ie] if o.lr_update else o.lr
+            # lr_epoch = lr_recipe[ie] if o.lr_update else o.lr
 
             ib_val = 0
             loss_ep = []
@@ -156,34 +166,28 @@ def train(m, loader, o):
         print 'total time elapsed: {0:.2f}'.format(time.time()-t_total)
 
 
-def _get_lr_recipe():
-    # TODO: may need a different recipe; also consider exponential decay
-    # (previous) lr_epoch = o.lr*(0.1**np.floor(float(ie)/(nepoch/2))) \
-            #if o.lr_update else o.lr
-    # manual learning rate recipe
-    lr_recipe = np.zeros([100], dtype=np.float32)
-    for i in range(lr_recipe.shape[0]):
-        if i < 5:
-            lr_recipe[i] = 0.0001*(0.1**i) # TODO: check if this is alright
-        else:
-            lr_recipe[i] = lr_recipe[4]
-    return lr_recipe
+# def _get_lr_recipe():
+#     # TODO: may need a different recipe; also consider exponential decay
+#     # (previous) lr_epoch = o.lr*(0.1**np.floor(float(ie)/(nepoch/2))) \
+#             #if o.lr_update else o.lr
+#     # manual learning rate recipe
+#     lr_recipe = np.zeros([100], dtype=np.float32)
+#     for i in range(lr_recipe.shape[0]):
+#         if i < 5:
+#             lr_recipe[i] = 0.0001*(0.1**i) # TODO: check if this is alright
+#         else:
+#             lr_recipe[i] = lr_recipe[4]
+#     return lr_recipe
 
-def _get_optimizer(m, o):
-    global_step = tf.Variable(0, name='global_step', trainable=False)
-    lr = tf.placeholder(o.dtype, shape=[])
+def _get_optimizer(lr, o):
     if o.optimizer == 'sgd':
-        optimizer = tf.train.GradientDescentOptimizer(lr).minimize(\
-                m.net['loss'], global_step=global_step)
+        optimizer = tf.train.GradientDescentOptimizer(lr)
     elif o.optimizer == 'momentum':
-        optimizer = tf.train.MomentumOptimizer(lr, 0.9).minimize(\
-                m.net['loss'], global_step=global_step)
+        optimizer = tf.train.MomentumOptimizer(lr, 0.9)
     elif o.optimizer == 'rmsprop':
-        optimizer = tf.train.RMSPropOptimizer(learning_rate=lr).minimize(\
-                m.net['loss'], global_step=global_step)
+        optimizer = tf.train.RMSPropOptimizer(learning_rate=lr)
     elif o.optimizer == 'adam':
-        optimizer = tf.train.AdamOptimizer(learning_rate=lr).minimize(\
-                m.net['loss'], global_step=global_step)
+        optimizer = tf.train.AdamOptimizer(learning_rate=lr)
     else:
         raise ValueError('optimizer not implemented or simply wrong.')
-    return optimizer, global_step, lr
+    return optimizer

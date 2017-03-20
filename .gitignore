@@ -2,7 +2,7 @@
 *.pyc
 data
 tmp
-save
+ckpt
 logs
 testscripts
 env/
