@@ -137,8 +137,7 @@ if __name__ == "__main__":
     o.initialize()
 
     loader = data.load_data(o)
-    example, feed_loop = train.make_input_pipeline(batch_size=o.batchsz,
-                                                   stat=loader.stat['train'])
+    example, feed_loop = train.make_input_pipeline(o, stat=loader.stat['train'])
     m = model.load_model(example, o)
 
     assert(o.mode == 'train')

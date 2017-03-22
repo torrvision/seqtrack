@@ -614,8 +614,6 @@ def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype, name='loss'):
     with tf.name_scope(name) as scope:
         # NOTE: Be careful about length of labels and outputs. 
         # labels and inputs_valid will be of T+1 length, and y0 shouldn't be used.
-        print 'outputs.shape:', outputs.shape
-        print 'labels.shape:', labels.shape
         assert(outputs.get_shape().as_list()[1] == o.ntimesteps)
         assert(labels.get_shape().as_list()[1] == o.ntimesteps+1)
 

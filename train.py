@@ -24,23 +24,28 @@ def iter_examples(loader, o, dstype='train', num_epochs=None):
             yield loader.get_example(j, o, dstype=dstype)
 
 
-def get_example_files(capacity=32):
+def get_example_files(capacity=32, name='get_example'):
     '''Creates an example queue that contains filenames not images.
 
     Returns:
         The Tensor at the front of the queue and
         a function handle that feeds an iterable collection of examples to the queue.
     '''
-    # Create queue to write examples to.
-    queue = tf.FIFOQueue(capacity=capacity,
-                         dtypes=[tf.string, tf.float32],
-                         names=['files', 'labels'],
-                         name='file_queue')
-    example_var = {
-        'files':  tf.placeholder(tf.string, shape=[None], name='example_files'),
-        'labels': tf.placeholder(tf.float32, shape=[None, 4], name='example_labels'),
-    }
-    enqueue_op = queue.enqueue(example_var)
+    with tf.name_scope(name) as scope:
+        # Create queue to write examples to.
+        queue = tf.FIFOQueue(capacity=capacity,
+                             dtypes=[tf.string, tf.float32],
+                             names=['files', 'labels'],
+                             name='file_queue')
+        example_var = {
+            'files':  tf.placeholder(tf.string, shape=[None], name='example_files'),
+            'labels': tf.placeholder(tf.float32, shape=[None, 4], name='example_labels'),
+        }
+        enqueue = queue.enqueue(example_var)
+        with tf.name_scope('summary'):
+            tf.summary.scalar('fraction_of_%d_full' % capacity,
+                              tf.cast(queue.size(), tf.float32) * (1./capacity))
+        dequeue = queue.dequeue(name=scope)
 
     def feed_loop(sess, coord, examples):
         '''Enqueues examples in a loop.
@@ -52,71 +57,86 @@ def get_example_files(capacity=32):
         for example in examples:
             if coord.should_stop():
                 return
-            sess.run(enqueue_op, feed_dict={
+            sess.run(enqueue, feed_dict={
                 example_var['files']:  example['files'],
                 example_var['labels']: example['labels'],
             })
         coord.request_stop()
 
-    return queue.dequeue(), feed_loop
+    return dequeue, feed_loop
 
 
-def load_images(example, capacity=32, num_threads=1):
+def load_images(example, capacity=32, num_threads=1, name='load_images'):
     # Follow structure of tf.train.batch().
-    # Create queue to write images to.
-    queue = tf.FIFOQueue(capacity=capacity,
-                         dtypes=[tf.uint8, tf.float32],
-                         names=['images', 'labels'],
-                         name='image_queue')
-    # Read files from disk.
-    file_contents = tf.map_fn(tf.read_file, example['files'], dtype=tf.string)
-    # Decode images.
-    images = tf.map_fn(tf.image.decode_jpeg, file_contents, dtype=tf.uint8)
-    # Replace files with images.
-    del example['files']
-    example['images'] = images
-    enqueue_op = queue.enqueue(example)
-    tf.train.add_queue_runner(tf.train.QueueRunner(queue, [enqueue_op]*num_threads))
-    return queue.dequeue()
+    with tf.name_scope(name) as scope:
+        # Create queue to write images to.
+        queue = tf.FIFOQueue(capacity=capacity,
+                             dtypes=[tf.uint8, tf.float32],
+                             names=['images', 'labels'],
+                             name='image_queue')
+        # Read files from disk.
+        file_contents = tf.map_fn(tf.read_file, example['files'], dtype=tf.string)
+        # Decode images.
+        images = tf.map_fn(tf.image.decode_jpeg, file_contents, dtype=tf.uint8)
+        # Replace files with images.
+        del example['files']
+        example['images'] = images
+        enqueue = queue.enqueue(example)
+        tf.train.add_queue_runner(tf.train.QueueRunner(queue, [enqueue]*num_threads))
+        with tf.name_scope('summary'):
+            tf.summary.scalar('fraction_of_%d_full' % capacity,
+                              tf.cast(queue.size(), tf.float32) * (1./capacity))
+        return queue.dequeue(name=scope)
 
 
-def make_input_pipeline(batch_size, stat=None, dtype=tf.float32, capacity=32):
-    example_files, feed_loop = get_example_files(capacity=capacity)
-    example_images = load_images(example_files, capacity=capacity)
-    # Cast images.
-    example_images['images'] = tf.cast(example_images['images'], dtype)
-    # Restore size (or at least rank) of Tensors for tf.train.batch.
-    # TODO: Check if a mistake here raises an error.
-    example_images['images'].set_shape([None, 241, 241, 3]) # TODO: Fix
-    example_images['labels'].set_shape([None, 4]) # TODO: Fix
-    # Put in format expected by model.
-    example = {
-        'inputs_raw':   example_images['images'],
-        'labels':       example_images['labels'],
-        'x0_raw':       example_images['images'][0],
-        'y0':           example_images['labels'][0],
-        'inputs_valid': [True] * 21, # TODO: Fix
-        'inputs_HW':    [241, 241], # TODO: Fix
-    }
-    # TODO: Get length of sequences before padding?
-    example = tf.train.batch(example, batch_size=batch_size, dynamic_pad=True)
-    example['inputs_raw'].set_shape([None, 21, 241, 241, 3]) # TODO: Fix
-    example['labels'].set_shape([None, 21, 4]) # TODO: Fix
-    # Normalize mean and variance.
-    assert(stat is not None)
-    with tf.name_scope('image_stats') as scope:
-        if stat:
-            mean = tf.constant(stat['mean'], dtype, name='mean')
-            std  = tf.constant(stat['std'],  dtype, name='std')
-        else:
-            mean = tf.constant(0.0, dtype, name='mean')
-            std  = tf.constant(1.0, dtype, name='std')
-    # Replace raw images with whitened images.
-    example['inputs'] = _whiten(example['inputs_raw'], mean, std, name='inputs')
-    del example['inputs_raw']
-    example['x0'] = _whiten(example['x0_raw'], mean, std, name='x0')
-    del example['x0_raw']
-    return example, feed_loop
+def make_input_pipeline(o, stat=None, dtype=tf.float32,
+        sequence_capacity=128, batch_capacity=32, num_threads=8, name='pipeline'):
+    with tf.name_scope(name) as scope:
+        example_files, feed_loop = get_example_files(capacity=sequence_capacity)
+        example_images = load_images(example_files, capacity=sequence_capacity, num_threads=num_threads)
+        # Restore rank information of Tensors for tf.train.batch.
+        # TODO: It does not seem possible to preserve this through the FIFOQueue?
+        # Let at least the sequence length remain dynamic.
+        example_images['images'].set_shape([None, None, None, 3])
+        example_images['labels'].set_shape([None, 4])
+        # Get the length of the sequence before tf.train.batch.
+        example_images['num_frames'] = tf.shape(example_images['images'])[0]
+        # TODO: This may produce batches of length < ntimesteps+1
+        # since PaddingFIFOQueue pads to the *maximum* length.
+        # Is this a problem for the training code?
+        batch_images = tf.train.batch(example_images, batch_size=o.batchsz,
+            dynamic_pad=True, capacity=batch_capacity, num_threads=num_threads)
+        # Set static dimension of sequence length.
+        # TODO: This may only be necessary due to how the model is written.
+        batch_images['images'].set_shape([None, o.ntimesteps+1, None, None, None])
+        batch_images['labels'].set_shape([None, o.ntimesteps+1, None])
+        # Cast type of images.
+        batch_images['images'] = tf.cast(batch_images['images'], o.dtype)
+        # Put in format expected by model.
+        valid = (range(o.ntimesteps+1) < tf.expand_dims(batch_images['num_frames'], -1))
+        batch = {
+            'inputs_raw':   batch_images['images'],
+            'labels':       batch_images['labels'],
+            'x0_raw':       batch_images['images'][:, 0],
+            'y0':           batch_images['labels'][:, 0],
+            'inputs_valid': valid,
+            'inputs_HW':    [o.frmsz, o.frmsz],
+        }
+        # Normalize mean and variance.
+        assert(stat is not None)
+        with tf.name_scope('image_stats') as scope:
+            if stat:
+                mean = tf.constant(stat['mean'], o.dtype, name='mean')
+                std  = tf.constant(stat['std'],  o.dtype, name='std')
+            else:
+                mean = tf.constant(0.0, o.dtype, name='mean')
+                std  = tf.constant(1.0, o.dtype, name='std')
+        # Replace raw images with whitened images.
+        batch['inputs'] = _whiten(batch['inputs_raw'], mean, std, name='inputs')
+        del batch['inputs_raw']
+        batch['x0'] = _whiten(batch['x0_raw'], mean, std, name='x0')
+        del batch['x0_raw']
+        return batch, feed_loop
 
 
 def _whiten(x, mean, std, name='whiten'):
