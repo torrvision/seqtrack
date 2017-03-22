@@ -2,12 +2,58 @@ import pdb
 import sys
 import numpy as np
 import tensorflow as tf
+import threading
 import time
 import os
 
 import draw
 from evaluate import evaluate
 import helpers
+
+
+def create_track_examples(loader, set_name):
+    str_feature        = lambda x: tf.train.Feature(bytes_list=tf.train.BytesList(value=x))
+    int_list_feature   = lambda x: tf.train.Feature(int64_list=tf.train.Int64List(value=x))
+    float_list_feature = lambda x: tf.train.Feature(float_list=tf.train.FloatList(value=x))
+    int_feature        = lambda x: int_list_feature([x])
+    float_feature      = lambda x: float_list_feature([x])
+
+    tracks = []
+    for i in range(loader.nsnps[set_name]):
+        image_dir = loader.snps['train']['Data'][i]
+        print image_dir
+        annotations_dir = loader.snps['train']['Annotations'][i]
+        video_len = loader.nfrms_snp[set_name][i]
+        objs = loader.objids_snp[set_name][i]
+        for obj in range(len(objs)):
+            print obj
+            # # Find frames that contain the object.
+            # obj_frames = [t for t in range(video_len)
+            #               if obj in loader.objids_allfrm_snp[set_name][i][t]]
+
+            get_image_file = lambda t: os.path.join(image_dir, '{:06d}.JPEG'.format(t))
+            image_file_list = map(get_image_file, range(video_len))
+            # List of length 1 or 0 depending on object presence.
+            xmin = [[] for t in range(video_len)]
+            xmax = [[] for t in range(video_len)]
+            ymin = [[] for t in range(video_len)]
+            ymax = [[] for t in range(video_len)]
+
+            track = tf.train.SequenceExample(
+                context=tf.train.Features(feature={
+                    'length': tf.train.Feature(
+                        int64_list=tf.train.Int64List(value=[video_len])),
+                    # 'label_frames': tf.train.Feature(
+                    #     int64_list=tf.train.Int64List(value=obj_frames)),
+                }),
+                feature_lists=tf.train.FeatureLists(feature_list={
+                    'image_file': tf.train.FeatureList(feature=map(str_feature, image_file_list)),
+                    'xmin':       tf.train.FeatureList(feature=map(float_list_feature, xmin)),
+                    'xmax':       tf.train.FeatureList(feature=map(float_list_feature, xmax)),
+                    'ymin':       tf.train.FeatureList(feature=map(float_list_feature, ymin)),
+                    'ymax':       tf.train.FeatureList(feature=map(float_list_feature, ymax)),
+                }))
+            yield track
 
 
 def train(m, loader, o):
@@ -26,8 +72,139 @@ def train(m, loader, o):
     optimizer = _get_optimizer(lr, o)
     optimize_op = optimizer.minimize(m.net['loss'], global_step=global_step_var)
 
-    # # (manual) learning rate recipe
-    # lr_recipe = _get_lr_recipe()
+    # # Enqueue a list of images (a tensor of strings).
+    # snippet_images = []
+    # for i in range(loader.nsnps['train']):
+    #     image_dir = loader.snps['train']['Data'][i]
+    #     video_len = loader.nfrms_snp['train'][i]
+    #     get_image_file = lambda t: os.path.join(image_dir, '{:06d}.JPEG'.format(t))
+    #     snippet_images.append(map(get_image_file, range(video_len)))
+
+    QUEUE_CAPACITY = 32
+    QUEUE_THREADS = 4
+
+    example_files = tf.placeholder(tf.string, shape=[None,], name='example_files')
+    example_labels = tf.placeholder(tf.float32, shape=[None,4], name='example_labels')
+    # Queue contains (valid, image files, label, x0 file, y0)
+    file_queue = tf.FIFOQueue(capacity=QUEUE_CAPACITY,
+        dtypes=[tf.string, tf.float32],
+        names=['files', 'labels'],
+        name='file_queue')
+    example_for_file_queue = {'files': example_files, 'labels': example_labels}
+    enqueue_file_op = file_queue.enqueue(example_for_file_queue)
+    print '-' * 40
+    print 'example_for_file_queue:', example_for_file_queue
+
+    example_from_file_queue = file_queue.dequeue()
+    image_contents = tf.map_fn(tf.read_file, example_from_file_queue['files'], dtype=tf.string)
+    images = tf.map_fn(tf.image.decode_jpeg, image_contents, dtype=tf.uint8)
+    print '-' * 40
+    print 'images:', images
+
+    image_queue = tf.FIFOQueue(capacity=QUEUE_CAPACITY,
+        dtypes=[tf.uint8, tf.float32],
+        names=['images', 'labels'],
+        name='image_queue')
+    enqueue_image_op = image_queue.enqueue({'images': images, 'labels': example_from_file_queue['labels']})
+    tf.train.add_queue_runner(
+        tf.train.QueueRunner(image_queue, [enqueue_image_op] * QUEUE_THREADS))
+
+    example_from_image_queue = image_queue.dequeue()
+    print '-' * 40
+    print 'example_from_image_queue:', example_from_image_queue
+
+    # TODO: Check if a mistake here raises an error.
+    example_from_image_queue['images'].set_shape([None, None, None, 3])
+    example_from_image_queue['labels'].set_shape([None, 4])
+    print '-' * 40
+    print 'example_from_image_queue:', example_from_image_queue
+
+    full_example = {
+        'images_raw': example_from_image_queue['images'],
+        'label':      example_from_image_queue['labels'],
+        'x0_raw':     example_from_image_queue['images'][0],
+        'y0':         example_from_image_queue['labels'][0],
+    }
+    print '-' * 40
+    print 'full_example:', full_example
+    print '-' * 40
+    # TODO: Get length of sequences before padding?
+    batch = tf.train.batch(full_example, batch_size=o.batchsz, dynamic_pad=True)
+    print '-' * 40
+    print 'batch:', batch
+
+    init_op = tf.global_variables_initializer()
+    with tf.Session(config=o.tfconfig) as sess:
+        def enqueue_batch():
+            for i in range(loader.nexps['train']):
+                example = loader.get_example(i, o, dstype='train')
+                sess.run(enqueue_file_op, feed_dict={example_files: example['files'],
+                                                     example_labels: example['labels']})
+
+        sess.run(init_op)
+
+        coord = tf.train.Coordinator()
+        tf.train.start_queue_runners(sess, coord)
+        t = threading.Thread(target=enqueue_batch)
+        t.start()
+
+        # sess.run(enqueue_file_op)
+        # images_val = sess.run(images)
+        batch_val = sess.run(batch)
+        pdb.set_trace()
+
+    # ----------------------------------------
+
+    records_file = 'tracks_train.tfrecords'
+    if not os.path.exists(records_file):
+        print 'generate track examples'
+        tracks = list(create_track_examples(loader, 'train'))
+        # tracks = [example.SerializeToString() for example in tracks]
+
+        print 'write tracks to file'
+        with tf.python_io.TFRecordWriter(records_file) as writer:
+            for track in tracks:
+                writer.write(track.SerializeToString())
+
+    filename_queue = tf.train.string_input_producer([records_file])
+    result = tf.TFRecordReader().read(filename_queue)
+    serialized_example = result[1]
+
+    # queue = tf.train.string_input_producer(tracks)
+    context_features, sequence_features = tf.parse_single_sequence_example(
+        serialized_example,
+        context_features={
+            'length': tf.FixedLenFeature(shape=[], dtype=tf.int64),
+        },
+        sequence_features={
+            'image_file': tf.VarLenFeature(dtype=tf.string),
+            # 'xmin':       tf.VarLenSequenceFeature(dtype=tf.int64),
+        })
+    print
+    print 'context_features:'
+    print context_features
+    print
+    print 'sequence_features:'
+    print sequence_features
+
+    image_files_var = sequence_features['image_file']
+    print
+    print 'image_files_var:'
+    print image_files_var
+
+    # # Read each image once.
+    # image_file_queue = tf.train.string_input_producer(image_files_var, num_epochs=1)
+    # _, image_content = tf.WholeFileReader().read(image_file_queue)
+    # image_var = tf.image.decode_jpeg(image_content)
+
+    # # def f(dataset):
+    # #     num_label_frames = tf.constant(dataset.num_label_frames)
+    # #     video_index = tf.train.range_input_producer(dataset.num_videos)
+    # #     label_frames = tf.constant(pad(dataset.label_frames[video_index]))
+    # #     first_frame = tf.multinomial(tf.log())
+
+    # # # (manual) learning rate recipe
+    # # lr_recipe = _get_lr_recipe()
 
     init_op = tf.global_variables_initializer()
     summary_var_eval = tf.summary.merge_all()
@@ -35,6 +212,18 @@ def train(m, loader, o):
     summary_var_opt = tf.summary.merge([summary_var_eval,
         tf.summary.scalar('lr', lr)])
     saver = tf.train.Saver()
+
+    with tf.Session(config=o.tfconfig) as sess:
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(coord=coord)
+        image_files = sess.run([image_files_var])
+        print
+        print 'image_files:'
+        print image_files
+        pdb.set_trace()
+        # image = sess.run([image_var])
+
+    # ----------------------------------------
 
     def process_batch(batch, step, optimize=True, writer=None, write_summary=False):
         names = ['target_raw', 'inputs_raw', 'x0_raw', 'y0', 'inputs_valid', 'inputs_HW', 'labels']

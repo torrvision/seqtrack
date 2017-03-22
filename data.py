@@ -472,9 +472,13 @@ class Data_ILSVRC(object):
                                 if o.useresizedimg else 'Data'
 
         self.snps               = dict.fromkeys({'train', 'val', 'test'}, None)
+        # Number of snippets.
         self.nsnps              = dict.fromkeys({'train', 'val', 'test'}, None)
+        # Number of frames in each snippet.
         self.nfrms_snp          = dict.fromkeys({'train', 'val', 'test'}, None)
+        # List of object IDs present in each frame of each snippet.
         self.objids_allfrm_snp  = dict.fromkeys({'train', 'val', 'test'}, None)
+        # List of unique object IDs in each snippet.
         self.objids_snp         = dict.fromkeys({'train', 'val', 'test'}, None)
         self.objids_valid_snp   = dict.fromkeys({'train', 'val', 'test'}, None)
         self.objvalidfrms_snp   = dict.fromkeys({'train', 'val', 'test'}, None)
@@ -868,6 +872,33 @@ class Data_ILSVRC(object):
         else:
             raise ValueError('not available option for seqtype.')
         return frms
+
+    def get_example(self, i, o, dstype):
+        # NOTE: examples have a length of ntimesteps+1.
+        files = []
+        labels = []
+
+        # randomly select an object
+        objid = random.sample(self.objids_valid_snp[dstype][i], 1)[0]
+
+        # randomly select segment of frames (<=T+1)
+        # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
+        # self.objvalidfrms_snp should be changed as well.
+        frms = self._select_frms(self.objvalidfrms_snp[dstype][i][objid], o, seqtype='sampling')
+
+        for frm in frms:
+            # for x; image
+            fimg = os.path.join(self.snps[dstype]['Data'][i], '{:06d}.JPEG'.format(frm))
+            # for y; labels
+            xmlfile = os.path.join(self.snps[dstype]['Annotations'][i], '{:06d}.xml'.format(frm))
+            y = self._get_bndbox_from_xml(xmlfile, objid)
+            files.append(fimg)
+            labels.append(y)
+
+        return {
+            'files':  files,
+            'labels': labels,
+        }
 
     def get_batch(self, ib, o, dstype, shuffle_local=False):
         if shuffle_local: # used for evaluation during train
