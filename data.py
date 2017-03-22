@@ -877,20 +877,21 @@ class Data_ILSVRC(object):
         # NOTE: examples have a length of ntimesteps+1.
         files = []
         labels = []
+        idx = self.idx_shuffle[dstype][i] 
 
         # randomly select an object
-        objid = random.sample(self.objids_valid_snp[dstype][i], 1)[0]
+        objid = random.sample(self.objids_valid_snp[dstype][idx], 1)[0]
 
         # randomly select segment of frames (<=T+1)
         # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
         # self.objvalidfrms_snp should be changed as well.
-        frms = self._select_frms(self.objvalidfrms_snp[dstype][i][objid], o, seqtype='sampling')
+        frms = self._select_frms(self.objvalidfrms_snp[dstype][idx][objid], o, seqtype='sampling')
 
         for frm in frms:
             # for x; image
-            fimg = os.path.join(self.snps[dstype]['Data'][i], '{:06d}.JPEG'.format(frm))
+            fimg = os.path.join(self.snps[dstype]['Data'][idx], '{:06d}.JPEG'.format(frm))
             # for y; labels
-            xmlfile = os.path.join(self.snps[dstype]['Annotations'][i], '{:06d}.xml'.format(frm))
+            xmlfile = os.path.join(self.snps[dstype]['Annotations'][idx], '{:06d}.xml'.format(frm))
             y = self._get_bndbox_from_xml(xmlfile, objid)
             files.append(fimg)
             labels.append(y)

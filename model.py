@@ -22,83 +22,83 @@ import cnnutil
 # The state variables will be fed only when the segment is being continued
 # from a previous segment.
 
-def make_input_placeholders(o, stat=None):
-    '''
-    Feed images to 'inputs_raw', 'x0_raw', etc.
-    Compute functions of 'inputs', 'x0', etc.
-    '''
-
-    # placeholders for inputs
-    inputs_raw = tf.placeholder(o.dtype,
-            shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel],
-            name='inputs_raw')
-    inputs_valid = tf.placeholder(tf.bool,
-            shape=[o.batchsz, o.ntimesteps+1],
-            name='inputs_valid')
-    inputs_HW = tf.placeholder(o.dtype,
-            shape=[o.batchsz, 2],
-            name='inputs_HW')
-    labels = tf.placeholder(o.dtype,
-            shape=[o.batchsz, o.ntimesteps+1, o.outdim],
-            name='labels')
-
-    # placeholders for initializations of full-length sequences
-    # y_init = tf.placeholder_with_default(
-    #         labels[:,0],
-    #         shape=[o.batchsz, o.outdim], name='y_init')
-    y_init = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y_init')
-
-    # placeholders for x0 and y0. This is used for full-length sequences
-    # NOTE: when it's not first segment, you should always feed x0, y0
-    # otherwise it will use GT as default. It will be wrong then.
-    # x0_raw = tf.placeholder_with_default(
-    #         inputs_raw[:,0],
-    #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0_raw')
-    # y0 = tf.placeholder_with_default(o.dtype
-    #         labels[:,0],
-    #         shape=[o.batchsz, o.outdim], name='y0')
-    x0_raw = tf.placeholder(o.dtype,
-            shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
-            name='x0_raw')
-    y0 = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y0')
-    # NOTE: when it's not first segment, be careful what is passed to target.
-    # Make sure to pass x0, not the first frame of every segments.
-    target_raw = tf.placeholder(o.dtype,
-            shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
-            name='target_raw')
-
-    assert(stat is not None)
-    with tf.name_scope('image_stats') as scope:
-        if stat:
-            mean = tf.constant(stat['mean'], o.dtype, name='mean')
-            std  = tf.constant(stat['std'],  o.dtype, name='std')
-        else:
-            mean = tf.constant(0.0, o.dtype, name='mean')
-            std  = tf.constant(1.0, o.dtype, name='std')
-    inputs = whiten(inputs_raw, mean, std, name='inputs')
-    x0     = whiten(x0_raw,     mean, std, name='x0')
-    target = whiten(target_raw, mean, std, name='target')
-
-    return {
-            'inputs_raw':   inputs_raw,
-            'inputs':       inputs,
-            'inputs_valid': inputs_valid,
-            'inputs_HW':    inputs_HW,
-            'labels':       labels,
-           #'outputs':      outputs,
-           #'loss':         loss_total,
-            'y_init':       y_init,
-           #'y_last':       y_curr,
-            'x0_raw':       x0_raw,
-            'x0':           x0,
-            'y0':           y0,
-            'target_raw':   target_raw,
-            'target':       target,
-            }
-
-def whiten(x, mean, std, name='whiten'):
-    with tf.name_scope(name) as scope:
-        return tf.divide(x - mean, std, name=scope)
+# def make_input_placeholders(o, stat=None):
+#     '''
+#     Feed images to 'inputs_raw', 'x0_raw', etc.
+#     Compute functions of 'inputs', 'x0', etc.
+#     '''
+# 
+#     # placeholders for inputs
+#     inputs_raw = tf.placeholder(o.dtype,
+#             shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel],
+#             name='inputs_raw')
+#     inputs_valid = tf.placeholder(tf.bool,
+#             shape=[o.batchsz, o.ntimesteps+1],
+#             name='inputs_valid')
+#     inputs_HW = tf.placeholder(o.dtype,
+#             shape=[o.batchsz, 2],
+#             name='inputs_HW')
+#     labels = tf.placeholder(o.dtype,
+#             shape=[o.batchsz, o.ntimesteps+1, o.outdim],
+#             name='labels')
+# 
+#     # placeholders for initializations of full-length sequences
+#     # y_init = tf.placeholder_with_default(
+#     #         labels[:,0],
+#     #         shape=[o.batchsz, o.outdim], name='y_init')
+#     y_init = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y_init')
+# 
+#     # placeholders for x0 and y0. This is used for full-length sequences
+#     # NOTE: when it's not first segment, you should always feed x0, y0
+#     # otherwise it will use GT as default. It will be wrong then.
+#     # x0_raw = tf.placeholder_with_default(
+#     #         inputs_raw[:,0],
+#     #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0_raw')
+#     # y0 = tf.placeholder_with_default(o.dtype
+#     #         labels[:,0],
+#     #         shape=[o.batchsz, o.outdim], name='y0')
+#     x0_raw = tf.placeholder(o.dtype,
+#             shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
+#             name='x0_raw')
+#     y0 = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y0')
+#     # NOTE: when it's not first segment, be careful what is passed to target.
+#     # Make sure to pass x0, not the first frame of every segments.
+#     target_raw = tf.placeholder(o.dtype,
+#             shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
+#             name='target_raw')
+# 
+#     assert(stat is not None)
+#     with tf.name_scope('image_stats') as scope:
+#         if stat:
+#             mean = tf.constant(stat['mean'], o.dtype, name='mean')
+#             std  = tf.constant(stat['std'],  o.dtype, name='std')
+#         else:
+#             mean = tf.constant(0.0, o.dtype, name='mean')
+#             std  = tf.constant(1.0, o.dtype, name='std')
+#     inputs = whiten(inputs_raw, mean, std, name='inputs')
+#     x0     = whiten(x0_raw,     mean, std, name='x0')
+#     target = whiten(target_raw, mean, std, name='target')
+# 
+#     return {
+#             'inputs_raw':   inputs_raw,
+#             'inputs':       inputs,
+#             'inputs_valid': inputs_valid,
+#             'inputs_HW':    inputs_HW,
+#             'labels':       labels,
+#            #'outputs':      outputs,
+#            #'loss':         loss_total,
+#             'y_init':       y_init,
+#            #'y_last':       y_curr,
+#             'x0_raw':       x0_raw,
+#             'x0':           x0,
+#             'y0':           y0,
+#             'target_raw':   target_raw,
+#             'target':       target,
+#             }
+# 
+# def whiten(x, mean, std, name='whiten'):
+#     with tf.name_scope(name) as scope:
+#         return tf.divide(x - mean, std, name=scope)
 
 class RNN_attention_s(object):
     def __init__(self, o, is_train):
@@ -614,6 +614,8 @@ def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype, name='loss'):
     with tf.name_scope(name) as scope:
         # NOTE: Be careful about length of labels and outputs. 
         # labels and inputs_valid will be of T+1 length, and y0 shouldn't be used.
+        print 'outputs.shape:', outputs.shape
+        print 'labels.shape:', labels.shape
         assert(outputs.get_shape().as_list()[1] == o.ntimesteps)
         assert(labels.get_shape().as_list()[1] == o.ntimesteps+1)
 
@@ -788,12 +790,12 @@ def enforce_min_size(x1, y1, x2, y2, min=1.0):
 
 
 class RNN_basic(object):
-    def __init__(self, o, stat=None):
+    def __init__(self, o):
         self.is_train = True if o.mode == 'train' else False
 
         self.params = {}
         self._update_params_cnn(o)
-        self.net = self._load_model(o, stat=stat) 
+        self.net = self._load_model(o) 
 
     def _update_params_cnn(self, o):
         # non-learnable params; dataset dependent
@@ -907,8 +909,8 @@ class RNN_basic(object):
         h_curr = tf.sigmoid(o_curr) * tf.tanh(C_curr)
         return h_curr, C_curr
 
-    def _load_model(self, o, stat=None):
-        net = make_input_placeholders(o, stat)
+    def _load_model(self, o):
+        net = make_input_placeholders(o)
         inputs       = net['inputs']
         inputs_valid = net['inputs_valid']
         inputs_HW    = net['inputs_HW']
@@ -1018,11 +1020,11 @@ class RNN_basic(object):
 
 
 class RNN_new(object):
-    def __init__(self, o, stat=None):
+    def __init__(self, o):
         self.is_train = True if o.mode == 'train' else False
 
         self.params = self._update_params(o)
-        self.net = self._load_model(o, stat=stat) 
+        self.net = self._load_model(o) 
 
     def _update_params(self, o):
         # cnn params (depends kernel size and strides at each layer)
@@ -1221,8 +1223,8 @@ class RNN_new(object):
         output = conv2d(h, self.params['out']['w'], self.params['out']['b'])
         return output
 
-    def _load_model(self, o, stat=None):
-        net = make_input_placeholders(o, stat)
+    def _load_model(self, o):
+        net = make_input_placeholders(o)
         inputs       = net['inputs']
         inputs_valid = net['inputs_valid']
         inputs_HW    = net['inputs_HW']
@@ -1336,16 +1338,16 @@ class RNN_new(object):
 
 
 class RNN_conv_asymm(object):
-    def __init__(self, o, stat=None):
+    def __init__(self, example, o):
         self.is_train = True if o.mode == 'train' else False
         # self.params = self._update_params(o)
-        self.net = self._load_model(o, stat=stat)
+        self.net = self._load_model(example, o)
 
-    def _load_model(self, o, stat=None):
-        net = make_input_placeholders(o, stat)
-        inputs = net['inputs']
-        x0     = net['x0']
-        y0     = net['y0']
+    def _load_model(self, example, o):
+        # net = make_input_placeholders(o)
+        inputs = example['inputs']
+        x0     = example['x0']
+        y0     = example['y0']
         masks = get_masks_from_rectangles(y0, o)
         init_input = tf.concat([x0, masks], axis=3)
 
@@ -1459,7 +1461,7 @@ class RNN_conv_asymm(object):
         print '  stride:', field.stride
 
         with tf.name_scope('loss'):
-            loss_pred = get_loss(outputs, net['labels'], net['inputs_valid'], net['inputs_HW'], o,
+            loss_pred = get_loss(outputs, example['labels'], example['inputs_valid'], example['inputs_HW'], o,
                                  outtype='rectangle',
                                  name='pred')
             loss_reg = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
@@ -1471,6 +1473,7 @@ class RNN_conv_asymm(object):
                 tf.summary.scalar('reg', loss_reg)
                 tf.summary.scalar('total', loss_total)
 
+        net = dict(example)
         net.update({
             'outputs': outputs,
             'loss':    loss_total,
@@ -1483,11 +1486,11 @@ class RNN_conv_asymm(object):
 
 
 class NonRecur(object):
-    def __init__(self, o, stat=None):
+    def __init__(self, o):
         self.is_train = True if o.mode == 'train' else False
         self.params = {}
         self._update_params_cnn(o)
-        self.net = self._load_model(o, stat=stat) 
+        self.net = self._load_model(o) 
 
     def _update_params_cnn(self, o):
         # non-learnable params; dataset dependent
@@ -1574,8 +1577,8 @@ class NonRecur(object):
         y = tf.matmul(h1, w2) + b2
         return y
 
-    def _load_model(self, o, stat=None):
-        net = make_input_placeholders(o, stat)
+    def _load_model(self, o):
+        net = make_input_placeholders(o)
         inputs       = net['inputs']
         inputs_valid = net['inputs_valid']
         inputs_HW    = net['inputs_HW']
@@ -1667,15 +1670,19 @@ class NonRecur(object):
         return net
 
 
-def load_model(o, stat=None):
+def load_model(example, o):
+    '''
+    example is a dictionary that maps strings to Tensors.
+    Its keys should include 'inputs', 'labels', 'x0', 'y0'.
+    '''
     if o.model == 'RNN_basic':
-        model = RNN_basic(o, stat=stat)
+        model = RNN_basic(o)
     elif o.model == 'RNN_new':
-        model = RNN_new(o, stat=stat)
+        model = RNN_new(o)
     elif o.model == 'RNN_conv_asymm':
-        model = RNN_conv_asymm(o, stat=stat)
+        model = RNN_conv_asymm(example, o)
     elif o.model == 'CNN':
-        model = NonRecur(o, stat=stat)
+        model = NonRecur(o)
     else:
         raise ValueError ('model not available')
     return model

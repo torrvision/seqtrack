@@ -5,7 +5,7 @@ import tensorflow as tf
 from opts           import Opts
 import data
 import model
-from train          import train
+import train
 
 
 
@@ -137,7 +137,9 @@ if __name__ == "__main__":
     o.initialize()
 
     loader = data.load_data(o)
-    m = model.load_model(o, stat=loader.stat['train'])
+    example, feed_loop = train.make_input_pipeline(batch_size=o.batchsz,
+                                                   stat=loader.stat['train'])
+    m = model.load_model(example, o)
 
     assert(o.mode == 'train')
-    train(m, loader, o)
+    train.train(m, feed_loop, loader, o)
