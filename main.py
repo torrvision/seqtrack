@@ -137,8 +137,7 @@ if __name__ == "__main__":
     o.initialize()
 
     loader = data.load_data(o)
-    example, feed_loop = train.make_input_pipeline(o, stat=loader.stat['train'])
-    m = lambda example: model.load_model(example, o)
+    m = lambda example: model.load_model(example, o).net
 
     assert(o.mode == 'train')
-    train.train(m, feed_loop, loader, o)
+    train.train(m, loader, o)

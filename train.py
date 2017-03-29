@@ -44,10 +44,10 @@ def train(model, loader, o):
 
     model = tf.make_template('model', model)
     # Create one instance of the model for training.
-    example_train, feed_loop_train = make_input_pipeline(o, stat=loader.stat['train'])
+    example_train, feed_loop_train = _make_input_pipeline(o, stat=loader.stat['train'])
     output_train = model(example_train)
     # Create another instance of the model for validation.
-    example_val, feed_loop_val = make_input_pipeline(o, stat=loader.stat['train'])
+    example_val, feed_loop_val = _make_input_pipeline(o, stat=loader.stat['train'])
     output_val = model(example_train)
     # Create loss for each instance of the model (should not have any trainable parameters).
     loss_train = get_loss(example_train, output_train, o)
@@ -271,7 +271,7 @@ def iter_examples(loader, o, dstype='train', num_epochs=None):
 
 
 # def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype, name='loss'):
-def get_loss(example, outputs, outtype='rectangle', name='loss'):
+def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
     # NOTE: Be careful about length of labels and outputs. 
     # labels and inputs_valid will be of T+1 length, and y0 shouldn't be used.
     labels       = example['labels']

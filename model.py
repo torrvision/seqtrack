@@ -1403,29 +1403,31 @@ class RNN_conv_asymm(object):
         print '  center offset:', field.rect.int_center()
         print '  stride:', field.stride
 
-        with tf.name_scope('loss'):
-            loss_pred = get_loss(outputs, example['labels'], example['inputs_valid'], example['inputs_HW'], o,
-                                 outtype='rectangle',
-                                 name='pred')
-            loss_reg = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-            loss_total = loss_pred + loss_reg
-            # tf.add_to_collection('losses', loss)
-            # loss_total = tf.reduce_sum(tf.get_collection('losses'), name='loss_total')
-            with tf.name_scope('summary'):
-                tf.summary.scalar('pred', loss_pred)
-                tf.summary.scalar('reg', loss_reg)
-                tf.summary.scalar('total', loss_total)
+        # with tf.name_scope('loss'):
+        #     loss_pred = get_loss(outputs, example['labels'], example['inputs_valid'], example['inputs_HW'], o,
+        #                          outtype='rectangle',
+        #                          name='pred')
+        #     loss_reg = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+        #     loss_total = loss_pred + loss_reg
+        #     # tf.add_to_collection('losses', loss)
+        #     # loss_total = tf.reduce_sum(tf.get_collection('losses'), name='loss_total')
+        #     with tf.name_scope('summary'):
+        #         tf.summary.scalar('pred', loss_pred)
+        #         tf.summary.scalar('reg', loss_reg)
+        #         tf.summary.scalar('total', loss_total)
 
-        net = dict(example)
-        net.update({
-            'outputs': outputs,
-            'loss':    loss_total,
-            'h_init':  h_init,
-            'c_init':  c_init,
-            'h_last':  ht,
-            'c_last':  yt,
-        })
-        return net
+        # net = dict(example)
+        # net.update({
+        #     'outputs': outputs,
+        #     'loss':    loss_total,
+        #     'h_init':  h_init,
+        #     'c_init':  c_init,
+        #     'h_last':  ht,
+        #     'c_last':  yt,
+        # })
+        return {
+            'y': outputs,
+        }
 
 
 class NonRecur(object):
