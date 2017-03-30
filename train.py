@@ -14,7 +14,8 @@ import pipeline
 
 
 def train(model, loader, o):
-    '''
+    '''Trains a network.
+
     The model is a function that takes as input a dictionary of tensors and
     returns a dictionary of tensors.
 
@@ -42,16 +43,30 @@ def train(model, loader, o):
     The images provided to the model are already normalized (e.g. dataset mean subtracted).
     '''
 
-    model = tf.make_template('model', model)
-    # Create one instance of the model for training.
-    example_train, feed_loop_train = _make_input_pipeline(o, stat=loader.stat['train'])
-    output_train = model(example_train)
-    # Create another instance of the model for validation.
-    example_val, feed_loop_val = _make_input_pipeline(o, stat=loader.stat['train'])
-    output_val = model(example_train)
-    # Create loss for each instance of the model (should not have any trainable parameters).
-    loss_train = get_loss(example_train, output_train, o)
-    loss_val = get_loss(example_val, output_val, o)
+    # How should we compute training and validation error with pipelines?
+    # Option 1 is to have multiple copies of the network with shared parameters.
+    # However, this makes it difficult to plot training and validation error on the same axes
+    # since there are separate summary ops for training and validation (with different names).
+    # Option 2 is to use FIFOQueue.from_list()
+
+    # Tune these numbers to adjust which queues are full.
+    NUM_LOAD_THREADS = 4
+    NUM_BATCH_THREADS = 1
+    NUM_MULTIPLEX_THREADS = 1
+
+    with tf.name_scope('pipeline'):
+        # Create a queue for each set.
+        example_train, feed_loop_train = _make_input_pipeline(o,
+            num_load_threads=NUM_LOAD_THREADS, num_batch_threads=NUM_BATCH_THREADS,
+            name='train')
+        example_val, feed_loop_val = _make_input_pipeline(o,
+            num_load_threads=NUM_LOAD_THREADS, num_batch_threads=NUM_BATCH_THREADS,
+            name='val')
+        queue_index, example = pipeline.make_multiplexer([example_train, example_val],
+            num_threads=NUM_MULTIPLEX_THREADS)
+
+    output = model(_whiten(example, o, stat=loader.stat['train']))
+    loss_var = get_loss(example, output, o)
 
     nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = loader.nexps['train']/o.batchsz if not o.debugmode else 30
@@ -66,12 +81,12 @@ def train(model, loader, o):
                                     decay_rate=o.lr_decay_rate,
                                     staircase=True)
     optimizer = _get_optimizer(lr, o)
-    optimize_op = optimizer.minimize(loss_train, global_step=global_step_var)
+    optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
 
     init_op = tf.global_variables_initializer()
-    summary_var_eval = tf.summary.merge_all()
+    summary_evaluate = tf.summary.merge_all()
     # Optimization summary might include gradients, learning rate, etc.
-    summary_var_opt = tf.summary.merge([summary_var_eval,
+    summary_optimize = tf.summary.merge([summary_evaluate,
         tf.summary.scalar('lr', lr)])
     saver = tf.train.Saver()
 
@@ -99,9 +114,9 @@ def train(model, loader, o):
             t.start()
 
         path_summary_train = os.path.join(o.path_summary, 'train')
-        # path_summary_val = os.path.join(o.path_summary, 'val')
+        path_summary_val = os.path.join(o.path_summary, 'val')
         train_writer = tf.summary.FileWriter(path_summary_train, sess.graph)
-        # val_writer = tf.summary.FileWriter(path_summary_val)
+        val_writer = tf.summary.FileWriter(path_summary_val)
 
         while True: # Loop over epochs
             global_step = global_step_var.eval() # Number of steps taken.
@@ -156,39 +171,34 @@ def train(model, loader, o):
                         evals['train']['cle_mean'], evals[val_]['cle_mean'])
 
                 # Take a training step.
-                # start = time.time()
-                # batch = loader.get_batch(ib, o, dstype='train')
-                # load_dur = time.time() - start
-                # loss, dur = process_batch(batch, step=global_step, optimize=True,
-                #     writer=train_writer,
-                #     write_summary=(ib % o.summary_period == 0))
                 start = time.time()
-                # pdb.set_trace()
                 if ib % o.summary_period == 0:
-                    _, loss, summary = sess.run([optimize_op, loss_train, summary_var_opt])
+                    _, loss, summary = sess.run([optimize_op, loss_var, summary_optimize],
+                                                feed_dict={queue_index: 0})
+                    dur = time.time() - start
                     train_writer.add_summary(summary, global_step=global_step)
                 else:
-                    _, loss = sess.run([optimize_op, loss_train])
-                dur = time.time() - start
+                    _, loss = sess.run([optimize_op, loss_var], feed_dict={queue_index: 0})
+                    dur = time.time() - start
 
                 # **results after every batch
                 print ('ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
                     '|loss:{5:.5f} |time:{6:.2f}').format(
                     ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur)
 
-                # # Evaluate validation error.
-                # if ib % o.val_period == 0:
-                #     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
-                #     if ib * nbatch_val >= ib_val * nbatch:
-                #         start = time.time()
-                #         batch = loader.get_batch(ib_val, o, dstype='val')
-                #         load_dur = time.time() - start
-                #         loss, dur = process_batch(batch, step=global_step, optimize=False,
-                #             writer=val_writer, write_summary=True)
-                #         print ('[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
-                #             '|loss:{5:.5f} |time:{6:.2f} ({7:.2f})').format(
-                #             ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
-                #         ib_val += 1
+                # Evaluate validation error.
+                if ib % o.val_period == 0:
+                    # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
+                    if ib * nbatch_val >= ib_val * nbatch:
+                        start = time.time()
+                        _, loss, summary = sess.run([optimize_op, loss_var, summary_evaluate],
+                                                    feed_dict={queue_index: 1})
+                        dur = time.time() - start
+                        val_writer.add_summary(summary, global_step=global_step)
+                        print ('[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
+                            '|loss:{5:.5f} |time:{6:.2f}').format(
+                            ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur)
+                        ib_val += 1
 
             print 'ep {0:d}/{1:d} (EPOCH) |time:{2:.2f}'.format(
                     ie+1, nepoch, time.time()-t_epoch)
@@ -212,13 +222,15 @@ def _get_optimizer(lr, o):
     return optimizer
 
 
-def _make_input_pipeline(o, stat=None, dtype=tf.float32,
-        sequence_capacity=128, batch_capacity=32, num_threads=8, name='pipeline'):
+def _make_input_pipeline(o, dtype=tf.float32,
+        example_capacity=512, load_capacity=128, batch_capacity=32,
+        num_load_threads=8, num_batch_threads=8,
+        name='pipeline'):
     with tf.name_scope(name) as scope:
-        files, feed_loop = pipeline.get_example_filenames(capacity=sequence_capacity)
-        images = pipeline.load_images(files, capacity=sequence_capacity, num_threads=num_threads)
+        files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
+        images = pipeline.load_images(files, capacity=load_capacity, num_threads=num_load_threads)
         images_batch = pipeline.batch(images, batch_size=o.batchsz,
-            capacity=batch_capacity, num_threads=num_threads)
+            capacity=batch_capacity, num_threads=num_batch_threads)
 
         # Set static dimension of sequence length.
         # TODO: This may only be necessary due to how the model is written.
@@ -234,26 +246,32 @@ def _make_input_pipeline(o, stat=None, dtype=tf.float32,
             'x0_raw':       images_batch['images'][:, 0],
             'y0':           images_batch['labels'][:, 0],
             'inputs_valid': valid,
-            'inputs_HW':    [o.frmsz, o.frmsz],
+            'inputs_HW':    tf.constant([o.frmsz, o.frmsz]),
         }
-        # Normalize mean and variance.
-        assert(stat is not None)
-        with tf.name_scope('image_stats') as scope:
-            if stat:
-                mean = tf.constant(stat['mean'], o.dtype, name='mean')
-                std  = tf.constant(stat['std'],  o.dtype, name='std')
-            else:
-                mean = tf.constant(0.0, o.dtype, name='mean')
-                std  = tf.constant(1.0, o.dtype, name='std')
-        # Replace raw images with whitened images.
-        inputs_batch['inputs'] = _whiten(inputs_batch['inputs_raw'], mean, std, name='inputs')
-        del inputs_batch['inputs_raw']
-        inputs_batch['x0'] = _whiten(inputs_batch['x0_raw'], mean, std, name='x0')
-        del inputs_batch['x0_raw']
         return inputs_batch, feed_loop
 
 
-def _whiten(x, mean, std, name='whiten'):
+def _whiten(example_raw, o, stat=None, name='whiten'):
+    with tf.name_scope(name) as scope:
+        # Normalize mean and variance.
+        assert(stat is not None)
+        # with tf.variable_scope('image_stats'):
+        if stat:
+            mean = tf.constant(stat['mean'], o.dtype, name='mean')
+            std  = tf.constant(stat['std'],  o.dtype, name='std')
+        else:
+            mean = tf.constant(0.0, o.dtype, name='mean')
+            std  = tf.constant(1.0, o.dtype, name='std')
+        example = dict(example_raw) # Copy dictionary before modifying.
+        # Replace raw images with whitened images.
+        example['inputs'] = _whiten_image(example['inputs_raw'], mean, std, name='inputs')
+        del example['inputs_raw']
+        example['x0'] = _whiten_image(example['x0_raw'], mean, std, name='x0')
+        del example['x0_raw']
+        return example
+
+
+def _whiten_image(x, mean, std, name='whiten_image'):
     with tf.name_scope(name) as scope:
         return tf.divide(x - mean, std, name=scope)
 

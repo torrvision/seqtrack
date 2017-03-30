@@ -178,3 +178,30 @@ def batch(example, batch_size=1, capacity=32, num_threads=1, name='batch'):
         return tf.train.batch(example, batch_size=batch_size,
             dynamic_pad=True, capacity=capacity, num_threads=num_threads,
             name=scope)
+
+
+def make_multiplexer(sources, capacity=32, num_threads=1, name='multiplex'):
+    # Take details from first source.
+    names = sorted(sources[0].keys())
+    dtypes = [sources[0][k].dtype for k in names]
+    shapes = [sources[0][k].shape for k in names]
+    with tf.name_scope(name) as scope:
+        # Create dummy queues.
+        queues = []
+        for i, source in enumerate(sources):
+            with tf.name_scope('dummy_{}'.format(i)):
+                queue = tf.FIFOQueue(capacity=capacity, dtypes=dtypes, names=names)
+                enqueue = queue.enqueue(source)
+                with tf.name_scope('summary'):
+                    tf.summary.scalar('fraction_of_%d_full' % capacity,
+                                      tf.cast(queue.size(), tf.float32) * (1./capacity))
+            tf.train.add_queue_runner(tf.train.QueueRunner(queue, [enqueue]*num_threads))
+            queues.append(queue)
+        # Multiplex over dummy queues.
+        index = tf.placeholder(tf.int32, [], 'index')
+        queue = tf.QueueBase.from_list(index, queues)
+        example = queue.dequeue(name=scope)
+    # Restore (partial) shape to tensors.
+    for k, shape in zip(names, shapes):
+        example[k].set_shape(shape)
+    return index, example

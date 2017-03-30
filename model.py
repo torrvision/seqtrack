@@ -1425,9 +1425,7 @@ class RNN_conv_asymm(object):
         #     'h_last':  ht,
         #     'c_last':  yt,
         # })
-        return {
-            'y': outputs,
-        }
+        return {'y': outputs}
 
 
 class NonRecur(object):
