@@ -146,8 +146,7 @@ def train(create_model, dataset, o):
                 # - print results (loss, eval resutls, time, etc.)
                 period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step % period_assess == 0: # evaluate model
-                    sequences = sample.sample_ILSVRC(dataset, 'train', o.ntimesteps,
-                        seqtype='sampling', shuffle=True)
+                    sequences = sample.all_tracks_full_ILSVRC(dataset, 'train')
                     evaluate.track(sess, raw_inputs, model, next(sequences))
                     # # evaluate
                     # val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'

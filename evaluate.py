@@ -35,7 +35,7 @@ def track(sess, inputs, tracker, sequence):
 
     # If the length of the sequence is greater than the instantiated RNN,
     # it will need to be run in chunks.
-    output_chunks = []
+    y_chunks = []
     prev_state = {}
     for start in range(1, sequence_len, tracker.sequence_len):
         rem = sequence_len - start
@@ -56,16 +56,15 @@ def track(sess, inputs, tracker, sequence):
             feed_dict.update({init_state[k]: prev_state[k] for k in init_state})
         # Get output and final state.
         # TODO: Check that this works when `final_state` is an empty dictionary.
-        outputs, prev_state = sess.run([tracker.outputs, final_state],
-                                       feed_dict=feed_dict)
+        y, prev_state = sess.run([tracker.outputs['y'], final_state],
+                                 feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
-        outputs = {k: v[0][:chunk_len] for k, v in outputs.iteritems()}
-        output_chunks.append(outputs)
+        y = y[0][:chunk_len]
+        y_chunks.append(y)
 
     # Concatenate the results for all chunks.
-    outputs = {k: np.concatenate([chunk[k] for chunk in output_chunks])
-               for k in tracker.outputs}
-    return outputs
+    y = np.concatenate(y_chunks)
+    return y
 
 def pad_to(x, n, mode='constant', axis=0):
     width = [(0, 0) for s in x.shape]

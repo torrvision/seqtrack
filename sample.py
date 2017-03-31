@@ -1,8 +1,13 @@
-'''The functions in this file generate sequences from datasets.'''
+'''The functions in this file create collections of sequences from datasets.
 
+The sequences can be returned as a list or the functions can act as generators.
+'''
+
+import pdb
 import numpy as np
 import os
 import random
+
 
 def sample_ILSVRC(dataset, dstype, ntimesteps, seqtype=None, shuffle=True):
     num_videos = dataset.nexps[dstype]
@@ -101,3 +106,32 @@ def sample_ILSVRC(dataset, dstype, ntimesteps, seqtype=None, shuffle=True):
             files.append(fimg)
             labels.append(y)
         yield {'image_files': files, 'labels': labels}
+
+
+def all_tracks_full_ILSVRC(dataset, dstype, seqtype=None):
+    num_videos = dataset.nexps[dstype]
+
+    def _select_frms(objvalidfrms):
+        # 1. get selection range (= first one and last one)
+        objvalidfrms_np = np.asarray(objvalidfrms)
+        frms_one = np.where(objvalidfrms_np == 1)[0]
+        frm_start = frms_one[0]
+        frm_end = frms_one[-1]
+        return range(frm_start, frm_end)
+
+    for idx in range(num_videos):
+        # NOTE: examples have a length of ntimesteps+1.
+        files = []
+        labels = []
+        for objid in dataset.objids_valid_snp[dstype][idx]:
+            # self.objvalidfrms_snp should be changed as well.
+            frms = _select_frms(dataset.objvalidfrms_snp[dstype][idx][objid])
+            for frm in frms:
+                # for x; image
+                fimg = os.path.join(dataset.snps[dstype]['Data'][idx], '{:06d}.JPEG'.format(frm))
+                # for y; labels
+                xmlfile = os.path.join(dataset.snps[dstype]['Annotations'][idx], '{:06d}.xml'.format(frm))
+                y = dataset._get_bndbox_from_xml(xmlfile, objid)
+                files.append(fimg)
+                labels.append(y)
+            yield {'image_files': files, 'labels': labels}
