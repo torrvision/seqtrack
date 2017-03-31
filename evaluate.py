@@ -6,9 +6,84 @@ import time
 
 import draw
 import data
+from helpers import load_image, im_to_arr
 
 
-def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
+def track(sess, inputs, tracker, sequence):
+    '''Run an instantiated tracker on a sequence.
+
+    tracker.outputs      -- Dictionary of tensors
+    tracker.state        -- Dictionary of 2-tuples of tensors
+    tracker.sequence_len -- Integer
+    tracker.batch_size   -- Integer
+
+    sequence['image_files'] -- List of strings
+    sequence['labels']      -- Numpy array
+    '''
+    # TODO: Variable batch size.
+    # TODO: Run on a batch of sequences for speed.
+
+    first_image = load_image(sequence['image_files'][0])
+    first_label = sequence['labels'][0]
+    first_image = _single_to_batch(im_to_arr(first_image), tracker.batch_size)
+    first_label = _single_to_batch(first_label, tracker.batch_size)
+
+    init_state  = {k: v[0] for k, v in tracker.state.iteritems()}
+    final_state = {k: v[1] for k, v in tracker.state.iteritems()}
+
+    sequence_len = len(sequence['image_files'])
+
+    # If the length of the sequence is greater than the instantiated RNN,
+    # it will need to be run in chunks.
+    y_chunks = []
+    prev_state = {}
+    for start in range(1, sequence_len, tracker.sequence_len):
+        rem = sequence_len - start
+        # Feed the next `chunk_len` frames into the tracker.
+        chunk_len = min(rem, tracker.sequence_len)
+        images = map(load_image, sequence['image_files'][start:start+chunk_len])
+        # Create single array of all images.
+        images = np.array(map(im_to_arr, images))
+        images = _single_to_batch(pad_to(images, tracker.sequence_len), tracker.batch_size)
+        feed_dict = {
+            inputs['inputs_raw']: images,
+            inputs['x0_raw']:     first_image,
+            inputs['y0']:         first_label,
+        }
+        if start > 1:
+            # This is not the first chunk.
+            # Add the previous state to the feed dictionary.
+            feed_dict.update({init_state[k]: prev_state[k] for k in init_state})
+        # Get output and final state.
+        # TODO: Check that this works when `final_state` is an empty dictionary.
+        y, prev_state = sess.run([tracker.outputs['y'], final_state],
+                                 feed_dict=feed_dict)
+        # Take first element of batch and first `chunk_len` elements of output.
+        y = y[0][:chunk_len]
+        y_chunks.append(y)
+
+    # Concatenate the results for all chunks.
+    y = np.concatenate(y_chunks)
+    return y
+
+def pad_to(x, n, mode='constant', axis=0):
+    width = [(0, 0) for s in x.shape]
+    width[axis] = (0, n - x.shape[axis])
+    return np.pad(x, width, mode=mode)
+
+def _single_to_batch(x, batch_size):
+    # TODO: Pad to sequence length and batch size?
+    x = np.expand_dims(x, 0)
+    return pad_to(x, batch_size)
+
+
+def track_all(sess, tracker, sequences):
+    '''Runs the tracker on the set of sequences.'''
+    for sequence in sequences:
+        outputs = track(sess, tracker, sequence)
+
+
+def evaluate(sess, inputs, outputs, state, loader, o, dstype, nbatches_=None, hold_inputs=False,
         shuffle_local=False, fulllen=False):
     '''
     Args: 

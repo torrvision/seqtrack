@@ -5,7 +5,7 @@ import tensorflow as tf
 from opts           import Opts
 import data
 import model
-from train          import train
+import train
 
 
 def parse_arguments():
@@ -133,8 +133,8 @@ if __name__ == "__main__":
     o.update_by_sysarg(args=args)
     o.initialize()
 
-    loader = data.load_data(o)
-    m = model.load_model(o, stat=loader.stat['train'])
+    dataset = data.load_data(o)
+    m = lambda inputs: model.load_model(inputs, o)
 
     assert(o.mode == 'train')
-    train(m, loader, o)
+    train.train(m, dataset, o)
