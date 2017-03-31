@@ -12,13 +12,15 @@ from helpers import load_image, im_to_arr
 def track(sess, inputs, tracker, sequence):
     '''Run an instantiated tracker on a sequence.
 
-    tracker.outputs -- Dictionary of tensors
-    tracker.state -- Dictionary of 2-tuples of tensors
+    tracker.outputs      -- Dictionary of tensors
+    tracker.state        -- Dictionary of 2-tuples of tensors
     tracker.sequence_len -- Integer
+    tracker.batch_size   -- Integer
 
-    sequence.image_files -- List of strings
-    sequence.labels -- Numpy array
+    sequence['image_files'] -- List of strings
+    sequence['labels']      -- Numpy array
     '''
+    # TODO: Variable batch size.
     # TODO: Run on a batch of sequences for speed.
 
     first_image = load_image(sequence['image_files'][0])
