@@ -17,8 +17,8 @@ import sample
 def train(create_model, dataset, o):
     '''Trains a network.
 
-    The model is a function that takes as input a dictionary of tensors and
-    returns a dictionary of tensors.
+    The `create_model` function takes as input a dictionary of tensors and
+    returns a model object.
 
     The reason that the model is provided as a *function* is so that
     the code which uses the model is free to decide how to instantiate it.
@@ -66,9 +66,15 @@ def train(create_model, dataset, o):
         queue_index, example = pipeline.make_multiplexer([example_train, example_val],
             num_threads=NUM_MULTIPLEX_THREADS)
 
+    # Create placeholders with variable batch size.
+    clear_batch_size = lambda shape: [None] + shape[1:]
+    example = {k: tf.placeholder_with_default(example[k],
+                      clear_batch_size(example[k].shape.as_list()))
+               for k in example}
+
     # Take subset of `example` fields to give inputs.
-    raw_inputs = {k: example[k] for k in ['inputs_raw', 'x0_raw', 'y0']}
-    model = create_model(_whiten(raw_inputs, o, stat=dataset.stat['train']))
+    inputs = {k: example[k] for k in ['inputs_raw', 'x0_raw', 'y0']}
+    model = create_model(_whiten(inputs, o, stat=dataset.stat['train']))
     loss_var = get_loss(example, model.outputs, o)
 
     nepoch     = o.nepoch if not o.debugmode else 2
@@ -150,7 +156,7 @@ def train(create_model, dataset, o):
                 period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step % period_assess == 0: # evaluate model
                     sequences = sample.all_tracks_full_ILSVRC(dataset, 'train')
-                    evaluate.track(sess, raw_inputs, model, next(sequences))
+                    evaluate.track(sess, inputs, model, next(sequences))
                     # # evaluate
                     # val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
                     # evals = {

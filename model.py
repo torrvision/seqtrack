@@ -1,23 +1,22 @@
-'''
-A model is a function that takes as input a dictionary of tensors and returns a dictionary of tensors::
+'''This file describes several different models.
 
-    def model(input):
-        # ...
-        return output
+A model is a class with the properties::
 
-The `input` dictionary should have keys `inputs`, `inputs_valid`, `inputs_HW`, `x0` and `y0`.
-It may also have `target` if required.
+    model.outputs      # Dictionary of tensors
+    model.state        # Dictionary of 2-tuples of tensors
+    model.batch_size   # Batch size of instance.
+    model.sequence_len # Size of instantiated RNN.
+
+The model constructor should take a dictionary of tensors::
+
+    'inputs' # Tensor of images [b, t, h, w, c]
+    'x0'     # Tensor of initial images [b, h, w, c]
+    'y0'     # Tensor of initial rectangles [b, 4]
+
+It may also have 'target' if required.
 Images input to the model are already normalized (e.g. have dataset mean subtracted).
 
-The `output` dictionary should have keys `y` or `heatmap` (preference will be given to `y`).
-
-The reason that the model is provided as a *function* is so that the code which uses the model is free to decide how to instantiate it.
-For example, training code may construct a single instance of the model with input placeholders, or it may construct two instances of the model, each with its own input queue.
-
-The model should use `tf.get_variable` rather than `tf.Variable` to facilitate variable sharing between multiple instances.
-The model will be used in the same manner as an input to `tf.make_template`.
-
-TODO: Is there anything particular about how the model should use summaries?
+The `outputs` dictionary should have a key 'y' and may have other keys such as 'heatmap'.
 '''
 
 import pdb
@@ -706,8 +705,9 @@ def get_masks_from_rectangles(rec, o, kind='fg', typecast=True):
     x2 = tf.expand_dims(tf.expand_dims(x2,1),2)
     y1 = tf.expand_dims(tf.expand_dims(y1,1),2)
     y2 = tf.expand_dims(tf.expand_dims(y2,1),2)
-    grid_x = tf.tile(tf.expand_dims(grid_x,0), [o.batchsz,1,1])
-    grid_y = tf.tile(tf.expand_dims(grid_y,0), [o.batchsz,1,1])
+    # JV: Not necessary due to broadcast rules.
+    # grid_x = tf.tile(tf.expand_dims(grid_x,0), [o.batchsz,1,1])
+    # grid_y = tf.tile(tf.expand_dims(grid_y,0), [o.batchsz,1,1])
     # mask
     masks = tf.logical_and(
         tf.logical_and(tf.less_equal(x1, grid_x), 
@@ -1278,7 +1278,7 @@ class RNN_conv_asymm(object):
         self.outputs = outputs
         self.state   = state
         self.sequence_len = o.ntimesteps
-        self.batch_size   = o.batchsz
+        self.batch_size   = None
 
     def _load_model(self, inputs, o):
         # net = make_input_placeholders(o)

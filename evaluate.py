@@ -15,7 +15,7 @@ def track(sess, inputs, tracker, sequence):
     tracker.outputs      -- Dictionary of tensors
     tracker.state        -- Dictionary of 2-tuples of tensors
     tracker.sequence_len -- Integer
-    tracker.batch_size   -- Integer
+    tracker.batch_size   -- Integer or None
 
     sequence['image_files'] -- List of strings
     sequence['labels']      -- Numpy array
@@ -74,6 +74,8 @@ def pad_to(x, n, mode='constant', axis=0):
 def _single_to_batch(x, batch_size):
     # TODO: Pad to sequence length and batch size?
     x = np.expand_dims(x, 0)
+    if batch_size is None:
+        return x
     return pad_to(x, batch_size)
 
 
