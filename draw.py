@@ -5,10 +5,10 @@ import os
 import matplotlib
 matplotlib.use('Agg') # generate images without having a window appear
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 from matplotlib.patches import Rectangle
 
 import helpers
-from evaluate import convert_heatmap_to_rec
 
 
 def show_masks(masks, dataset):
@@ -133,27 +133,16 @@ def show_dataset_batch_fulllen_seq(batch, dataset, frmsz):
         plt.savefig(savedir + '/seg{}.png'.format(i))
         plt.close()
 
-def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
-    nbatches = results['nbatches']
-    idx = np.reshape(np.asarray(results['idx']), [nbatches, o.batchsz])
-    #inputs = np.reshape(np.asarray(results['inputs']),
-    #    [nbatches, o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel])
-    #outputs = np.reshape(np.asarray(results['outputs']), 
-    #    [nbatches, o.batchsz, o.ntimesteps, o.outdim])
-    # The way of using stat is changed, so inputs_raw.
-    inputs_raw = np.reshape(np.asarray(results['inputs_raw']),
-        [nbatches, o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel])
-    # output is a form of heatmap
-    outputs = np.reshape(np.asarray(results['outputs']), 
-        [nbatches, o.batchsz, o.ntimesteps, o.frmsz, o.frmsz, 1])
-    labels = np.reshape(np.asarray(results['labels']), 
-        [nbatches, o.batchsz, o.ntimesteps+1, o.outdim])
-    inputs_valid = np.reshape(np.asarray(results['inputs_valid']), 
-        [nbatches, o.batchsz, o.ntimesteps+1])
-    inputs_HW = np.reshape(np.asarray(results['inputs_HW']),
-        [nbatches, o.batchsz, 2])
-    outputs_rec = convert_heatmap_to_rec(outputs, inputs_HW)
-
+def show_track_results(results, loader, dstype, o, iteration=None, nlimit=20):
+    nbatches        = results['nbatches']
+    inputs_raw      = results['inputs_raw']
+    outputs         = results['outputs'] # Note output is already softmax-ed
+    outputs_rec     = results['outputs_rec']
+    labels          = results['labels']
+    inputs_valid    = results['inputs_valid']
+    inputs_HW       = results['inputs_HW']
+    idx             = results['idx']
+    
     if o.dataset in ['moving_mnist', 'bouncing_mnist']:
         plt.gray()
 
@@ -168,14 +157,20 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
 
             ncols = 5 
             nrows = int(np.ceil(o.ntimesteps/float(ncols))) + 1
-            fig = plt.figure(figsize=(12,8))
+            ncols *= 3 # to also visualize heatmaps for foreground and background
+
+            fig = plt.figure(figsize=(16,8))
+            gs = gridspec.GridSpec(nrows,ncols)
+            gs.update(wspace=0.05, hspace=0.025)
             for t in range(o.ntimesteps+1):
                 if t == 0:
-                    plt.subplot(nrows,ncols,t+1)
+                    plt.subplot(gs[0])
+                    plt.title('t={}'.format(t))
                 else:
-                    plt.subplot(nrows,ncols,t+ncols)
+                    plt.subplot(gs[(t-1)*3+ncols])
+                    plt.axis('off')
+                    plt.title('t={}'.format(t))
                 #image
-                #img = inputs[i, b, t]
                 img = inputs_raw[i, b, t]
                 if o.dataset in ['moving_mnist', 'bouncing_mnist']:
                     plt.imshow(np.squeeze(img, axis=2))
@@ -198,8 +193,15 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=50):
                             (box_pred[0], box_pred[1]), 
                             box_pred[2]-box_pred[0], box_pred[3]-box_pred[1], 
                             facecolor='b', edgecolor='b', fill=False))
-                # heatmap
-                plt.imshow(np.squeeze(outputs[i, b, t-1]), cmap='jet', alpha=0.3)
+
+                # heatmaps
+                if t != 0 and inputs_valid[i,b,t]:
+                    plt.subplot(gs[(t-1)*3+1+ncols]) # fg
+                    plt.imshow(outputs[i, b, t-1, :, :, 0])
+                    plt.axis('off')
+                    plt.subplot(gs[(t-1)*3+2+ncols]) # fg
+                    plt.imshow(outputs[i, b, t-1, :, :, 1])
+                    plt.axis('off')
 
             savedir = os.path.join(o.path_output, 'track_results')
             if not os.path.exists(savedir): helpers.mkdir_p(savedir)

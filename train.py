@@ -63,6 +63,8 @@ def train(m, loader, o):
 
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
+        print '\ntraining starts! --------------------------------------------'
+
         # Either initialize or restore model.
         if o.resume:
             model_file = tf.train.latest_checkpoint(o.path_ckpt)
@@ -70,7 +72,6 @@ def train(m, loader, o):
             saver.restore(sess, model_file)
         else:
             sess.run(init_op)
-
 
         path_summary_train = os.path.join(o.path_summary, 'train')
         path_summary_val = os.path.join(o.path_summary, 'val')
@@ -102,7 +103,7 @@ def train(m, loader, o):
                         saver.save(sess, fname)
 
                 # periodic assessment (success & precision rates, visualizations)
-                if global_step % (o.period_assess if not o.debugmode else 20) == 0: # save intermediate model
+                if global_step > 0 and global_step % (o.period_assess if not o.debugmode else 20) == 0: # save intermediate model
                     # evaluate
                     val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
                     evals = {
@@ -114,9 +115,9 @@ def train(m, loader, o):
                             hold_inputs=True, shuffle_local=True)}
                     # visualize tracking results examples
                     draw.show_track_results(
-                        evals['train'], loader, 'train', o, global_step,nlimit=20)
+                        evals['train'], loader, 'train', o, global_step, nlimit=10)
                     draw.show_track_results(
-                        evals[val_], loader, val_, o, global_step,nlimit=20)
+                        evals[val_], loader, val_, o, global_step, nlimit=10)
                     # print results
                     print 'ep {:d}/{:d} (GLOBAL_STEP-{:d}) '\
                         '|(train/{:s}) loss: {:.4f}/{:.4f}, IOU: {:.3f}/{:.3f}, '\
@@ -158,8 +159,8 @@ def train(m, loader, o):
                                 ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur, load_dur)
                         ib_val += 1
 
-            print 'ep {:d}/{:d} (EPOCH) |loss: {:.4f}, time:{:.2f}'.format(
-                    ie+1, nepoch, np.mean(loss_ep), time.time()-t_epoch)
+            print 'ep {:d}/{:d} (global_step: {:d}) |loss: {:.4f}, time:{:.2f}'.format(
+                    ie+1, nepoch, global_step_var.eval(), np.mean(loss_ep), time.time()-t_epoch)
 
         # **training finished
         print '\ntraining finished! ------------------------------------------'

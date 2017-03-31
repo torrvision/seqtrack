@@ -113,6 +113,9 @@ def parse_arguments():
     parser.add_argument(
             '--resume_data', help='data to resume i.e. save/{time}/resume.npy',
             type=str)
+    parser.add_argument(
+            '--period_ckpt', help='period to save ckpt (and interm assess)',
+            type=int, default=10000)
 
     parser.add_argument(
             '--gpu_frac', help='fraction of gpu memory', 

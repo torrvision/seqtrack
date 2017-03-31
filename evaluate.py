@@ -63,8 +63,8 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
             for k in keys:
                 if k in batch:
                     results.setdefault(k, []).append(batch[k])
-            #results.setdefault('outputs', []).append(outputs) # NL->JV: remove if no need anymore?
-            #results.setdefault('loss', []).append(loss) # NL->JV: remove if no need anymore?
+            results.setdefault('outputs', []).append(outputs)
+            results.setdefault('loss', []).append(loss)
 
             sys.stdout.write(
                     '\r(during \'{0:s}\') passed {1:d}/{2:d}th batch on '\
@@ -73,7 +73,22 @@ def evaluate(sess, m, loader, o, dstype, nbatches_=None, hold_inputs=False,
             sys.stdout.flush()
         print ' '
 
-        results = evaluate_outputs(results, outtype='heatmap')
+        # list -> numpy array
+        for key in results.keys():
+            if isinstance(results[key], list):
+                results[key] = np.asarray(results[key])
+
+        # if outtype is heatmap, 
+        # 1) convert 2-dim heatmaps to 1 dim (softmax); for valid probability
+        # 2) compute rectangle from heatmap
+        outtype = 'heatmap'
+        if outtype == 'heatmap':
+            results['outputs'] = softmax_v1(results['outputs'])
+            results['outputs_rec'] = convert_heatmap_to_rec(
+                    results['outputs'][:,:,:,:,:,0], results['inputs_HW'])
+
+        # evaluate
+        results = evaluate_outputs(results, outtype=outtype)
         return results
 
     
@@ -286,18 +301,20 @@ def evaluate_outputs_new(results):
     return results
 
 def evaluate_outputs(results, outtype='rectangle'):
-    # to numpy array and take only valid to compute (i.e., from frame 1)
-    boxA = np.asarray(results['outputs'])
-    boxB = np.asarray(results['labels'])
-    boxB = boxB[:,:,1:,:]
-    inputs_valid = np.asarray(results['inputs_valid'])
-    inputs_valid = inputs_valid[:,:,1:]
-    inputs_HW = np.asarray(results['inputs_HW'])
-        
-    # convert if heatmap to rec
+    inputs_valid    = results['inputs_valid']
+    inputs_HW       = results['inputs_HW']
+    boxB            = np.copy(results['labels'])
     if outtype == 'heatmap':
-        boxA = convert_heatmap_to_rec(boxA, inputs_HW)
+        boxA = np.copy(results['outputs_rec'])
+    elif outtype == 'rectangle':
+        boxA = np.copy(results['outputs'])
+    else: 
+        raise ValueError('Not available outtype')
 
+    # take only valid to compute (i.e., from frame 1)
+    boxB = boxB[:,:,1:,:]
+    inputs_valid = inputs_valid[:,:,1:]
+        
     # back to original scale (pixel)
     scalar = np.concatenate((inputs_HW[:,:,[1]], inputs_HW[:,:,[0]], 
         inputs_HW[:,:,[1]], inputs_HW[:,:,[0]]), axis=2)
@@ -370,13 +387,17 @@ def evaluate_outputs(results, outtype='rectangle'):
     results['cle_representative'] = cle_representative
     return results
 
+def softmax_v1(x):
+    e_x = np.exp(x - np.expand_dims(np.max(x,axis=5), axis=-1)) # for numerical stability
+    return e_x / np.expand_dims(np.sum(e_x, axis=5), axis=-1)
+
 def convert_heatmap_to_rec(heatmap, inputs_HW):
     nbatches = heatmap.shape[0]
     batchsz = heatmap.shape[1]
     ntimesteps = heatmap.shape[2]
 
     # pass threshold
-    threshold = 0.9
+    threshold = 0.7
     heatmap_binary = heatmap>threshold
 
     # heatmap -> rec

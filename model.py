@@ -661,24 +661,32 @@ def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype, name='loss'):
 
             # loss1: cross-entropy between probabilty maps (need to change label) 
             if 'ce' in o.losses: 
-                labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
-                outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
-                assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
-                with tf.control_dependencies([assert_finite(outputs_valid)]):
-                    outputs_valid = tf.identity(outputs_valid)
-                loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=labels_flat, logits=outputs_flat)
-                # Wrap with assertion that loss is finite.
-                with tf.control_dependencies([assert_finite(loss_ce)]):
-                    loss_ce = tf.identity(loss_ce)
-                loss_ce = tf.reduce_mean(loss_ce)
+                # reshape labels and outputs, to use softmax_cross_entropy_with_logits.
+                # labels[i] must be a valid probability distribution.
+                loss_ce = tf.reduce_mean(
+                        tf.nn.softmax_cross_entropy_with_logits(
+                            labels=tf.reshape(labels_valid, [-1, 2]), 
+                            logits=tf.reshape(outputs_valid, [-1, 2])))
                 losses['ce'] = loss_ce
+                #labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
+                #outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
+                #assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
+                #with tf.control_dependencies([assert_finite(outputs_valid)]):
+                #    outputs_valid = tf.identity(outputs_valid)
+                #loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=labels_flat, logits=outputs_flat)
+                ## Wrap with assertion that loss is finite.
+                #with tf.control_dependencies([assert_finite(loss_ce)]):
+                #    loss_ce = tf.identity(loss_ce)
+                #loss_ce = tf.reduce_mean(loss_ce)
+                #losses['ce'] = loss_ce
 
             # loss2: tf's l2 (without sqrt)
             if 'l2' in o.losses:
-                labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
-                outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
-                outputs_softmax = tf.nn.softmax(outputs_flat)
-                loss_l2 = tf.nn.l2_loss(labels_flat - outputs_softmax)
+                #labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
+                #outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
+                #outputs_softmax = tf.nn.softmax(outputs_flat)
+                #loss_l2 = tf.nn.l2_loss(labels_flat - outputs_softmax)
+                loss_l2 = tf.nn.l2_loss(labels_valid - outputs_valid)
                 losses['l2'] = loss_l2
 
         with tf.name_scope('summary'):
@@ -692,11 +700,12 @@ def convert_rec_to_heatmap(rec, o):
     Args:
         rec: [batchsz x ntimesteps+1] ground-truth rectangle labels
     Return:
-        heatmap: [batchsz x ntimesteps+1 x o.frmsz x o.frmsz x 1]
+        #heatmap: [batchsz x ntimesteps+1 x o.frmsz x o.frmsz x 1]
+        heatmap: [batchsz x ntimesteps+1 x o.frmsz x o.frmsz x 2] # fg + bg
     '''
     masks = []
     for t in range(o.ntimesteps+1):
-        masks.append(get_masks_from_rectangles(rec[:,t], o))
+        masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
     masks = tf.stack(masks, axis=1)
     return masks
 
@@ -745,7 +754,7 @@ def activate(input_, activation_='relu'):
     else:
         raise ValueError('no available activation type!')
 
-def get_masks_from_rectangles(rec, o):
+def get_masks_from_rectangles(rec, o, kind='fg', typecast=True):
     # create mask using rec; typically rec=y_prev
     x1 = rec[:,0] * o.frmsz
     y1 = rec[:,1] * o.frmsz
@@ -768,8 +777,15 @@ def get_masks_from_rectangles(rec, o):
             tf.less_equal(grid_x, x2)),
         tf.logical_and(tf.less_equal(y1, grid_y), 
             tf.less_equal(grid_y, y2)))
-    # type and dim change so that it can be concated with x
-    masks = tf.expand_dims(tf.cast(masks, o.dtype),3)
+
+    if kind == 'fg': # only foreground mask
+        masks = tf.expand_dims(masks, 3) # to have channel dim
+    elif kind == 'bg': # add background mask
+        masks_bg = tf.logical_not(masks)
+        masks = tf.concat_v2(
+                (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
+    if typecast: # type cast so that it can be concatenated with x
+        masks = tf.cast(masks, o.dtype)
     return masks
 
 def enforce_min_size(x1, y1, x2, y2, min=1.0):
@@ -1112,12 +1128,25 @@ class RNN_new(object):
                 get_variable_with_initial(get_bilinear_upsample_weights(
                     cnn['layer'][0]['filtsz'], cnn_1x1['layer'][-1]['chout'])))
 
+        # final 1x1 CNNs at the output
+        with tf.variable_scope('cnn_1x1_out'):
+            cnn_1x1_out = {}
+            cnn_1x1_out['nlayers'] = 2
+            cnn_1x1_out['layer'] = []
+            channels = cnn_1x1['layer'][-1]['chout']
+            cnn_1x1_out['layer'].append({
+                'w': get_weight_variable([1, 1, channels, channels], name_='w0', wd=o.wd),
+                'b': get_bias_variable([channels], name_='b0', wd=o.wd)})
+            cnn_1x1_out['layer'].append({
+                'w': get_weight_variable([1, 1, channels, 2], name_='w1', wd=o.wd),
+                'b': get_bias_variable([2], name_='b1', wd=o.wd)})
+
         # regression for y; (1x1 convolutions reducing channels to 1)
-        with tf.variable_scope('out'):
-            out = {}
-            out['w'] = get_weight_variable(
-                [1, 1, cnn_1x1['layer'][-1]['chout'], 1], name_='w', wd=o.wd)
-            out['b'] = get_bias_variable([1], name_='b', wd=o.wd)
+        #with tf.variable_scope('out'):
+        #    out = {}
+        #    out['w'] = get_weight_variable(
+        #        [1, 1, cnn_1x1['layer'][-1]['chout'], 1], name_='w', wd=o.wd)
+        #    out['b'] = get_bias_variable([1], name_='b', wd=o.wd)
 
         # return params
         params = {}
@@ -1125,7 +1154,8 @@ class RNN_new(object):
         params['cnn_1x1'] = cnn_1x1
         params['lstm'] = lstm
         params['cnn_deconv'] = cnn_deconv
-        params['out'] = out
+        params['cnn_1x1_out'] = cnn_1x1_out
+        #params['out'] = out
         return params
 
     def _pass_cnn(self, cnnin, o):
@@ -1214,9 +1244,21 @@ class RNN_new(object):
 
         return act_deconv2
 
-    def _project_output(self, h):
-        output = conv2d(h, self.params['out']['w'], self.params['out']['b'])
-        return output
+    def _pass_cnn_1x1s_out(self, scoremap):
+        assert(self.params['cnn_1x1_out']['nlayers'] == 2)
+        conv1 = conv2d(scoremap, 
+                self.params['cnn_1x1_out']['layer'][0]['w'],
+                self.params['cnn_1x1_out']['layer'][0]['b'])
+        act = activate(conv1, 'relu')
+        # TODO: can add dropout here 
+        conv2 = conv2d(act,
+                self.params['cnn_1x1_out']['layer'][1]['w'],
+                self.params['cnn_1x1_out']['layer'][1]['b'])
+        return conv2
+
+    #def _project_output(self, h):
+    #    output = conv2d(h, self.params['out']['w'], self.params['out']['b'])
+    #    return output
 
     def _load_model(self, o, stat=None):
         # placeholders
@@ -1263,7 +1305,10 @@ class RNN_new(object):
 
             # regress output heatmap using deconvolution layers (transpose of conv)
             h_deconv = self._pass_deconvolution(h_curr, o)
-            y_curr = self._project_output(h_deconv)
+
+            # after reaching the output resolution, two 1x1 CNN same as StackedHourglassNet.
+            y_curr = self._pass_cnn_1x1s_out(h_deconv)
+            #y_curr = self._project_output(h_deconv)
             outputs.append(y_curr)
         outputs = tf.stack(outputs, axis=1) # list to tensor
 

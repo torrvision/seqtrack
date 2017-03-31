@@ -90,7 +90,7 @@ class Opts(object):
         self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
         self.resume_data        = None
-        self.period_ckpt        = 10000
+        self.period_ckpt        = 10000 # this is based only on global_step; batchsz not considered
         self.period_assess      = self.period_ckpt
         self.period_summary     = 10 # NL->JV: changed XXX_period-> period_XXX
         self.activ_histogram    = False
