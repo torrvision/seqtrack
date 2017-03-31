@@ -174,7 +174,7 @@ def train(create_model, dataset, o):
 
                 # Take a training step.
                 start = time.time()
-                if ib % o.summary_period == 0:
+                if ib % o.period_summary == 0:
                     _, loss, summary = sess.run([optimize_op, loss_var, summary_optimize],
                                                 feed_dict={queue_index: 0})
                     dur = time.time() - start
