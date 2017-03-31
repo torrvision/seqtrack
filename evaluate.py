@@ -102,15 +102,15 @@ def evaluate(sess, inputs, outputs, state, loader, o, dstype, nbatches_=None, ho
     #   forward-pass should run multiple times.
     #--------------------------------------------------------------------------
 
-    # results = {
-    #         'idx': [], 
-    #         'inputs_valid': [], 
-    #         'inputs_HW': [], 
-    #         'labels': [], 
-    #         'outputs': [],
-    #         'loss': []
-    #         }
-    results = {}
+    results = {
+            'idx': [], 
+            'inputs_raw': [], # TOO large to have in memory
+            'inputs_valid': [], 
+            'inputs_HW': [], 
+            'labels': [], 
+            'outputs': [],
+            'loss': [],
+            }
 
     if not fulllen: # this is only used during training.
         if o.debugmode:
@@ -127,37 +127,19 @@ def evaluate(sess, inputs, outputs, state, loader, o, dstype, nbatches_=None, ho
             t_start = time.time()
             batch = loader.get_batch(ib, o, dstype, shuffle_local=shuffle_local)
 
-            # fdict = {
-            #     # m.net['firstseg']: True, # this is no fulllen routine
-            #     m.net['target']: batch['target'],
-            #     m.net['inputs']: batch['inputs'],
-            #     m.net['inputs_valid']: batch['inputs_valid'],
-            #     m.net['inputs_HW']: batch['inputs_HW'],
-            #     m.net['labels']: batch['labels']
-            #     }
             names = ['target_raw', 'inputs_raw', 'x0_raw', 'y0', 'inputs_valid', 'inputs_HW', 'labels']
             fdict = {m.net[name]: batch[name] for name in names}
 
-            outputs, loss = sess.run(
-                    [m.net['outputs'], m.net['loss']], feed_dict=fdict)
+            outputs, loss = sess.run([m.net['outputs'], m.net['loss']], feed_dict=fdict)
 
-            # if 'idx' in batch: 
-            #     results['idx'].append(batch['idx'])
-            # if hold_inputs:
-            #     results['inputs'].append(batch['inputs']) # no memory 
-            # results['inputs_valid'].append(batch['inputs_valid'])
-            # results['inputs_HW'].append(batch['inputs_HW'])
-            # results['labels'].append(batch['labels'])
-            # results['outputs'].append(outputs)
-            # results['loss'].append(loss)
             keys = ['idx', 'inputs_valid', 'inputs_HW', 'labels']
             if hold_inputs:
                 keys.append('inputs_raw')
             for k in keys:
                 if k in batch:
                     results.setdefault(k, []).append(batch[k])
-            results.setdefault('outputs', []).append(outputs)
-            results.setdefault('loss', []).append(loss)
+            #results.setdefault('outputs', []).append(outputs) # NL->JV: remove if no need anymore?
+            #results.setdefault('loss', []).append(loss) # NL->JV: remove if no need anymore?
 
             sys.stdout.write(
                     '\r(during \'{0:s}\') passed {1:d}/{2:d}th batch on '\
@@ -166,7 +148,7 @@ def evaluate(sess, inputs, outputs, state, loader, o, dstype, nbatches_=None, ho
             sys.stdout.flush()
         print ' '
 
-        results = evaluate_outputs(results)
+        results = evaluate_outputs(results, outtype='heatmap')
         return results
 
     
@@ -233,9 +215,8 @@ def evaluate(sess, inputs, outputs, state, loader, o, dstype, nbatches_=None, ho
                         m.net['y0']: y0
                         }
 
-                outputs, loss, h_last, C_last, y_last = sess.run(
-                    [m.net['outputs'], m.net['loss'], 
-                        m.net['h_last'], m.net['C_last'], m.net['y_last']],
+                outputs, h_last, C_last, y_last = sess.run(
+                    [m.net['outputs'], m.net['h_last'], m.net['C_last'], m.net['y_last']],
                     feed_dict=fdict)
                 outputs_all.append(outputs[0, :, :])
 
@@ -379,7 +360,7 @@ def evaluate_outputs_new(results):
     results['cle_representative'] = cle_representative
     return results
 
-def evaluate_outputs(results):
+def evaluate_outputs(results, outtype='rectangle'):
     # to numpy array and take only valid to compute (i.e., from frame 1)
     boxA = np.asarray(results['outputs'])
     boxB = np.asarray(results['labels'])
@@ -387,6 +368,10 @@ def evaluate_outputs(results):
     inputs_valid = np.asarray(results['inputs_valid'])
     inputs_valid = inputs_valid[:,:,1:]
     inputs_HW = np.asarray(results['inputs_HW'])
+        
+    # convert if heatmap to rec
+    if outtype == 'heatmap':
+        boxA = convert_heatmap_to_rec(boxA, inputs_HW)
 
     # back to original scale (pixel)
     scalar = np.concatenate((inputs_HW[:,:,[1]], inputs_HW[:,:,[0]], 
@@ -460,3 +445,35 @@ def evaluate_outputs(results):
     results['cle_representative'] = cle_representative
     return results
 
+def convert_heatmap_to_rec(heatmap, inputs_HW):
+    nbatches = heatmap.shape[0]
+    batchsz = heatmap.shape[1]
+    ntimesteps = heatmap.shape[2]
+
+    # pass threshold
+    threshold = 0.9
+    heatmap_binary = heatmap>threshold
+
+    # heatmap -> rec
+    rec = np.zeros([nbatches, batchsz, ntimesteps, 4], dtype=np.float32)
+    for ib in range(nbatches):
+        for ie in range(batchsz):
+            for t in range(ntimesteps):
+                indices = np.transpose(np.nonzero(heatmap_binary[ib,ie,t]))
+                if len(indices) != 0:
+                    rec[ib,ie,t,0] = np.min(indices[:,1])
+                    rec[ib,ie,t,1] = np.min(indices[:,0])
+                    rec[ib,ie,t,2] = np.max(indices[:,1])
+                    rec[ib,ie,t,3] = np.max(indices[:,0])
+                else: # if there is no foreground fired, output the entire image
+                    rec[ib,ie,t,0] = 0
+                    rec[ib,ie,t,1] = 0
+                    rec[ib,ie,t,2] = inputs_HW[ib, ie, 0]
+                    rec[ib,ie,t,3] = inputs_HW[ib, ie, 1]
+
+    # rectangle is scaled betwen 0 and 1
+    scalar = np.concatenate((inputs_HW[:,:,[1]], inputs_HW[:,:,[0]], 
+        inputs_HW[:,:,[1]], inputs_HW[:,:,[0]]), axis=2)
+    rec /= np.expand_dims(scalar, 2)
+    
+    return rec

@@ -8,8 +8,6 @@ import model
 import train
 
 
-
-
 def parse_arguments():
     parser = argparse.ArgumentParser(description='rnn tracking - main script')
 
@@ -17,7 +15,10 @@ def parse_arguments():
             '--verbose', help='print arguments',
             action='store_true')
     parser.add_argument(
-            '--mode', help='choose mode (train, test)',
+            '--verbose_train', help='print train losses during train', 
+            action='store_true')
+    parser.add_argument(
+            '--mode', help='choose mode (train, test)', 
             type=str, default='')
     parser.add_argument(
             '--debugmode', help='used for debugging',
@@ -27,33 +28,14 @@ def parse_arguments():
             '--dataset', help='specify the name of dataset',
             type=str, default='')
     parser.add_argument(
-            '--frmsz', help='size of a square image', type=int, default=100)
-    parser.add_argument(
-            '--path_data_home', help='location of datasets',
-            type=str, default='./data')
-    # parser.add_argument('--path_ckpt', help='location to save training checkpoints')
-    # parser.add_argument('--path_output', help='location to write results')
-    parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
-    parser.set_defaults(useresizedimg=True)
-    parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
             type=int, default=0)
 
     parser.add_argument(
-            '--nosave', help='no need to save results?',
-            action='store_true')
-    parser.add_argument(
-            '--restore', help='to load a pretrained model (for test)',
-            action='store_true')
-    parser.add_argument(
-            '--restore_model', help='model to restore',
-            type=str)
-    parser.add_argument(
-            '--resume', help='to resume training',
-            action='store_true')
-    parser.add_argument(
-            '--resume_data', help='data to resume i.e. save/{time}/resume.npy',
-            type=str)
+            '--frmsz', help='size of a square image', type=int, default=100)
+    # NOTE: (NL) any reason to have two arguments for this option?
+    parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
+    parser.set_defaults(useresizedimg=True)
 
     parser.add_argument(
             '--model', help='model!',
@@ -114,13 +96,26 @@ def parse_arguments():
             type=float, default=1e-3)
 
     parser.add_argument(
-            '--device_number', help='gpu number for manual assignment',
-            type=int, default=0)
+            '--path_data_home', help='location of datasets',
+            type=str, default='./data')
     parser.add_argument(
-            '--gpu_manctrl', help='control gpu memory manual',
+            '--nosave', help='no need to save results?', 
+            action='store_true') 
+    parser.add_argument(
+            '--restore', help='to load a pretrained model (for test)',
             action='store_true')
     parser.add_argument(
-            '--gpu_frac', help='fraction of gpu memory',
+            '--restore_model', help='model to restore', 
+            type=str) 
+    parser.add_argument(
+            '--resume', help='to resume training',
+            action='store_true')
+    parser.add_argument(
+            '--resume_data', help='data to resume i.e. save/{time}/resume.npy',
+            type=str)
+
+    parser.add_argument(
+            '--gpu_frac', help='fraction of gpu memory', 
             type=float, default=0.4)
 
     args = parser.parse_args()
@@ -130,7 +125,6 @@ def parse_arguments():
     return args
 
 if __name__ == "__main__":
-    # parameter settings
     args = parse_arguments()
     o = Opts()
     o.update_by_sysarg(args=args)

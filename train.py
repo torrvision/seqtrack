@@ -129,6 +129,7 @@ def train(create_model, dataset, o):
             t_epoch = time.time()
 
             ib_val = 0
+            loss_ep = []
             for ib in range(nbatch): # Loop over batches in epoch.
                 global_step = global_step_var.eval() # Number of steps taken.
 
@@ -181,14 +182,16 @@ def train(create_model, dataset, o):
                 else:
                     _, loss = sess.run([optimize_op, loss_var], feed_dict={queue_index: 0})
                     dur = time.time() - start
+                loss_ep.append(loss)
 
                 # **results after every batch
-                print ('ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
-                    '|loss:{5:.5f} |time:{6:.2f}').format(
-                    ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur)
+                if o.verbose_train:
+                    print ('ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
+                        '|loss:{5:.5f} |time:{6:.2f}').format(
+                        ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur)
 
                 # Evaluate validation error.
-                if ib % o.val_period == 0:
+                if ib % o.period_summary == 0:
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
@@ -196,13 +199,14 @@ def train(create_model, dataset, o):
                                                     feed_dict={queue_index: 1})
                         dur = time.time() - start
                         val_writer.add_summary(summary, global_step=global_step)
-                        print ('[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
-                            '|loss:{5:.5f} |time:{6:.2f}').format(
-                            ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur)
+                        if o.verbose_train:
+                            print ('[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
+                                '|loss:{5:.5f} |time:{6:.2f}').format(
+                                ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur)
                         ib_val += 1
 
-            print 'ep {0:d}/{1:d} (EPOCH) |time:{2:.2f}'.format(
-                    ie+1, nepoch, time.time()-t_epoch)
+            print 'ep {:d}/{:d} (EPOCH) |loss: {:.4f}, time:{:.2f}'.format(
+                    ie+1, nepoch, np.mean(loss_ep), time.time()-t_epoch)
 
         # **training finished
         print '\ntraining finished! ------------------------------------------'
