@@ -1,6 +1,9 @@
+import pdb
 import datetime
 import errno
+import numpy as np
 import os
+from PIL import Image
 
 def get_time():
     dt = datetime.datetime.now()
@@ -36,3 +39,12 @@ def createScalarMap(name='hot', vmin=-10, vmax=10):
     cm = plt.get_cmap(name)
     cNorm  = colors.Normalize(vmin=vmin, vmax=vmax)
     return cmx.ScalarMappable(norm=cNorm, cmap=cm)
+
+def load_image(fname):
+    im = Image.open(fname)
+    if im.mode != 'RGB':
+        im = im.convert('RGB')
+    return im
+
+def im_to_arr(x):
+    return np.array(x, dtype=np.float32)

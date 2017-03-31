@@ -42,8 +42,8 @@ def get_example_filenames(capacity=32, name='get_example'):
 
     Each element of the queue represents a single example sequence.
     For a sequence of length n, each element is a dictionary with the elements::
-        'files'  # Tensor with shape [n] containing strings.
-        'labels' # Tensor with shape [n, 4] containing rectangles.
+        'image_files' # Tensor with shape [n] containing strings.
+        'labels'      # Tensor with shape [n, 4] containing rectangles.
 
     Args:
         capacity: The size of the queue.
@@ -59,11 +59,11 @@ def get_example_filenames(capacity=32, name='get_example'):
         # Create queue to write examples to.
         queue = tf.FIFOQueue(capacity=capacity,
                              dtypes=[tf.string, tf.float32],
-                             names=['files', 'labels'],
+                             names=['image_files', 'labels'],
                              name='file_queue')
         placeholder = {
-            'files':  tf.placeholder(tf.string, shape=[None], name='example_files'),
-            'labels': tf.placeholder(tf.float32, shape=[None, 4], name='example_labels'),
+            'image_files': tf.placeholder(tf.string, shape=[None], name='example_files'),
+            'labels':      tf.placeholder(tf.float32, shape=[None, 4], name='example_labels'),
         }
         enqueue = queue.enqueue(placeholder)
         with tf.name_scope('summary'):
@@ -88,8 +88,8 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
     The dictionaries in `examples` will be fed into the `placeholder` tensors.
     Both dictionaries should have elements::
 
-        'files'  # List of image filenames.
-        'labels' # Numpy array with shape [n, 4] containing rectangles.
+        'image_files' # List of image filenames.
+        'labels'      # Numpy array with shape [n, 4] containing rectangles.
 
     The function `get_example_filenames` returns a function that calls this function.
     '''
@@ -97,7 +97,7 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
         if coord.should_stop():
             return
         sess.run(enqueue, feed_dict={
-            placeholder['files']:  example['files'],
+            placeholder['image_files']:  example['image_files'],
             placeholder['labels']: example['labels'],
         })
     coord.request_stop()
@@ -115,8 +115,8 @@ def load_images(example, capacity=32, num_threads=1, name='load_images'):
 
     The input dictionary has fields::
 
-        'files'  # Tensor with shape [n] containing strings.
-        'labels' # Tensor with shape [n, 4] containing rectangles.
+        'image_files' # Tensor with shape [n] containing strings.
+        'labels'      # Tensor with shape [n, 4] containing rectangles.
 
     The output dictionary has fields::
 
@@ -133,12 +133,13 @@ def load_images(example, capacity=32, num_threads=1, name='load_images'):
                              dtypes=[tf.uint8, tf.float32],
                              names=['images', 'labels'],
                              name='image_queue')
+        example = dict(example)
         # Read files from disk.
-        file_contents = tf.map_fn(tf.read_file, example['files'], dtype=tf.string)
+        file_contents = tf.map_fn(tf.read_file, example['image_files'], dtype=tf.string)
         # Decode images.
         images = tf.map_fn(tf.image.decode_jpeg, file_contents, dtype=tf.uint8)
         # Replace files with images.
-        del example['files']
+        del example['image_files']
         example['images'] = images
         enqueue = queue.enqueue(example)
         tf.train.add_queue_runner(tf.train.QueueRunner(queue, [enqueue]*num_threads))

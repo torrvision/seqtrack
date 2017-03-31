@@ -8,12 +8,13 @@ import itertools
 import threading
 
 import draw
-from evaluate import evaluate
+import evaluate
 import helpers
 import pipeline
+import sample
 
 
-def train(model, loader, o):
+def train(create_model, dataset, o):
     '''Trains a network.
 
     The model is a function that takes as input a dictionary of tensors and
@@ -65,12 +66,14 @@ def train(model, loader, o):
         queue_index, example = pipeline.make_multiplexer([example_train, example_val],
             num_threads=NUM_MULTIPLEX_THREADS)
 
-    output = model(_whiten(example, o, stat=loader.stat['train']))
-    loss_var = get_loss(example, output, o)
+    # Take subset of `example` fields to give inputs.
+    raw_inputs = {k: example[k] for k in ['inputs_raw', 'x0_raw', 'y0']}
+    model = create_model(_whiten(raw_inputs, o, stat=dataset.stat['train']))
+    loss_var = get_loss(example, model.outputs, o)
 
     nepoch     = o.nepoch if not o.debugmode else 2
-    nbatch     = loader.nexps['train']/o.batchsz if not o.debugmode else 30
-    nbatch_val = loader.nexps['val']/o.batchsz if not o.debugmode else 30
+    nbatch     = dataset.nexps['train']/o.batchsz if not o.debugmode else 30
+    nbatch_val = dataset.nexps['val']/o.batchsz if not o.debugmode else 30
 
     global_step_var = tf.Variable(0, name='global_step', trainable=False)
     # lr = init * decay^(step)
@@ -90,8 +93,8 @@ def train(model, loader, o):
         tf.summary.scalar('lr', lr)])
     saver = tf.train.Saver()
 
-    examples_train = iter_examples(loader, o, dstype='train', num_epochs=None)
-    examples_val = iter_examples(loader, o, dstype='val', num_epochs=None)
+    examples_train = iter_examples(dataset, o, dstype='train', num_epochs=None)
+    examples_val = iter_examples(dataset, o, dstype='val', num_epochs=None)
 
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
@@ -124,9 +127,6 @@ def train(model, loader, o):
                 break
             ie = global_step / nbatch
             t_epoch = time.time()
-            # loader.update_epoch_begin('train')
-            # loader.update_epoch_begin('val')
-            # lr_epoch = lr_recipe[ie] if o.lr_update else o.lr
 
             ib_val = 0
             for ib in range(nbatch): # Loop over batches in epoch.
@@ -146,29 +146,31 @@ def train(model, loader, o):
                 # - print results (loss, eval resutls, time, etc.)
                 period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step % period_assess == 0: # evaluate model
-                    print ' '
-                    # evaluate
-                    val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
-                    evals = {
-                        'train': evaluate(sess, m, loader, o, 'train',
-                            np.maximum(int(np.floor(100/o.batchsz)), 1),
-                            hold_inputs=True, shuffle_local=True),
-                        val_: evaluate(sess, m, loader, o, val_,
-                            np.maximum(int(np.floor(100/o.batchsz)), 1),
-                            hold_inputs=True, shuffle_local=True)}
-                    # visualize tracking results examples
-                    draw.show_track_results(
-                        evals['train'], loader, 'train', o, global_step,nlimit=20)
-                    draw.show_track_results(
-                        evals[val_], loader, val_, o, global_step,nlimit=20)
-                    # print results
-                    print 'ep {:d}/{:d} (STEP-{:d}) '\
-                        '|(train/{:s}) IOU: {:.3f}/{:.3f}, '\
-                        'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} '.format(
-                        ie+1, nepoch, global_step+1, val_,
-                        evals['train']['iou_mean'], evals[val_]['iou_mean'],
-                        evals['train']['auc'],      evals[val_]['auc'],
-                        evals['train']['cle_mean'], evals[val_]['cle_mean'])
+                    sequences = sample.sample_ILSVRC(dataset, 'train', o.ntimesteps,
+                        seqtype='sampling', shuffle=True)
+                    evaluate.track(sess, raw_inputs, model, next(sequences))
+                    # # evaluate
+                    # val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
+                    # evals = {
+                    #     'train': evaluate.evaluate(sess, output, state, loader, o, 'train',
+                    #         np.maximum(int(np.floor(100/o.batchsz)), 1),
+                    #         hold_inputs=True, shuffle_local=True),
+                    #     val_: evaluate.evaluate(sess, m, loader, o, val_,
+                    #         np.maximum(int(np.floor(100/o.batchsz)), 1),
+                    #         hold_inputs=True, shuffle_local=True)}
+                    # # visualize tracking results examples
+                    # draw.show_track_results(
+                    #     evals['train'], loader, 'train', o, global_step,nlimit=20)
+                    # draw.show_track_results(
+                    #     evals[val_], loader, val_, o, global_step,nlimit=20)
+                    # # print results
+                    # print 'ep {:d}/{:d} (STEP-{:d}) '\
+                    #     '|(train/{:s}) IOU: {:.3f}/{:.3f}, '\
+                    #     'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} '.format(
+                    #     ie+1, nepoch, global_step+1, val_,
+                    #     evals['train']['iou_mean'], evals[val_]['iou_mean'],
+                    #     evals['train']['auc'],      evals[val_]['auc'],
+                    #     evals['train']['cle_mean'], evals[val_]['cle_mean'])
 
                 # Take a training step.
                 start = time.time()
@@ -239,10 +241,10 @@ def _make_input_pipeline(o, dtype=tf.float32,
         # Cast type of images.
         images_batch['images'] = tf.cast(images_batch['images'], o.dtype)
         # Put in format expected by model.
-        valid = (range(o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
+        valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
         inputs_batch = {
-            'inputs_raw':   images_batch['images'],
-            'labels':       images_batch['labels'],
+            'inputs_raw':   images_batch['images'][:, 1:],
+            'labels':       images_batch['labels'][:, 1:],
             'x0_raw':       images_batch['images'][:, 0],
             'y0':           images_batch['labels'][:, 0],
             'inputs_valid': valid,
@@ -276,26 +278,27 @@ def _whiten_image(x, mean, std, name='whiten_image'):
         return tf.divide(x - mean, std, name=scope)
 
 
-def iter_examples(loader, o, dstype='train', num_epochs=None):
+def iter_examples(dataset, o, dstype='train', num_epochs=None):
     '''Generator that produces multiple epochs of examples for SGD.'''
     if num_epochs:
         epochs = xrange(num_epochs)
     else:
         epochs = itertools.count()
     for i in epochs:
-        loader.update_epoch_begin(dstype)
-        for j in range(loader.nexps[dstype]):
-            yield loader.get_example(j, o, dstype=dstype)
+        sequences = sample.sample_ILSVRC(dataset, dstype, o.ntimesteps,
+            seqtype='sampling', shuffle=True)
+        for sequence in sequences:
+            yield sequence
 
 
 # def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype, name='loss'):
 def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
     # NOTE: Be careful about length of labels and outputs. 
-    # labels and inputs_valid will be of T+1 length, and y0 shouldn't be used.
+    # labels and inputs_valid will be of T length, and y0 shouldn't be used.
     labels       = example['labels']
     inputs_valid = example['inputs_valid']
     inputs_HW    = example['inputs_HW']
-    assert(labels.get_shape().as_list()[1] == o.ntimesteps+1)
+    assert(labels.get_shape().as_list()[1] == o.ntimesteps)
 
     with tf.name_scope(name) as scope:
         losses = dict()
@@ -306,8 +309,8 @@ def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
 
             # loss1: sum of two l1 distances for left-top and right-bottom
             if 'l1' in o.losses: # TODO: double check
-                labels_valid = tf.boolean_mask(labels[:,1:], inputs_valid[:,1:])
-                outputs_valid = tf.boolean_mask(y, inputs_valid[:,1:])
+                labels_valid = tf.boolean_mask(labels, inputs_valid)
+                outputs_valid = tf.boolean_mask(y, inputs_valid)
                 loss_l1 = tf.reduce_mean(tf.abs(labels_valid - outputs_valid))
                 losses['l1'] = loss_l1
 
@@ -317,7 +320,7 @@ def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
                 scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
                     inputs_HW[:,1], inputs_HW[:,0]), axis=1)
                 boxA = y * tf.expand_dims(scalar, 1)
-                boxB = labels[:,1:,:] * tf.expand_dims(scalar, 1)
+                boxB = labels * tf.expand_dims(scalar, 1)
                 xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
                 yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
                 xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
@@ -343,8 +346,8 @@ def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
             labels_heatmap = model.convert_rec_to_heatmap(labels, o)
 
             # valid labels and outputs
-            labels_valid = tf.boolean_mask(labels_heatmap[:,1:], inputs_valid[:,1:])
-            outputs_valid = tf.boolean_mask(heatmap, inputs_valid[:,1:])
+            labels_valid = tf.boolean_mask(labels_heatmap, inputs_valid)
+            outputs_valid = tf.boolean_mask(heatmap, inputs_valid)
 
             # loss1: cross-entropy between probabilty maps (need to change label) 
             if 'ce' in o.losses: 

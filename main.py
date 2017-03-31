@@ -136,8 +136,8 @@ if __name__ == "__main__":
     o.update_by_sysarg(args=args)
     o.initialize()
 
-    loader = data.load_data(o)
-    m = lambda example: model.load_model(example, o).net
+    dataset = data.load_data(o)
+    m = lambda inputs: model.load_model(inputs, o)
 
     assert(o.mode == 'train')
-    train.train(m, loader, o)
+    train.train(m, dataset, o)

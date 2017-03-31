@@ -1,3 +1,9 @@
+'''Describes different datasets.
+
+A dataset is a collection of videos,
+where each video contains a collection of tracks.
+'''
+
 import pdb
 import numpy as np
 import cPickle as pickle
@@ -485,15 +491,15 @@ class Data_ILSVRC(object):
 
         self.nexps              = dict.fromkeys({'train', 'val', 'test'}, None)
 
-        self.idx_shuffle        = dict.fromkeys({'train', 'val', 'test'}, None)
+        # self.idx_shuffle        = dict.fromkeys({'train', 'val', 'test'}, None)
         self.stat               = dict.fromkeys({'train', 'val', 'test'}, None)
 
-        self.exps_fulllen       = dict.fromkeys({'val'}, None)
+        # self.exps_fulllen       = dict.fromkeys({'val'}, None)
 
         self._load_data(o)
-        self._update_idx_shuffle(['train', 'val', 'test'])
+        # self._update_idx_shuffle(['train', 'val', 'test'])
 
-        self.nexps_fulllen  = len(self.exps_fulllen['val']) # used in evaluation
+        # self.nexps_fulllen  = len(self.exps_fulllen['val']) # used in evaluation
 
     def _load_data(self, o):
         # TODO: need to process and load test data set as well..
@@ -510,8 +516,8 @@ class Data_ILSVRC(object):
             self._update_nexps(dstype)
             self._update_stat(dstype, o)
 
-        for dstype in ['val']: # might want to try 'train' as well..
-            self._update_list_fulllen_seq(dstype, o)
+        # for dstype in ['val']: # might want to try 'train' as well..
+        #     self._update_list_fulllen_seq(dstype, o)
 
     def _parsexml(self, xmlfile):
         with open(xmlfile) as f:
@@ -748,26 +754,26 @@ class Data_ILSVRC(object):
                 self.stat[dstype] = create_stat_global(dstype) 
                 np.save(filename, self.stat[dstype])
 
-    def _update_list_fulllen_seq(self, dstype, o):
-        assert(dstype=='val') # may change
-        def create_fulllen_seq():
-            # all examples (#examples = # valid objects in all videos)
-            exps = []
-            for i in range(self.nsnps[dstype]):
-                for objid in self.objids_valid_snp[dstype][i]:
-                    frms = self._select_frms(
-                            self.objvalidfrms_snp[dstype][i][objid], o, 
-                            seqtype='sparse')
-                    exp = {}
-                    exp['Data'] = self.snps[dstype]['Data'][i] 
-                    exp['Anno'] = self.snps[dstype]['Annotations'][i] 
-                    exp['objid'] = objid
-                    exp['frms'] = frms
-                    exps.append(exp)
-            return exps
+    # def _update_list_fulllen_seq(self, dstype, o):
+    #     assert(dstype=='val') # may change
+    #     def create_fulllen_seq():
+    #         # all examples (#examples = # valid objects in all videos)
+    #         exps = []
+    #         for i in range(self.nsnps[dstype]):
+    #             for objid in self.objids_valid_snp[dstype][i]:
+    #                 frms = self._select_frms(
+    #                         self.objvalidfrms_snp[dstype][i][objid], o, 
+    #                         seqtype='sparse')
+    #                 exp = {}
+    #                 exp['Data'] = self.snps[dstype]['Data'][i] 
+    #                 exp['Anno'] = self.snps[dstype]['Annotations'][i] 
+    #                 exp['objid'] = objid
+    #                 exp['frms'] = frms
+    #                 exps.append(exp)
+    #         return exps
 
-        if self.exps_fulllen[dstype] is None:
-            self.exps_fulllen[dstype] = create_fulllen_seq()
+    #     if self.exps_fulllen[dstype] is None:
+    #         self.exps_fulllen[dstype] = create_fulllen_seq()
 
     def _get_bndbox_from_xml(self, xmlfile, objid):
         doc = self._parsexml(xmlfile)
@@ -802,273 +808,273 @@ class Data_ILSVRC(object):
             #raise ValueError('currently not allowing no labeled frames')
         return bndbox # xyxy format
 
-    def _select_frms(self, objvalidfrms, o, seqtype=None):
-        if seqtype == 'dense':
-            '''
-            Select one sequence only from (possibly multiple) consecutive ones.
-            All frames are annotated (dense).
-            eg, [1,1,1,1,1,1,1,1,1]
-            '''
-            # firstly create consecutive 1s 
-            segment_minlen = 2
-            consecutiveones = []
-            stack = []
-            for i, val in enumerate(objvalidfrms):
-                if val == 0: 
-                    if len(stack) >= segment_minlen:
-                        consecutiveones.append(stack)
-                    stack = []
-                elif val == 1:
-                    stack.append(i)
-                else:
-                    raise ValueError('should be either 1 or 0')
-            if len(stack) >= segment_minlen: consecutiveones.append(stack)
+    # def _select_frms(self, objvalidfrms, o, seqtype=None):
+    #     if seqtype == 'dense':
+    #         '''
+    #         Select one sequence only from (possibly multiple) consecutive ones.
+    #         All frames are annotated (dense).
+    #         eg, [1,1,1,1,1,1,1,1,1]
+    #         '''
+    #         # firstly create consecutive 1s 
+    #         segment_minlen = 2
+    #         consecutiveones = []
+    #         stack = []
+    #         for i, val in enumerate(objvalidfrms):
+    #             if val == 0: 
+    #                 if len(stack) >= segment_minlen:
+    #                     consecutiveones.append(stack)
+    #                 stack = []
+    #             elif val == 1:
+    #                 stack.append(i)
+    #             else:
+    #                 raise ValueError('should be either 1 or 0')
+    #         if len(stack) >= segment_minlen: consecutiveones.append(stack)
 
-            # randomly choose one segment
-            frms_cand = random.choice(consecutiveones)
+    #         # randomly choose one segment
+    #         frms_cand = random.choice(consecutiveones)
 
-            # select frames (randomness in it and < RNN+1 size)
-            frm_length = np.minimum(
-                random.randint(segment_minlen, len(frms_cand)), o.ntimesteps+1)
-            frm_start = random.randint(0, len(frms_cand)-frm_length)
-            frms = frms_cand[frm_start:frm_start+frm_length]
-        elif seqtype == 'sparse':
-            '''
-            Select from first valid frame to last valid frame.
-            It is possible that some frames are missing labels (sparse).
-            eg, [1,1,1,0,0,1,0,1,1]
-            '''
-            objvalidfrms_np = np.asarray(objvalidfrms)
-            assert(objvalidfrms_np.ndim==1)
-            # first one and last one
-            frms_one = np.where(objvalidfrms_np == 1)
-            frm_start = frms_one[0][0]
-            frm_end = frms_one[0][-1]
-            frms = range(frm_start, frm_end+1)
-        elif seqtype == 'sampling': 
-            '''
-            Sampling k number of 1s from first 1 to last 1.
-            It consists of only 1s (no sparse), but is sampled from long range.
-            Example outputs can be [1,1,1,1,1,1].
-            '''
-            # 1. get selection range (= first one and last one)
-            objvalidfrms_np = np.asarray(objvalidfrms)
-            frms_one = np.where(objvalidfrms_np == 1)[0]
-            frm_start = frms_one[0]
-            frm_end = frms_one[-1]
-            # 2. get possible min and max (max <= o.ntimesteps+1; min >= 2)
-            minlen = 2
-            maxlen = min(frm_end-frm_start+1, o.ntimesteps+1)
-            # 3. decide length k (sampling number; min <= k <= max)
-            #k = np.random.randint(minlen, maxlen+1, 1)[0]
-            # NOTE: if k is in [min,max], it results in too many <T+1 sequences.
-            # But I think I need a lot more samples that is of length T+1.
-            # So, I stick to have k=T+1 if possible, but change later if necessary. 
-            k = maxlen
-            # 4. sample k uniformly, using randperm
-            indices = np.random.randint(0, frms_one.size, k)
-            # 5. find frames 
-            frms = frms_one[np.sort(indices)].tolist()
-        else:
-            raise ValueError('not available option for seqtype.')
-        return frms
+    #         # select frames (randomness in it and < RNN+1 size)
+    #         frm_length = np.minimum(
+    #             random.randint(segment_minlen, len(frms_cand)), o.ntimesteps+1)
+    #         frm_start = random.randint(0, len(frms_cand)-frm_length)
+    #         frms = frms_cand[frm_start:frm_start+frm_length]
+    #     elif seqtype == 'sparse':
+    #         '''
+    #         Select from first valid frame to last valid frame.
+    #         It is possible that some frames are missing labels (sparse).
+    #         eg, [1,1,1,0,0,1,0,1,1]
+    #         '''
+    #         objvalidfrms_np = np.asarray(objvalidfrms)
+    #         assert(objvalidfrms_np.ndim==1)
+    #         # first one and last one
+    #         frms_one = np.where(objvalidfrms_np == 1)
+    #         frm_start = frms_one[0][0]
+    #         frm_end = frms_one[0][-1]
+    #         frms = range(frm_start, frm_end+1)
+    #     elif seqtype == 'sampling': 
+    #         '''
+    #         Sampling k number of 1s from first 1 to last 1.
+    #         It consists of only 1s (no sparse), but is sampled from long range.
+    #         Example outputs can be [1,1,1,1,1,1].
+    #         '''
+    #         # 1. get selection range (= first one and last one)
+    #         objvalidfrms_np = np.asarray(objvalidfrms)
+    #         frms_one = np.where(objvalidfrms_np == 1)[0]
+    #         frm_start = frms_one[0]
+    #         frm_end = frms_one[-1]
+    #         # 2. get possible min and max (max <= o.ntimesteps+1; min >= 2)
+    #         minlen = 2
+    #         maxlen = min(frm_end-frm_start+1, o.ntimesteps+1)
+    #         # 3. decide length k (sampling number; min <= k <= max)
+    #         #k = np.random.randint(minlen, maxlen+1, 1)[0]
+    #         # NOTE: if k is in [min,max], it results in too many <T+1 sequences.
+    #         # But I think I need a lot more samples that is of length T+1.
+    #         # So, I stick to have k=T+1 if possible, but change later if necessary. 
+    #         k = maxlen
+    #         # 4. sample k uniformly, using randperm
+    #         indices = np.random.randint(0, frms_one.size, k)
+    #         # 5. find frames 
+    #         frms = frms_one[np.sort(indices)].tolist()
+    #     else:
+    #         raise ValueError('not available option for seqtype.')
+    #     return frms
 
-    def get_example(self, i, o, dstype):
-        # NOTE: examples have a length of ntimesteps+1.
-        files = []
-        labels = []
-        idx = self.idx_shuffle[dstype][i] 
+    # def get_example(self, i, o, dstype):
+    #     # NOTE: examples have a length of ntimesteps+1.
+    #     files = []
+    #     labels = []
+    #     idx = self.idx_shuffle[dstype][i] 
 
-        # randomly select an object
-        objid = random.sample(self.objids_valid_snp[dstype][idx], 1)[0]
+    #     # randomly select an object
+    #     objid = random.sample(self.objids_valid_snp[dstype][idx], 1)[0]
 
-        # randomly select segment of frames (<=T+1)
-        # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
-        # self.objvalidfrms_snp should be changed as well.
-        frms = self._select_frms(self.objvalidfrms_snp[dstype][idx][objid], o, seqtype='sampling')
+    #     # randomly select segment of frames (<=T+1)
+    #     # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
+    #     # self.objvalidfrms_snp should be changed as well.
+    #     frms = self._select_frms(self.objvalidfrms_snp[dstype][idx][objid], o, seqtype='sampling')
 
-        for frm in frms:
-            # for x; image
-            fimg = os.path.join(self.snps[dstype]['Data'][idx], '{:06d}.JPEG'.format(frm))
-            # for y; labels
-            xmlfile = os.path.join(self.snps[dstype]['Annotations'][idx], '{:06d}.xml'.format(frm))
-            y = self._get_bndbox_from_xml(xmlfile, objid)
-            files.append(fimg)
-            labels.append(y)
+    #     for frm in frms:
+    #         # for x; image
+    #         fimg = os.path.join(self.snps[dstype]['Data'][idx], '{:06d}.JPEG'.format(frm))
+    #         # for y; labels
+    #         xmlfile = os.path.join(self.snps[dstype]['Annotations'][idx], '{:06d}.xml'.format(frm))
+    #         y = self._get_bndbox_from_xml(xmlfile, objid)
+    #         files.append(fimg)
+    #         labels.append(y)
 
-        return {
-            'files':  files,
-            'labels': labels,
-        }
+    #     return {
+    #         'files':  files,
+    #         'labels': labels,
+    #     }
 
-    def get_batch(self, ib, o, dstype, shuffle_local=False):
-        if shuffle_local: # used for evaluation during train
-            idx = np.random.permutation(self.nexps[dstype])[(ib*o.batchsz):(ib+1)*o.batchsz]
-        else:
-            idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
+    # def get_batch(self, ib, o, dstype, shuffle_local=False):
+    #     if shuffle_local: # used for evaluation during train
+    #         idx = np.random.permutation(self.nexps[dstype])[(ib*o.batchsz):(ib+1)*o.batchsz]
+    #     else:
+    #         idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
 
-        # NOTE: examples have a length of ntimesteps+1.
-        data = np.zeros(
-            (o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel), 
-            dtype=np.float32)
-        label = np.zeros((o.batchsz, o.ntimesteps+1, o.outdim), dtype=np.float32)
-        inputs_valid = np.zeros((o.batchsz, o.ntimesteps+1), dtype=np.bool)
-        inputs_HW = np.zeros((o.batchsz, 2), dtype=np.float32)
+    #     # NOTE: examples have a length of ntimesteps+1.
+    #     data = np.zeros(
+    #         (o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel), 
+    #         dtype=np.float32)
+    #     label = np.zeros((o.batchsz, o.ntimesteps+1, o.outdim), dtype=np.float32)
+    #     inputs_valid = np.zeros((o.batchsz, o.ntimesteps+1), dtype=np.bool)
+    #     inputs_HW = np.zeros((o.batchsz, 2), dtype=np.float32)
 
-        for ie in range(o.batchsz): # batchsz
-            # randomly select an object
-            objid = random.sample(self.objids_valid_snp[dstype][idx[ie]], 1)[0]
+    #     for ie in range(o.batchsz): # batchsz
+    #         # randomly select an object
+    #         objid = random.sample(self.objids_valid_snp[dstype][idx[ie]], 1)[0]
 
-            # randomly select segment of frames (<=T+1)
-            # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
-            # self.objvalidfrms_snp should be changed as well.
-            frms = self._select_frms(self.objvalidfrms_snp[dstype][idx[ie]][objid], o, seqtype='sampling')
+    #         # randomly select segment of frames (<=T+1)
+    #         # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
+    #         # self.objvalidfrms_snp should be changed as well.
+    #         frms = self._select_frms(self.objvalidfrms_snp[dstype][idx[ie]][objid], o, seqtype='sampling')
 
-            for t, frm in enumerate(frms):
-                # for x; image
-                fimg = self.snps[dstype]['Data'][idx[ie]] + '/{0:06d}.JPEG'.format(frm)
-                x = cv2.imread(fimg)[:,:,(2,1,0)]
+    #         for t, frm in enumerate(frms):
+    #             # for x; image
+    #             fimg = self.snps[dstype]['Data'][idx[ie]] + '/{0:06d}.JPEG'.format(frm)
+    #             x = cv2.imread(fimg)[:,:,(2,1,0)]
 
-                # image resize. NOTE: the best image size? need experiments
-                if not o.useresizedimg: 
-                    data[ie,t] = cv2.resize(x, (o.frmsz, o.frmsz), 
-                        interpolation=cv2.INTER_AREA)
-                else:
-                    data[ie,t] = x
+    #             # image resize. NOTE: the best image size? need experiments
+    #             if not o.useresizedimg: 
+    #                 data[ie,t] = cv2.resize(x, (o.frmsz, o.frmsz), 
+    #                     interpolation=cv2.INTER_AREA)
+    #             else:
+    #                 data[ie,t] = x
 
-                # for y; label
-                xmlfile = self.snps[dstype]['Annotations'][idx[ie]] + '/{0:06d}.xml'.format(frm)
-                y = self._get_bndbox_from_xml(xmlfile, objid)
-                label[ie,t] = y
-            inputs_valid[ie,:len(frms)] = True # TODO: This should be changed if frms are sparse! (no gt)
-            inputs_HW[ie] = x.shape[0:2]
+    #             # for y; label
+    #             xmlfile = self.snps[dstype]['Annotations'][idx[ie]] + '/{0:06d}.xml'.format(frm)
+    #             y = self._get_bndbox_from_xml(xmlfile, objid)
+    #             label[ie,t] = y
+    #         inputs_valid[ie,:len(frms)] = True # TODO: This should be changed if frms are sparse! (no gt)
+    #         inputs_HW[ie] = x.shape[0:2]
 
-        # TODO: Data augmentation
-        # 1. data augmentation (rotation, scaling, translation)
-        # 2. data perturbation.. 
+    #     # TODO: Data augmentation
+    #     # 1. data augmentation (rotation, scaling, translation)
+    #     # 2. data perturbation.. 
 
-        # # image normalization 
-        # data -= self.stat[dstype]['mean']
-        # data /= self.stat[dstype]['std']
-        # Do not use different normalization for training and testing!
-        # Moved this to model() so that it is saved with the graph.
+    #     # # image normalization 
+    #     # data -= self.stat[dstype]['mean']
+    #     # data /= self.stat[dstype]['std']
+    #     # Do not use different normalization for training and testing!
+    #     # Moved this to model() so that it is saved with the graph.
 
-        # (masked and centered) target patch
-        x0 = np.copy(data[:,0])
-        y0 = np.copy(label[:,0])
-        masks = get_masks_from_rectangles(y0, o)
-        # Mask object, fill rest with mean of training set.
-        # TODO: Construct target within TensorFlow graph to ensure that means match.
-        x0_mask = x0*masks + self.stat['train']['mean']*(1-masks)
-        x0_center = np.zeros_like(x0_mask, dtype=np.float32)
-        for i in range(o.batchsz):
-            # shift the target to the center
-            rec = y0[i] * o.frmsz
-            width = (rec[2]-rec[0])
-            height = (rec[3]-rec[1])
-            shift_x = int((o.frmsz/2) - (rec[0]) - (width/2))
-            shift_y = int((o.frmsz/2) - (rec[1]) - (height/2))
-            x0_shift_x = np.roll(x0_mask[i], shift_x, axis=1)
-            x0_center[i] = np.roll(x0_shift_x, shift_y, axis=0)
+    #     # (masked and centered) target patch
+    #     x0 = np.copy(data[:,0])
+    #     y0 = np.copy(label[:,0])
+    #     masks = get_masks_from_rectangles(y0, o)
+    #     # Mask object, fill rest with mean of training set.
+    #     # TODO: Construct target within TensorFlow graph to ensure that means match.
+    #     x0_mask = x0*masks + self.stat['train']['mean']*(1-masks)
+    #     x0_center = np.zeros_like(x0_mask, dtype=np.float32)
+    #     for i in range(o.batchsz):
+    #         # shift the target to the center
+    #         rec = y0[i] * o.frmsz
+    #         width = (rec[2]-rec[0])
+    #         height = (rec[3]-rec[1])
+    #         shift_x = int((o.frmsz/2) - (rec[0]) - (width/2))
+    #         shift_y = int((o.frmsz/2) - (rec[1]) - (height/2))
+    #         x0_shift_x = np.roll(x0_mask[i], shift_x, axis=1)
+    #         x0_center[i] = np.roll(x0_shift_x, shift_y, axis=0)
 
-        # test visualization
-        #draw.show_target(x0_center, o.dataset, self.stat[dstype])
-        #draw.show_masks(masks, o.dataset)
+    #     # test visualization
+    #     #draw.show_target(x0_center, o.dataset, self.stat[dstype])
+    #     #draw.show_masks(masks, o.dataset)
 
-        batch = {
-                'target_raw':   x0_center, #NOTE: Be careful for full-length case!!!
-                'inputs_raw':   data,
-                'inputs_valid': inputs_valid, 
-                'inputs_HW':    inputs_HW,
-                'labels':       label,
-                'x0_raw':       x0,
-                'y0':           y0, #NOTE: Be careful for full-length case!!!
-                'idx':          idx
-                }
-        return batch
-    
-    def get_batch_fl(self, ie, o):
-        '''
-        This module loads an example in its full length, and thus is used 
-        to test for full length sequences. 
-        '''
-        dstype = 'val'
+    #     batch = {
+    #             'target_raw':   x0_center, #NOTE: Be careful for full-length case!!!
+    #             'inputs_raw':   data,
+    #             'inputs_valid': inputs_valid, 
+    #             'inputs_HW':    inputs_HW,
+    #             'labels':       label,
+    #             'x0_raw':       x0,
+    #             'y0':           y0, #NOTE: Be careful for full-length case!!!
+    #             'idx':          idx
+    #             }
+    #     return batch
+    # 
+    # def get_batch_fl(self, ie, o):
+    #     '''
+    #     This module loads an example in its full length, and thus is used 
+    #     to test for full length sequences. 
+    #     '''
+    #     dstype = 'val'
 
-        # all examples list
-        exps = self.exps_fulllen[dstype]
+    #     # all examples list
+    #     exps = self.exps_fulllen[dstype]
 
-        # input tensors 
-        frms = exps[ie]['frms']
-        data = np.zeros(
-            (1, len(frms), o.frmsz, o.frmsz, o.ninchannel), dtype=np.float32)
-        label = np.zeros((1, len(frms), o.outdim), dtype=np.float32)
-        inputs_valid = np.zeros((1, len(frms)), dtype=np.bool)
-        inputs_HW = np.zeros((1, 2), dtype=np.float32)
+    #     # input tensors 
+    #     frms = exps[ie]['frms']
+    #     data = np.zeros(
+    #         (1, len(frms), o.frmsz, o.frmsz, o.ninchannel), dtype=np.float32)
+    #     label = np.zeros((1, len(frms), o.outdim), dtype=np.float32)
+    #     inputs_valid = np.zeros((1, len(frms)), dtype=np.bool)
+    #     inputs_HW = np.zeros((1, 2), dtype=np.float32)
 
-        for t, frm in enumerate(frms): # NOTE: be careful when changing frms iterator.
-            # for x; image
-            fimg = exps[ie]['Data'] + '/{0:06d}.JPEG'.format(frm)
-            x = cv2.imread(fimg)[:,:,(2,1,0)]
-            # for y; label
-            xmlfile = exps[ie]['Anno'] + '/{0:06d}.xml'.format(frm)
-            objid = exps[ie]['objid']
-            y = self._get_bndbox_from_xml(xmlfile, objid)
+    #     for t, frm in enumerate(frms): # NOTE: be careful when changing frms iterator.
+    #         # for x; image
+    #         fimg = exps[ie]['Data'] + '/{0:06d}.JPEG'.format(frm)
+    #         x = cv2.imread(fimg)[:,:,(2,1,0)]
+    #         # for y; label
+    #         xmlfile = exps[ie]['Anno'] + '/{0:06d}.xml'.format(frm)
+    #         objid = exps[ie]['objid']
+    #         y = self._get_bndbox_from_xml(xmlfile, objid)
 
-            # image resize. NOTE: the best image resize? need experiments
-            if not o.useresizedimg:
-                data[0,t] = cv2.resize(x, (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
-            else:
-                data[0,t] = x
-            label[0,t] = y
+    #         # image resize. NOTE: the best image resize? need experiments
+    #         if not o.useresizedimg:
+    #             data[0,t] = cv2.resize(x, (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
+    #         else:
+    #             data[0,t] = x
+    #         label[0,t] = y
 
-            # if there is a labeled box, assign 1 to inputs_valid
-            if not (sum(y) == 0): 
-                inputs_valid[0,t] = True
-        inputs_HW[0] = x.shape[0:2]
+    #         # if there is a labeled box, assign 1 to inputs_valid
+    #         if not (sum(y) == 0): 
+    #             inputs_valid[0,t] = True
+    #     inputs_HW[0] = x.shape[0:2]
 
-        # # image normalization 
-        # data -= self.stat[dstype]['mean']
-        # data /= self.stat[dstype]['std']
-        # Do not use different normalization for training and testing!
-        # Moved this to model() so that it is saved with the graph.
+    #     # # image normalization 
+    #     # data -= self.stat[dstype]['mean']
+    #     # data /= self.stat[dstype]['std']
+    #     # Do not use different normalization for training and testing!
+    #     # Moved this to model() so that it is saved with the graph.
 
-        batch = {
-                'inputs': data,
-                'inputs_valid': inputs_valid,
-                'inputs_HW': inputs_HW,
-                'labels': label,
-                'nfrms': len(frms),
-                'idx': ie
-                }
-        return batch 
+    #     batch = {
+    #             'inputs': data,
+    #             'inputs_valid': inputs_valid,
+    #             'inputs_HW': inputs_HW,
+    #             'labels': label,
+    #             'nfrms': len(frms),
+    #             'idx': ie
+    #             }
+    #     return batch 
 
-    def update_epoch_begin(self, dstype):
-        '''Perform updates at each epoch. Whatever necessary comes into this.
-        '''
-        # may no need dstype, as this shuffles train data only.
-        self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
+    # def update_epoch_begin(self, dstype):
+    #     '''Perform updates at each epoch. Whatever necessary comes into this.
+    #     '''
+    #     # may no need dstype, as this shuffles train data only.
+    #     self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
 
-    def create_resized_images(self, o):
-        '''
-        This module performs resizing of images offline. 
-        '''
-        assert(o.trainsplit == 9)
-        assert(o.useresizedimg == False)
-        for dstype in ['train', 'val']: # NOTE: need to perform for test set
-            for i, snp in enumerate(self.snps[dstype]['Data']):
-                print dstype, i, self.nsnps[dstype], snp
+    # def create_resized_images(self, o):
+    #     '''
+    #     This module performs resizing of images offline. 
+    #     '''
+    #     assert(o.trainsplit == 9)
+    #     assert(o.useresizedimg == False)
+    #     for dstype in ['train', 'val']: # NOTE: need to perform for test set
+    #         for i, snp in enumerate(self.snps[dstype]['Data']):
+    #             print dstype, i, self.nsnps[dstype], snp
 
-                savedir = snp.replace('Data', 'Data_frmsz{}'.format(o.frmsz))
-                if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+    #             savedir = snp.replace('Data', 'Data_frmsz{}'.format(o.frmsz))
+    #             if not os.path.exists(savedir): helpers.mkdir_p(savedir)
 
-                imglist = sorted(glob.glob(snp+'/*.JPEG'))
-                for img in imglist:
-                    # image read and resize
-                    x = cv2.resize(cv2.imread(img), 
-                            (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
-                    # save
-                    fname = img.replace('Data', 'Data_frmsz{}'.format(o.frmsz))
-                    cv2.imwrite(fname, x)
+    #             imglist = sorted(glob.glob(snp+'/*.JPEG'))
+    #             for img in imglist:
+    #                 # image read and resize
+    #                 x = cv2.resize(cv2.imread(img), 
+    #                         (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
+    #                 # save
+    #                 fname = img.replace('Data', 'Data_frmsz{}'.format(o.frmsz))
+    #                 cv2.imwrite(fname, x)
 
 
 class Data_OTB(object):

@@ -1281,16 +1281,19 @@ class RNN_new(object):
 
 
 class RNN_conv_asymm(object):
-    def __init__(self, example, o):
+    def __init__(self, inputs, o):
         self.is_train = True if o.mode == 'train' else False
-        # self.params = self._update_params(o)
-        self.net = self._load_model(example, o)
+        outputs, state = self._load_model(inputs, o)
+        self.outputs = outputs
+        self.state   = state
+        self.sequence_len = o.ntimesteps
+        self.batch_size   = o.batchsz
 
-    def _load_model(self, example, o):
+    def _load_model(self, inputs, o):
         # net = make_input_placeholders(o)
-        inputs = example['inputs']
-        x0     = example['x0']
-        y0     = example['y0']
+        images = inputs['inputs']
+        x0     = inputs['x0']
+        y0     = inputs['y0']
         masks = get_masks_from_rectangles(y0, o)
         init_input = tf.concat([x0, masks], axis=3)
 
@@ -1372,26 +1375,25 @@ class RNN_conv_asymm(object):
             with tf.variable_scope('c_init'):
                 c_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
 
-        outputs = []
+        y = []
         ht, ct = h_init, c_init
-        for t in range(1, o.ntimesteps+1):
-            xt = inputs[:, t]
+        for t in range(o.ntimesteps):
+            xt = images[:, t]
             with tf.name_scope('frame_cnn_{}'.format(t)) as scope:
-                with tf.variable_scope('frame_cnn', reuse=(t > 1)):
+                with tf.variable_scope('frame_cnn', reuse=(t > 0)):
                     # Pass name scope from above, otherwise makes new name scope
                     # within name scope created by variable scope.
                     rt = input_cnn(xt, num_outputs=lstm_dim, name=scope)
             with tf.name_scope('conv_lstm_{}'.format(t)) as scope:
-                with tf.variable_scope('conv_lstm', reuse=(t > 1)):
+                with tf.variable_scope('conv_lstm', reuse=(t > 0)):
                     ht, ct = conv_lstm(rt, ht, ct, state_dim=lstm_dim, name=scope)
             with tf.name_scope('out_cnn_{}'.format(t)) as scope:
-                with tf.variable_scope('out_cnn', reuse=(t > 1)):
+                with tf.variable_scope('out_cnn', reuse=(t > 0)):
                     yt = output_cnn(ht, name=scope)
-            outputs.append(yt)
+            y.append(yt)
             # tf.get_variable_scope().reuse_variables()
-        outputs = tf.stack(outputs, axis=1) # list to tensor
+        y = tf.stack(y, axis=1) # list to tensor
         h_last, c_last = ht, ct
-        state_vars = [(h_init, h_last), (c_init, c_last)]
 
         if o.param_histogram:
             for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
@@ -1416,16 +1418,9 @@ class RNN_conv_asymm(object):
         #         tf.summary.scalar('reg', loss_reg)
         #         tf.summary.scalar('total', loss_total)
 
-        # net = dict(example)
-        # net.update({
-        #     'outputs': outputs,
-        #     'loss':    loss_total,
-        #     'h_init':  h_init,
-        #     'c_init':  c_init,
-        #     'h_last':  ht,
-        #     'c_last':  yt,
-        # })
-        return {'y': outputs}
+        outputs = {'y': y}
+        state = {'h': (h_init, h_last), 'c': (c_init, c_last)}
+        return outputs, state
 
 
 class NonRecur(object):
