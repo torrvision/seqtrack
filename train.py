@@ -30,11 +30,10 @@ def train(create_model, dataset, o):
 
     The input dictionary has fields::
 
-        'inputs'       # Input images, shape [b, n+1, h, w, 3]
-        'inputs_valid' # Booleans indicating presence of frame, shape [b, n]
-        'x0'           # First image in sequence, shape [b, h, w, 3]
-        'y0'           # Position of target in first image, shape [b, 4]
-        'inputs_HW'    # Tensor of image sizes, shape [b, 2]
+        'x'         # Input images, shape [b, n+1, h, w, 3]
+        'x0'        # First image in sequence, shape [b, h, w, 3]
+        'y0'        # Position of target in first image, shape [b, 4]
+        'y_valid'   # Booleans indicating presence of frame, shape [b, n]
 
     and the output dictionary has fields::
 
@@ -73,7 +72,7 @@ def train(create_model, dataset, o):
                for k in example}
 
     # Take subset of `example` fields to give inputs.
-    inputs = {k: example[k] for k in ['inputs_raw', 'x0_raw', 'y0']}
+    inputs = {k: example[k] for k in ['x_raw', 'x0_raw', 'y0']}
     model = create_model(_whiten(inputs, o, stat=dataset.stat['train']))
     loss_var = get_loss(example, model.outputs, o)
 
@@ -252,14 +251,13 @@ def _make_input_pipeline(o, dtype=tf.float32,
         # Cast type of images.
         images_batch['images'] = tf.cast(images_batch['images'], o.dtype)
         # Put in format expected by model.
-        valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
+        is_valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
         inputs_batch = {
-            'inputs_raw':   images_batch['images'][:, 1:],
-            'labels':       images_batch['labels'][:, 1:],
+            'x_raw':        images_batch['images'][:, 1:],
+            'y':            images_batch['labels'][:, 1:],
             'x0_raw':       images_batch['images'][:, 0],
             'y0':           images_batch['labels'][:, 0],
-            'inputs_valid': valid,
-            'inputs_HW':    tf.constant([o.frmsz, o.frmsz]),
+            'y_is_valid':   is_valid,
         }
         return inputs_batch, feed_loop
 
@@ -276,9 +274,9 @@ def _whiten(example_raw, o, stat=None, name='whiten'):
             mean = tf.constant(0.0, o.dtype, name='mean')
             std  = tf.constant(1.0, o.dtype, name='std')
         example = dict(example_raw) # Copy dictionary before modifying.
-        # Replace raw images with whitened images.
-        example['inputs'] = _whiten_image(example['inputs_raw'], mean, std, name='inputs')
-        del example['inputs_raw']
+        # Replace raw x (images) with whitened x (images).
+        example['x'] = _whiten_image(example['x_raw'], mean, std, name='x')
+        del example['x_raw']
         example['x0'] = _whiten_image(example['x0_raw'], mean, std, name='x0')
         del example['x0_raw']
         return example
@@ -302,72 +300,44 @@ def iter_examples(dataset, o, dstype='train', num_epochs=None):
             yield sequence
 
 
-# def get_loss(outputs, labels, inputs_valid, inputs_HW, o, outtype, name='loss'):
 def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
-    # NOTE: Be careful about length of labels and outputs. 
-    # labels and inputs_valid will be of T length, and y0 shouldn't be used.
-    labels       = example['labels']
-    inputs_valid = example['inputs_valid']
-    inputs_HW    = example['inputs_HW']
-    assert(labels.get_shape().as_list()[1] == o.ntimesteps)
+    y           = example['y']
+    y_is_valid  = example['y_is_valid']
+    assert(y.get_shape().as_list()[1] == o.ntimesteps)
 
     with tf.name_scope(name) as scope:
         losses = dict()
         
         if outtype == 'rectangle':
-            y = outputs['y']
-            assert(y.get_shape().as_list()[1] == o.ntimesteps)
+            y_pred = outputs['y']
+            assert(y_pred.get_shape().as_list()[1] == o.ntimesteps)
 
             # loss1: sum of two l1 distances for left-top and right-bottom
             if 'l1' in o.losses: # TODO: double check
-                labels_valid = tf.boolean_mask(labels, inputs_valid)
-                outputs_valid = tf.boolean_mask(y, inputs_valid)
-                loss_l1 = tf.reduce_mean(tf.abs(labels_valid - outputs_valid))
+                y_valid = tf.boolean_mask(y, y_is_valid)
+                y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+                loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid))
                 losses['l1'] = loss_l1
 
-            # loss2: IoU
-            if 'iou' in o.losses:
-                assert(False) # TODO: change from inputs_length to inputs_valid
-                scalar = tf.stack((inputs_HW[:,1], inputs_HW[:,0], 
-                    inputs_HW[:,1], inputs_HW[:,0]), axis=1)
-                boxA = y * tf.expand_dims(scalar, 1)
-                boxB = labels * tf.expand_dims(scalar, 1)
-                xA = tf.maximum(boxA[:,:,0], boxB[:,:,0])
-                yA = tf.maximum(boxA[:,:,1], boxB[:,:,1])
-                xB = tf.minimum(boxA[:,:,2], boxB[:,:,2])
-                yB = tf.minimum(boxA[:,:,3], boxB[:,:,3])
-                interArea = tf.maximum((xB - xA), 0) * tf.maximum((yB - yA), 0)
-                boxAArea = (boxA[:,:,2] - boxA[:,:,0]) * (boxA[:,:,3] - boxA[:,:,1]) 
-                boxBArea = (boxB[:,:,2] - boxB[:,:,0]) * (boxB[:,:,3] - boxB[:,:,1]) 
-                # TODO: CHECK tf.div or tf.divide
-                #iou = tf.div(interArea, (boxAArea + boxBArea - interArea) + 1e-4)
-                iou = interArea / (boxAArea + boxBArea - interArea + 1e-4) 
-                iou_valid = []
-                for i in range(o.batchsz):
-                    iou_valid.append(iou[i, :inputs_length[i]-1])
-                iou_mean = tf.reduce_mean(iou_valid)
-                loss_iou = 1 - iou_mean # NOTE: Any normalization?
-                losses['iou'] = loss_iou
-
         elif outtype == 'heatmap':
-            heatmap = outputs['heatmap']
-            assert(heatmap.get_shape().as_list()[1] == o.ntimesteps)
+            y_pred_heatmap = outputs['heatmap']
+            assert(y_pred_heatmap.get_shape().as_list()[1] == o.ntimesteps)
 
-            # First of all, need to convert labels into heat maps
-            labels_heatmap = model.convert_rec_to_heatmap(labels, o)
+            # First of all, need to convert y into heat maps
+            y_heatmap = model.convert_rec_to_heatmap(y, o)
 
-            # valid labels and outputs
-            labels_valid = tf.boolean_mask(labels_heatmap, inputs_valid)
-            outputs_valid = tf.boolean_mask(heatmap, inputs_valid)
+            # valid y and y_pred
+            y_valid = tf.boolean_mask(y_heatmap, y_is_valid)
+            y_pred_valid = tf.boolean_mask(y_pred_heatmap, y_is_valid)
 
             # loss1: cross-entropy between probabilty maps (need to change label) 
             if 'ce' in o.losses: 
-                labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
-                outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
+                y_flat = tf.reshape(y_valid, [-1, o.frmsz**2])
+                y_pred_flat = tf.reshape(y_pred_valid, [-1, o.frmsz**2])
                 assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
-                with tf.control_dependencies([assert_finite(outputs_valid)]):
-                    outputs_valid = tf.identity(outputs_valid)
-                loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=labels_flat, logits=outputs_flat)
+                with tf.control_dependencies([assert_finite(y_pred_valid)]):
+                    y_pred_valid = tf.identity(y_pred_valid)
+                loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=y_flat, logits=y_pred_flat)
                 # Wrap with assertion that loss is finite.
                 with tf.control_dependencies([assert_finite(loss_ce)]):
                     loss_ce = tf.identity(loss_ce)
@@ -376,10 +346,10 @@ def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
 
             # loss2: tf's l2 (without sqrt)
             if 'l2' in o.losses:
-                labels_flat = tf.reshape(labels_valid, [-1, o.frmsz**2])
-                outputs_flat = tf.reshape(outputs_valid, [-1, o.frmsz**2])
-                outputs_softmax = tf.nn.softmax(outputs_flat)
-                loss_l2 = tf.nn.l2_loss(labels_flat - outputs_softmax)
+                y_flat = tf.reshape(y_valid, [-1, o.frmsz**2])
+                y_pred_flat = tf.reshape(y_pred_valid, [-1, o.frmsz**2])
+                y_pred_softmax = tf.nn.softmax(y_pred_flat)
+                loss_l2 = tf.nn.l2_loss(y_flat - y_pred_softmax)
                 losses['l2'] = loss_l2
 
         with tf.name_scope('summary'):
