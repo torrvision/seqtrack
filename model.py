@@ -9,9 +9,9 @@ A model is a class with the properties::
 
 The model constructor should take a dictionary of tensors::
 
-    'inputs' # Tensor of images [b, t, h, w, c]
-    'x0'     # Tensor of initial images [b, h, w, c]
-    'y0'     # Tensor of initial rectangles [b, 4]
+    'x'  # Tensor of images [b, t, h, w, c]
+    'x0' # Tensor of initial images [b, h, w, c]
+    'y0' # Tensor of initial rectangles [b, 4]
 
 It may also have 'target' if required.
 Images input to the model are already normalized (e.g. have dataset mean subtracted).
@@ -1282,7 +1282,7 @@ class RNN_conv_asymm(object):
 
     def _load_model(self, inputs, o):
         # net = make_input_placeholders(o)
-        images = inputs['inputs']
+        images = inputs['x']
         x0     = inputs['x0']
         y0     = inputs['y0']
         masks = get_masks_from_rectangles(y0, o)
