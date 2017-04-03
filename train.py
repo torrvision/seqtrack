@@ -13,6 +13,8 @@ import helpers
 import pipeline
 import sample
 
+from model import convert_rec_to_heatmap
+
 
 def train(create_model, dataset, o):
     '''Trains a network.
@@ -72,9 +74,10 @@ def train(create_model, dataset, o):
                for k in example}
 
     # Take subset of `example` fields to give inputs.
-    inputs = {k: example[k] for k in ['x_raw', 'x0_raw', 'y0']}
-    model = create_model(_whiten(inputs, o, stat=dataset.stat['train']))
-    loss_var = get_loss(example, model.outputs, o)
+    example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
+    model = create_model(_whiten(example, o, stat=dataset.stat['train']))
+    #loss_var = get_loss(example, model.outputs, o)
+    loss_var = get_loss(example, model.outputs, o, outtype='heatmap')
 
     nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = dataset.nexps['train']/o.batchsz if not o.debugmode else 30
@@ -152,10 +155,12 @@ def train(create_model, dataset, o):
                 # **after a certain iteration, perform the followings
                 # - evaluate on train/test/val set
                 # - print results (loss, eval resutls, time, etc.)
+                '''
                 period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step % period_assess == 0: # evaluate model
                     sequences = sample.all_tracks_full_ILSVRC(dataset, 'train')
-                    evaluate.track(sess, inputs, model, next(sequences))
+                    evaluate.track(sess, example, model, next(sequences))
+                '''
                     # # evaluate
                     # val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
                     # evals = {
@@ -240,7 +245,8 @@ def _make_input_pipeline(o, dtype=tf.float32,
         name='pipeline'):
     with tf.name_scope(name) as scope:
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
-        images = pipeline.load_images(files, capacity=load_capacity, num_threads=num_load_threads)
+        images = pipeline.load_images(files, capacity=load_capacity,
+                num_threads=num_load_threads, image_size=[o.frmsz, o.frmsz, 3])
         images_batch = pipeline.batch(images, batch_size=o.batchsz,
             capacity=batch_capacity, num_threads=num_batch_threads)
 
@@ -320,11 +326,11 @@ def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
                 losses['l1'] = loss_l1
 
         elif outtype == 'heatmap':
-            y_pred_heatmap = outputs['heatmap']
+            y_pred_heatmap = outputs['y']
             assert(y_pred_heatmap.get_shape().as_list()[1] == o.ntimesteps)
 
             # First of all, need to convert y into heat maps
-            y_heatmap = model.convert_rec_to_heatmap(y, o)
+            y_heatmap = convert_rec_to_heatmap(y, o)
 
             # valid y and y_pred
             y_valid = tf.boolean_mask(y_heatmap, y_is_valid)
@@ -332,17 +338,22 @@ def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
 
             # loss1: cross-entropy between probabilty maps (need to change label) 
             if 'ce' in o.losses: 
-                y_flat = tf.reshape(y_valid, [-1, o.frmsz**2])
-                y_pred_flat = tf.reshape(y_pred_valid, [-1, o.frmsz**2])
-                assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
-                with tf.control_dependencies([assert_finite(y_pred_valid)]):
-                    y_pred_valid = tf.identity(y_pred_valid)
-                loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=y_flat, logits=y_pred_flat)
-                # Wrap with assertion that loss is finite.
-                with tf.control_dependencies([assert_finite(loss_ce)]):
-                    loss_ce = tf.identity(loss_ce)
-                loss_ce = tf.reduce_mean(loss_ce)
+                loss_ce = tf.reduce_mean(
+                        tf.nn.softmax_cross_entropy_with_logits(
+                            labels=tf.reshape(y_valid, [-1, 2]),
+                            logits=tf.reshape(y_pred_valid, [-1, 2])))
                 losses['ce'] = loss_ce
+                #y_flat = tf.reshape(y_valid, [-1, o.frmsz**2])
+                #y_pred_flat = tf.reshape(y_pred_valid, [-1, o.frmsz**2])
+                #assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
+                #with tf.control_dependencies([assert_finite(y_pred_valid)]):
+                #    y_pred_valid = tf.identity(y_pred_valid)
+                #loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=y_flat, logits=y_pred_flat)
+                ## Wrap with assertion that loss is finite.
+                #with tf.control_dependencies([assert_finite(loss_ce)]):
+                #    loss_ce = tf.identity(loss_ce)
+                #loss_ce = tf.reduce_mean(loss_ce)
+                #losses['ce'] = loss_ce
 
             # loss2: tf's l2 (without sqrt)
             if 'l2' in o.losses:
