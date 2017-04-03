@@ -9,9 +9,9 @@ A model is a class with the properties::
 
 The model constructor should take a dictionary of tensors::
 
-    'inputs' # Tensor of images [b, t, h, w, c]
-    'x0'     # Tensor of initial images [b, h, w, c]
-    'y0'     # Tensor of initial rectangles [b, 4]
+    'x'  # Tensor of images [b, t, h, w, c]
+    'x0' # Tensor of initial images [b, h, w, c]
+    'y0' # Tensor of initial rectangles [b, 4]
 
 It may also have 'target' if required.
 Images input to the model are already normalized (e.g. have dataset mean subtracted).

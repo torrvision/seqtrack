@@ -111,8 +111,9 @@ def train(create_model, dataset, o):
         # Either initialize or restore model.
         if o.resume:
             model_file = tf.train.latest_checkpoint(o.path_ckpt)
-            print "restore: {}".format(model_file)
+            print 'restore: {}'.format(model_file)
             saver.restore(sess, model_file)
+            print 'done: restore'
         else:
             sess.run(init_op)
 
@@ -150,17 +151,15 @@ def train(create_model, dataset, o):
                             os.makedirs(o.path_ckpt)
                         fname = os.path.join(o.path_ckpt, 'iteration{}.ckpt'.format(global_step))
                         # saved_model = saver.save(sess, fname)
+                        print 'save model'
                         saver.save(sess, fname)
+                        print 'done: save model'
 
                 # **after a certain iteration, perform the followings
                 # - evaluate on train/test/val set
                 # - print results (loss, eval resutls, time, etc.)
-                '''
                 period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step % period_assess == 0: # evaluate model
-                    sequences = sample.all_tracks_full_ILSVRC(dataset, 'train')
-                    evaluate.track(sess, example, model, next(sequences))
-                '''
                     # # evaluate
                     # val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
                     # evals = {
@@ -183,6 +182,39 @@ def train(create_model, dataset, o):
                     #     evals['train']['iou_mean'], evals[val_]['iou_mean'],
                     #     evals['train']['auc'],      evals[val_]['auc'],
                     #     evals['train']['cle_mean'], evals[val_]['cle_mean'])
+
+                    # Run the tracker on a full epoch.
+                    evals_batch = {}
+                    for s in ['train', 'val']:
+                        sequences = sample.sample_ILSVRC(dataset, s, o.ntimesteps,
+                            seqtype='sampling', shuffle=False)
+                        print 'sample sequences'
+                        sequences = [next(sequences) for _ in range(20)]
+                        print 'done: sample sequences'
+                        print 'len(sequences):', len(sequences)
+                        sequences = sequences[:20]
+                        evals_batch[s] = evaluate.evaluate(sess, inputs, model, sequences)
+                    print ('(train/val) IOU: {:.3f}/{:.3f}, '
+                        'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} ').format(
+                        evals_batch['train']['iou_mean'], evals_batch['val']['iou_mean'],
+                        evals_batch['train']['auc'],      evals_batch['val']['auc'],
+                        evals_batch['train']['cle_mean'], evals_batch['val']['cle_mean'])
+
+                    # Run the tracker on whole sequences.
+                    # TODO: Add other datasets.
+                    evals_full = {}
+                    for s in ['train', 'val']:
+                        sequences = sample.all_tracks_full_ILSVRC(dataset, s)
+                        print 'sample sequences'
+                        sequences = [next(sequences) for _ in range(20)]
+                        print 'done: sample sequences'
+                        evals_full[s] = evaluate.evaluate(sess, inputs, model, sequences)
+                    print ('(train/val) IOU: {:.3f}/{:.3f}, '
+                        'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} ').format(
+                        evals_full['train']['iou_mean'], evals_full['val']['iou_mean'],
+                        evals_full['train']['auc'],      evals_full['val']['auc'],
+                        evals_full['train']['cle_mean'], evals_full['val']['cle_mean'])
+                    # TODO: Draw
 
                 # Take a training step.
                 start = time.time()
