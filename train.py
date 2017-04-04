@@ -193,7 +193,7 @@ def train(create_model, dataset, o):
                         print 'done: sample sequences'
                         print 'len(sequences):', len(sequences)
                         sequences = sequences[:20]
-                        evals_batch[s] = evaluate.evaluate(sess, inputs, model, sequences)
+                        evals_batch[s] = evaluate.evaluate(sess, example, model, sequences)
                     print ('(train/val) IOU: {:.3f}/{:.3f}, '
                         'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} ').format(
                         evals_batch['train']['iou_mean'], evals_batch['val']['iou_mean'],
@@ -208,7 +208,7 @@ def train(create_model, dataset, o):
                         print 'sample sequences'
                         sequences = [next(sequences) for _ in range(20)]
                         print 'done: sample sequences'
-                        evals_full[s] = evaluate.evaluate(sess, inputs, model, sequences)
+                        evals_full[s] = evaluate.evaluate(sess, example, model, sequences)
                     print ('(train/val) IOU: {:.3f}/{:.3f}, '
                         'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} ').format(
                         evals_full['train']['iou_mean'], evals_full['val']['iou_mean'],
@@ -220,11 +220,12 @@ def train(create_model, dataset, o):
                 start = time.time()
                 if ib % o.period_summary == 0:
                     _, loss, summary = sess.run([optimize_op, loss_var, summary_optimize],
-                                                feed_dict={queue_index: 0})
+                            feed_dict={queue_index: 0, example['use_gt']: True})
                     dur = time.time() - start
                     train_writer.add_summary(summary, global_step=global_step)
                 else:
-                    _, loss = sess.run([optimize_op, loss_var], feed_dict={queue_index: 0})
+                    _, loss = sess.run([optimize_op, loss_var],
+                            feed_dict={queue_index: 0, example['use_gt']: True})
                     dur = time.time() - start
                 loss_ep.append(loss)
 
@@ -239,8 +240,8 @@ def train(create_model, dataset, o):
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
-                        _, loss, summary = sess.run([optimize_op, loss_var, summary_evaluate],
-                                                    feed_dict={queue_index: 1})
+                        loss, summary = sess.run([loss_var, summary_evaluate],
+                                feed_dict={queue_index: 1, example['use_gt']: True})
                         dur = time.time() - start
                         val_writer.add_summary(summary, global_step=global_step)
                         if o.verbose_train:
@@ -345,7 +346,7 @@ def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
 
     with tf.name_scope(name) as scope:
         losses = dict()
-        
+
         if outtype == 'rectangle':
             y_pred = outputs['y']
             assert(y_pred.get_shape().as_list()[1] == o.ntimesteps)
@@ -368,8 +369,8 @@ def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
             y_valid = tf.boolean_mask(y_heatmap, y_is_valid)
             y_pred_valid = tf.boolean_mask(y_pred_heatmap, y_is_valid)
 
-            # loss1: cross-entropy between probabilty maps (need to change label) 
-            if 'ce' in o.losses: 
+            # loss1: cross-entropy between probabilty maps (need to change label)
+            if 'ce' in o.losses:
                 loss_ce = tf.reduce_mean(
                         tf.nn.softmax_cross_entropy_with_logits(
                             labels=tf.reshape(y_valid, [-1, 2]),

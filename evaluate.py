@@ -45,10 +45,13 @@ def track(sess, inputs, model, sequence):
         # Create single array of all images.
         images = np.array(map(im_to_arr, images))
         images = _single_to_batch(pad_to(images, model.sequence_len), model.batch_size)
+        # Create fake y values.
+        labels = np.zeros(list(images.shape[:2])+[4])
         feed_dict = {
             inputs['x_raw']:  images,
             inputs['x0_raw']: first_image,
             inputs['y0']:     first_label,
+            inputs['y']:      labels,
         }
         if start > 1:
             # This is not the first chunk.

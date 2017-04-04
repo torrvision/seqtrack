@@ -1341,6 +1341,13 @@ class RNN_dual(object):
             lstm1.update({
                 'w': get_weight_variable(shape_=shape_w, name_='w', wd=o.wd),
                 'b': get_bias_variable(shape_=shape_b, name_='b', wd=o.wd)})
+            h_init_value = get_weight_variable(
+                    shape_=[o.nunits], name_='h_init', wd=o.wd)
+            c_init_value = get_weight_variable(
+                    shape_=[o.nunits], name_='c_init', wd=o.wd)
+            lstm1.update({
+                'h_init': tf.stack([h_init_value] * o.batchsz),
+                'c_init': tf.stack([c_init_value] * o.batchsz)})
 
         # cc: cross-correlation
         with tf.variable_scope('cc'):
@@ -1371,20 +1378,26 @@ class RNN_dual(object):
         # lstm2: conv lstm params
         with tf.variable_scope('lstm2'):
             lstm2 = {}
+            # NOTE: currently, h and c have the same dimension as input to ConvLSTM
+            h = cnn1['layer'][-1]['out_h']
+            w = cnn1['layer'][-1]['out_w']
+            ch = cnn_1x1['layer'][-1]['chout']
+            h_init_value = get_weight_variable(
+                    shape_=[h, w, ch], name_='h_init', wd=o.wd)
+            c_init_value = get_weight_variable(
+                    shape_=[h, w, ch], name_='c_init', wd=o.wd)
+            lstm2.update({
+                'h_init': tf.stack([h_init_value] * o.batchsz),
+                'c_init': tf.stack([c_init_value] * o.batchsz)})
             gates = ['i', 'f' , 'c' , 'o']
             for gate in gates:
                 lstm2['w_x{}'.format(gate)] = get_weight_variable(
-                        [3, 3, cnn_1x1['layer'][-1]['chout'], 
-                        cnn_1x1['layer'][-1]['chout']],
-                        name_='w_x{}'.format(gate), wd=o.wd)
+                        [3, 3, ch, ch], name_='w_x{}'.format(gate), wd=o.wd)
                 lstm2['w_h{}'.format(gate)] = get_weight_variable(
-                        [3,3,cnn_1x1['layer'][-1]['chout'], 
-                        cnn_1x1['layer'][-1]['chout']],
-                        name_='w_h{}'.format(gate), wd=o.wd)
+                        [3, 3, ch, ch], name_='w_h{}'.format(gate), wd=o.wd)
                 lstm2['b_{}'.format(gate)] = get_weight_variable(
-                    [cnn_1x1['layer'][-1]['chout']], 
-                    name_='b_{}'.format(gate), wd=o.wd)
-                    
+                        [ch], name_='b_{}'.format(gate), wd=o.wd)
+
         # upsample filter, initialize with bilinear upsample weights
         # NOTE: #layers may need to be at least the size change occurs in cnnin
         def get_bilinear_upsample_weights(filtsz, channels):
@@ -1575,51 +1588,35 @@ class RNN_dual(object):
             return conv2
 
 
-        x  = inputs['x']
-        x0 = inputs['x0']
-        y0 = inputs['y0']
-        y  = inputs['y']
-        use_gt = inputs['use_gt']
+        x       = inputs['x']
+        x0      = inputs['x0']
+        y0      = inputs['y0']
+        y       = inputs['y']
+        use_gt  = inputs['use_gt']
 
-        batchsz = tf.shape(x)[0]
-
-        h_init1 = tf.placeholder_with_default(
-            tf.truncated_normal([batchsz, o.nunits], dtype=o.dtype),
-            shape=[None, o.nunits], name='h_init1')
-        c_init1 = tf.placeholder_with_default(
-            tf.truncated_normal([batchsz, o.nunits], dtype=o.dtype),
-            shape=[None, o.nunits], name='c_init1')
-        # NOTE: currently, h1, c1 have the same dimension as input to ConvLSTM
-        cnnh = self.params['cnn1']['layer'][-1]['out_h']
-        cnnw = self.params['cnn1']['layer'][-1]['out_w']
-        cnnch = self.params['cnn_1x1']['layer'][-1]['chout']
-        h_init2 = tf.placeholder_with_default(
-            tf.truncated_normal([batchsz, cnnh, cnnw, cnnch], dtype=o.dtype), 
-            shape=[None, cnnh, cnnw, cnnch], name='h_init2')
-        c_init2 = tf.placeholder_with_default(
-            tf.truncated_normal([batchsz, cnnh, cnnw, cnnch], dtype=o.dtype), 
-            shape=[None, cnnh, cnnw, cnnch], name='c_init2')
-
+        h_init1 = self.params['lstm1']['h_init']
+        c_init1 = self.params['lstm1']['c_init']
+        h_init2 = self.params['lstm2']['h_init']
+        c_init2 = self.params['lstm2']['c_init']
 
         y_pred = []
         ht1, ct1 = h_init1, c_init1
         ht2, ct2 = h_init2, c_init2
-        masks_init = get_masks_from_rectangles(y0, o)
+        hmap_init = get_masks_from_rectangles(y0, o)
         for t in range(o.ntimesteps):
             xt = x[:, t]
             yt = y[:, t]
 
             # cnn1: extract conv feature for xt
             cnn1out = pass_cnn1(xt)
-            # cnn2: extract target feature for {x0,y0} and {xt,yt}
+            # cnn2: extract target appearance using {x,y}
             if t==0:
-                masks = init_mask
+                hmap = hmap_init
             else:
-                yt_pred_prob = tf.expand_dims(tf.nn.softmax(yt_pred)[:,:,:,0], 3)
-                masks = tf.cond(use_gt, lambda: get_masks_from_rectangles(yt,o),
-                                        lambda: yt_pred_prob)
-                # masks = get_masks_from_rectangles(yt,o)
-            xy = tf.concat([xt, masks], axis=3)
+                hmap = tf.cond(use_gt, 
+                    lambda: get_masks_from_rectangles(yt, o),
+                    lambda: tf.expand_dims(tf.nn.softmax(yt_pred)[:,:,:,0], 3))
+            xy = tf.concat([xt, hmap], axis=3)
             cnn2out = pass_cnn2(xy)
             # lstm1: no convolutional
             ht1, ct1 = pass_lstm1(cnn2out, ht1, ct1)
@@ -1639,12 +1636,12 @@ class RNN_dual(object):
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
         h_last1, c_last1 = ht1, ct1
         h_last2, c_last2 = ht2, ct2
-        masks_last = masks
+        hmap_last = hmap
 
         outputs = {'y': y_pred}
         state = {'h1': (h_init1, h_last1), 'c1': (c_init1, c_last1),
                  'h2': (h_init2, h_last2), 'c2': (c_init2, c_last2),
-                 'y': (masks_init, masks_last),
+                 'hmap': (hmap_init, hmap_last),
                  'x': (x0, x[:, -1])}
         return outputs, state
 
