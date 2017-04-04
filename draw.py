@@ -22,7 +22,7 @@ def show_masks(masks, dataset):
         plt.draw()
         plt.axis('off')
     savedir = 'tmp/{}_masks'.format(dataset)
-    if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+    if not os.path.exists(savedir): os.mkdirs(savedir)
     plt.savefig(savedir + '/masks.png')
     plt.close()
 
@@ -41,7 +41,7 @@ def show_target(x0, dataset):
         plt.draw()
         plt.axis('off')
     savedir = 'tmp/{}_x0'.format(dataset)
-    if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+    if not os.path.exists(savedir): os.mkdirs(savedir)
     plt.savefig(savedir + '/examples.png')
     plt.close()
 
@@ -85,7 +85,7 @@ def show_dataset_batch(batch, dataset, frmsz):
             plt.draw()
             plt.axis('off')
         savedir = 'tmp/{}'.format(dataset)
-        if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+        if not os.path.exists(savedir): os.mkdirs(savedir)
         plt.savefig(savedir + '/frame{}.png'.format(t))
         plt.close()
     #os.system('convert -loop 0 -delay 30 tmp/{}/frame*.png tmp/{}/vid.gif'.\
@@ -129,7 +129,7 @@ def show_dataset_batch_fulllen_seq(batch, dataset, frmsz):
             plt.draw()
             plt.axis('off')
         savedir = 'tmp/{}_fulllen'.format(dataset)
-        if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+        if not os.path.exists(savedir): os.mkdirs(savedir)
         plt.savefig(savedir + '/seg{}.png'.format(i))
         plt.close()
 
@@ -204,7 +204,7 @@ def show_track_results(results, loader, dstype, o, iteration=None, nlimit=20):
                     plt.axis('off')
 
             savedir = os.path.join(o.path_output, 'track_results')
-            if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+            if not os.path.exists(savedir): os.mkdirs(savedir)
             outfile = os.path.join(savedir, 
                 'iteration_{}_{}_idx{}.png'.format(iteration, dstype, idx[i,b]))
             plt.savefig(outfile)
@@ -277,7 +277,7 @@ def plot_losses(losses, o, intermediate_=False, cnt_=''): # after trainingj
         ax1.set_title('average intermediate loss')
 
     savedir = os.path.join(o.path_output, 'losses')
-    if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+    if not os.path.exists(savedir): os.mkdirs(savedir)
     outfile = os.path.join(savedir, '{}.png'.format(cnt_))
     plt.savefig(outfile)
     plt.close()
@@ -290,7 +290,7 @@ def plot_losses_train_val(loss_train, loss_val, o, cnt_):
     ax1.set_title('average intermediate loss for evaluation subsets')
 
     savedir = os.path.join(o.path_output, 'losses_evalsubset')
-    if not os.path.exists(savedir): helpers.mkdir_p(savedir)
+    if not os.path.exists(savedir): os.mkdirs(savedir)
     outfile = os.path.join(savedir, '{}.png'.format(cnt_))
     plt.savefig(outfile)
     plt.close()

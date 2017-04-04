@@ -9,8 +9,8 @@ import os
 import random
 
 
-def sample_ILSVRC(dataset, dstype, ntimesteps, seqtype=None, shuffle=True):
-    num_videos = dataset.nexps[dstype]
+def sample_ILSVRC(dataset, ntimesteps, seqtype=None, shuffle=True):
+    num_videos = len(dataset.videos)
     if shuffle:
         idx_shuffle = np.random.permutation(num_videos)
     else:
@@ -88,29 +88,28 @@ def sample_ILSVRC(dataset, dstype, ntimesteps, seqtype=None, shuffle=True):
         return frms
 
     for idx in idx_shuffle:
+        video = dataset.videos[idx]
         # NOTE: examples have a length of ntimesteps+1.
         files = []
         labels = []
         # randomly select an object
-        objid = random.sample(dataset.objids_valid_snp[dstype][idx], 1)[0]
+        track = random.choice(dataset.tracks[video])
         # randomly select segment of frames (<=T+1)
         # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
         # self.objvalidfrms_snp should be changed as well.
-        frms = _select_frms(dataset.objvalidfrms_snp[dstype][idx][objid])
-        for frm in frms:
+        frm_is_valid = [t in track for t in range(dataset.video_length[video])]
+        frames = _select_frms(frm_is_valid)
+        for frame in frames:
             # for x; image
-            fimg = os.path.join(dataset.snps[dstype]['Data'][idx], '{:06d}.JPEG'.format(frm))
+            fimg = dataset.image_file(video, frame)
             # for y; labels
-            xmlfile = os.path.join(dataset.snps[dstype]['Annotations'][idx], '{:06d}.xml'.format(frm))
-            y = dataset._get_bndbox_from_xml(xmlfile, objid)
+            y = track[frame]
             files.append(fimg)
             labels.append(y)
         yield {'image_files': files, 'labels': labels}
 
 
-def all_tracks_full_ILSVRC(dataset, dstype, seqtype=None):
-    num_videos = dataset.nexps[dstype]
-
+def all_tracks_full_ILSVRC(dataset, seqtype=None):
     def _select_frms(objvalidfrms):
         # 1. get selection range (= first one and last one)
         objvalidfrms_np = np.asarray(objvalidfrms)
@@ -119,19 +118,17 @@ def all_tracks_full_ILSVRC(dataset, dstype, seqtype=None):
         frm_end = frms_one[-1]
         return range(frm_start, frm_end)
 
-    for idx in range(num_videos):
-        # NOTE: examples have a length of ntimesteps+1.
+    for video in dataset.videos:
         files = []
         labels = []
-        for objid in dataset.objids_valid_snp[dstype][idx]:
-            # self.objvalidfrms_snp should be changed as well.
-            frms = _select_frms(dataset.objvalidfrms_snp[dstype][idx][objid])
-            for frm in frms:
+        for track in dataset.tracks[video]:
+            frm_is_valid = [t in track for t in range(dataset.video_length[video])]
+            frames = _select_frms(frm_is_valid)
+            for frame in frames:
                 # for x; image
-                fimg = os.path.join(dataset.snps[dstype]['Data'][idx], '{:06d}.JPEG'.format(frm))
+                fimg = dataset.image_file(video, frame)
                 # for y; labels
-                xmlfile = os.path.join(dataset.snps[dstype]['Annotations'][idx], '{:06d}.xml'.format(frm))
-                y = dataset._get_bndbox_from_xml(xmlfile, objid)
+                y = track[frame]
                 files.append(fimg)
                 labels.append(y)
             yield {'image_files': files, 'labels': labels}
