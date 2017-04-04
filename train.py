@@ -14,7 +14,7 @@ import pipeline
 import sample
 
 
-def train(create_model, dataset, o):
+def train(create_model, datasets, o):
     '''Trains a network.
 
     The `create_model` function takes as input a dictionary of tensors and
@@ -73,12 +73,12 @@ def train(create_model, dataset, o):
 
     # Take subset of `example` fields to give inputs.
     inputs = {k: example[k] for k in ['x_raw', 'x0_raw', 'y0']}
-    model = create_model(_whiten(inputs, o, stat=dataset.stat['train']))
+    model = create_model(_whiten(inputs, o, stat=datasets['train'].stat))
     loss_var = get_loss(example, model.outputs, o)
 
     nepoch     = o.nepoch if not o.debugmode else 2
-    nbatch     = dataset.nexps['train']/o.batchsz if not o.debugmode else 30
-    nbatch_val = dataset.nexps['val']/o.batchsz if not o.debugmode else 30
+    nbatch     = datasets['train'].nexps/o.batchsz if not o.debugmode else 30
+    nbatch_val = datasets['val'].nexps/o.batchsz if not o.debugmode else 30
 
     global_step_var = tf.Variable(0, name='global_step', trainable=False)
     # lr = init * decay^(step)
@@ -98,8 +98,8 @@ def train(create_model, dataset, o):
         tf.summary.scalar('lr', lr)])
     saver = tf.train.Saver()
 
-    examples_train = iter_examples(dataset, o, dstype='train', num_epochs=None)
-    examples_val = iter_examples(dataset, o, dstype='val', num_epochs=None)
+    examples_train = iter_examples(datasets['train'], o, num_epochs=None)
+    examples_val = iter_examples(datasets['val'], o, num_epochs=None)
 
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
@@ -183,7 +183,7 @@ def train(create_model, dataset, o):
                     # Run the tracker on a full epoch.
                     evals_batch = {}
                     for s in ['train', 'val']:
-                        sequences = sample.sample_ILSVRC(dataset, s, o.ntimesteps,
+                        sequences = sample.sample_ILSVRC(datasets[s], o.ntimesteps,
                             seqtype='sampling', shuffle=False)
                         print 'sample sequences'
                         sequences = [next(sequences) for _ in range(20)]
@@ -201,7 +201,7 @@ def train(create_model, dataset, o):
                     # TODO: Add other datasets.
                     evals_full = {}
                     for s in ['train', 'val']:
-                        sequences = sample.all_tracks_full_ILSVRC(dataset, s)
+                        sequences = sample.all_tracks_full_ILSVRC(datasets[s])
                         print 'sample sequences'
                         sequences = [next(sequences) for _ in range(20)]
                         print 'done: sample sequences'
@@ -321,14 +321,14 @@ def _whiten_image(x, mean, std, name='whiten_image'):
         return tf.divide(x - mean, std, name=scope)
 
 
-def iter_examples(dataset, o, dstype='train', num_epochs=None):
+def iter_examples(dataset, o, num_epochs=None):
     '''Generator that produces multiple epochs of examples for SGD.'''
     if num_epochs:
         epochs = xrange(num_epochs)
     else:
         epochs = itertools.count()
     for i in epochs:
-        sequences = sample.sample_ILSVRC(dataset, dstype, o.ntimesteps,
+        sequences = sample.sample_ILSVRC(dataset, o.ntimesteps,
             seqtype='sampling', shuffle=True)
         for sequence in sequences:
             yield sequence

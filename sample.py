@@ -9,8 +9,8 @@ import os
 import random
 
 
-def sample_ILSVRC(dataset, dstype, ntimesteps, seqtype=None, shuffle=True):
-    num_videos = dataset.nexps[dstype]
+def sample_ILSVRC(dataset, ntimesteps, seqtype=None, shuffle=True):
+    num_videos = dataset.nexps
     if shuffle:
         idx_shuffle = np.random.permutation(num_videos)
     else:
@@ -92,24 +92,24 @@ def sample_ILSVRC(dataset, dstype, ntimesteps, seqtype=None, shuffle=True):
         files = []
         labels = []
         # randomly select an object
-        objid = random.sample(dataset.objids_valid_snp[dstype][idx], 1)[0]
+        objid = random.sample(dataset.objids_valid_snp[idx], 1)[0]
         # randomly select segment of frames (<=T+1)
         # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
         # self.objvalidfrms_snp should be changed as well.
-        frms = _select_frms(dataset.objvalidfrms_snp[dstype][idx][objid])
+        frms = _select_frms(dataset.objvalidfrms_snp[idx][objid])
         for frm in frms:
             # for x; image
-            fimg = os.path.join(dataset.snps[dstype]['Data'][idx], '{:06d}.JPEG'.format(frm))
+            fimg = os.path.join(dataset.snps['Data'][idx], '{:06d}.JPEG'.format(frm))
             # for y; labels
-            xmlfile = os.path.join(dataset.snps[dstype]['Annotations'][idx], '{:06d}.xml'.format(frm))
+            xmlfile = os.path.join(dataset.snps['Annotations'][idx], '{:06d}.xml'.format(frm))
             y = dataset._get_bndbox_from_xml(xmlfile, objid)
             files.append(fimg)
             labels.append(y)
         yield {'image_files': files, 'labels': labels}
 
 
-def all_tracks_full_ILSVRC(dataset, dstype, seqtype=None):
-    num_videos = dataset.nexps[dstype]
+def all_tracks_full_ILSVRC(dataset, seqtype=None):
+    num_videos = dataset.nexps
 
     def _select_frms(objvalidfrms):
         # 1. get selection range (= first one and last one)
@@ -123,14 +123,14 @@ def all_tracks_full_ILSVRC(dataset, dstype, seqtype=None):
         # NOTE: examples have a length of ntimesteps+1.
         files = []
         labels = []
-        for objid in dataset.objids_valid_snp[dstype][idx]:
+        for objid in dataset.objids_valid_snp[idx]:
             # self.objvalidfrms_snp should be changed as well.
-            frms = _select_frms(dataset.objvalidfrms_snp[dstype][idx][objid])
+            frms = _select_frms(dataset.objvalidfrms_snp[idx][objid])
             for frm in frms:
                 # for x; image
-                fimg = os.path.join(dataset.snps[dstype]['Data'][idx], '{:06d}.JPEG'.format(frm))
+                fimg = os.path.join(dataset.snps['Data'][idx], '{:06d}.JPEG'.format(frm))
                 # for y; labels
-                xmlfile = os.path.join(dataset.snps[dstype]['Annotations'][idx], '{:06d}.xml'.format(frm))
+                xmlfile = os.path.join(dataset.snps['Annotations'][idx], '{:06d}.xml'.format(frm))
                 y = dataset._get_bndbox_from_xml(xmlfile, objid)
                 files.append(fimg)
                 labels.append(y)
