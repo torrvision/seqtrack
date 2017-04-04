@@ -93,17 +93,17 @@ def sample_ILSVRC(dataset, ntimesteps, seqtype=None, shuffle=True):
         files = []
         labels = []
         # randomly select an object
-        objid = random.sample(dataset.objids_valid_snp[video], 1)[0]
+        track = random.choice(dataset.tracks[video])
         # randomly select segment of frames (<=T+1)
         # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
         # self.objvalidfrms_snp should be changed as well.
-        frms = _select_frms(dataset.objvalidfrms_snp[video][objid])
-        for frm in frms:
+        frm_is_valid = [t in track for t in range(dataset.video_length[video])]
+        frames = _select_frms(frm_is_valid)
+        for frame in frames:
             # for x; image
-            fimg = dataset.image_file(video, frm)
+            fimg = dataset.image_file(video, frame)
             # for y; labels
-            xmlfile = os.path.join(dataset._annotations_dir(video), '{:06d}.xml'.format(frm))
-            y = dataset._get_bndbox_from_xml(xmlfile, objid)
+            y = track[frame]
             files.append(fimg)
             labels.append(y)
         yield {'image_files': files, 'labels': labels}
@@ -119,18 +119,16 @@ def all_tracks_full_ILSVRC(dataset, seqtype=None):
         return range(frm_start, frm_end)
 
     for video in dataset.videos:
-        # NOTE: examples have a length of ntimesteps+1.
         files = []
         labels = []
-        for objid in dataset.objids_valid_snp[video]:
-            # self.objvalidfrms_snp should be changed as well.
-            frms = _select_frms(dataset.objvalidfrms_snp[video][objid])
-            for frm in frms:
+        for track in dataset.tracks[video]:
+            frm_is_valid = [t in track for t in range(dataset.video_length[video])]
+            frames = _select_frms(frm_is_valid)
+            for frame in frames:
                 # for x; image
-                fimg = dataset.image_file(video, frm)
+                fimg = dataset.image_file(video, frame)
                 # for y; labels
-                xmlfile = os.path.join(dataset._annotations_dir(video), '{:06d}.xml'.format(frm))
-                y = dataset._get_bndbox_from_xml(xmlfile, objid)
+                y = track[frame]
                 files.append(fimg)
                 labels.append(y)
             yield {'image_files': files, 'labels': labels}

@@ -1,6 +1,7 @@
 import pdb
 import datetime
 import errno
+import json
 import numpy as np
 import os
 from PIL import Image
@@ -10,15 +11,6 @@ def get_time():
     time = '{0:04d}{1:02d}{2:02d}_h{3:02d}m{4:02d}s{5:02d}'.format(
             dt.year,dt.month,dt.day,dt.hour,dt.minute,dt.second)
     return time
-
-def mkdir_p(path):
-    try:
-        os.makedirs(path)
-    except OSError as exc:  # Python >2.5
-        if exc.errno == errno.EEXIST and os.path.isdir(path):
-            pass
-        else:
-            raise
 
 
 import matplotlib
@@ -48,3 +40,18 @@ def load_image(fname):
 
 def im_to_arr(x):
     return np.array(x, dtype=np.float32)
+
+def cache_json(filename, func):
+    '''Caches the result of a function in a file.
+
+    Args:
+        func -- Function with zero arguments.
+    '''
+    if os.path.exists(filename):
+        with open(filename, 'r') as r:
+            result = json.load(r)
+    else:
+        result = func()
+        with open(filename, 'w') as w:
+            json.dump(result, w)
+    return result

@@ -11,16 +11,13 @@ A dataset object has the following properties:
     dataset.videos -- List of strings.
     dataset.video_length[video] -- Dictionary that maps string -> integer.
     dataset.image_file(video, frame_number) -- Returns absolute path.
-    dataset.video_resolution[video] -- Dictionary that maps string -> (width, height).
-    dataset.objects[video] -- Dictionary that maps string -> list of tracks.
-
-A track object has the following properties:
-
-    track.location[frame] -- Dictionary that maps frame_number -> rectangle.
+    dataset.original_resolution[video] -- Dictionary that maps string -> (width, height).
+    dataset.actual_resolution[video] -- Dictionary that maps string -> (width, height).
+    dataset.tracks[video] -- Dictionary that maps string -> list of tracks.
+        A track is a dictionary that maps frame_number -> rectangle.
         The subset of keys indicates in which frames the object is labelled.
-        The rectangle is in the form (xmin, ymin, xmax, ymax).
+        The rectangle is in the form [xmin, ymin, xmax, ymax].
         The rectangle coordinates are in the original video resolution.
-
 '''
 
 import pdb
@@ -34,13 +31,13 @@ import h5py
 import scipy.ndimage as spn
 import os
 
-import draw
-
 import glob
+import itertools
 import random
 import xmltodict
 import cv2
 
+import draw
 import helpers
 
 
@@ -500,15 +497,8 @@ class Data_ILSVRC(object):
         self.videos = None
         # Number of frames in each snippet.
         self.video_length = None
-        # List of object IDs present in each frame of each snippet.
-        self.objids_allfrm_snp = None
-        # List of unique object IDs in each snippet.
-        self.objids_snp       = None
-        self.objids_valid_snp = None
-        self.objvalidfrms_snp = None
-
+        self.tracks = None
         self.stat = None
-
         self._load_data(o)
 
     def _images_dir(self, video):
@@ -529,14 +519,14 @@ class Data_ILSVRC(object):
         # to load only "Data". Will fix it later.
         self._update_videos()
         self._update_video_length()
-        self._update_objids_allfrm_snp(o)
-        self._update_objids_snp() # simply unique obj ids in a snippet
-        self._update_objvalidfrms_snp()
+        self._update_tracks(o)
+        # self._update_objids_snp() # simply unique obj ids in a snippet
+        # self._update_objvalidfrms_snp()
         self._update_stat(o)
 
     def _parsexml(self, xmlfile):
         with open(xmlfile) as f:
-            doc = xmltodict.parse(f.read())
+            doc = xmltodict.parse(f.read(), force_list={'object'})
         return doc
 
     def _update_videos(self):
@@ -575,103 +565,67 @@ class Data_ILSVRC(object):
         if self.video_length is None:
             self.video_length = create_video_length()
 
-    def _update_objids_allfrm_snp(self, o):
-        def extract_objids_allfrm_snp():
-            def extract_objids_from_xml(xmlfile, doc=None):
-                if doc is None: 
-                    doc = self._parsexml(xmlfile)
-                if 'object' in doc['annotation']:
-                    if type(doc['annotation']['object']) is list:
-                        trackids = []
-                        for i in range(len(doc['annotation']['object'])):
-                            trackids.append(
-                                int(doc['annotation']['object'][i]['trackid']))
-                        return trackids 
-                    else:
-                        return [int(doc['annotation']['object']['trackid'])]
-                else:
-                    return [None] # No object in this file (or current frame)
+    def _identifier(self):
+        if self.dstype == 'train':
+            return '{}_{}'.format(self.dstype, self.trainsplit)
+        else:
+            return self.dstype
 
-            objids_allfrm_snp = {}
+    def _update_tracks(self, o):
+        def load_tracks():
+            tracks = {}
             for i, video in enumerate(self.videos):
                 print i+1, video
-                objids_frm = []
-                for j in range(self.video_length[video]):
-                    xmlfile = os.path.join(self._annotations_dir(video), '{:06d}.xml'.format(j))
-                    objids_frm.append(extract_objids_from_xml(xmlfile))
-                objids_allfrm_snp[video] = objids_frm
-            return objids_allfrm_snp
+                tracks[video] = load_video_tracks(video)
+            return tracks
 
-        if self.objids_allfrm_snp is None:
-            if not os.path.exists(o.path_aux): helpers.mkdir_p(o.path_aux)
-            if self.dstype == 'train':
-                filename = os.path.join(o.path_aux, 
-                    'objids_allfrm_snp_{}_{}.json'.format(self.dstype, self.trainsplit))
-            else:
-                filename = os.path.join(o.path_aux, 
-                    'objids_allfrm_snp_{}.json'.format(self.dstype))
-            if os.path.exists(filename):
-                # self.objids_allfrm_snp = np.load(filename).tolist()
-                with open(filename, 'r') as f:
-                    self.objids_allfrm_snp = json.load(f)
-            else: # if no file, create and also save
-                self.objids_allfrm_snp = extract_objids_allfrm_snp()
-                # np.save(filename, self.objids_allfrm_snp)
-                with open(filename, 'w') as f:
-                    json.dump(self.objids_allfrm_snp, f)
+        def load_video_tracks(video):
+            frames = []
+            video_len = self.video_length[video]
+            for t in range(video_len):
+                xmlfile = os.path.join(self._annotations_dir(video), '{:06d}.xml'.format(t))
+                frame_objects, original_resolution = read_frame_annotation(xmlfile)
+                frames.append(frame_objects)
+            # Convert from list of frame annotations to list of tracks.
+            tracks = {}
+            for t, frame_objects in enumerate(frames):
+                for obj_id, rect in frame_objects.iteritems():
+                    # List of (frame, rectangle) pairs instead of dictionary
+                    # because JSON does not support integer keys.
+                    tracks.setdefault(obj_id, []).append((t, rect))
+                    # tracks.setdefault(obj_id, {})[t] = rect
+            # Note: This will not preserve the original object IDs
+            # if the IDs are not consecutive starting from 0.
+            # For example: ILSVRC2015_VID_train_0000/ILSVRC2015_train_00014017
+            return [tracks[obj_id] for obj_id in sorted(tracks.keys())]
 
-    def _update_objids_snp(self):
-        assert(self.objids_allfrm_snp is not None) # obtain from 'objids_allfrm_snp'
-        def find_objids_snp():
-            objids_snp = {}
-            for video, objids_allfrm_snp in self.objids_allfrm_snp.iteritems():
-                objids_unique = set([item for sublist in objids_allfrm_snp for item in sublist])
-                objids_unique.discard(None)
-                assert(len(objids_unique)>0)
-                objids_snp[video] = objids_unique
-            return objids_snp
+        def read_frame_annotation(xmlfile):
+            '''Returns a dictionary of (track index) -> rectangle.'''
+            doc = self._parsexml(xmlfile)
+            width  = int(doc['annotation']['size']['width'])
+            height = int(doc['annotation']['size']['height'])
+            obj_annots = doc['annotation'].get('object', [])
+            objs = dict(map(lambda obj: extract_id_rect_pair(obj, width, height),
+                            obj_annots))
+            return objs, (width, height)
 
-        if self.objids_snp is None:
-            self.objids_snp = find_objids_snp()
+        def extract_id_rect_pair(obj, width, height):
+            index = int(obj['trackid'])
+            # Add 1 to xmax because we use range xmin <= x < xmax.
+            rect = [ int(obj['bndbox']['xmin'])    / float(dimension(width)),
+                    (int(obj['bndbox']['xmax'])+1) / float(dimension(width)),
+                     int(obj['bndbox']['ymin'])    / float(dimension(height)),
+                    (int(obj['bndbox']['ymax'])+1) / float(dimension(height))]
+            return index, rect
 
-    def _update_objvalidfrms_snp(self):
-        assert(self.objids_allfrm_snp is not None) # obtain from 'objids_allfrm_snp'
-        def extract_objvalidfrms_snp():
-            objvalidfrms_snp = {}
-            # NOTE: there are objs that only appear one frame. 
-            # This objids are not valid. Thus, objids_valid_snp comes in.
-            objids_valid_snp = {}
-            for i, video in enumerate(self.videos): # snippets
-                #print 'processing objvalidfrms_snp {}'.format(i)
-                objvalidfrms = {}
-                objids_valid = []
-                for objid in self.objids_snp[video]: # objects
-                    validfrms = []
-                    flag_one = False
-                    flag_consecutive_one = False
-                    for t in range(self.video_length[video]):
-                        if objid in self.objids_allfrm_snp[video][t]:
-                            validfrms.append(1)
-                            if flag_one:
-                                flag_consecutive_one = True
-                            flag_one = True
-                        else:
-                            validfrms.append(0)
-                            flag_one = False
-                    assert(np.sum(validfrms)> 0)
-                    if flag_consecutive_one: # the object should be seen at least 2 consecutive frames
-                        objvalidfrms[objid] = validfrms
-                        objids_valid.append(objid)
-
-                # check if there is not a single available objvalidfrms
-                assert(len(objvalidfrms)>0)
-                objvalidfrms_snp[video] = objvalidfrms
-                objids_valid_snp[video] = set(objids_valid)
-            self.objids_valid_snp = objids_valid_snp
-            return objvalidfrms_snp
-
-        if self.objvalidfrms_snp is None:
-            self.objvalidfrms_snp = extract_objvalidfrms_snp()
+        if self.tracks is None:
+            cache_file = os.path.join(o.path_aux, 'tracks_{}.json'.format(self._identifier()))
+            tracks = helpers.cache_json(cache_file, lambda: load_tracks())
+            # Convert (frame, rectangle) pairs to dictionary.
+            for video in tracks:
+                for obj_id, track in enumerate(tracks[video]):
+                    tracks[video][obj_id] = dict(tracks[video][obj_id])
+            self.tracks = tracks
 
     def _update_stat(self, o):
         def create_stat_pixelwise(): # NOTE: obsolete
@@ -731,39 +685,6 @@ class Data_ILSVRC(object):
             else:
                 self.stat = create_stat_global() 
                 np.save(filename, self.stat)
-
-    def _get_bndbox_from_xml(self, xmlfile, objid):
-        doc = self._parsexml(xmlfile)
-        w = np.float32(doc['annotation']['size']['width'])
-        h = np.float32(doc['annotation']['size']['height'])
-        # NOTE: Case of no object in the current frame.
-        # Either None or zeros. None becomes 'nan' when converting to numpy.
-        #bndbox = [None, None, None, None]
-        bndbox = [0, 0, 0, 0]
-        if 'object' in doc['annotation']:
-            if type(doc['annotation']['object']) is list:
-                nobjs = len(doc['annotation']['object'])
-                for i in range(nobjs):
-                    if int(doc['annotation']['object'][i]['trackid']) == objid:
-                        bndbox = [
-                            np.float32(doc['annotation']['object'][i]['bndbox']['xmin']) / w,
-                            np.float32(doc['annotation']['object'][i]['bndbox']['ymin']) / h,
-                            np.float32(doc['annotation']['object'][i]['bndbox']['xmax']) / w,
-                            np.float32(doc['annotation']['object'][i]['bndbox']['ymax']) / h]
-                        break
-            else:
-                if int(doc['annotation']['object']['trackid']) == objid:
-                    bndbox = [
-                        np.float32(doc['annotation']['object']['bndbox']['xmin']) / w,
-                        np.float32(doc['annotation']['object']['bndbox']['ymin']) / h,
-                        np.float32(doc['annotation']['object']['bndbox']['xmax']) / w,
-                        np.float32(doc['annotation']['object']['bndbox']['ymax']) / h]
-        else:
-            # NOTE: from now on, it allows returning bndbox of [0,0,0,0] 
-            # for no labeled frames.
-            pass
-            #raise ValueError('currently not allowing no labeled frames')
-        return bndbox # xyxy format
 
 
 class Data_OTB(object):
