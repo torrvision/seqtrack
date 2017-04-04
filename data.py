@@ -17,7 +17,7 @@ A dataset object has the following properties:
         A track is a dictionary that maps frame_number -> rectangle.
         The subset of keys indicates in which frames the object is labelled.
         The rectangle is in the form [xmin, ymin, xmax, ymax].
-        The rectangle coordinates are in the original video resolution.
+        The rectangle coordinates are normalized to [0, 1].
 '''
 
 import pdb
@@ -621,6 +621,8 @@ class Data_ILSVRC(object):
             return index, rect
 
         if self.tracks is None:
+            if not os.path.isdir(o.path_aux):
+                os.makedirs(o.path_aux)
             cache_file = os.path.join(o.path_aux, 'tracks_{}.json'.format(self._identifier()))
             tracks = helpers.cache_json(cache_file, lambda: load_tracks())
             # Convert (frame, rectangle) pairs to dictionary.

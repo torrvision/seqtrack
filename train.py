@@ -76,11 +76,8 @@ def train(create_model, datasets, o):
     # Add a placeholder for models that use ground-truth during training.
     example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
     model = create_model(_whiten(example, o, stat=datasets['train'].stat))
-    if 'hmap' in model.outputs:
-        # TODO: Check if this works with Namhoon's new code.
-        loss_var = get_loss(example, model.outputs, o, outtype='heatmap')
-    else:
-        loss_var = get_loss(example, model.outputs, o)
+
+    loss_var = get_loss(example, model.outputs, o)
 
     nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
@@ -342,62 +339,51 @@ def iter_examples(dataset, o, num_epochs=None):
             yield sequence
 
 
-def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
-    y           = example['y']
-    y_is_valid  = example['y_is_valid']
+def get_loss(example, outputs, o, name='loss'):
+    y          = example['y']
+    y_is_valid = example['y_is_valid']
     assert(y.get_shape().as_list()[1] == o.ntimesteps)
+    hmap = convert_rec_to_heatmap(y, o)
 
     with tf.name_scope(name) as scope:
         losses = dict()
 
-        if outtype == 'rectangle':
+        # assert(y_pred.get_shape().as_list()[1] == o.ntimesteps)
+        # assert(hmap_pred.get_shape().as_list()[1] == o.ntimesteps)
+
+        # loss1: sum of two l1 distances for left-top and right-bottom
+        if 'l1' in o.losses: # TODO: double check
             y_pred = outputs['y']
-            assert(y_pred.get_shape().as_list()[1] == o.ntimesteps)
+            y_valid = tf.boolean_mask(y, y_is_valid)
+            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid))
+            losses['l1'] = loss_l1
 
-            # loss1: sum of two l1 distances for left-top and right-bottom
-            if 'l1' in o.losses: # TODO: double check
-                y_valid = tf.boolean_mask(y, y_is_valid)
-                y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
-                loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid))
-                losses['l1'] = loss_l1
-
-        elif outtype == 'heatmap':
-            y_pred_heatmap = outputs['y']
-            assert(y_pred_heatmap.get_shape().as_list()[1] == o.ntimesteps)
-
+        # loss1: cross-entropy between probabilty maps (need to change label)
+        if 'ce' in o.losses:
+            hmap_pred = outputs['hmap']
             # First of all, need to convert y into heat maps
-            y_heatmap = convert_rec_to_heatmap(y, o)
 
             # valid y and y_pred
-            y_valid = tf.boolean_mask(y_heatmap, y_is_valid)
-            y_pred_valid = tf.boolean_mask(y_pred_heatmap, y_is_valid)
+            hmap_valid = tf.boolean_mask(hmap, y_is_valid)
+            hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
 
-            # loss1: cross-entropy between probabilty maps (need to change label)
-            if 'ce' in o.losses:
-                loss_ce = tf.reduce_mean(
-                        tf.nn.softmax_cross_entropy_with_logits(
-                            labels=tf.reshape(y_valid, [-1, 2]),
-                            logits=tf.reshape(y_pred_valid, [-1, 2])))
-                losses['ce'] = loss_ce
-                #y_flat = tf.reshape(y_valid, [-1, o.frmsz**2])
-                #y_pred_flat = tf.reshape(y_pred_valid, [-1, o.frmsz**2])
-                #assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
-                #with tf.control_dependencies([assert_finite(y_pred_valid)]):
-                #    y_pred_valid = tf.identity(y_pred_valid)
-                #loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=y_flat, logits=y_pred_flat)
-                ## Wrap with assertion that loss is finite.
-                #with tf.control_dependencies([assert_finite(loss_ce)]):
-                #    loss_ce = tf.identity(loss_ce)
-                #loss_ce = tf.reduce_mean(loss_ce)
-                #losses['ce'] = loss_ce
-
-            # loss2: tf's l2 (without sqrt)
-            if 'l2' in o.losses:
-                y_flat = tf.reshape(y_valid, [-1, o.frmsz**2])
-                y_pred_flat = tf.reshape(y_pred_valid, [-1, o.frmsz**2])
-                y_pred_softmax = tf.nn.softmax(y_pred_flat)
-                loss_l2 = tf.nn.l2_loss(y_flat - y_pred_softmax)
-                losses['l2'] = loss_l2
+            loss_ce = tf.reduce_mean(
+                    tf.nn.softmax_cross_entropy_with_logits(
+                        labels=tf.reshape(hmap_valid, [-1, 2]),
+                        logits=tf.reshape(hmap_pred_valid, [-1, 2])))
+            losses['ce'] = loss_ce
+            #y_flat = tf.reshape(hmap_valid, [-1, o.frmsz**2])
+            #y_pred_flat = tf.reshape(hmap_pred_valid, [-1, o.frmsz**2])
+            #assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
+            #with tf.control_dependencies([assert_finite(hmap_pred_valid)]):
+            #    hmap_pred_valid = tf.identity(hmap_pred_valid)
+            #loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=y_flat, logits=y_pred_flat)
+            ## Wrap with assertion that loss is finite.
+            #with tf.control_dependencies([assert_finite(loss_ce)]):
+            #    loss_ce = tf.identity(loss_ce)
+            #loss_ce = tf.reduce_mean(loss_ce)
+            #losses['ce'] = loss_ce
 
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():

@@ -1638,7 +1638,7 @@ class RNN_dual(object):
         h_last2, c_last2 = ht2, ct2
         hmap_last = hmap
 
-        outputs = {'y': y_pred}
+        outputs = {'hmap': y_pred}
         state = {'h1': (h_init1, h_last1), 'c1': (c_init1, c_last1),
                  'h2': (h_init2, h_last2), 'c2': (c_init2, c_last2),
                  'hmap': (hmap_init, hmap_last),
