@@ -71,6 +71,10 @@ def get_example_filenames(capacity=32, name='get_example'):
                               tf.cast(queue.size(), tf.float32) * (1./capacity))
         dequeue = queue.dequeue(name=scope)
 
+    # Restore partial shape information that is erased by FIFOQueue.
+    for k in dequeue:
+        dequeue[k].set_shape(placeholder[k].shape)
+
     feed_loop = functools.partial(feed_example_filenames, placeholder, enqueue)
     return dequeue, feed_loop
 
@@ -103,7 +107,8 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
     coord.request_stop()
 
 
-def load_images(example, capacity=32, num_threads=1, name='load_images'):
+def load_images(example, capacity=32, num_threads=1, image_size=[None, None, None],
+        name='load_images'):
     '''Creates a queue of sequences with images loaded.
     See the package example.
 
@@ -150,8 +155,8 @@ def load_images(example, capacity=32, num_threads=1, name='load_images'):
         # Restore rank information of Tensors for tf.train.batch.
         # TODO: It does not seem possible to preserve this through the FIFOQueue?
         # Let at least the sequence length remain dynamic.
-        dequeue['images'].set_shape([None, None, None, 3])
-        dequeue['labels'].set_shape([None, 4])
+        dequeue['images'].set_shape([None] + image_size)
+        dequeue['labels'].set_shape(example['labels'].shape)
         return dequeue
 
 def batch(example, batch_size=1, capacity=32, num_threads=1, name='batch'):
@@ -176,9 +181,13 @@ def batch(example, batch_size=1, capacity=32, num_threads=1, name='batch'):
         # TODO: This may produce batches of length < ntimesteps+1
         # since PaddingFIFOQueue pads to the *maximum* length.
         # Is this a problem for the training code?
-        return tf.train.batch(example, batch_size=batch_size,
+        example_batch = tf.train.batch(example, batch_size=batch_size,
             dynamic_pad=True, capacity=capacity, num_threads=num_threads,
             name=scope)
+    # Restore partial shape information that is erased by FIFOQueue.
+    for k in example_batch:
+        example_batch[k].set_shape([None] + example[k].shape.as_list())
+    return example_batch
 
 
 def make_multiplexer(sources, capacity=32, num_threads=1, name='multiplex'):
@@ -202,7 +211,7 @@ def make_multiplexer(sources, capacity=32, num_threads=1, name='multiplex'):
         index = tf.placeholder(tf.int32, [], 'index')
         queue = tf.QueueBase.from_list(index, queues)
         example = queue.dequeue(name=scope)
-    # Restore (partial) shape to tensors.
+    # Restore partial shape information that is erased by FIFOQueue.
     for k, shape in zip(names, shapes):
         example[k].set_shape(shape)
     return index, example

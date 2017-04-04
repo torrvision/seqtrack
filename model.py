@@ -634,13 +634,12 @@ class RNN_attention_st(object):
 def convert_rec_to_heatmap(rec, o):
     '''Create heatmap from rectangle
     Args:
-        rec: [batchsz x ntimesteps+1] ground-truth rectangle labels
+        rec: [batchsz x ntimesteps] ground-truth rectangle labels
     Return:
-        #heatmap: [batchsz x ntimesteps+1 x o.frmsz x o.frmsz x 1]
-        heatmap: [batchsz x ntimesteps+1 x o.frmsz x o.frmsz x 2] # fg + bg
+        heatmap: [batchsz x ntimesteps x o.frmsz x o.frmsz x 2] # fg + bg
     '''
     masks = []
-    for t in range(o.ntimesteps+1):
+    for t in range(o.ntimesteps):
         masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
     masks = tf.stack(masks, axis=1)
     return masks
@@ -967,11 +966,16 @@ class RNN_basic(object):
 
 
 class RNN_new(object):
-    def __init__(self, o):
+    def __init__(self, inputs, o):
         self.is_train = True if o.mode == 'train' else False
 
+        #self.params = self._update_params(o)
+        #self.net = self._load_model(o) 
+
         self.params = self._update_params(o)
-        self.net = self._load_model(o) 
+        self.outputs, self.state = self._load_model(inputs, o)
+        self.sequence_len = o.ntimesteps
+        self.batch_size   = None
 
     def _update_params(self, o):
         # cnn params (depends kernel size and strides at each layer)
@@ -1077,13 +1081,6 @@ class RNN_new(object):
             cnn_1x1_out['layer'].append({
                 'w': get_weight_variable([1, 1, channels, 2], name_='w1', wd=o.wd),
                 'b': get_bias_variable([2], name_='b1', wd=o.wd)})
-
-        # regression for y; (1x1 convolutions reducing channels to 1)
-        #with tf.variable_scope('out'):
-        #    out = {}
-        #    out['w'] = get_weight_variable(
-        #        [1, 1, cnn_1x1['layer'][-1]['chout'], 1], name_='w', wd=o.wd)
-        #    out['b'] = get_bias_variable([1], name_='b', wd=o.wd)
 
         # return params
         params = {}
@@ -1193,17 +1190,12 @@ class RNN_new(object):
                 self.params['cnn_1x1_out']['layer'][1]['b'])
         return conv2
 
-    #def _project_output(self, h):
-    #    output = conv2d(h, self.params['out']['w'], self.params['out']['b'])
-    #    return output
-
-    def _load_model(self, input_vars, o):
+    def _load_model(self, inputs, o):
         # placeholders
-        inputs       = input_vars['inputs']
-        inputs_valid = input_vars['inputs_valid']
-        inputs_HW    = input_vars['inputs_HW']
-        labels       = input_vars['labels']
-        target       = input_vars['target']
+        x  = inputs['x']
+        x0 = inputs['x0']
+        y0 = inputs['y0']
+        assert(False) # this model requires `target` which inputs doesn't hold. 
 
         # placeholders for initializations of full-length sequences
         # NOTE: currently, h and c have the same dimension as input to ConvLSTM
@@ -1217,58 +1209,444 @@ class RNN_new(object):
             tf.truncated_normal([o.batchsz, cnnh, cnnw, cnnch], dtype=o.dtype), 
             shape=[o.batchsz, cnnh, cnnw, cnnch], name='c_init')
 
-
         # RNN unroll
-        outputs = []
-        dbg = []
+        y = []
+        ht, ct = h_init, c_init
         for t in range(1, o.ntimesteps+1):
-            if t==1:
-                h_prev = h_init
-                c_prev = c_init
-            else:
-                h_prev = h_curr
-                c_prev = c_curr
-            x_curr = inputs[:,t]
+            xt = x[:,t]
 
             # siamese
             feat_x0 = self._pass_cnn(target, o)
-            feat_xt = self._pass_cnn(x_curr, o)
+            feat_xt = self._pass_cnn(xt, o)
             scoremap = self._depthwise_convolution(feat_xt, feat_x0, o)
             scoremap = self._pass_cnn_1x1s(scoremap, o)
 
             # ConvLSTM (try convGRU)
-            h_curr, c_curr = self._pass_rnn(scoremap, h_prev, c_prev, o)
+            ht, ct = self._pass_rnn(scoremap, ht, ct, o)
 
             # regress output heatmap using deconvolution layers (transpose of conv)
-            h_deconv = self._pass_deconvolution(h_curr, o)
+            h_deconv = self._pass_deconvolution(ht, o)
 
             # after reaching the output resolution, two 1x1 CNN same as StackedHourglassNet.
-            y_curr = self._pass_cnn_1x1s_out(h_deconv)
-            #y_curr = self._project_output(h_deconv)
-            outputs.append(y_curr)
-        outputs = tf.stack(outputs, axis=1) # list to tensor
+            yt = self._pass_cnn_1x1s_out(h_deconv)
+            y.append(yt)
+        y = tf.stack(y, axis=1) # list to tensor
+        h_last, c_last = ht, ct
 
-        # loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'heatmap')
-        # tf.add_to_collection('losses', loss)
-        # loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
-        with tf.name_scope('loss'):
-            loss = get_loss(outputs, labels, inputs_valid, inputs_HW, o, 'heatmap', name='pred')
-            tf.add_to_collection('losses', loss)
-            loss_total = tf.reduce_sum(tf.get_collection('losses'),name='loss_total')
-            with tf.name_scope('summary'):
-                tf.summary.scalar('pred', loss)
-                tf.summary.scalar('total', loss_total)
+        if o.param_histogram:
+            for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
+                tf.summary.histogram(v.name, v)
 
-        net.update({
-                'outputs': outputs,
-                'loss': loss_total,
-                'h_init': h_init,
-                'c_init': c_init,
-                'h_last': h_curr,
-                'c_last': c_curr,
-                'dbg': dbg
-                })
-        return net
+        field = cnnutil.find_rf(xt, rt)
+        print 'CNN receptive field:'
+        print '  size:', field.rect.size()
+        print '  center offset:', field.rect.int_center()
+        print '  stride:', field.stride
+
+        outputs = {'y': y}
+        state = {'h': (h_init, h_last), 'c': (c_init, c_last)}
+        return outputs, state
+
+
+class RNN_dual(object):
+    '''
+    This model has two RNNs (ConvLSTM for Dynamics and LSTM for Appearances).
+    '''
+    def __init__(self, inputs, o):
+        self.is_train = True if o.mode == 'train' else False
+        self.params = self._update_params(o)
+        self.outputs, self.state = self._load_model(inputs, o)
+        self.sequence_len = o.ntimesteps
+        self.batch_size   = o.batchsz
+
+    def _update_params(self, o):
+        # cnn1 params (depends kernel size and strides at each layer)
+        with tf.variable_scope('cnn1'):
+            cnn1 = {}
+            cnn1['layer'] = []
+            cnn1['layer'].append({'type':'conv', 'filtsz':7, 'st':3, 'chin':3,  'chout':16})
+            cnn1['layer'].append({'type':'pool', 'filtsz':2, 'st':2, 'chin':16, 'chout':16})
+            cnn1['layer'].append({'type':'conv', 'filtsz':5, 'st':2, 'chin':16, 'chout':32})
+            cnn1['layer'].append({'type':'pool', 'filtsz':2, 'st':2, 'chin':32, 'chout':32})
+            cnn1['layer'].append({'type':'conv', 'filtsz':3, 'st':1, 'chin':32, 'chout':64})
+            cnn1['nconv'] = 3
+            cnn1['npool'] = 2
+            cnn1['nlayers'] = cnn1['nconv'] + cnn1['npool']
+            # compute cnn1 output sizes
+            h, w = o.frmsz, o.frmsz
+            for i in range(cnn1['nlayers']):
+                if cnn1['layer'][i]['type'] in ['conv', 'pool']:
+                    cnn1['layer'][i].update({'in_h': h, 'in_w': w})
+                    h = int(np.ceil(h / float(cnn1['layer'][i]['st'])))
+                    w = int(np.ceil(w / float(cnn1['layer'][i]['st'])))
+                    cnn1['layer'][i].update({'out_h': h, 'out_w': w})
+            # params
+            for i in range(cnn1['nlayers']):
+                if cnn1['layer'][i]['type'] == 'conv':
+                    shape_w = [cnn1['layer'][i]['filtsz'], cnn1['layer'][i]['filtsz'], 
+                            cnn1['layer'][i]['chin'], cnn1['layer'][i]['chout']]
+                    shape_b = [cnn1['layer'][i]['chout']]
+                    cnn1['layer'][i].update({'w': get_weight_variable(
+                        shape_w, name_='w{}'.format(i), wd=o.wd) })
+                    cnn1['layer'][i].update({'b': get_bias_variable(
+                        shape_b, name_='b{}'.format(i), wd=o.wd) })
+
+        # cnn2 params (depends kernel size and strides at each layer)
+        with tf.variable_scope('cnn2'):
+            cnn2 = {}
+            cnn2['layer'] = []
+            cnn2['layer'].append({'type':'conv', 'filtsz':7, 'st':3, 'chin':3+1,'chout':16})
+            cnn2['layer'].append({'type':'pool', 'filtsz':2, 'st':2, 'chin':16, 'chout':16})
+            cnn2['layer'].append({'type':'conv', 'filtsz':5, 'st':2, 'chin':16, 'chout':32})
+            cnn2['layer'].append({'type':'pool', 'filtsz':2, 'st':2, 'chin':32, 'chout':32})
+            cnn2['layer'].append({'type':'conv', 'filtsz':3, 'st':1, 'chin':32, 'chout':64})
+            cnn2['layer'].append({'type':'pool', 'filtsz':2, 'st':2, 'chin':64, 'chout':64})
+            cnn2['layer'].append({'type':'fc'})
+            cnn2['nconv'] = 3
+            cnn2['npool'] = 3
+            cnn2['nfc']   = 1
+            cnn2['nlayers'] = cnn2['nconv'] + cnn2['npool'] + cnn2['nfc']
+            # compute cnn2 output sizes
+            h, w = o.frmsz, o.frmsz
+            for i in range(cnn2['nlayers']):
+                if cnn2['layer'][i]['type'] in ['conv', 'pool']:
+                    cnn2['layer'][i].update({'in_h': h, 'in_w': w})
+                    h = int(np.ceil(h / float(cnn2['layer'][i]['st'])))
+                    w = int(np.ceil(w / float(cnn2['layer'][i]['st'])))
+                    cnn2['layer'][i].update({'out_h': h, 'out_w': w})
+            # params
+            for i in range(cnn2['nlayers']):
+                if cnn2['layer'][i]['type'] == 'conv':
+                    shape_w = [cnn2['layer'][i]['filtsz'], cnn2['layer'][i]['filtsz'], 
+                            cnn2['layer'][i]['chin'], cnn2['layer'][i]['chout']]
+                    shape_b = [cnn2['layer'][i]['chout']]
+                    cnn2['layer'][i].update({'w': get_weight_variable(
+                        shape_w, name_='w{}'.format(i), wd=o.wd) })
+                    cnn2['layer'][i].update({'b': get_bias_variable(
+                        shape_b, name_='b{}'.format(i), wd=o.wd) })
+            # fc layers
+            featin = cnn2['layer'][-2]['out_h']*cnn2['layer'][-2]['out_w']*cnn2['layer'][-2]['chout']
+            featout = 256
+            cnn2['layer'][-1].update({
+                'featin': featin, 'featout': featout,
+                'w': get_weight_variable(
+                    shape_=[featin, featout], name_='w3', wd=o.wd), 
+                'b': get_bias_variable(shape_=[featout], name_='b3', wd=o.wd)})
+
+        # lstm1 (Conv LSTM) params
+        with tf.variable_scope('lstm1'):
+            lstm1 = {}
+            shape_w = [o.nunits+featout, o.nunits*4] 
+            shape_b = [o.nunits*4]
+            lstm1.update({
+                'w': get_weight_variable(shape_=shape_w, name_='w', wd=o.wd),
+                'b': get_bias_variable(shape_=shape_b, name_='b', wd=o.wd)})
+
+        # cc: cross-correlation
+        with tf.variable_scope('cc'):
+            cc = {}
+            # fc layer to project lstm hidden to the size of cnn1 out channel
+            featout = cnn1['layer'][-1]['chout']
+            cc.update({ 
+                'w_proj': get_weight_variable(
+                    shape_=[o.nunits, featout], name_='w_proj', wd=o.wd),
+                'b_proj': get_bias_variable(
+                    shape_=[featout], name_='b_proj', wd=o.wd)}) 
+
+        # 1x1 CNN params; used before putting cnn features to conv lstm
+        with tf.variable_scope('cnn_1x1'):
+            cnn_1x1 = {}
+            cnn_1x1['nlayers'] = 2
+            cnn_1x1['layer'] = []
+            for i in range(cnn_1x1['nlayers']):
+                chin = cnn1['layer'][-1]['chout']/pow(2,i)
+                chout = cnn1['layer'][-1]['chout']/pow(2,i+1)
+                cnn_1x1['layer'].append({
+                    'w': get_weight_variable([1, 1, chin, chout], 
+                        name_='w{}'.format(i), wd=o.wd),
+                    'b': get_bias_variable([chout], 
+                        name_='b{}'.format(i), wd=o.wd),
+                    'chout': chout})
+
+        # lstm2: conv lstm params
+        with tf.variable_scope('lstm2'):
+            lstm2 = {}
+            gates = ['i', 'f' , 'c' , 'o']
+            for gate in gates:
+                lstm2['w_x{}'.format(gate)] = get_weight_variable(
+                        [3, 3, cnn_1x1['layer'][-1]['chout'], 
+                        cnn_1x1['layer'][-1]['chout']],
+                        name_='w_x{}'.format(gate), wd=o.wd)
+                lstm2['w_h{}'.format(gate)] = get_weight_variable(
+                        [3,3,cnn_1x1['layer'][-1]['chout'], 
+                        cnn_1x1['layer'][-1]['chout']],
+                        name_='w_h{}'.format(gate), wd=o.wd)
+                lstm2['b_{}'.format(gate)] = get_weight_variable(
+                    [cnn_1x1['layer'][-1]['chout']], 
+                    name_='b_{}'.format(gate), wd=o.wd)
+                    
+        # upsample filter, initialize with bilinear upsample weights
+        # NOTE: #layers may need to be at least the size change occurs in cnnin
+        def get_bilinear_upsample_weights(filtsz, channels):
+            '''Create weights matrix for transposed convolution with 
+            bilinear filter initialization.
+            '''
+            factor = (filtsz+ 1) / float(2)
+            if filtsz % 2 == 1:
+                center = factor - 1
+            else:
+                center = factor - 0.5
+            og = np.ogrid[:filtsz, :filtsz]
+            upsample_kernel = (1-abs(og[0]-center)/factor) \
+                    * (1-abs(og[1]-center)/factor)
+            weights = np.zeros((filtsz, filtsz, channels, channels), 
+                    dtype=np.float32)
+            for i in xrange(channels):
+                weights[:, :, i, i] = upsample_kernel
+            return weights
+
+        with tf.variable_scope('cnn_deconv'):
+            cnn_deconv = {}
+            cnn_deconv['layer'] = []
+            for i in range(cnn1['nlayers']-2, -1, -1):
+                cnn_deconv['layer'].append(
+                    get_variable_with_initial(get_bilinear_upsample_weights(
+                        cnn1['layer'][i]['filtsz'], cnn_1x1['layer'][-1]['chout'])))
+
+        # final 1x1 CNNs at the output
+        with tf.variable_scope('cnn_1x1_out'):
+            cnn_1x1_out = {}
+            cnn_1x1_out['nlayers'] = 2
+            cnn_1x1_out['layer'] = []
+            channels = cnn_1x1['layer'][-1]['chout']
+            cnn_1x1_out['layer'].append({
+                'w': get_weight_variable([1, 1, channels, channels], name_='w0', wd=o.wd),
+                'b': get_bias_variable([channels], name_='b0', wd=o.wd)})
+            cnn_1x1_out['layer'].append({
+                'w': get_weight_variable([1, 1, channels, 2], name_='w1', wd=o.wd),
+                'b': get_bias_variable([2], name_='b1', wd=o.wd)})
+
+        # return params
+        params = {}
+        params['cnn1'] = cnn1
+        params['cnn2'] = cnn2
+        params['lstm1'] = lstm1
+        params['cc'] = cc
+        params['cnn_1x1'] = cnn_1x1
+        params['lstm2'] = lstm2
+        params['cnn_deconv'] = cnn_deconv
+        params['cnn_1x1_out'] = cnn_1x1_out
+        return params
+
+    def _load_model(self, inputs, o):
+
+        def pass_cnn1(x):
+            for i in range(self.params['cnn1']['nlayers']):
+                layertype = self.params['cnn1']['layer'][i]['type']
+                if layertype == 'conv':
+                    x = activate(conv2d(x, 
+                        self.params['cnn1']['layer'][i]['w'], 
+                        self.params['cnn1']['layer'][i]['b'],
+                        stride=self.params['cnn1']['layer'][i]['st']))
+                elif layertype == 'pool':
+                    x = tf.nn.max_pool(x, 
+                        ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME')
+            return x
+
+        def pass_cnn2(x):
+            for i in range(self.params['cnn2']['nlayers']):
+                layertype = self.params['cnn2']['layer'][i]['type']
+                if layertype == 'conv':
+                    x = activate(conv2d(x, 
+                        self.params['cnn2']['layer'][i]['w'], 
+                        self.params['cnn2']['layer'][i]['b'],
+                        stride=self.params['cnn2']['layer'][i]['st']))
+                elif layertype == 'pool':
+                    x = tf.nn.max_pool(x, 
+                        ksize=[1,2,2,1], strides=[1,2,2,1], padding='SAME')
+                elif layertype == 'fc':
+                    featin = self.params['cnn2']['layer'][i]['featin']
+                    x = activate(tf.matmul(
+                        tf.reshape(x, [-1, featin]), 
+                        self.params['cnn2']['layer'][i]['w']) +
+                        self.params['cnn2']['layer'][i]['b'])
+            return x
+
+        def pass_lstm1(x, h_prev, c_prev):
+            f_curr, i_curr, c_curr_tilda, o_curr = tf.split(tf.matmul(
+                tf.concat_v2((h_prev, x), 1), self.params['lstm1']['w']) + 
+                self.params['lstm1']['b'], 4, 1)
+            c_curr = tf.sigmoid(f_curr) * c_prev + \
+                    tf.sigmoid(i_curr) * tf.tanh(c_curr_tilda) 
+            h_curr = tf.sigmoid(o_curr) * tf.tanh(c_curr)
+            return h_curr, c_curr
+
+        def pass_cc(h):
+            # reshape hidden state (target appearance); project and 1x1 space
+            h = activate(tf.matmul(h, self.params['cc']['w_proj']) 
+                    + self.params['cc']['b_proj'])
+            h = tf.expand_dims(h, 1)
+            h = tf.expand_dims(h, 1)
+            return h
+
+        def depthwise_convolution(search, filt):
+            # TODO: How can I achieve this without using o.batchsz?
+            scoremap = []
+            for i in range(o.batchsz):
+                searchimg = tf.expand_dims(search[i],0)
+                filtimg = tf.expand_dims(filt[i],3)
+                scoremap.append(
+                    tf.nn.depthwise_conv2d(searchimg, filtimg, [1,1,1,1], 'SAME'))
+            scoremap = tf.squeeze(tf.stack(scoremap, axis=0), squeeze_dims=1)
+            scoremap.set_shape([None, None, None, 64]) # TODO: is this working?
+            return scoremap
+
+        def pass_cnn_1x1(x):
+            x = activate(conv2d(x, 
+                self.params['cnn_1x1']['layer'][0]['w'], 
+                self.params['cnn_1x1']['layer'][0]['b']))
+            x = activate(conv2d(x, 
+                self.params['cnn_1x1']['layer'][1]['w'], 
+                self.params['cnn_1x1']['layer'][1]['b']))
+            return x
+
+        def pass_lstm2(x, h_prev, c_prev):
+            ''' ConvLSTM
+            1. h and c have the same dimension as x (padding can be used)
+            2. no peephole connection
+            '''
+            it = activate(
+                conv2d(x, 
+                    self.params['lstm2']['w_xi'], self.params['lstm2']['b_i']) +
+                conv2d(h_prev, 
+                    self.params['lstm2']['w_hi'], self.params['lstm2']['b_i']), 
+                'sigmoid')
+            ft = activate(
+                conv2d(x, 
+                    self.params['lstm2']['w_xf'], self.params['lstm2']['b_f']) +
+                conv2d(h_prev, 
+                    self.params['lstm2']['w_hf'], self.params['lstm2']['b_f']), 
+                'sigmoid')
+            ct_tilda = activate(
+                conv2d(x, 
+                    self.params['lstm2']['w_xc'], self.params['lstm2']['b_c']) +
+                conv2d(h_prev, 
+                    self.params['lstm2']['w_hc'], self.params['lstm2']['b_c']), 
+                'tanh')
+            ct = (ft * c_prev) + (it * ct_tilda)
+            ot = activate(
+                conv2d(x, 
+                    self.params['lstm2']['w_xo'], self.params['lstm2']['b_o']) +
+                conv2d(h_prev, 
+                    self.params['lstm2']['w_ho'], self.params['lstm2']['b_o']), 
+                'sigmoid')
+            ht = ot * activate(ct, 'tanh')
+            return ht, ct
+
+        def pass_deconvolution(x):
+            # transposed convolution (or fractionally strided convolution). 
+            # (a.k.a. deconvolution, but wrong)
+            # bilinear resampling kernel is used at initialization.
+            # # of deconvolution layers = # of size-changing layers in cnn1 = 4 
+            ndeconv = self.params['cnn1']['nlayers']-1
+            for i in range(ndeconv):
+                x = tf.nn.conv2d_transpose(
+                        x, self.params['cnn_deconv']['layer'][i],
+                        output_shape=[o.batchsz,
+                            self.params['cnn1']['layer'][ndeconv-i-1]['in_h'],
+                            self.params['cnn1']['layer'][ndeconv-i-1]['in_w'],
+                            self.params['cnn_1x1']['layer'][-1]['chout']], 
+                        strides=[1,
+                            self.params['cnn1']['layer'][ndeconv-i-1]['st'],
+                            self.params['cnn1']['layer'][ndeconv-i-1]['st'], 1])
+                x = activate(x)
+            return x
+
+        def pass_cnn_1x1s_out(scoremap):
+            assert(self.params['cnn_1x1_out']['nlayers'] == 2)
+            conv1 = conv2d(scoremap, 
+                    self.params['cnn_1x1_out']['layer'][0]['w'],
+                    self.params['cnn_1x1_out']['layer'][0]['b'])
+            act = activate(conv1, 'relu')
+            # TODO: can add dropout here 
+            conv2 = conv2d(act,
+                    self.params['cnn_1x1_out']['layer'][1]['w'],
+                    self.params['cnn_1x1_out']['layer'][1]['b'])
+            return conv2
+
+
+        x  = inputs['x']
+        x0 = inputs['x0']
+        y0 = inputs['y0']
+        y  = inputs['y']
+        use_gt = inputs['use_gt']
+
+        batchsz = tf.shape(x)[0]
+
+        h_init1 = tf.placeholder_with_default(
+            tf.truncated_normal([batchsz, o.nunits], dtype=o.dtype),
+            shape=[None, o.nunits], name='h_init1')
+        c_init1 = tf.placeholder_with_default(
+            tf.truncated_normal([batchsz, o.nunits], dtype=o.dtype),
+            shape=[None, o.nunits], name='c_init1')
+        # NOTE: currently, h1, c1 have the same dimension as input to ConvLSTM
+        cnnh = self.params['cnn1']['layer'][-1]['out_h']
+        cnnw = self.params['cnn1']['layer'][-1]['out_w']
+        cnnch = self.params['cnn_1x1']['layer'][-1]['chout']
+        h_init2 = tf.placeholder_with_default(
+            tf.truncated_normal([batchsz, cnnh, cnnw, cnnch], dtype=o.dtype), 
+            shape=[None, cnnh, cnnw, cnnch], name='h_init2')
+        c_init2 = tf.placeholder_with_default(
+            tf.truncated_normal([batchsz, cnnh, cnnw, cnnch], dtype=o.dtype), 
+            shape=[None, cnnh, cnnw, cnnch], name='c_init2')
+
+
+        y_pred = []
+        ht1, ct1 = h_init1, c_init1
+        ht2, ct2 = h_init2, c_init2
+        masks_init = get_masks_from_rectangles(y0, o)
+        for t in range(o.ntimesteps):
+            xt = x[:, t]
+            yt = y[:, t]
+
+            # cnn1: extract conv feature for xt
+            cnn1out = pass_cnn1(xt)
+            # cnn2: extract target feature for {x0,y0} and {xt,yt}
+            if t==0:
+                masks = init_mask
+            else:
+                yt_pred_prob = tf.expand_dims(tf.nn.softmax(yt_pred)[:,:,:,0], 3)
+                masks = tf.cond(use_gt, lambda: get_masks_from_rectangles(yt,o),
+                                        lambda: yt_pred_prob)
+                # masks = get_masks_from_rectangles(yt,o)
+            xy = tf.concat([xt, masks], axis=3)
+            cnn2out = pass_cnn2(xy)
+            # lstm1: no convolutional
+            ht1, ct1 = pass_lstm1(cnn2out, ht1, ct1)
+            # project ht1 for cross-correlation
+            ht1_proj = pass_cc(ht1)
+            # depthwise convolution
+            scoremap = depthwise_convolution(cnn1out, ht1_proj)
+            # cnn: 1x1 cnn to reduce the channel size
+            scoremap = pass_cnn_1x1(scoremap)
+            # lstm2: conv lstm
+            ht2, ct2 = pass_lstm2(scoremap, ht2, ct2)
+            # Deconvolution
+            deconvout = pass_deconvolution(ht2)
+            # Output (two 1x1 CNN same as StackedHourglassNet)
+            yt_pred = pass_cnn_1x1s_out(deconvout)
+            y_pred.append(yt_pred)
+        y_pred = tf.stack(y_pred, axis=1) # list to tensor
+        h_last1, c_last1 = ht1, ct1
+        h_last2, c_last2 = ht2, ct2
+        masks_last = masks
+
+        outputs = {'y': y_pred}
+        state = {'h1': (h_init1, h_last1), 'c1': (c_init1, c_last1),
+                 'h2': (h_init2, h_last2), 'c2': (c_init2, c_last2),
+                 'y': (masks_init, masks_last),
+                 'x': (x0, x[:, -1])}
+        return outputs, state
 
 
 class RNN_conv_asymm(object):
@@ -1607,7 +1985,9 @@ def load_model(example, o):
     if o.model == 'RNN_basic':
         model = RNN_basic(o)
     elif o.model == 'RNN_new':
-        model = RNN_new(o)
+        model = RNN_new(example, o)
+    elif o.model == 'RNN_dual':
+        model = RNN_dual(example, o)
     elif o.model == 'RNN_conv_asymm':
         model = RNN_conv_asymm(example, o)
     elif o.model == 'CNN':

@@ -13,6 +13,8 @@ import helpers
 import pipeline
 import sample
 
+from model import convert_rec_to_heatmap
+
 
 def train(create_model, datasets, o):
     '''Trains a network.
@@ -71,10 +73,14 @@ def train(create_model, datasets, o):
                       clear_batch_size(example[k].shape.as_list()))
                for k in example}
 
-    # Take subset of `example` fields to give inputs.
-    inputs = {k: example[k] for k in ['x_raw', 'x0_raw', 'y0']}
-    model = create_model(_whiten(inputs, o, stat=datasets['train'].stat))
-    loss_var = get_loss(example, model.outputs, o)
+    # Add a placeholder for models that use ground-truth during training.
+    example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
+    model = create_model(_whiten(example, o, stat=datasets['train'].stat))
+    if 'hmap' in model.outputs:
+        # TODO: Check if this works with Namhoon's new code.
+        loss_var = get_loss(example, model.outputs, o, outtype='heatmap')
+    else:
+        loss_var = get_loss(example, model.outputs, o)
 
     nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
@@ -190,7 +196,7 @@ def train(create_model, datasets, o):
                         print 'done: sample sequences'
                         print 'len(sequences):', len(sequences)
                         sequences = sequences[:20]
-                        evals_batch[s] = evaluate.evaluate(sess, inputs, model, sequences)
+                        evals_batch[s] = evaluate.evaluate(sess, example, model, sequences)
                     print ('(train/val) IOU: {:.3f}/{:.3f}, '
                         'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} ').format(
                         evals_batch['train']['iou_mean'], evals_batch['val']['iou_mean'],
@@ -205,7 +211,7 @@ def train(create_model, datasets, o):
                         print 'sample sequences'
                         sequences = [next(sequences) for _ in range(20)]
                         print 'done: sample sequences'
-                        evals_full[s] = evaluate.evaluate(sess, inputs, model, sequences)
+                        evals_full[s] = evaluate.evaluate(sess, example, model, sequences)
                     print ('(train/val) IOU: {:.3f}/{:.3f}, '
                         'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} ').format(
                         evals_full['train']['iou_mean'], evals_full['val']['iou_mean'],
@@ -274,7 +280,8 @@ def _make_input_pipeline(o, dtype=tf.float32,
         name='pipeline'):
     with tf.name_scope(name) as scope:
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
-        images = pipeline.load_images(files, capacity=load_capacity, num_threads=num_load_threads)
+        images = pipeline.load_images(files, capacity=load_capacity,
+                num_threads=num_load_threads, image_size=[o.frmsz, o.frmsz, 3])
         images_batch = pipeline.batch(images, batch_size=o.batchsz,
             capacity=batch_capacity, num_threads=num_batch_threads)
 
@@ -354,11 +361,11 @@ def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
                 losses['l1'] = loss_l1
 
         elif outtype == 'heatmap':
-            y_pred_heatmap = outputs['heatmap']
+            y_pred_heatmap = outputs['y']
             assert(y_pred_heatmap.get_shape().as_list()[1] == o.ntimesteps)
 
             # First of all, need to convert y into heat maps
-            y_heatmap = model.convert_rec_to_heatmap(y, o)
+            y_heatmap = convert_rec_to_heatmap(y, o)
 
             # valid y and y_pred
             y_valid = tf.boolean_mask(y_heatmap, y_is_valid)
@@ -366,17 +373,22 @@ def get_loss(example, outputs, o, outtype='rectangle', name='loss'):
 
             # loss1: cross-entropy between probabilty maps (need to change label) 
             if 'ce' in o.losses: 
-                y_flat = tf.reshape(y_valid, [-1, o.frmsz**2])
-                y_pred_flat = tf.reshape(y_pred_valid, [-1, o.frmsz**2])
-                assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
-                with tf.control_dependencies([assert_finite(y_pred_valid)]):
-                    y_pred_valid = tf.identity(y_pred_valid)
-                loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=y_flat, logits=y_pred_flat)
-                # Wrap with assertion that loss is finite.
-                with tf.control_dependencies([assert_finite(loss_ce)]):
-                    loss_ce = tf.identity(loss_ce)
-                loss_ce = tf.reduce_mean(loss_ce)
+                loss_ce = tf.reduce_mean(
+                        tf.nn.softmax_cross_entropy_with_logits(
+                            labels=tf.reshape(y_valid, [-1, 2]),
+                            logits=tf.reshape(y_pred_valid, [-1, 2])))
                 losses['ce'] = loss_ce
+                #y_flat = tf.reshape(y_valid, [-1, o.frmsz**2])
+                #y_pred_flat = tf.reshape(y_pred_valid, [-1, o.frmsz**2])
+                #assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
+                #with tf.control_dependencies([assert_finite(y_pred_valid)]):
+                #    y_pred_valid = tf.identity(y_pred_valid)
+                #loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=y_flat, logits=y_pred_flat)
+                ## Wrap with assertion that loss is finite.
+                #with tf.control_dependencies([assert_finite(loss_ce)]):
+                #    loss_ce = tf.identity(loss_ce)
+                #loss_ce = tf.reduce_mean(loss_ce)
+                #losses['ce'] = loss_ce
 
             # loss2: tf's l2 (without sqrt)
             if 'l2' in o.losses:

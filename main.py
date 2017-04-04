@@ -49,7 +49,7 @@ def parse_arguments():
             type=str, default='LSTM')
     parser.add_argument(
             '--nunits', help='number of hidden units in rnn cell',
-            type=int, default=512)
+            type=int, default=256)
     parser.add_argument(
             '--ntimesteps', help='number of time steps for rnn',
             type=int, default=20)
@@ -110,9 +110,6 @@ def parse_arguments():
     parser.add_argument(
             '--resume', help='to resume training',
             action='store_true')
-    parser.add_argument(
-            '--resume_data', help='data to resume i.e. save/{time}/resume.npy',
-            type=str)
     parser.add_argument(
             '--period_ckpt', help='period to save ckpt (and interm assess)',
             type=int, default=10000)
