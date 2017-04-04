@@ -612,10 +612,12 @@ class Data_ILSVRC(object):
         def extract_id_rect_pair(obj, width, height):
             index = int(obj['trackid'])
             # Add 1 to xmax because we use range xmin <= x < xmax.
-            rect = [ int(obj['bndbox']['xmin'])    / float(dimension(width)),
-                    (int(obj['bndbox']['xmax'])+1) / float(dimension(width)),
-                     int(obj['bndbox']['ymin'])    / float(dimension(height)),
-                    (int(obj['bndbox']['ymax'])+1) / float(dimension(height))]
+            rect = [
+                 int(obj['bndbox']['xmin'])    / float(width),
+                 int(obj['bndbox']['ymin'])    / float(height),
+                (int(obj['bndbox']['xmax'])+1) / float(width),
+                (int(obj['bndbox']['ymax'])+1) / float(height),
+            ]
             return index, rect
 
         if self.tracks is None:
