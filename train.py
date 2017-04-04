@@ -77,8 +77,8 @@ def train(create_model, datasets, o):
     loss_var = get_loss(example, model.outputs, o)
 
     nepoch     = o.nepoch if not o.debugmode else 2
-    nbatch     = datasets['train'].nexps/o.batchsz if not o.debugmode else 30
-    nbatch_val = datasets['val'].nexps/o.batchsz if not o.debugmode else 30
+    nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
+    nbatch_val = len(datasets['val'].videos)/o.batchsz if not o.debugmode else 30
 
     global_step_var = tf.Variable(0, name='global_step', trainable=False)
     # lr = init * decay^(step)

@@ -491,119 +491,92 @@ class Data_bouncing_mnist(object):
 
 class Data_ILSVRC(object):
     def __init__(self, dstype, o):
-        self.dstype         = dstype
-        self.path_data      = o.path_data
-        self.trainsplit     = o.trainsplit # 0, 1, 2, 3, or 9 for all
-        self.datadirname    = 'Data_frmsz{}'.format(o.frmsz) \
+        self.dstype      = dstype
+        self.path_data   = o.path_data
+        self.trainsplit  = o.trainsplit # 0, 1, 2, 3, or 9 for all
+        self.datadirname = 'Data_frmsz{}'.format(o.frmsz) \
                                 if o.useresizedimg else 'Data'
 
-        self.snps               = None
-        # Number of snippets.
-        self.nsnps              = None
+        self.videos = None
         # Number of frames in each snippet.
-        self.nfrms_snp          = None
+        self.video_length = None
         # List of object IDs present in each frame of each snippet.
-        self.objids_allfrm_snp  = None
+        self.objids_allfrm_snp = None
         # List of unique object IDs in each snippet.
-        self.objids_snp         = None
-        self.objids_valid_snp   = None
-        self.objvalidfrms_snp   = None
+        self.objids_snp       = None
+        self.objids_valid_snp = None
+        self.objvalidfrms_snp = None
 
-        self.nexps              = None
-
-        self.stat               = None
+        self.stat = None
 
         self._load_data(o)
+
+    def _images_dir(self, video):
+        parts = video.split('/')
+        return os.path.join(self.path_data, self.datadirname, 'VID', self.dstype, *parts)
+
+    def _annotations_dir(self, video):
+        parts = video.split('/')
+        return os.path.join(self.path_data, 'Annotations', 'VID', self.dstype, *parts)
+
+    def image_file(self, video, frame):
+        return os.path.join(self._images_dir(video), '{:06d}.JPEG'.format(frame))
 
     def _load_data(self, o):
         # TODO: need to process and load test data set as well..
         # TODO: not loading test data yet. ILSVRC doesn't have "Annotations" for
         # test set. I can still load "Data", but need to fix a couple of places
         # to load only "Data". Will fix it later.
-        self._update_snps()
-        self._update_nsnps()
-        self._update_nfrms_snp()
+        self._update_videos()
+        self._update_video_length()
         self._update_objids_allfrm_snp(o)
         self._update_objids_snp() # simply unique obj ids in a snippet
         self._update_objvalidfrms_snp()
-        self._update_nexps()
         self._update_stat(o)
-
-        # for dstype in ['val']: # might want to try 'train' as well..
-        #     self._update_list_fulllen_seq(dstype, o)
 
     def _parsexml(self, xmlfile):
         with open(xmlfile) as f:
             doc = xmltodict.parse(f.read())
         return doc
 
-    def _update_snps(self):
-        def create_snps(dstype):
-            output = {}
-            if dstype is 'test': # Only data exists. No annotations available. 
-                path_snp_data = os.path.join(
-                    self.path_data, '{}/VID/{}'.format(self.datadirname, dstype))
-                snps = sorted(os.listdir(path_snp_data))
-                snps_data = [path_snp_data + '/' + snp for snp in snps]
-                output['Data'] = snps_data
-            elif dstype is 'val': 
-                path_snp_data = os.path.join(
-                    self.path_data, '{}/VID/{}'.format(self.datadirname, dstype))
-                path_snp_anno = os.path.join(
-                    self.path_data, 'Annotations/VID/{}'.format(dstype))
-                snps = sorted(os.listdir(path_snp_data))
-                snps_data = [path_snp_data + '/' + snp for snp in snps]
-                snps_anno = [path_snp_anno + '/' + snp for snp in snps]
-                output['Data'] = snps_data
-                output['Annotations'] = snps_anno
-            elif dstype is 'train': # train data has 4 splits.
-                if self.trainsplit in [0,1,2,3]:
-                    path_snp_data = os.path.join(self.path_data, 
-                        '{0:s}/VID/train/ILSVRC2015_VID_train_{1:04d}'.format(self.datadirname, self.trainsplit))
-                    path_snp_anno = os.path.join(self.path_data, 
-                        'Annotations/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(self.trainsplit))
-                    snps = sorted(os.listdir(path_snp_data))
-                    snps_data = [path_snp_data + '/' + snp for snp in snps]
-                    snps_anno = [path_snp_anno + '/' + snp for snp in snps]
-                    output['Data'] = snps_data
-                    output['Annotations'] = snps_anno
+    def _update_videos(self):
+        def create_videos():
+            if self.dstype in {'test', 'val'}:
+                path_snp_data = os.path.join(self.path_data, self.datadirname, 'VID', self.dstype)
+                videos = sorted(os.listdir(path_snp_data))
+            elif self.dstype is 'train': # train data has 4 splits.
+                splits = []
+                if self.trainsplit in range(4):
+                    splits = [self.trainsplit]
                 elif self.trainsplit == 9: # MAGIC NUMBER for all train data 
-                    snps_data_all = []
-                    snps_anno_all = []
-                    for i in range(4):
-                        path_snp_data = os.path.join(self.path_data, 
-                            '{0:s}/VID/train/ILSVRC2015_VID_train_{1:04d}'.format(self.datadirname, i))
-                        path_snp_anno = os.path.join(self.path_data, 
-                            'Annotations/VID/train/ILSVRC2015_VID_train_{0:04d}'.format(i))
-                        snps = sorted(os.listdir(path_snp_data))
-                        snps_data = [path_snp_data + '/' + snp for snp in snps]
-                        snps_anno = [path_snp_anno + '/' + snp for snp in snps]
-                        snps_data_all.extend(snps_data)
-                        snps_anno_all.extend(snps_anno)
-                    output['Data'] = snps_data_all
-                    output['Annotations'] = snps_anno_all
+                    splits = range(4)
                 else:
-                    pdb.set_trace()
                     raise ValueError('No available option for train split')
-            return output
-        if self.snps is None:
-            self.snps = create_snps(self.dstype)
+                videos = []
+                for i in splits:
+                    split_dir = 'ILSVRC2015_VID_train_{:04d}'.format(i)
+                    path_snp_data = os.path.join(self.path_data, self.datadirname, 'VID', self.dstype, split_dir)
+                    vs = sorted(os.listdir(path_snp_data))
+                    vs = ['{}/{}'.format(split_dir, v) for v in vs]
+                    videos.extend(vs)
+            return videos
 
-    def _update_nsnps(self):
-        if self.nsnps is None:
-            self.nsnps = len(self.snps['Data'])
+        if self.videos is None:
+            self.videos = create_videos()
 
-    def _update_nfrms_snp(self):
-        def create_nfrms_snp(dstype):
-            nfrms = []
-            for snp in self.snps['Data']:
-                nfrms.append(len(glob.glob(snp+'/*.JPEG')))
+    def _update_video_length(self):
+        def create_video_length():
+            nfrms = {}
+            for video in self.videos:
+                images = glob.glob(os.path.join(self._images_dir(video), '*.JPEG'))
+                nfrms[video] = len(images)
             return nfrms
-        if self.nfrms_snp is None:
-            self.nfrms_snp = create_nfrms_snp(self.dstype)
+
+        if self.video_length is None:
+            self.video_length = create_video_length()
 
     def _update_objids_allfrm_snp(self, o):
-        def extract_objids_allfrm_snp(dstype):
+        def extract_objids_allfrm_snp():
             def extract_objids_from_xml(xmlfile, doc=None):
                 if doc is None: 
                     doc = self._parsexml(xmlfile)
@@ -619,17 +592,16 @@ class Data_ILSVRC(object):
                 else:
                     return [None] # No object in this file (or current frame)
 
-            objids_allfrm_snp = []
-            for i in range(self.nsnps):
-                print i
+            objids_allfrm_snp = {}
+            for i, video in enumerate(self.videos):
+                print i+1, video
                 objids_frm = []
-                for j in range(self.nfrms_snp[i]):
-                    xmlfile = os.path.join(self.snps['Annotations'][i], 
-                        '{0:06d}.xml'.format(j))
+                for j in range(self.video_length[video]):
+                    xmlfile = os.path.join(self._annotations_dir(video), '{:06d}.xml'.format(j))
                     objids_frm.append(extract_objids_from_xml(xmlfile))
-                objids_allfrm_snp.append(objids_frm)
+                objids_allfrm_snp[video] = objids_frm
             return objids_allfrm_snp
-    
+
         if self.objids_allfrm_snp is None:
             if not os.path.exists(o.path_aux): helpers.mkdir_p(o.path_aux)
             if self.dstype == 'train':
@@ -643,41 +615,42 @@ class Data_ILSVRC(object):
                 with open(filename, 'r') as f:
                     self.objids_allfrm_snp = json.load(f)
             else: # if no file, create and also save
-                self.objids_allfrm_snp = extract_objids_allfrm_snp(self.dstype)
+                self.objids_allfrm_snp = extract_objids_allfrm_snp()
                 # np.save(filename, self.objids_allfrm_snp)
                 with open(filename, 'w') as f:
                     json.dump(self.objids_allfrm_snp, f)
 
     def _update_objids_snp(self):
         assert(self.objids_allfrm_snp is not None) # obtain from 'objids_allfrm_snp'
-        def find_objids_snp(dstype):
-            output = []
-            for objids_allfrm_snp in self.objids_allfrm_snp:
+        def find_objids_snp():
+            objids_snp = {}
+            for video, objids_allfrm_snp in self.objids_allfrm_snp.iteritems():
                 objids_unique = set([item for sublist in objids_allfrm_snp for item in sublist])
                 objids_unique.discard(None)
                 assert(len(objids_unique)>0)
-                output.append(objids_unique)
-            return output
+                objids_snp[video] = objids_unique
+            return objids_snp
+
         if self.objids_snp is None:
-            self.objids_snp = find_objids_snp(self.dstype)
+            self.objids_snp = find_objids_snp()
 
     def _update_objvalidfrms_snp(self):
         assert(self.objids_allfrm_snp is not None) # obtain from 'objids_allfrm_snp'
-        def extract_objvalidfrms_snp(dstype):
-            objvalidfrms_snp = []
+        def extract_objvalidfrms_snp():
+            objvalidfrms_snp = {}
             # NOTE: there are objs that only appear one frame. 
             # This objids are not valid. Thus, objids_valid_snp comes in.
-            objids_valid_snp = []
-            for i in range(self.nsnps): # snippets
+            objids_valid_snp = {}
+            for i, video in enumerate(self.videos): # snippets
                 #print 'processing objvalidfrms_snp {}'.format(i)
                 objvalidfrms = {}
                 objids_valid = []
-                for objid in self.objids_snp[i]: # objects
+                for objid in self.objids_snp[video]: # objects
                     validfrms = []
                     flag_one = False
                     flag_consecutive_one = False
-                    for t in range(self.nfrms_snp[i]):
-                        if objid in self.objids_allfrm_snp[i][t]:
+                    for t in range(self.video_length[video]):
+                        if objid in self.objids_allfrm_snp[video][t]:
                             validfrms.append(1)
                             if flag_one:
                                 flag_consecutive_one = True
@@ -692,27 +665,23 @@ class Data_ILSVRC(object):
 
                 # check if there is not a single available objvalidfrms
                 assert(len(objvalidfrms)>0)
-                objvalidfrms_snp.append(objvalidfrms)
-                objids_valid_snp.append(set(objids_valid))
+                objvalidfrms_snp[video] = objvalidfrms
+                objids_valid_snp[video] = set(objids_valid)
             self.objids_valid_snp = objids_valid_snp
             return objvalidfrms_snp
 
         if self.objvalidfrms_snp is None:
-            self.objvalidfrms_snp = extract_objvalidfrms_snp(self.dstype)
-
-    def _update_nexps(self):
-        if self.nexps is None:
-            self.nexps = self.nsnps
+            self.objvalidfrms_snp = extract_objvalidfrms_snp()
 
     def _update_stat(self, o):
-        def create_stat_pixelwise(dstype): # NOTE: obsolete
+        def create_stat_pixelwise(): # NOTE: obsolete
             stat = dict.fromkeys({'mean', 'std'}, None)
             mean = []
             std = []
-            for i, snp in enumerate(self.snps['Data']):
+            for i, video in enumerate(self.videos):
                 print 'computing mean and std in snippet of {}, {}/{}'.format(
-                        dstype, i+1, self.nsnps)
-                imglist = sorted(glob.glob(snp+'/*.JPEG'))
+                        self.dstype, i+1, len(self.videos))
+                imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
                 xs = []
                 for j in imglist:
                     # NOTE: perform resize image!
@@ -726,14 +695,15 @@ class Data_ILSVRC(object):
             stat['mean'] = mean
             stat['std'] = std
             return stat
-        def create_stat_global(dstype):
+
+        def create_stat_global():
             stat = dict.fromkeys({'mean', 'std'}, None)
             means = []
             stds = []
-            for i, snp in enumerate(self.snps['Data']):
+            for i, video in enumerate(self.videos):
                 print 'computing mean and std in snippet of {}, {}/{}'.format(
-                        dstype, i+1, self.nsnps)
-                imglist = sorted(glob.glob(snp+'/*.JPEG'))
+                        self.dstype, i+1, len(self.videos))
+                imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
                 xs = []
                 # for j in imglist:
                 #     # NOTE: perform resize image!
@@ -759,7 +729,7 @@ class Data_ILSVRC(object):
             if os.path.exists(filename):
                 self.stat = np.load(filename).tolist()
             else:
-                self.stat = create_stat_global(self.dstype) 
+                self.stat = create_stat_global() 
                 np.save(filename, self.stat)
 
     def _get_bndbox_from_xml(self, xmlfile, objid):
