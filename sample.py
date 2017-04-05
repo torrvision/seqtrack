@@ -9,7 +9,7 @@ import os
 import random
 
 
-def sample_ILSVRC(dataset, ntimesteps, seqtype=None, shuffle=True):
+def sample(dataset, ntimesteps, seqtype=None, shuffle=True):
     num_videos = len(dataset.videos)
     if shuffle:
         idx_shuffle = np.random.permutation(num_videos)
@@ -109,7 +109,7 @@ def sample_ILSVRC(dataset, ntimesteps, seqtype=None, shuffle=True):
         yield {'image_files': files, 'labels': labels}
 
 
-def all_tracks_full_ILSVRC(dataset, seqtype=None):
+def all_tracks_full(dataset, seqtype=None):
     def _select_frms(objvalidfrms):
         # 1. get selection range (= first one and last one)
         objvalidfrms_np = np.asarray(objvalidfrms)

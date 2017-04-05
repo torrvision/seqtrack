@@ -16,7 +16,7 @@ import sample
 from model import convert_rec_to_heatmap
 
 
-def train(create_model, datasets, o):
+def train(create_model, datasets, val_sets, o):
     '''Trains a network.
 
     The `create_model` function takes as input a dictionary of tensors and
@@ -183,38 +183,31 @@ def train(create_model, datasets, o):
                     #     evals['train']['auc'],      evals[val_]['auc'],
                     #     evals['train']['cle_mean'], evals[val_]['cle_mean'])
 
-                    # Run the tracker on a full epoch.
-                    evals_batch = {}
-                    for s in ['train', 'val']:
-                        sequences = sample.sample_ILSVRC(datasets[s], o.ntimesteps,
-                            seqtype='sampling', shuffle=False)
+                    for s, dataset in val_sets.iteritems():
+                        # Run the tracker on a full epoch.
+                        sequences = sample.sample(dataset, o.ntimesteps, seqtype='sampling', shuffle=False)
                         print 'sample sequences'
                         sequences = [next(sequences) for _ in range(20)]
                         print 'done: sample sequences'
                         print 'len(sequences):', len(sequences)
                         sequences = sequences[:20]
-                        evals_batch[s] = evaluate.evaluate(sess, example, model, sequences)
-                    print ('(train/val) IOU: {:.3f}/{:.3f}, '
-                        'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} ').format(
-                        evals_batch['train']['iou_mean'], evals_batch['val']['iou_mean'],
-                        evals_batch['train']['auc'],      evals_batch['val']['auc'],
-                        evals_batch['train']['cle_mean'], evals_batch['val']['cle_mean'])
+                        result = evaluate.evaluate(sess, example, model, sequences)
+                        print 'dataset: {} (training sequences)'.format(s)
+                        print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
+                            result['iou_mean'], result['auc'], result['cle_mean'])
 
-                    # Run the tracker on whole sequences.
-                    # TODO: Add other datasets.
-                    evals_full = {}
-                    for s in ['train', 'val']:
-                        sequences = sample.all_tracks_full_ILSVRC(datasets[s])
+                    for s, dataset in val_sets.iteritems():
+                        # Run the tracker on whole sequences.
+                        sequences = sample.all_tracks_full(dataset)
                         print 'sample sequences'
                         sequences = [next(sequences) for _ in range(20)]
                         print 'done: sample sequences'
-                        evals_full[s] = evaluate.evaluate(sess, example, model, sequences)
-                    print ('(train/val) IOU: {:.3f}/{:.3f}, '
-                        'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} ').format(
-                        evals_full['train']['iou_mean'], evals_full['val']['iou_mean'],
-                        evals_full['train']['auc'],      evals_full['val']['auc'],
-                        evals_full['train']['cle_mean'], evals_full['val']['cle_mean'])
-                    # TODO: Draw
+                        result = evaluate.evaluate(sess, example, model, sequences)
+                        print 'dataset: {} (full sequences)'.format(s)
+                        print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
+                            result['iou_mean'], result['auc'], result['cle_mean'])
+
+                        # TODO: Draw
 
                 # Take a training step.
                 start = time.time()
@@ -333,7 +326,7 @@ def iter_examples(dataset, o, num_epochs=None):
     else:
         epochs = itertools.count()
     for i in epochs:
-        sequences = sample.sample_ILSVRC(dataset, o.ntimesteps,
+        sequences = sample.sample(dataset, o.ntimesteps,
             seqtype='sampling', shuffle=True)
         for sequence in sequences:
             yield sequence
