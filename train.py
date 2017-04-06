@@ -110,6 +110,7 @@ def train(create_model, datasets, val_sets, o):
 
         # Either initialize or restore model.
         model_file = None
+        prev_ckpt = 0
         if o.resume:
             model_file = tf.train.latest_checkpoint(o.path_ckpt)
             if model_file is None:
@@ -118,6 +119,7 @@ def train(create_model, datasets, val_sets, o):
             print 'restore: {}'.format(model_file)
             saver.restore(sess, model_file)
             print 'done: restore'
+            prev_ckpt = global_step_var.eval()
         else:
             sess.run(init_op)
 
@@ -150,7 +152,7 @@ def train(create_model, datasets, val_sets, o):
 
                 if not o.nosave:
                     period_ckpt = o.period_ckpt if not o.debugmode else 40
-                    if global_step > 0 and global_step % period_ckpt == 0: # save intermediate model
+                    if global_step % period_ckpt == 0 and global_step > prev_ckpt:
                         if not os.path.isdir(o.path_ckpt):
                             os.makedirs(o.path_ckpt)
                         fname = os.path.join(o.path_ckpt, 'iteration{}.ckpt'.format(global_step))
@@ -158,6 +160,7 @@ def train(create_model, datasets, val_sets, o):
                         print 'save model'
                         saver.save(sess, fname)
                         print 'done: save model'
+                        prev_ckpt = global_step
 
                 # **after a certain iteration, perform the followings
                 # - evaluate on train/test/val set
