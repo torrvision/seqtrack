@@ -97,16 +97,13 @@ def sample(dataset, ntimesteps, seqtype=None, shuffle=True):
         # randomly select segment of frames (<=T+1)
         # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
         # self.objvalidfrms_snp should be changed as well.
-        frm_is_valid = [t in track for t in range(dataset.video_length[video])]
+        frm_is_valid = [(t in track) for t in range(dataset.video_length[video])]
         frames = _select_frms(frm_is_valid)
-        for frame in frames:
-            # for x; image
-            fimg = dataset.image_file(video, frame)
-            # for y; labels
-            y = track[frame]
-            files.append(fimg)
-            labels.append(y)
-        yield {'image_files': files, 'labels': labels}
+        yield {
+            'image_files': [dataset.image_file(video, t) for t in frames],
+            'labels':      [track[t] for t in frames],
+            'original_image_size': dataset.original_image_size[video],
+        }
 
 
 def all_tracks_full(dataset, seqtype=None):
@@ -122,13 +119,10 @@ def all_tracks_full(dataset, seqtype=None):
         files = []
         labels = []
         for track in dataset.tracks[video]:
-            frm_is_valid = [t in track for t in range(dataset.video_length[video])]
+            frm_is_valid = [(t in track) for t in range(dataset.video_length[video])]
             frames = _select_frms(frm_is_valid)
-            for frame in frames:
-                # for x; image
-                fimg = dataset.image_file(video, frame)
-                # for y; labels
-                y = track[frame]
-                files.append(fimg)
-                labels.append(y)
-            yield {'image_files': files, 'labels': labels}
+            yield {
+                'image_files': [dataset.image_file(video, t) for t in frames],
+                'labels':      [track[t] for t in frames],
+                'original_image_size': dataset.original_image_size[video],
+            }

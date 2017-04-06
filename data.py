@@ -11,8 +11,9 @@ A dataset object has the following properties:
     dataset.videos -- List of strings.
     dataset.video_length[video] -- Dictionary that maps string -> integer.
     dataset.image_file(video, frame_number) -- Returns absolute path.
-    dataset.original_resolution[video] -- Dictionary that maps string -> (width, height).
-    dataset.actual_resolution[video] -- Dictionary that maps string -> (width, height).
+    dataset.image_size[video] -- Dictionary that maps string -> (width, height).
+    dataset.original_image_size[video] -- Dictionary that maps string -> (width, height).
+        Used for computing IOU, distance, etc.
     dataset.tracks[video] -- Dictionary that maps string -> list of tracks.
         A track is a dictionary that maps frame_number -> rectangle.
         The subset of keys indicates in which frames the object is labelled.
@@ -521,8 +522,6 @@ class Data_ILSVRC(object):
         self._update_videos()
         self._update_video_length()
         self._update_tracks(o)
-        # self._update_objids_snp() # simply unique obj ids in a snippet
-        # self._update_objvalidfrms_snp()
         self._update_stat(o)
 
     def _parsexml(self, xmlfile):
@@ -585,7 +584,7 @@ class Data_ILSVRC(object):
             video_len = self.video_length[video]
             for t in range(video_len):
                 xmlfile = os.path.join(self._annotations_dir(video), '{:06d}.xml'.format(t))
-                frame_objects, original_resolution = read_frame_annotation(xmlfile)
+                frame_objects, original_image_size = read_frame_annotation(xmlfile)
                 frames.append(frame_objects)
             # Convert from list of frame annotations to list of tracks.
             tracks = {}
@@ -612,12 +611,12 @@ class Data_ILSVRC(object):
 
         def extract_id_rect_pair(obj, width, height):
             index = int(obj['trackid'])
-            # Add 1 to xmax because we use range xmin <= x < xmax.
+            # ImageNet uses range xmin <= x < xmax.
             rect = [
-                 int(obj['bndbox']['xmin'])    / float(width),
-                 int(obj['bndbox']['ymin'])    / float(height),
-                (int(obj['bndbox']['xmax'])+1) / float(width),
-                (int(obj['bndbox']['ymax'])+1) / float(height),
+                int(obj['bndbox']['xmin']) / float(width),
+                int(obj['bndbox']['ymin']) / float(height),
+                int(obj['bndbox']['xmax']) / float(width),
+                int(obj['bndbox']['ymax']) / float(height),
             ]
             return index, rect
 
@@ -693,34 +692,20 @@ class Data_ILSVRC(object):
 
 
 class Data_OTB(object):
-    '''
-    OTB-50 or OTB-100 can be loaded.
+    '''Represents OTB-50 or OTB-100 dataset.'''
 
-    OTB dataset doesn't really maintain consistency (so bad actually..)
-
-    Also some other modifications are made to the original dataset.
-    1. Skating2 class has two rectangles for each of two objects respectively.
-    To make the directory structure consistent, I created Skating2_1, Skating2_2.
-    2. Human4 class has 2 labels 'groundtruth_rect.{1,2}.txt' but 1 is empty.
-    I copied 2 to 'groundtruth_rect.txt' to maintain filename consistency.
-    3. Jogging class has two rectangles for each of two objects respectively.
-    To make the directory structure consistent, I created Jogging1, Jogging2.
-    '''
     def __init__(self, variant, o):
         self.path_data = os.path.join(o.path_data_home, 'OTB')
         self.variant = variant # {'OTB-50', 'OTB-100'}
-
-        # TODO: OTB dataset has attributes to videos. Add them.
-
-        # examples = full-length test sequences
-        self.exps = None
-        self.videos       = None
-        self.video_length = None
-        self.tracks       = None
-
+        # Options to save locally.
         self.useresizedimg = o.useresizedimg
         self.frmsz         = o.frmsz
 
+        # TODO: OTB dataset has attributes to videos. Add them.
+
+        self.videos       = None
+        self.video_length = None
+        self.tracks       = None
         self._load_data(o)
 
     def image_file(self, video, t):
@@ -807,15 +792,14 @@ class Data_OTB(object):
                 if len(rects) == 0:
                     continue
                 # Normalize by image size.
-                rects[:,(0,2)] /= float(width)
-                rects[:,(1,3)] /= float(height)
+                rects = rects / np.array([width, height, width, height])
                 # Create track from rectangles and offset.
                 offset = self.offset.get(video, 1) - 1
                 track = {t+offset: list(rect) for t, rect in enumerate(rects)}
                 tracks.append(track)
             return {
                 'video_length':        video_length,
-                'original_resolution': (width, height),
+                'original_image_size': (width, height),
                 'tracks':              tracks,
             }
 
@@ -824,86 +808,20 @@ class Data_OTB(object):
                 rects = np.loadtxt(fname, dtype=np.float32, delimiter=',')
             except:
                 rects = np.loadtxt(fname, dtype=np.float32)
-            # label reformat [x1,y1,w,h] -> [x1,y1,x2,y2]
             if len(rects) == 0:
                 return []
-            rects[:,(2,3)] = rects[:,(0,1)] + rects[:,(2,3)] + 1
-            return rects
+            # label reformat [x1,y1,w,h] -> [x1,y1,x2,y2]
+            rects[:,(2,3)] = rects[:,(0,1)] + rects[:,(2,3)]
+            # Assume rectangles are meant for use with Matlab's imshow() and rectangle().
+            # Matlab draws an image of size n on the continuous range 0.5 to n+0.5.
+            return rects - 0.5
 
-        if self.exps is None:
+        if self.tracks is None:
             info = load_info()
             self.video_length        = info['video_length']
-            self.original_resolution = info['original_resolution']
+            self.original_image_size = info['original_image_size']
             self.tracks              = info['tracks']
 
-#   def get_batch_fl(self, ie, o):
-#       assert(ie < len(self.videos))
-
-#       # input tensors 
-#       c = self.videos[ie]
-#       nfrms = self.exps[c]['nfrms']
-#       data = np.zeros(
-#           (1, nfrms, o.frmsz, o.frmsz, o.ninchannel), dtype=np.float32)
-#       label = np.zeros((1, nfrms, o.outdim), dtype=np.float32)
-#       inputs_valid = np.zeros((1, nfrms), dtype=np.bool)
-#       inputs_HW = np.zeros((1, 2), dtype=np.float32)
-
-#       # in case of OTB-50, self.exps already has everything except for images
-#       for t in range(nfrms):
-#           # for x; image
-#           x = cv2.imread(self.exps[c]['images'][t])[:,:,(2,1,0)]
-#           # for y; label
-#           y = self.exps[c]['labels'][t]
-
-#           # image resize. NOTE: the best image resize? need experiments
-#           if not o.useresizedimg:
-#               data[0,t] = cv2.resize(x, (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
-#           else:
-#               data[0,t] = x
-#           label[0,t] = y
-
-#           # if there is a labeled box, assign 1 to inputs_valid
-#           if not (sum(y) == 0): 
-#               inputs_valid[0,t] = True
-#       inputs_HW[0] = x.shape[0:2]
-
-#       # # image normalization 
-#       # # NOTE: use ILSVRC stat
-#       # data -= self.stat['mean']
-#       # data /= self.stat['std']
-#       # Moved this to model() so that it is saved with the graph.
-
-#       batch = {
-#               'inputs': data,
-#               'inputs_valid': inputs_valid,
-#               'inputs_HW': inputs_HW,
-#               'labels': label,
-#               'nfrms': nfrms,
-#               'idx': ie
-#               }
-#       return batch 
-
-#   def create_resized_images(self, o):
-#       '''
-#       This module performs resizing of images offline. 
-#       '''
-#       assert(False) # it's performed already and no need to run this twice.
-#       assert(o.useresizedimg == False)
-
-#       for c in self.videos: #videos = #sequences = #examples
-#           print 'resizing (and saving) images in {} dataset |class {}'.format(
-#                   self.variant, c)
-#           for t in range(self.exps[c]['nfrms']):
-#               self.exps[c]
-#               img = self.exps[c]['images'][t]
-#               x = cv2.resize(cv2.imread(img), 
-#                       (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
-
-#               # save
-#               fname = img.replace('img', 'img_frmsz{}'.format(o.frmsz))
-#               savedir = fname[:-9]
-#               if not os.path.exists(savedir): helpers.mkdir_p(savedir)
-#               cv2.imwrite(fname, x)
 
 def get_masks_from_rectangles(rec, o):
     # create mask using rec; typically rec=y_prev
