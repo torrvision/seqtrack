@@ -109,8 +109,12 @@ def train(create_model, datasets, val_sets, o):
         print '\ntraining starts! --------------------------------------------'
 
         # Either initialize or restore model.
+        model_file = None
         if o.resume:
             model_file = tf.train.latest_checkpoint(o.path_ckpt)
+            if model_file is None:
+                print 'could not find checkpoint'
+        if model_file:
             print 'restore: {}'.format(model_file)
             saver.restore(sess, model_file)
             print 'done: restore'
