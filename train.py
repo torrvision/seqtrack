@@ -160,15 +160,22 @@ def train(create_model, datasets, val_sets, o):
                 # - print results (loss, eval resutls, time, etc.)
                 period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step % period_assess == 0: # evaluate model
-                    # # evaluate
-                    # val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
-                    # evals = {
-                    #     'train': evaluate.evaluate(sess, output, state, loader, o, 'train',
-                    #         np.maximum(int(np.floor(100/o.batchsz)), 1),
-                    #         hold_inputs=True, shuffle_local=True),
-                    #     val_: evaluate.evaluate(sess, m, loader, o, val_,
-                    #         np.maximum(int(np.floor(100/o.batchsz)), 1),
-                    #         hold_inputs=True, shuffle_local=True)}
+                    samplers = {
+                        'train': {
+                            'name': 'training sequences',
+                            'func': lambda d: sample.sample(d, o.ntimesteps,
+                                        seqtype='sampling', shuffle=False)},
+                        'full': {
+                            'name': 'full sequences',
+                            'func': lambda d: sample.all_tracks_full(dataset)}}
+                    for sampler_id, sampler in samplers.iteritems():
+                        for dataset_id, dataset in val_sets.iteritems():
+                            # Run the tracker on a full epoch.
+                            sequences = sampler['func'](dataset)
+                            result = evaluate.evaluate(sess, example, model, sequences)
+                            print 'dataset: {}  sampler: {}'.format(dataset_id, sampler['name'])
+                            print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
+                                result['iou_mean'], result['auc'], result['cle_mean'])
                     # # visualize tracking results examples
                     # draw.show_track_results(
                     #     evals['train'], loader, 'train', o, global_step,nlimit=20)
@@ -182,32 +189,6 @@ def train(create_model, datasets, val_sets, o):
                     #     evals['train']['iou_mean'], evals[val_]['iou_mean'],
                     #     evals['train']['auc'],      evals[val_]['auc'],
                     #     evals['train']['cle_mean'], evals[val_]['cle_mean'])
-
-                    for s, dataset in val_sets.iteritems():
-                        # Run the tracker on a full epoch.
-                        sequences = sample.sample(dataset, o.ntimesteps, seqtype='sampling', shuffle=False)
-                        print 'sample sequences'
-                        sequences = [next(sequences) for _ in range(20)]
-                        print 'done: sample sequences'
-                        print 'len(sequences):', len(sequences)
-                        sequences = sequences[:20]
-                        result = evaluate.evaluate(sess, example, model, sequences)
-                        print 'dataset: {} (training sequences)'.format(s)
-                        print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
-                            result['iou_mean'], result['auc'], result['cle_mean'])
-
-                    for s, dataset in val_sets.iteritems():
-                        # Run the tracker on whole sequences.
-                        sequences = sample.all_tracks_full(dataset)
-                        print 'sample sequences'
-                        sequences = [next(sequences) for _ in range(20)]
-                        print 'done: sample sequences'
-                        result = evaluate.evaluate(sess, example, model, sequences)
-                        print 'dataset: {} (full sequences)'.format(s)
-                        print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
-                            result['iou_mean'], result['auc'], result['cle_mean'])
-
-                        # TODO: Draw
 
                 # Take a training step.
                 start = time.time()
