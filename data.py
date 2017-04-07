@@ -11,8 +11,9 @@ A dataset object has the following properties:
     dataset.videos -- List of strings.
     dataset.video_length[video] -- Dictionary that maps string -> integer.
     dataset.image_file(video, frame_number) -- Returns absolute path.
-    dataset.original_resolution[video] -- Dictionary that maps string -> (width, height).
-    dataset.actual_resolution[video] -- Dictionary that maps string -> (width, height).
+    dataset.image_size[video] -- Dictionary that maps string -> (width, height).
+    dataset.original_image_size[video] -- Dictionary that maps string -> (width, height).
+        Used for computing IOU, distance, etc.
     dataset.tracks[video] -- Dictionary that maps string -> list of tracks.
         A track is a dictionary that maps frame_number -> rectangle.
         The subset of keys indicates in which frames the object is labelled.
@@ -36,6 +37,7 @@ import itertools
 import random
 import xmltodict
 import cv2
+from PIL import Image
 
 import draw
 import helpers
@@ -520,8 +522,6 @@ class Data_ILSVRC(object):
         self._update_videos()
         self._update_video_length()
         self._update_tracks(o)
-        # self._update_objids_snp() # simply unique obj ids in a snippet
-        # self._update_objvalidfrms_snp()
         self._update_stat(o)
 
     def _parsexml(self, xmlfile):
@@ -572,20 +572,26 @@ class Data_ILSVRC(object):
             return self.dstype
 
     def _update_tracks(self, o):
-        def load_tracks():
-            tracks = {}
+        def load_info():
+            info = {}
             for i, video in enumerate(self.videos):
                 print i+1, video
-                tracks[video] = load_video_tracks(video)
-            return tracks
+                video_info = load_video_info(video)
+                for k, v in video_info.iteritems():
+                    info.setdefault(k, {})[video] = v
+            return info
 
-        def load_video_tracks(video):
+        def load_video_info(video):
             frames = []
+            size = None
             video_len = self.video_length[video]
             for t in range(video_len):
                 xmlfile = os.path.join(self._annotations_dir(video), '{:06d}.xml'.format(t))
-                frame_objects, original_resolution = read_frame_annotation(xmlfile)
+                frame_objects, frame_size = read_frame_annotation(xmlfile)
+                if size is not None:
+                    assert(size == frame_size)
                 frames.append(frame_objects)
+                size = size or frame_size
             # Convert from list of frame annotations to list of tracks.
             tracks = {}
             for t, frame_objects in enumerate(frames):
@@ -597,7 +603,10 @@ class Data_ILSVRC(object):
             # Note: This will not preserve the original object IDs
             # if the IDs are not consecutive starting from 0.
             # For example: ILSVRC2015_VID_train_0000/ILSVRC2015_train_00014017
-            return [tracks[obj_id] for obj_id in sorted(tracks.keys())]
+            return {
+                'tracks': [tracks[obj_id] for obj_id in sorted(tracks.keys())],
+                'original_image_size': size,
+            }
 
         def read_frame_annotation(xmlfile):
             '''Returns a dictionary of (track index) -> rectangle.'''
@@ -611,25 +620,24 @@ class Data_ILSVRC(object):
 
         def extract_id_rect_pair(obj, width, height):
             index = int(obj['trackid'])
-            # Add 1 to xmax because we use range xmin <= x < xmax.
+            # ImageNet uses range xmin <= x < xmax.
             rect = [
-                 int(obj['bndbox']['xmin'])    / float(width),
-                 int(obj['bndbox']['ymin'])    / float(height),
-                (int(obj['bndbox']['xmax'])+1) / float(width),
-                (int(obj['bndbox']['ymax'])+1) / float(height),
+                int(obj['bndbox']['xmin']) / float(width),
+                int(obj['bndbox']['ymin']) / float(height),
+                int(obj['bndbox']['xmax']) / float(width),
+                int(obj['bndbox']['ymax']) / float(height),
             ]
             return index, rect
 
         if self.tracks is None:
             if not os.path.isdir(o.path_aux):
                 os.makedirs(o.path_aux)
-            cache_file = os.path.join(o.path_aux, 'tracks_{}.json'.format(self._identifier()))
-            tracks = helpers.cache_json(cache_file, lambda: load_tracks())
+            cache_file = os.path.join(o.path_aux, 'info_{}.json'.format(self._identifier()))
+            info = helpers.cache_json(cache_file, lambda: load_info())
             # Convert (frame, rectangle) pairs to dictionary.
-            for video in tracks:
-                for obj_id, track in enumerate(tracks[video]):
-                    tracks[video][obj_id] = dict(tracks[video][obj_id])
-            self.tracks = tracks
+            self.tracks = {video: [dict(track) for track in track_list]
+                           for video, track_list in info['tracks'].iteritems()}
+            self.original_image_size = info['original_image_size']
 
     def _update_stat(self, o):
         def create_stat_pixelwise(): # NOTE: obsolete
@@ -692,44 +700,39 @@ class Data_ILSVRC(object):
 
 
 class Data_OTB(object):
-    '''
-    OTB-50 or OTB-100 can be loaded.
-    
-    OTB dataset doesn't really maintain consistency (so bad actually..)
+    '''Represents OTB-50 or OTB-100 dataset.'''
 
-    Also some other modifications are made to the original dataset.
-    1. Skating2 class has two rectangles for each of two objects respectively.
-    To make the directory structure consistent, I created Skating2_1, Skating2_2.
-    2. Human4 class has 2 labels 'groundtruth_rect.{1,2}.txt' but 1 is empty.
-    I copied 2 to 'groundtruth_rect.txt' to maintain filename consistency.
-    3. Jogging class has two rectangles for each of two objects respectively.
-    To make the directory structure consistent, I created Jogging1, Jogging2.
-    '''
-    def __init__(self, o):
+    def __init__(self, variant, o):
         self.path_data = os.path.join(o.path_data_home, 'OTB')
-        if o.dataset == 'OTB-50':
-            self.nclasses = 50
-            self.nexps_fulllen = 50 # used in evaluation
-        elif o.dataset == 'OTB-100':
-            self.nclasses = 100
-            self.nexps_fulllen = 100 # used in evaluation
+        self.variant = variant # {'OTB-50', 'OTB-100'}
+        # Options to save locally.
+        self.useresizedimg = o.useresizedimg
+        self.frmsz         = o.frmsz
 
         # TODO: OTB dataset has attributes to videos. Add them.
 
-        # examples = full-length test sequences
-        self.exps = None
-        self.classes = None
-        self.stat = None # TODO: not sure if it's okay to use ILSVRC's stat
-
+        self.videos       = None
+        self.video_length = None
+        self.tracks       = None
         self._load_data(o)
 
-    def _load_data(self, o):
-        self._update_classes()
-        self._update_exceptions(o)
-        self._update_exps(o)
-        self._update_stat(o)
+    def image_file(self, video, t):
+        if self.useresizedimg:
+            img_dir = 'img'
+        else:
+            img_dir = 'img_frmsz{}'.format(self.frmsz)
+        if video == 'Board':
+            filename = '{:05d}.jpg'.format(t+1)
+        else:
+            filename = '{:04d}.jpg'.format(t+1)
+        return os.path.join(self.path_data, video, img_dir, filename)
 
-    def _update_classes(self):
+    def _load_data(self, o):
+        self._update_videos()
+        self._update_exceptions(o)
+        self._update_video_info(o)
+
+    def _update_videos(self):
         OTB50 = [
             'Basketball','Biker','Bird1','BlurBody','BlurCar2','BlurFace',
             'BlurOwl','Bolt','Box','Car1','Car4','CarDark','CarScale',
@@ -737,178 +740,96 @@ class Data_OTB(object):
             'Dudek','Football','Freeman4','Girl','Human3','Human4','Human6',
             'Human9','Ironman','Jump','Jumping','Liquor','Matrix',
             'MotorRolling','Panda','RedTeam','Shaking','Singer2','Skating1',
-            'Skating2_1','Skating2_2','Skiing','Soccer','Surfer','Sylvester',
+            'Skating2','Skiing','Soccer','Surfer','Sylvester',
             'Tiger2','Trellis','Walking','Walking2','Woman']
-        OTB100only = [
+        OTB100 = OTB50 + [
             'Bird2','BlurCar1','BlurCar3','BlurCar4','Board','Bolt2','Boy', 
             'Car2','Car24','Coke','Coupon','Crossing','Dancer','Dancer2',
             'David2','David3','Dog','Dog1','Doll','FaceOcc1','FaceOcc2','Fish', 
             'FleetFace','Football1','Freeman1','Freeman3','Girl2','Gym',
-            'Human2','Human5','Human7','Human8','Jogging1','Jogging2',
+            'Human2','Human5','Human7','Human8','Jogging',
             'KiteSurf','Lemming','Man','Mhyang','MountainBike','Rubik',
             'Singer1','Skater','Skater2','Subway','Suv','Tiger1','Toy','Trans', 
             'Twinnings','Vase']
-        self.classes = dict.fromkeys({'OTB-50', 'OTB-100'}, None)
-        self.classes['OTB-50'] = OTB50
-        self.classes['OTB-100'] = OTB50 + OTB100only
+        if self.variant == 'OTB-50':
+            self.videos = OTB50
+        elif self.variant == 'OTB-100':
+            self.videos = OTB100
+        else:
+            raise ValueError('unknown OTB variant: {}'.format(self.variant))
 
     def _update_exceptions(self, o):
-        self.exceptions = {}
-        self.exceptions['David'] = {}
-        self.exceptions['Football1'] = {}
-        self.exceptions['Freeman3'] = {}
-        self.exceptions['Freeman4'] = {}
-        self.exceptions['BlurCar1'] = {}
-        self.exceptions['BlurCar3'] = {}
-        self.exceptions['BlurCar4'] = {}
-        self.exceptions['David']['frms'] = range(300, 770+1)
-        self.exceptions['Football1']['frms'] = range(1, 74+1)
-        self.exceptions['Freeman3']['frms'] = range(1, 460+1)
-        self.exceptions['Freeman4']['frms'] = range(1, 283+1)
-        self.exceptions['BlurCar1']['frms'] = range(247, 988+1)
-        self.exceptions['BlurCar3']['frms'] = range(3, 359+1)
-        self.exceptions['BlurCar4']['frms'] = range(18, 397+1)
+        # Note: First frame is indexed from 1!
+        self.offset = {}
+        self.offset['David']    = 300
+        self.offset['BlurCar1'] = 247
+        self.offset['BlurCar3'] = 3
+        self.offset['BlurCar4'] = 18
 
-    def _update_exps(self, o):
-        def create_exps():
-            # classes
-            classes = self.classes[o.dataset]
-            assert(len(classes) == self.nclasses)
-            
-            # data
-            data = {}
-            for i, c in enumerate(classes):
-                data[c] = dict.fromkeys(
-                        {'images', 'labels', 'nfrms', 'HW'}, None)
+    def _update_video_info(self, o):
+        def load_info():
+            info = {}
+            for i, video in enumerate(self.videos):
+                video_info = load_video_info(video)
+                for k, v in video_info.iteritems():
+                    info.setdefault(k, {})[video] = v
+            return info
 
-                # label
-                dirname = os.path.join(self.path_data, c)
-                try:
-                    label = np.loadtxt(dirname + '/groundtruth_rect.txt', delimiter=',', dtype=np.float32)
-                except:
-                    label = np.loadtxt(dirname + '/groundtruth_rect.txt', dtype=np.float32)
-                # label reformat [x1,y1,w,h] -> [x1,y1,x2,y2]
-                # TODO: double check the format
-                label[:,(2,3)] += label[:,(0,1)]
-                data[c]['labels'] = label
+        def load_video_info(video):
+            video_dir = os.path.join(self.path_data, video)
+            if not os.path.isdir(video_dir):
+                raise ValueError('video directory does not exist: {}'.format(video_dir))
+            # Get video length.
+            image_files = glob.glob(os.path.join(video_dir, 'img', '*.jpg'))
+            video_length = len(image_files)
+            assert(video_length > 0)
+            # Check image resolution.
+            width, height = Image.open(image_files[0]).size
 
-                # nfrms: number of frames
-                data[c]['nfrms'] = data[c]['labels'].shape[0]
-
-                # images: only file names otherwise too large to hold images
-                if c in self.exceptions:
-                    frmrange = self.exceptions[c]['frms']
+            # Get number of objects.
+            gt_files = glob.glob(os.path.join(video_dir, 'groundtruth_rect*.txt'))
+            num_objects = len(gt_files)
+            assert(num_objects > 0)
+            tracks = []
+            for j in range(num_objects):
+                if num_objects == 1:
+                    gt_file = 'groundtruth_rect.txt'
                 else:
-                    frmrange = range(1, data[c]['nfrms']+1)
-                
-                if c is not 'Board':
-                    if not o.useresizedimg: 
-                        data[c]['images'] = [os.path.join(dirname, 'img') 
-                            + '/{0:04d}.jpg'.format(t) for t in frmrange]
-                    else:
-                        data[c]['images'] = [os.path.join(dirname, 'img_frmsz{}'.format(o.frmsz)) 
-                            + '/{0:04d}.jpg'.format(t) for t in frmrange]
-                else:
-                    if not o.useresizedimg: 
-                        data[c]['images'] = [os.path.join(dirname, 'img') 
-                            + '/{0:05d}.jpg'.format(t) for t in frmrange]
-                    else:
-                        data[c]['images'] = [os.path.join(dirname, 'img_frmsz{}'.format(o.frmsz)) 
-                            + '/{0:05d}.jpg'.format(t) for t in frmrange]
+                    gt_file = 'groundtruth_rect.{}.txt'.format(j+1)
+                rects = load_rectangles(os.path.join(video_dir, gt_file))
+                if len(rects) == 0:
+                    continue
+                # Normalize by image size.
+                rects = rects / np.array([width, height, width, height])
+                # Create track from rectangles and offset.
+                offset = self.offset.get(video, 1) - 1
+                track = {t+offset: list(rect) for t, rect in enumerate(rects)}
+                tracks.append(track)
+            return {
+                'video_length':        video_length,
+                'original_image_size': (width, height),
+                'tracks':              tracks,
+            }
 
-                # label normalization using image size
-                exampleimg = data[c]['images'][0].replace('img_frmsz{}'.format(o.frmsz) ,'img')
-                HW_ori = cv2.imread(exampleimg).shape[0:2]
-                HW_res = (o.frmsz, o.frmsz)
-                if not o.useresizedimg:
-                    assert(False)
-                    data[c]['HW'] = HW_ori
-                else:
-                    data[c]['HW'] = HW_res
-                data[c]['labels'][:,(0,2)] /= HW_ori[1]
-                data[c]['labels'][:,(1,3)] /= HW_ori[0]
+        def load_rectangles(fname):
+            try:
+                rects = np.loadtxt(fname, dtype=np.float32, delimiter=',')
+            except:
+                rects = np.loadtxt(fname, dtype=np.float32)
+            if len(rects) == 0:
+                return []
+            # label reformat [x1,y1,w,h] -> [x1,y1,x2,y2]
+            rects[:,(2,3)] = rects[:,(0,1)] + rects[:,(2,3)]
+            # Assume rectangles are meant for use with Matlab's imshow() and rectangle().
+            # Matlab draws an image of size n on the continuous range 0.5 to n+0.5.
+            return rects - 0.5
 
-                assert(len(data[c]['images']) == data[c]['nfrms'])
-                assert(data[c]['labels'].shape[0] == data[c]['nfrms'])
-            return data
+        if self.tracks is None:
+            info = load_info()
+            self.video_length        = info['video_length']
+            self.original_image_size = info['original_image_size']
+            self.tracks              = info['tracks']
 
-        if self.exps is None:
-            self.exps = create_exps()
-
-    def _update_stat(self, o):
-        if self.stat is None:
-            filename = os.path.join(o.path_stat, 
-                    'meanstd_ILSVRC_frmsz_{}_train_9.npy'.format(o.frmsz))
-            self.stat = np.load(filename).tolist()
-
-    def get_batch_fl(self, ie, o):
-        assert(ie < len(self.classes[o.dataset]))
-
-        # input tensors 
-        c = self.classes[o.dataset][ie]
-        nfrms = self.exps[c]['nfrms']
-        data = np.zeros(
-            (1, nfrms, o.frmsz, o.frmsz, o.ninchannel), dtype=np.float32)
-        label = np.zeros((1, nfrms, o.outdim), dtype=np.float32)
-        inputs_valid = np.zeros((1, nfrms), dtype=np.bool)
-        inputs_HW = np.zeros((1, 2), dtype=np.float32)
-
-        # in case of OTB-50, self.exps already has everything except for images
-        for t in range(nfrms):
-            # for x; image
-            x = cv2.imread(self.exps[c]['images'][t])[:,:,(2,1,0)]
-            # for y; label
-            y = self.exps[c]['labels'][t]
-
-            # image resize. NOTE: the best image resize? need experiments
-            if not o.useresizedimg:
-                data[0,t] = cv2.resize(x, (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
-            else:
-                data[0,t] = x
-            label[0,t] = y
-
-            # if there is a labeled box, assign 1 to inputs_valid
-            if not (sum(y) == 0): 
-                inputs_valid[0,t] = True
-        inputs_HW[0] = x.shape[0:2]
-
-        # # image normalization 
-        # # NOTE: use ILSVRC stat
-        # data -= self.stat['mean']
-        # data /= self.stat['std']
-        # Moved this to model() so that it is saved with the graph.
-
-        batch = {
-                'inputs': data,
-                'inputs_valid': inputs_valid,
-                'inputs_HW': inputs_HW,
-                'labels': label,
-                'nfrms': nfrms,
-                'idx': ie
-                }
-        return batch 
-
-    def create_resized_images(self, o):
-        '''
-        This module performs resizing of images offline. 
-        '''
-        assert(False) # it's performed already and no need to run this twice.
-        assert(o.useresizedimg == False)
-
-        for c in self.classes[o.dataset]: #classes = #sequences = #examples
-            print 'resizing (and saving) images in {} dataset |class {}'.format(
-                    o.dataset, c)
-            for t in range(self.exps[c]['nfrms']):
-                self.exps[c]
-                img = self.exps[c]['images'][t]
-                x = cv2.resize(cv2.imread(img), 
-                        (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA)
-
-                # save
-                fname = img.replace('img', 'img_frmsz{}'.format(o.frmsz))
-                savedir = fname[:-9]
-                if not os.path.exists(savedir): helpers.mkdir_p(savedir)
-                cv2.imwrite(fname, x)
 
 def get_masks_from_rectangles(rec, o):
     # create mask using rec; typically rec=y_prev

@@ -16,7 +16,7 @@ import sample
 from model import convert_rec_to_heatmap
 
 
-def train(create_model, datasets, o):
+def train(create_model, datasets, val_sets, o):
     '''Trains a network.
 
     The `create_model` function takes as input a dictionary of tensors and
@@ -95,11 +95,15 @@ def train(create_model, datasets, o):
     optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
 
     init_op = tf.global_variables_initializer()
-    summary_evaluate = tf.summary.merge_all()
     # Optimization summary might include gradients, learning rate, etc.
-    summary_optimize = tf.summary.merge([summary_evaluate,
+    summary_vars = {'val': tf.summary.merge_all()}
+    summary_vars['train'] = tf.summary.merge([summary_vars['val'],
         tf.summary.scalar('lr', lr)])
     saver = tf.train.Saver()
+
+    preview = tf.summary.image('box', _draw_bounding_boxes(example, model), max_outputs=o.ntimesteps+1)
+    summary_vars_with_preview = {k: tf.summary.merge([v, preview])
+        for k, v in summary_vars.iteritems()}
 
     examples_train = iter_examples(datasets['train'], o, num_epochs=None)
     examples_val = iter_examples(datasets['val'], o, num_epochs=None)
@@ -109,11 +113,17 @@ def train(create_model, datasets, o):
         print '\ntraining starts! --------------------------------------------'
 
         # Either initialize or restore model.
+        model_file = None
+        prev_ckpt = 0
         if o.resume:
             model_file = tf.train.latest_checkpoint(o.path_ckpt)
+            if model_file is None:
+                print 'could not find checkpoint'
+        if model_file:
             print 'restore: {}'.format(model_file)
             saver.restore(sess, model_file)
             print 'done: restore'
+            prev_ckpt = global_step_var.eval()
         else:
             sess.run(init_op)
 
@@ -146,7 +156,7 @@ def train(create_model, datasets, o):
 
                 if not o.nosave:
                     period_ckpt = o.period_ckpt if not o.debugmode else 40
-                    if global_step > 0 and global_step % period_ckpt == 0: # save intermediate model
+                    if global_step % period_ckpt == 0 and global_step > prev_ckpt:
                         if not os.path.isdir(o.path_ckpt):
                             os.makedirs(o.path_ckpt)
                         fname = os.path.join(o.path_ckpt, 'iteration{}.ckpt'.format(global_step))
@@ -154,21 +164,29 @@ def train(create_model, datasets, o):
                         print 'save model'
                         saver.save(sess, fname)
                         print 'done: save model'
+                        prev_ckpt = global_step
 
                 # **after a certain iteration, perform the followings
                 # - evaluate on train/test/val set
                 # - print results (loss, eval resutls, time, etc.)
                 period_assess = o.period_assess if not o.debugmode else 10
                 if global_step > 0 and global_step % period_assess == 0: # evaluate model
-                    # # evaluate
-                    # val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
-                    # evals = {
-                    #     'train': evaluate.evaluate(sess, output, state, loader, o, 'train',
-                    #         np.maximum(int(np.floor(100/o.batchsz)), 1),
-                    #         hold_inputs=True, shuffle_local=True),
-                    #     val_: evaluate.evaluate(sess, m, loader, o, val_,
-                    #         np.maximum(int(np.floor(100/o.batchsz)), 1),
-                    #         hold_inputs=True, shuffle_local=True)}
+                    samplers = {
+                        'train': {
+                            'name': 'training sequences',
+                            'func': lambda d: sample.sample(d, o.ntimesteps,
+                                        seqtype='sampling', shuffle=False)},
+                        'full': {
+                            'name': 'full sequences',
+                            'func': lambda d: sample.all_tracks_full(dataset)}}
+                    for sampler_id, sampler in samplers.iteritems():
+                        for dataset_id, dataset in val_sets.iteritems():
+                            # Run the tracker on a full epoch.
+                            sequences = sampler['func'](dataset)
+                            result = evaluate.evaluate(sess, example, model, sequences)
+                            print 'dataset: {}  sampler: {}'.format(dataset_id, sampler['name'])
+                            print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
+                                result['iou_mean'], result['auc'], result['cle_mean'])
                     # # visualize tracking results examples
                     # draw.show_track_results(
                     #     evals['train'], loader, 'train', o, global_step,nlimit=20)
@@ -183,43 +201,13 @@ def train(create_model, datasets, o):
                     #     evals['train']['auc'],      evals[val_]['auc'],
                     #     evals['train']['cle_mean'], evals[val_]['cle_mean'])
 
-                    # Run the tracker on a full epoch.
-                    evals_batch = {}
-                    for s in ['train', 'val']:
-                        sequences = sample.sample_ILSVRC(datasets[s], o.ntimesteps,
-                            seqtype='sampling', shuffle=False)
-                        print 'sample sequences'
-                        sequences = [next(sequences) for _ in range(20)]
-                        print 'done: sample sequences'
-                        print 'len(sequences):', len(sequences)
-                        sequences = sequences[:20]
-                        evals_batch[s] = evaluate.evaluate(sess, example, model, sequences)
-                    print ('(train/val) IOU: {:.3f}/{:.3f}, '
-                        'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} ').format(
-                        evals_batch['train']['iou_mean'], evals_batch['val']['iou_mean'],
-                        evals_batch['train']['auc'],      evals_batch['val']['auc'],
-                        evals_batch['train']['cle_mean'], evals_batch['val']['cle_mean'])
-
-                    # Run the tracker on whole sequences.
-                    # TODO: Add other datasets.
-                    evals_full = {}
-                    for s in ['train', 'val']:
-                        sequences = sample.all_tracks_full_ILSVRC(datasets[s])
-                        print 'sample sequences'
-                        sequences = [next(sequences) for _ in range(20)]
-                        print 'done: sample sequences'
-                        evals_full[s] = evaluate.evaluate(sess, example, model, sequences)
-                    print ('(train/val) IOU: {:.3f}/{:.3f}, '
-                        'AUC: {:.3f}/{:.3f}, CLE: {:.3f}/{:.3f} ').format(
-                        evals_full['train']['iou_mean'], evals_full['val']['iou_mean'],
-                        evals_full['train']['auc'],      evals_full['val']['auc'],
-                        evals_full['train']['cle_mean'], evals_full['val']['cle_mean'])
-                    # TODO: Draw
-
                 # Take a training step.
                 start = time.time()
-                if ib % o.period_summary == 0:
-                    _, loss, summary = sess.run([optimize_op, loss_var, summary_optimize],
+                if global_step % o.period_summary == 0:
+                    summary_var = (summary_vars_with_preview['train']
+                            if global_step % o.period_preview == 0
+                            else summary_vars['train'])
+                    _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
                             feed_dict={queue_index: 0, example['use_gt']: True})
                     dur = time.time() - start
                     train_writer.add_summary(summary, global_step=global_step)
@@ -236,11 +224,14 @@ def train(create_model, datasets, o):
                         ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur)
 
                 # Evaluate validation error.
-                if ib % o.period_summary == 0:
+                if global_step % o.period_summary == 0:
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
-                        loss, summary = sess.run([loss_var, summary_evaluate],
+                        summary_var = (summary_vars_with_preview['val']
+                                if global_step % o.period_preview == 0
+                                else summary_vars['val'])
+                        loss, summary = sess.run([loss_var, summary_var],
                                 feed_dict={queue_index: 1, example['use_gt']: True})
                         dur = time.time() - start
                         val_writer.add_summary(summary, global_step=global_step)
@@ -333,7 +324,7 @@ def iter_examples(dataset, o, num_epochs=None):
     else:
         epochs = itertools.count()
     for i in epochs:
-        sequences = sample.sample_ILSVRC(dataset, o.ntimesteps,
+        sequences = sample.sample(dataset, o.ntimesteps,
             seqtype='sampling', shuffle=True)
         for sequence in sequences:
             yield sequence
@@ -383,3 +374,29 @@ def get_loss(example, outputs, o, name='loss'):
                 tf.summary.scalar(name, loss)
 
         return tf.reduce_sum(losses.values(), name=scope)
+
+
+def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
+    with tf.name_scope(name) as scope:
+        # example['x_raw']   -- [b, t, h, w, 3]
+        # example['y']       -- [b, t, 4]
+        # model.outputs['y'] -- [b, t, 4]
+        # Just do the first example in the batch.
+        image = example['x_raw'][0][::time_stride]
+        y_gt = example['y'][0][::time_stride]
+        y_pred = model.outputs['y'][0][::time_stride]
+        y = tf.stack([y_gt, y_pred], axis=1)
+        coords = tf.unstack(y, axis=2)
+        boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
+        return tf.image.draw_bounding_boxes(image, boxes, name=scope)
+
+
+def _merge_dims(x, a, b):
+    '''Merge dimensions a to b but preserve rank.'''
+    static = x.shape.as_list()
+    n = len(static)
+    dynamic = tf.shape(x)
+    result = ([static[i] or dynamic[i] for i in range(0, a)] +
+              [tf.reduce_prod(dynamic[a:b])] +
+              [static[i] or dynamic[i] for i in range(b, n)])
+    return tf.reshape(x, result)

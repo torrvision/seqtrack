@@ -111,7 +111,10 @@ def parse_arguments():
             '--resume', help='to resume training',
             action='store_true')
     parser.add_argument(
-            '--period_ckpt', help='period to save ckpt (and interm assess)',
+            '--period_ckpt', help='period to save ckpt',
+            type=int, default=10000)
+    parser.add_argument(
+            '--period_assess', help='period to run evaluation',
             type=int, default=10000)
 
     parser.add_argument(
@@ -131,7 +134,9 @@ if __name__ == "__main__":
     o.initialize()
 
     dataset = data.load_data(o)
+    val_sets = {'OTB-50':  data.Data_OTB('OTB-50', o),
+                'OTB-100': data.Data_OTB('OTB-100', o)}
     m = lambda inputs: model.load_model(inputs, o)
 
     assert(o.mode == 'train')
-    train.train(m, dataset, o)
+    train.train(m, dataset, val_sets, o)

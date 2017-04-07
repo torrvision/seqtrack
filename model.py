@@ -718,7 +718,7 @@ def get_masks_from_rectangles(rec, o, kind='fg', typecast=True):
         masks = tf.expand_dims(masks, 3) # to have channel dim
     elif kind == 'bg': # add background mask
         masks_bg = tf.logical_not(masks)
-        masks = tf.concat_v2(
+        masks = tf.concat(
                 (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
     if typecast: # type cast so that it can be concatenated with x
         masks = tf.cast(masks, o.dtype)
@@ -1256,6 +1256,7 @@ class RNN_dual(object):
         self.is_train = True if o.mode == 'train' else False
         self.params = self._update_params(o)
         self.outputs, self.state = self._load_model(inputs, o)
+        self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
         self.batch_size   = o.batchsz
 
@@ -1720,6 +1721,7 @@ class RNN_conv_asymm(object):
         outputs, state = self._load_model(inputs, o)
         self.outputs = outputs
         self.state   = state
+        self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
         self.batch_size   = None
 

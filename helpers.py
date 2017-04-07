@@ -32,10 +32,16 @@ def createScalarMap(name='hot', vmin=-10, vmax=10):
     cNorm  = colors.Normalize(vmin=vmin, vmax=vmax)
     return cmx.ScalarMappable(norm=cNorm, cmap=cm)
 
-def load_image(fname):
+def load_image(fname, size=None, resize=False):
     im = Image.open(fname)
     if im.mode != 'RGB':
         im = im.convert('RGB')
+    if size is not None:
+        if im.size != size:
+            if resize:
+                im = im.resize(size)
+            else:
+                raise ValueError('size does not match')
     return im
 
 def im_to_arr(x):

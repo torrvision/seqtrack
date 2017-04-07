@@ -23,7 +23,7 @@ def track(sess, inputs, model, sequence):
     # TODO: Variable batch size.
     # TODO: Run on a batch of sequences for speed.
 
-    first_image = load_image(sequence['image_files'][0])
+    first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
     first_label = sequence['labels'][0]
     first_image = _single_to_batch(im_to_arr(first_image), model.batch_size)
     first_label = _single_to_batch(first_label, model.batch_size)
@@ -41,7 +41,8 @@ def track(sess, inputs, model, sequence):
         rem = sequence_len - start
         # Feed the next `chunk_len` frames into the model.
         chunk_len = min(rem, model.sequence_len)
-        images = map(load_image, sequence['image_files'][start:start+chunk_len])
+        images = map(lambda x: load_image(x, model.image_size, resize=True),
+                     sequence['image_files'][start:start+chunk_len])
         # Create single array of all images.
         images = np.array(map(im_to_arr, images))
         images = _single_to_batch(pad_to(images, model.sequence_len), model.batch_size)
@@ -58,7 +59,6 @@ def track(sess, inputs, model, sequence):
             # Add the previous state to the feed dictionary.
             feed_dict.update({init_state[k]: prev_state[k] for k in init_state})
         # Get output and final state.
-        # TODO: Check that this works when `final_state` is an empty dictionary.
         y, prev_state = sess.run([model.outputs['y'], final_state],
                                  feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
@@ -75,7 +75,6 @@ def pad_to(x, n, mode='constant', axis=0):
     return np.pad(x, width, mode=mode)
 
 def _single_to_batch(x, batch_size):
-    # TODO: Pad to sequence length and batch size?
     x = np.expand_dims(x, 0)
     if batch_size is None:
         return x
@@ -107,13 +106,25 @@ def evaluate(sess, inputs, model, sequences):
         pred = track(sess, inputs, model, sequence)
         gt = np.array(sequence['labels'])
         is_valid = [True] * len(pred) # sequence['valid']
-        # TODO: Convert to original image co-ordinates.
+        # Convert to original image co-ordinates.
+        pred = _unnormalize_rect(pred, sequence['original_image_size'])
+        gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
         sequence_results.append(evaluate_track(pred, gt, is_valid))
 
     results = {}
     for k in sequence_results[0]:
         results[k] = np.mean([r[k] for r in sequence_results], axis=0)
     return results
+
+
+def _normalize_rect(r, size):
+    width, height = size
+    return r / np.array([width, height, width, height])
+
+
+def _unnormalize_rect(r, size):
+    width, height = size
+    return r * np.array([width, height, width, height])
 
 
 def evaluate_track(pred, gt, is_valid):
@@ -204,9 +215,9 @@ def _compute_iou(boxA, boxB):
 
 def _compute_precision(boxA, boxB):
     # for precision computation (center location error)
-    centerA_x = (boxA[:,0] + boxA[:,2])/2
-    centerA_y = (boxA[:,1] + boxA[:,3])/2
-    centerB_x = (boxB[:,0] + boxB[:,2])/2
-    centerB_y = (boxB[:,1] + boxB[:,3])/2
+    centerA_x = (np.array(boxA[:,0]) + np.array(boxA[:,2]))/2
+    centerA_y = (np.array(boxA[:,1]) + np.array(boxA[:,3]))/2
+    centerB_x = (np.array(boxB[:,0]) + np.array(boxB[:,2]))/2
+    centerB_y = (np.array(boxB[:,1]) + np.array(boxB[:,3]))/2
     cle = np.sqrt((centerA_x-centerB_x)**2 + (centerA_y-centerB_y)**2)
     return cle
