@@ -95,11 +95,15 @@ def train(create_model, datasets, val_sets, o):
     optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
 
     init_op = tf.global_variables_initializer()
-    summary_evaluate = tf.summary.merge_all()
     # Optimization summary might include gradients, learning rate, etc.
-    summary_optimize = tf.summary.merge([summary_evaluate,
+    summary_vars = {'val': tf.summary.merge_all()}
+    summary_vars['train'] = tf.summary.merge([summary_vars['val'],
         tf.summary.scalar('lr', lr)])
     saver = tf.train.Saver()
+
+    preview = tf.summary.image('box', _draw_bounding_boxes(example, model), max_outputs=o.ntimesteps+1)
+    summary_vars_with_preview = {k: tf.summary.merge([v, preview])
+        for k, v in summary_vars.iteritems()}
 
     examples_train = iter_examples(datasets['train'], o, num_epochs=None)
     examples_val = iter_examples(datasets['val'], o, num_epochs=None)
@@ -199,8 +203,11 @@ def train(create_model, datasets, val_sets, o):
 
                 # Take a training step.
                 start = time.time()
-                if ib % o.period_summary == 0:
-                    _, loss, summary = sess.run([optimize_op, loss_var, summary_optimize],
+                if global_step % o.period_summary == 0:
+                    summary_var = (summary_vars_with_preview['train']
+                            if global_step % o.period_preview == 0
+                            else summary_vars['train'])
+                    _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
                             feed_dict={queue_index: 0, example['use_gt']: True})
                     dur = time.time() - start
                     train_writer.add_summary(summary, global_step=global_step)
@@ -217,11 +224,14 @@ def train(create_model, datasets, val_sets, o):
                         ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur)
 
                 # Evaluate validation error.
-                if ib % o.period_summary == 0:
+                if global_step % o.period_summary == 0:
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
-                        loss, summary = sess.run([loss_var, summary_evaluate],
+                        summary_var = (summary_vars_with_preview['val']
+                                if global_step % o.period_preview == 0
+                                else summary_vars['val'])
+                        loss, summary = sess.run([loss_var, summary_var],
                                 feed_dict={queue_index: 1, example['use_gt']: True})
                         dur = time.time() - start
                         val_writer.add_summary(summary, global_step=global_step)
@@ -371,3 +381,29 @@ def get_loss(example, outputs, o, name='loss'):
                 tf.summary.scalar(name, loss)
 
         return tf.reduce_sum(losses.values(), name=scope)
+
+
+def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
+    with tf.name_scope(name) as scope:
+        # example['x_raw']   -- [b, t, h, w, 3]
+        # example['y']       -- [b, t, 4]
+        # model.outputs['y'] -- [b, t, 4]
+        # Just do the first example in the batch.
+        image = example['x_raw'][0][::time_stride]
+        y_gt = example['y'][0][::time_stride]
+        y_pred = model.outputs['y'][0][::time_stride]
+        y = tf.stack([y_gt, y_pred], axis=1)
+        coords = tf.unstack(y, axis=2)
+        boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
+        return tf.image.draw_bounding_boxes(image, boxes, name=scope)
+
+
+def _merge_dims(x, a, b):
+    '''Merge dimensions a to b but preserve rank.'''
+    static = x.shape.as_list()
+    n = len(static)
+    dynamic = tf.shape(x)
+    result = ([static[i] or dynamic[i] for i in range(0, a)] +
+              [tf.reduce_prod(dynamic[a:b])] +
+              [static[i] or dynamic[i] for i in range(b, n)])
+    return tf.reshape(x, result)

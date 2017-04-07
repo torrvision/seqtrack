@@ -91,9 +91,10 @@ class Opts(object):
         self.resume             = False
         self.period_ckpt        = 10000 # this is based only on global_step; batchsz not considered
         self.period_assess      = self.period_ckpt
-        self.period_summary     = 10 # NL->JV: changed XXX_period-> period_XXX
+        self.period_summary     = 10
+        self.period_preview     = 100 # Ensure that period_preview % period_summary == 0.
         self.activ_histogram    = False
-        self.param_histogram    = True
+        self.param_histogram    = False
 
         #----------------------------------------------------------------------
         # custom libraries
