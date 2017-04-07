@@ -386,14 +386,3 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         coords = tf.unstack(y, axis=2)
         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
         return tf.image.draw_bounding_boxes(image, boxes, name=scope)
-
-
-def _merge_dims(x, a, b):
-    '''Merge dimensions a to b but preserve rank.'''
-    static = x.shape.as_list()
-    n = len(static)
-    dynamic = tf.shape(x)
-    result = ([static[i] or dynamic[i] for i in range(0, a)] +
-              [tf.reduce_prod(dynamic[a:b])] +
-              [static[i] or dynamic[i] for i in range(b, n)])
-    return tf.reshape(x, result)
