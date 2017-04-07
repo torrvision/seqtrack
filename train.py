@@ -158,7 +158,7 @@ def train(create_model, datasets, o):
                 # **after a certain iteration, perform the followings
                 # - evaluate on train/test/val set
                 # - print results (loss, eval resutls, time, etc.)
-                period_assess = o.period_assess if not o.debugmode else 20
+                period_assess = o.period_assess if not o.debugmode else 10
                 if global_step > 0 and global_step % period_assess == 0: # evaluate model
                     # # evaluate
                     # val_ = 'test' if o.dataset == 'bouncing_mnist' else 'val'
@@ -348,9 +348,6 @@ def get_loss(example, outputs, o, name='loss'):
     with tf.name_scope(name) as scope:
         losses = dict()
 
-        # assert(y_pred.get_shape().as_list()[1] == o.ntimesteps)
-        # assert(hmap_pred.get_shape().as_list()[1] == o.ntimesteps)
-
         # loss1: sum of two l1 distances for left-top and right-bottom
         if 'l1' in o.losses: # TODO: double check
             y_pred = outputs['y']
@@ -362,12 +359,8 @@ def get_loss(example, outputs, o, name='loss'):
         # loss1: cross-entropy between probabilty maps (need to change label)
         if 'ce' in o.losses:
             hmap_pred = outputs['hmap']
-            # First of all, need to convert y into heat maps
-
-            # valid y and y_pred
             hmap_valid = tf.boolean_mask(hmap, y_is_valid)
             hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
-
             loss_ce = tf.reduce_mean(
                     tf.nn.softmax_cross_entropy_with_logits(
                         labels=tf.reshape(hmap_valid, [-1, 2]),
