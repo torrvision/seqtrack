@@ -1434,11 +1434,58 @@ class RNN_dual(object):
             cnn_1x1_out['layer'] = []
             channels = cnn_1x1['layer'][-1]['chout']
             cnn_1x1_out['layer'].append({
-                'w': get_weight_variable([1, 1, channels, channels], name_='w0', wd=o.wd),
-                'b': get_bias_variable([channels], name_='b0', wd=o.wd)})
+                'w': get_weight_variable([1, 1, channels, 2], name_='w0', wd=o.wd),
+                'b': get_bias_variable([2], name_='b0', wd=o.wd)})
             cnn_1x1_out['layer'].append({
-                'w': get_weight_variable([1, 1, channels, 2], name_='w1', wd=o.wd),
+                'w': get_weight_variable([1, 1, 2, 2], name_='w1', wd=o.wd),
                 'b': get_bias_variable([2], name_='b1', wd=o.wd)})
+
+        # cnn3 params (depends kernel size and strides at each layer)
+        with tf.variable_scope('cnn3'):
+            cnn3 = {}
+            cnn3['layer'] = []
+            cnin = cnn_1x1['layer'][-1]['chout']
+            cnn3['layer'].append({'type':'conv', 'filtsz':7, 'st':3, 'chin':cnin, 'chout':2})
+            cnn3['layer'].append({'type':'conv', 'filtsz':5, 'st':2, 'chin':2, 'chout':2})
+            cnn3['layer'].append({'type':'conv', 'filtsz':3, 'st':1, 'chin':2, 'chout':2})
+            cnn3['layer'].append({'type':'fc'})
+            cnn3['layer'].append({'type':'fc'})
+            cnn3['nconv'] = 3
+            cnn3['nfc']   = 2
+            cnn3['nlayers'] = cnn3['nconv'] + cnn3['nfc']
+            # compute cnn3 output sizes
+            h, w = o.frmsz, o.frmsz
+            for i in range(cnn3['nlayers']):
+                if cnn3['layer'][i]['type'] == 'conv':
+                    cnn3['layer'][i].update({'in_h': h, 'in_w': w})
+                    h = int(np.ceil(h / float(cnn3['layer'][i]['st'])))
+                    w = int(np.ceil(w / float(cnn3['layer'][i]['st'])))
+                    cnn3['layer'][i].update({'out_h': h, 'out_w': w})
+            # params
+            for i in range(cnn3['nlayers']):
+                if cnn3['layer'][i]['type'] == 'conv':
+                    shape_w = [cnn3['layer'][i]['filtsz'], cnn3['layer'][i]['filtsz'], 
+                            cnn3['layer'][i]['chin'], cnn3['layer'][i]['chout']]
+                    shape_b = [cnn3['layer'][i]['chout']]
+                    cnn3['layer'][i].update({'w': get_weight_variable(
+                        shape_w, name_='w{}'.format(i), wd=o.wd) })
+                    cnn3['layer'][i].update({'b': get_bias_variable(
+                        shape_b, name_='b{}'.format(i), wd=o.wd) })
+            # fc layers; fc1
+            featin = cnn3['layer'][-3]['out_h']*cnn3['layer'][-3]['out_w']*cnn3['layer'][-3]['chout']
+            featout = featin/2
+            cnn3['layer'][-2].update({
+                'featin': featin, 'featout': featout,
+                'w': get_weight_variable(
+                    shape_=[featin, featout], name_='w3', wd=o.wd), 
+                'b': get_bias_variable(shape_=[featout], name_='b3', wd=o.wd)})
+            featin = featout
+            featout = 4
+            cnn3['layer'][-1].update({
+                'featin': featin, 'featout': featout,
+                'w': get_weight_variable(
+                    shape_=[featin, featout], name_='w3', wd=o.wd), 
+                'b': get_bias_variable(shape_=[featout], name_='b3', wd=o.wd)})
 
         # return params
         params = {}
@@ -1450,6 +1497,7 @@ class RNN_dual(object):
         params['lstm2'] = lstm2
         params['cnn_deconv'] = cnn_deconv
         params['cnn_1x1_out'] = cnn_1x1_out
+        params['cnn3'] = cnn3
         return params
 
     def _load_model(self, inputs, o):
@@ -1576,17 +1624,33 @@ class RNN_dual(object):
                 x = activate(x)
             return x
 
-        def pass_cnn_1x1s_out(scoremap):
+        def pass_cnn_1x1s_out(x):
             assert(self.params['cnn_1x1_out']['nlayers'] == 2)
-            conv1 = conv2d(scoremap, 
+            conv1 = conv2d(x, 
                     self.params['cnn_1x1_out']['layer'][0]['w'],
                     self.params['cnn_1x1_out']['layer'][0]['b'])
             act = activate(conv1, 'relu')
-            # TODO: can add dropout here 
             conv2 = conv2d(act,
                     self.params['cnn_1x1_out']['layer'][1]['w'],
                     self.params['cnn_1x1_out']['layer'][1]['b'])
             return conv2
+
+        def pass_cnn3(x):
+            for i in range(self.params['cnn3']['nlayers']):
+                layertype = self.params['cnn3']['layer'][i]['type']
+                if layertype == 'conv':
+                    x = activate(conv2d(x, 
+                        self.params['cnn3']['layer'][i]['w'], 
+                        self.params['cnn3']['layer'][i]['b'],
+                        stride=self.params['cnn3']['layer'][i]['st']))
+                elif layertype == 'fc':
+                    featin = self.params['cnn3']['layer'][i]['featin']
+                    x = tf.matmul(tf.reshape(x, [-1, featin]), 
+                            self.params['cnn3']['layer'][i]['w']) + \
+                                self.params['cnn3']['layer'][i]['b']
+                    if i < self.params['cnn3']['nlayers']-1:
+                        x = activate(x)
+            return x
 
 
         x       = inputs['x']
@@ -1601,6 +1665,7 @@ class RNN_dual(object):
         c_init2 = self.params['lstm2']['c_init']
 
         y_pred = []
+        hmap_pred = []
         ht1, ct1 = h_init1, c_init1
         ht2, ct2 = h_init2, c_init2
         hmap_init = get_masks_from_rectangles(y0, o)
@@ -1616,7 +1681,7 @@ class RNN_dual(object):
             else:
                 hmap = tf.cond(use_gt, 
                     lambda: get_masks_from_rectangles(yt, o),
-                    lambda: tf.expand_dims(tf.nn.softmax(yt_pred)[:,:,:,0], 3))
+                    lambda: tf.expand_dims(tf.nn.softmax(hmapt_pred)[:,:,:,0], 3))
             xy = tf.concat([xt, hmap], axis=3)
             cnn2out = pass_cnn2(xy)
             # lstm1: no convolutional
@@ -1627,19 +1692,22 @@ class RNN_dual(object):
             scoremap = depthwise_convolution(cnn1out, ht1_proj)
             # cnn: 1x1 cnn to reduce the channel size
             scoremap = pass_cnn_1x1(scoremap)
-            # lstm2: conv lstm
+            # lstm2: conv lstm; TODO: add more number of RNN layers
             ht2, ct2 = pass_lstm2(scoremap, ht2, ct2)
-            # Deconvolution
-            deconvout = pass_deconvolution(ht2)
-            # Output (two 1x1 CNN same as StackedHourglassNet)
-            yt_pred = pass_cnn_1x1s_out(deconvout)
+            # Deconvolution 
+            deconvout = pass_deconvolution(ht2) # TODO: add skip connections for multi-scale
+            # 2 Outputs: heatmap and rectangle
+            hmapt_pred = pass_cnn_1x1s_out(deconvout) # TODO: add skip connections for multi-scale
+            yt_pred = pass_cnn3(deconvout)
+            hmap_pred.append(hmapt_pred)
             y_pred.append(yt_pred)
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
+        hmap_pred = tf.stack(hmap_pred, axis=1)
         h_last1, c_last1 = ht1, ct1
         h_last2, c_last2 = ht2, ct2
         hmap_last = hmap
 
-        outputs = {'hmap': y_pred}
+        outputs = {'y': y_pred, 'hmap': hmap_pred}
         state = {'h1': (h_init1, h_last1), 'c1': (c_init1, c_last1),
                  'h2': (h_init2, h_last2), 'c2': (c_init2, c_last2),
                  'hmap': (hmap_init, hmap_last),
