@@ -572,20 +572,26 @@ class Data_ILSVRC(object):
             return self.dstype
 
     def _update_tracks(self, o):
-        def load_tracks():
-            tracks = {}
+        def load_info():
+            info = {}
             for i, video in enumerate(self.videos):
                 print i+1, video
-                tracks[video] = load_video_tracks(video)
-            return tracks
+                video_info = load_video_info(video)
+                for k, v in video_info.iteritems():
+                    info.setdefault(k, {})[video] = v
+            return info
 
-        def load_video_tracks(video):
+        def load_video_info(video):
             frames = []
+            size = None
             video_len = self.video_length[video]
             for t in range(video_len):
                 xmlfile = os.path.join(self._annotations_dir(video), '{:06d}.xml'.format(t))
-                frame_objects, original_image_size = read_frame_annotation(xmlfile)
+                frame_objects, frame_size = read_frame_annotation(xmlfile)
+                if size is not None:
+                    assert(size == frame_size)
                 frames.append(frame_objects)
+                size = size or frame_size
             # Convert from list of frame annotations to list of tracks.
             tracks = {}
             for t, frame_objects in enumerate(frames):
@@ -597,7 +603,10 @@ class Data_ILSVRC(object):
             # Note: This will not preserve the original object IDs
             # if the IDs are not consecutive starting from 0.
             # For example: ILSVRC2015_VID_train_0000/ILSVRC2015_train_00014017
-            return [tracks[obj_id] for obj_id in sorted(tracks.keys())]
+            return {
+                'tracks': [tracks[obj_id] for obj_id in sorted(tracks.keys())],
+                'original_image_size': size,
+            }
 
         def read_frame_annotation(xmlfile):
             '''Returns a dictionary of (track index) -> rectangle.'''
@@ -623,13 +632,12 @@ class Data_ILSVRC(object):
         if self.tracks is None:
             if not os.path.isdir(o.path_aux):
                 os.makedirs(o.path_aux)
-            cache_file = os.path.join(o.path_aux, 'tracks_{}.json'.format(self._identifier()))
-            tracks = helpers.cache_json(cache_file, lambda: load_tracks())
+            cache_file = os.path.join(o.path_aux, 'info_{}.json'.format(self._identifier()))
+            info = helpers.cache_json(cache_file, lambda: load_info())
             # Convert (frame, rectangle) pairs to dictionary.
-            for video in tracks:
-                for obj_id, track in enumerate(tracks[video]):
-                    tracks[video][obj_id] = dict(tracks[video][obj_id])
-            self.tracks = tracks
+            self.tracks = {video: [dict(track) for track in track_list]
+                           for video, track_list in info['tracks'].iteritems()}
+            self.original_image_size = info['original_image_size']
 
     def _update_stat(self, o):
         def create_stat_pixelwise(): # NOTE: obsolete
