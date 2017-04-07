@@ -1,11 +1,13 @@
 import pdb
 import argparse
+import random
 import tensorflow as tf
 
 from opts           import Opts
 import data
 import model
 import train
+import sample
 
 
 def parse_arguments():
@@ -134,8 +136,24 @@ if __name__ == "__main__":
     o.initialize()
 
     dataset = data.load_data(o)
-    val_sets = {'OTB-50':  data.Data_OTB('OTB-50', o),
-                'OTB-100': data.Data_OTB('OTB-100', o)}
+    ilsvrc_train = data.Data_ILSVRC('train', o)
+    ilsvrc_val   = data.Data_ILSVRC('val', o)
+    otb50        = data.Data_OTB('OTB-50', o)
+    otb100       = data.Data_OTB('OTB-100', o)
+    val_sets = {
+        'ILSVRC-train-full':
+            lambda: random.sample(list(sample.all_tracks_full(ilsvrc_train)), 100),
+        'ILSVRC-val-full':
+            lambda: random.sample(list(sample.all_tracks_full(ilsvrc_val)), 100),
+        'OTB-50-full':
+            lambda: sample.all_tracks_full(otb50),
+        'OTB-100-full':
+            lambda: sample.all_tracks_full(otb100),
+        'OTB-50-sample':
+            lambda: sample.sample(otb50, o.ntimesteps, seqtype='sampling', shuffle=False),
+        'OTB-100-sample':
+            lambda: sample.sample(otb100, o.ntimesteps, seqtype='sampling', shuffle=False),
+    }
     m = lambda inputs: model.load_model(inputs, o)
 
     assert(o.mode == 'train')

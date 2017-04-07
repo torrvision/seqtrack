@@ -12,6 +12,7 @@ import evaluate
 import helpers
 import pipeline
 import sample
+import visualize
 
 from model import convert_rec_to_heatmap
 
@@ -171,22 +172,18 @@ def train(create_model, datasets, val_sets, o):
                 # - print results (loss, eval resutls, time, etc.)
                 period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step % period_assess == 0: # evaluate model
-                    samplers = {
-                        'train': {
-                            'name': 'training sequences',
-                            'func': lambda d: sample.sample(d, o.ntimesteps,
-                                        seqtype='sampling', shuffle=False)},
-                        'full': {
-                            'name': 'full sequences',
-                            'func': lambda d: sample.all_tracks_full(dataset)}}
-                    for sampler_id, sampler in samplers.iteritems():
-                        for dataset_id, dataset in val_sets.iteritems():
-                            # Run the tracker on a full epoch.
-                            sequences = sampler['func'](dataset)
-                            result = evaluate.evaluate(sess, example, model, sequences)
-                            print 'dataset: {}  sampler: {}'.format(dataset_id, sampler['name'])
-                            print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
-                                result['iou_mean'], result['auc'], result['cle_mean'])
+                    iter_id = 'iteration{}'.format(global_step)
+                    for eval_id, sampler in val_sets.iteritems():
+                        vis_dir = os.path.join(o.path_output, iter_id, eval_id)
+                        if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
+                        visualizer = visualize.VideoFileWriter(vis_dir)
+                        # Run the tracker on a full epoch.
+                        print 'evaluation: {}'.format(eval_id)
+                        sequences = sampler()
+                        result = evaluate.evaluate(sess, example, model, sequences,
+                            visualize=visualizer.visualize)
+                        print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
+                            result['iou_mean'], result['auc'], result['cle_mean'])
                     # # visualize tracking results examples
                     # draw.show_track_results(
                     #     evals['train'], loader, 'train', o, global_step,nlimit=20)
@@ -281,15 +278,15 @@ def _make_input_pipeline(o, dtype=tf.float32,
         # Cast type of images.
         images_batch['images'] = tf.cast(images_batch['images'], o.dtype)
         # Put in format expected by model.
-        is_valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
-        inputs_batch = {
-            'x_raw':        images_batch['images'][:, 1:],
-            'y':            images_batch['labels'][:, 1:],
-            'x0_raw':       images_batch['images'][:, 0],
-            'y0':           images_batch['labels'][:, 0],
-            'y_is_valid':   is_valid,
+        # is_valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
+        example_batch = {
+            'x_raw':      images_batch['images'][:, 1:],
+            'y':          images_batch['labels'][:, 1:],
+            'y_is_valid': images_batch['label_is_valid'][:, 1:],
+            'x0_raw':     images_batch['images'][:, 0],
+            'y0':         images_batch['labels'][:, 0],
         }
-        return inputs_batch, feed_loop
+        return example_batch, feed_loop
 
 
 def _whiten(example_raw, o, stat=None, name='whiten'):

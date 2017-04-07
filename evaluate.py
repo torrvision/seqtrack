@@ -17,8 +17,11 @@ def track(sess, inputs, model, sequence):
     model.sequence_len -- Integer
     model.batch_size   -- Integer or None
 
-    sequence['image_files'] -- List of strings
-    sequence['labels']      -- Numpy array
+    sequence['image_files']    -- List of strings of length n.
+    sequence['labels']         -- Numpy array of shape [n, 4]
+    sequence['label_is_valid'] -- List of booleans of length n.
+    sequence['original_image_size'] -- (width, height) tuple.
+        Required to compute IOU, etc. with correct aspect ratio.
     '''
     # TODO: Variable batch size.
     # TODO: Run on a batch of sequences for speed.
@@ -32,10 +35,11 @@ def track(sess, inputs, model, sequence):
     final_state = {k: v[1] for k, v in model.state.iteritems()}
 
     sequence_len = len(sequence['image_files'])
+    assert(sequence_len >= 2)
 
     # If the length of the sequence is greater than the instantiated RNN,
     # it will need to be run in chunks.
-    y_chunks = []
+    y_pred_chunks = []
     prev_state = {}
     for start in range(1, sequence_len, model.sequence_len):
         rem = sequence_len - start
@@ -45,31 +49,31 @@ def track(sess, inputs, model, sequence):
                      sequence['image_files'][start:start+chunk_len])
         # Create single array of all images.
         images = np.array(map(im_to_arr, images))
-        images = _single_to_batch(pad_to(images, model.sequence_len), model.batch_size)
+        images = _single_to_batch(_pad_to(images, model.sequence_len), model.batch_size)
         # Create fake y values.
-        labels = np.zeros(list(images.shape[:2])+[4])
+        y_gt = np.zeros(list(images.shape[:2])+[4])
         feed_dict = {
             inputs['x_raw']:  images,
             inputs['x0_raw']: first_image,
             inputs['y0']:     first_label,
-            inputs['y']:      labels,
+            inputs['y']:      y_gt,
         }
         if start > 1:
             # This is not the first chunk.
             # Add the previous state to the feed dictionary.
             feed_dict.update({init_state[k]: prev_state[k] for k in init_state})
         # Get output and final state.
-        y, prev_state = sess.run([model.outputs['y'], final_state],
-                                 feed_dict=feed_dict)
+        y_pred, prev_state = sess.run([model.outputs['y'], final_state],
+                                      feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
-        y = y[0][:chunk_len]
-        y_chunks.append(y)
+        y_pred = y_pred[0][:chunk_len]
+        y_pred_chunks.append(y_pred)
 
     # Concatenate the results for all chunks.
-    y = np.concatenate(y_chunks)
-    return y
+    y_pred = np.concatenate(y_pred_chunks)
+    return y_pred
 
-def pad_to(x, n, mode='constant', axis=0):
+def _pad_to(x, n, mode='constant', axis=0):
     width = [(0, 0) for s in x.shape]
     width[axis] = (0, n - x.shape[axis])
     return np.pad(x, width, mode=mode)
@@ -78,10 +82,10 @@ def _single_to_batch(x, batch_size):
     x = np.expand_dims(x, 0)
     if batch_size is None:
         return x
-    return pad_to(x, batch_size)
+    return _pad_to(x, batch_size)
 
 
-def evaluate(sess, inputs, model, sequences):
+def evaluate(sess, inputs, model, sequences, visualize=None):
     '''
     Args: 
         nbatches_: the number of batches to evaluate 
@@ -104,8 +108,10 @@ def evaluate(sess, inputs, model, sequences):
     for i, sequence in enumerate(sequences):
         print 'sequence {} of {}'.format(i+1, len(sequences))
         pred = track(sess, inputs, model, sequence)
+        if visualize:
+            visualize('sequence_{:06d}'.format(i), sequence, pred)
         gt = np.array(sequence['labels'])
-        is_valid = [True] * len(pred) # sequence['valid']
+        is_valid = sequence['label_is_valid']
         # Convert to original image co-ordinates.
         pred = _unnormalize_rect(pred, sequence['original_image_size'])
         gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
@@ -137,6 +143,7 @@ def evaluate_track(pred, gt, is_valid):
     '''
     # take only valid to compute (i.e., from frame 1)
     gt = gt[1:]
+    is_valid = is_valid[1:]
     gt = gt[is_valid]
     pred = pred[is_valid]
 

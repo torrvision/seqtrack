@@ -93,15 +93,18 @@ def sample(dataset, ntimesteps, seqtype=None, shuffle=True):
         files = []
         labels = []
         # randomly select an object
-        track = random.choice(dataset.tracks[video])
+        trajectory = random.choice(dataset.tracks[video])
+        if len(trajectory) < 2:
+            continue
         # randomly select segment of frames (<=T+1)
         # TODO: if seqtype is not dense any more, should change 'inputs_valid' in the below as well.
         # self.objvalidfrms_snp should be changed as well.
-        frm_is_valid = [(t in track) for t in range(dataset.video_length[video])]
+        frm_is_valid = [(t in trajectory) for t in range(dataset.video_length[video])]
         frames = _select_frms(frm_is_valid)
         yield {
-            'image_files': [dataset.image_file(video, t) for t in frames],
-            'labels':      [track[t] for t in frames],
+            'image_files':    [dataset.image_file(video, t) for t in frames],
+            'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
+            'label_is_valid': [(t in trajectory) for t in frames],
             'original_image_size': dataset.original_image_size[video],
         }
 
@@ -113,16 +116,23 @@ def all_tracks_full(dataset, seqtype=None):
         frms_one = np.where(objvalidfrms_np == 1)[0]
         frm_start = frms_one[0]
         frm_end = frms_one[-1]
-        return range(frm_start, frm_end)
+        return range(frm_start, frm_end+1)
 
     for video in dataset.videos:
         files = []
         labels = []
-        for track in dataset.tracks[video]:
-            frm_is_valid = [(t in track) for t in range(dataset.video_length[video])]
+        for trajectory in dataset.tracks[video]:
+            if len(trajectory) < 2:
+                continue
+            frm_is_valid = [(t in trajectory) for t in range(dataset.video_length[video])]
             frames = _select_frms(frm_is_valid)
             yield {
-                'image_files': [dataset.image_file(video, t) for t in frames],
-                'labels':      [track[t] for t in frames],
+                'image_files':    [dataset.image_file(video, t) for t in frames],
+                'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
+                'label_is_valid': [(t in trajectory) for t in frames],
                 'original_image_size': dataset.original_image_size[video],
             }
+
+
+def _invalid_rect():
+    return [float('nan')] * 4
