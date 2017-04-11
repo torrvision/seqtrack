@@ -3,6 +3,7 @@ import numpy as np
 import sys
 import os
 import time
+from progressbar import ProgressBar, Bar, Counter, ETA, Percentage # pip install progressbar
 
 import draw
 import data
@@ -92,21 +93,14 @@ def evaluate(sess, inputs, model, sequences, visualize=None):
     Returns:
         results: a dictionary that contains evaluation results
     '''
-    #--------------------------------------------------------------------------
-    # NOTE: Proper evaluation
-    # - Instead of passing all x and receiving y, and evaluate at once, 
-    #   the system should yield each y one by one at each time step.
-    # - Evaluation should also be made by taking one output at a time.
-    #   Otherwise, it's completely offline evaluation, which cannot be the main 
-    #   supporting experiment. -> performed by 'split_batch_fortest'
-    # - If an example in the batch is loger than T (RNN size), 
-    #   forward-pass should run multiple times.
-    #--------------------------------------------------------------------------
-
     sequences = list(sequences)
     sequence_results = []
+    pbar = ProgressBar(maxval=len(sequences), 
+            widgets=['sequence ', Counter(), '/{} ('.format(len(sequences)), 
+                Percentage(), ') ', Bar(), ' ', ETA()]).start()
     for i, sequence in enumerate(sequences):
-        print 'sequence {} of {}'.format(i+1, len(sequences))
+        #print 'sequence {} of {}'.format(i+1, len(sequences))
+        pbar.update(i+1)
         pred = track(sess, inputs, model, sequence)
         if visualize:
             visualize('sequence_{:06d}'.format(i), sequence, pred)
@@ -116,6 +110,7 @@ def evaluate(sess, inputs, model, sequences, visualize=None):
         pred = _unnormalize_rect(pred, sequence['original_image_size'])
         gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
         sequence_results.append(evaluate_track(pred, gt, is_valid))
+    pbar.finish()
 
     results = {}
     for k in sequence_results[0]:
@@ -143,16 +138,9 @@ def evaluate_track(pred, gt, is_valid):
     '''
     # take only valid to compute (i.e., from frame 1)
     gt = gt[1:]
-    is_valid = is_valid[1:]
+    is_valid = np.where(is_valid[1:])
     gt = gt[is_valid]
     pred = pred[is_valid]
-
-    # JV: Do this outside this function, and use original aspect ratio?
-    # # back to original scale (pixel)
-    # scalar = np.concatenate((inputs_HW[:,:,[1]], inputs_HW[:,:,[0]], 
-    #     inputs_HW[:,:,[1]], inputs_HW[:,:,[0]]), axis=2)
-    # pred *= np.expand_dims(scalar, 2)
-    # gt *= np.expand_dims(scalar, 2)
 
     iou = _compute_iou(pred, gt)
     cle = _compute_precision(pred, gt)
