@@ -20,8 +20,18 @@ from model import convert_rec_to_heatmap
 def train(create_model, datasets, val_sets, o):
     '''Trains a network.
 
-    The `create_model` function takes as input a dictionary of tensors and
-    returns a model object.
+    Args:
+        create_model: Function that takes as input a dictionary of tensors and
+            returns a model object.
+        datasets: Dictionary of datasets with keys 'train' and 'val'.
+        val_sets: A dictionary of collections of sequences on which to evaluate the tracker.
+
+    Returns:
+        The results obtained using the tracker at different stages of training.
+        This is a dictionary with the same keys as val_sets:
+            all_results[val_set] = list of (iter_num, results)
+        Note that this is represented as a list of pairs instead of a dictionary
+        to facilitate saving to JSON (does not support integer keys).
 
     The reason that the model is provided as a *function* is so that
     the code which uses the model is free to decide how to instantiate it.
@@ -253,7 +263,8 @@ def _make_input_pipeline(o, dtype=tf.float32,
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
         images = pipeline.load_images(files, capacity=load_capacity,
                 num_threads=num_load_threads, image_size=[o.frmsz, o.frmsz, 3])
-        images_batch = pipeline.batch(images, batch_size=o.batchsz,
+        images_batch = pipeline.batch(images,
+            batch_size=o.batchsz, sequence_length=o.ntimesteps+1,
             capacity=batch_capacity, num_threads=num_batch_threads)
 
         # Set static dimension of sequence length.
@@ -265,11 +276,11 @@ def _make_input_pipeline(o, dtype=tf.float32,
         # Put in format expected by model.
         # is_valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
         example_batch = {
+            'x0_raw':     images_batch['images'][:, 0],
+            'y0':         images_batch['labels'][:, 0],
             'x_raw':      images_batch['images'][:, 1:],
             'y':          images_batch['labels'][:, 1:],
             'y_is_valid': images_batch['label_is_valid'][:, 1:],
-            'x0_raw':     images_batch['images'][:, 0],
-            'y0':         images_batch['labels'][:, 0],
         }
         return example_batch, feed_loop
 
