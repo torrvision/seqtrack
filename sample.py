@@ -167,8 +167,6 @@ def sample(dataset, ntimesteps=None, seqtype=None, shuffle=False):
         else:
             trajectories = dataset.tracks[video]
         for trajectory in trajectories:
-            #if len(trajectory) < 2:
-            #    continue
             frame_is_valid = [(t in trajectory) for t in range(dataset.video_length[video])]
             frames = _select_frames(frame_is_valid, trajectory.keys())
             yield {

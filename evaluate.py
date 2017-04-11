@@ -99,13 +99,19 @@ def evaluate(sess, inputs, model, sequences, visualize=None):
             widgets=['sequence ', Counter(), '/{} ('.format(len(sequences)), 
                 Percentage(), ') ', Bar(), ' ', ETA()]).start()
     for i, sequence in enumerate(sequences):
+        if len(sequence['image_files']) < 2:
+            continue
+        is_valid = sequence['label_is_valid']
+        # Count number of valid labels after first frame (ground truth).
+        num_valid = sum([1 for x in is_valid[1:] if x])
+        if num_valid < 1:
+            continue
         #print 'sequence {} of {}'.format(i+1, len(sequences))
         pbar.update(i+1)
         pred = track(sess, inputs, model, sequence)
         if visualize:
             visualize('sequence_{:06d}'.format(i), sequence, pred)
         gt = np.array(sequence['labels'])
-        is_valid = sequence['label_is_valid']
         # Convert to original image co-ordinates.
         pred = _unnormalize_rect(pred, sequence['original_image_size'])
         gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
@@ -113,6 +119,7 @@ def evaluate(sess, inputs, model, sequences, visualize=None):
     pbar.finish()
 
     results = {}
+    assert(len(sequence_results) > 0)
     for k in sequence_results[0]:
         results[k] = np.mean([r[k] for r in sequence_results], axis=0)
     return results
@@ -174,6 +181,7 @@ def evaluate_track(pred, gt, is_valid):
 
     cle_mean = np.mean(cle_valid)
     precision_rates = np.mean(precision_rate_table, axis=0)
+    # TODO: This can result in mean of empty list (nan).
     cle_representative = np.mean(
             cle_valid[cle_valid < representative_precision_threshold])
 
