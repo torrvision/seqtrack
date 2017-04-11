@@ -32,6 +32,7 @@ The function `get_example_filenames` instead gets its input from a placeholder.
 This must be manually fed using a loop running in a Python thread.
 '''
 
+import pdb
 import functools
 import tensorflow as tf
 
@@ -166,7 +167,7 @@ def load_images(example, capacity=32, num_threads=1, image_size=[None, None, Non
         dequeue['label_is_valid'].set_shape(example['label_is_valid'].shape)
         return dequeue
 
-def batch(example, batch_size=1, capacity=32, num_threads=1, name='batch'):
+def batch(example, batch_size=1, capacity=32, num_threads=1, sequence_length=None, name='batch'):
     '''Creates a queue of batches of sequences (with images) from a queue of sequences.
     Pads all sequences to the maximum length and adds a field for the length of the sequence.
     See the package example.
@@ -188,16 +189,27 @@ def batch(example, batch_size=1, capacity=32, num_threads=1, name='batch'):
     with tf.name_scope(name) as scope:
         # Get the length of the sequence before tf.train.batch.
         example['num_frames'] = tf.shape(example['images'])[0]
-        # TODO: This may produce batches of length < ntimesteps+1
-        # since PaddingFIFOQueue pads to the *maximum* length.
-        # Is this a problem for the training code?
-        example_batch = tf.train.batch(example, batch_size=batch_size,
+        b = tf.train.batch(example, batch_size=batch_size,
             dynamic_pad=True, capacity=capacity, num_threads=num_threads,
             name=scope)
-    # Restore partial shape information that is erased by FIFOQueue.
-    for k in example_batch:
-        example_batch[k].set_shape([None] + example[k].shape.as_list())
-    return example_batch
+        # Restore partial shape information (erased by FIFOQueue).
+        for k in b:
+            b[k].set_shape([None] + example[k].shape.as_list())
+        # Pad from maximum length to expected length.
+        # TODO: Support dynamic length, then this can be removed.
+        if sequence_length is not None:
+            for k in ['images', 'labels', 'label_is_valid']:
+                shape = b[k].shape.as_list()
+                rank = len(shape)
+                # Pad the time dimension by the necessary amount.
+                # Use dynamic not static shape.
+                paddings = [[0, sequence_length - tf.shape(b[k])[i]] if i == 1 else [0, 0]
+                            for i in range(len(shape))]
+                padded_shape = [sequence_length if i == 1 else d for i, d in enumerate(shape)]
+                b[k] = tf.pad(b[k], paddings)
+                # Restore partial shape information (erased by tf.pad).
+                b[k].set_shape(padded_shape)
+        return b
 
 
 def make_multiplexer(sources, capacity=32, num_threads=1, name='multiplex'):
