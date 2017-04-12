@@ -27,6 +27,7 @@ import os
 import numpy as np
 
 import cnnutil
+from helpers import merge_dims
 
 # Model interface:
 #
@@ -1716,16 +1717,31 @@ class RNN_dual(object):
 
 
 class RNN_conv_asymm(object):
-    def __init__(self, inputs, o):
+    def __init__(self, inputs, o, is_training=True, model_opts=None):
         self.is_train = True if o.mode == 'train' else False
-        outputs, state = self._load_model(inputs, o)
+        model_opts = model_opts or {}
+        outputs, state = self._load_model(inputs, o, is_training=True, **model_opts)
+        # Tensors that model produces:
         self.outputs = outputs
         self.state   = state
+        # Properties of instantiated model:
         self.image_size   = (o.frmsz, o.frmsz)
-        self.sequence_len = o.ntimesteps
-        self.batch_size   = None
+        self.sequence_len = o.ntimesteps # Static length of unrolled RNN.
+        self.batch_size   = None         # Model accepts variable batch size.
 
-    def _load_model(self, inputs, o):
+    def _load_model(self, inputs, o,
+            is_training=True, # Used by batch_norm, dropout.
+            # Model parameters:
+            input_num_layers=3,
+            input_kernel_size=[7, 5, 3],
+            input_num_channels=[16, 32, 64],
+            input_stride=[2, 1, 1],
+            input_pool=[True, True, True],
+            input_pool_stride=[2, 2, 2],
+            input_pool_kernel_size=[3, 3, 3],
+            input_batch_norm=False):
+            # lstm_num_layers=1,
+            # lstm_kernel_size=[3]):
         # net = make_input_placeholders(o)
         images = inputs['x']
         x0     = inputs['x0']
@@ -1733,25 +1749,43 @@ class RNN_conv_asymm(object):
         masks = get_masks_from_rectangles(y0, o)
         init_input = tf.concat([x0, masks], axis=3)
 
+        assert(len(input_kernel_size)      == input_num_layers)
+        assert(len(input_num_channels)     == input_num_layers)
+        assert(len(input_stride)           == input_num_layers)
+        assert(len(input_pool)             == input_num_layers)
+        assert(len(input_pool_stride)      == input_num_layers)
+        assert(len(input_pool_kernel_size) == input_num_layers)
+        # assert(len(lstm_kernel_size) == lstm_num_layers)
+
         def input_cnn(x, num_outputs, name='input_cnn'):
             with tf.name_scope(name):
                 with slim.arg_scope([slim.conv2d, slim.max_pool2d], padding='SAME'):
-                    with slim.arg_scope([slim.conv2d],
-                                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    normalizer_fn = None
+                    conv2d_params = {'weights_regularizer': slim.l2_regularizer(o.wd)}
+                    if input_batch_norm:
+                        conv2d_params.update({
+                            'normalizer_fn': slim.batch_norm,
+                            'normalizer_params': {
+                                'is_training': is_training,
+                            }})
+                    with slim.arg_scope([slim.conv2d], **conv2d_params):
                         layers = {}
-                        x = slim.conv2d(x, 16, kernel_size=7, stride=2, scope='conv1')
-                        layers['conv1'] = x
-                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool1')
-                        x = slim.conv2d(x, 32, kernel_size=5, stride=1, scope='conv2')
-                        layers['conv2'] = x
-                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool2')
-                        x = slim.conv2d(x, num_outputs, kernel_size=3, stride=1, scope='conv3')
-                        layers['conv3'] = x
-                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool3')
-                        if o.activ_histogram:
-                            with tf.name_scope('summary'):
-                                for k, v in layers.iteritems():
-                                    tf.summary.histogram(k, v)
+                        for i in range(input_num_layers):
+                            conv_name = 'conv{}'.format(i+1)
+                            x = slim.conv2d(x, input_num_channels[i],
+                                               kernel_size=input_kernel_size[i],
+                                               stride=input_stride[i],
+                                               scope=conv_name)
+                            layers[conv_name] = x
+                            if input_pool[i]:
+                                pool_name = 'pool{}'.format(i+1)
+                                x = slim.max_pool2d(x, kernel_size=input_pool_kernel_size[i],
+                                                       stride=input_pool_stride[i],
+                                                       scope=pool_name)
+                            if o.activ_histogram:
+                                with tf.name_scope('summary'):
+                                    for k, v in layers.iteritems():
+                                        tf.summary.histogram(k, v)
             return x
 
         def conv_lstm(x, h_prev, c_prev, state_dim, name='conv_lstm'):
@@ -1811,6 +1845,17 @@ class RNN_conv_asymm(object):
             with tf.variable_scope('c_init'):
                 c_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
 
+        # # TODO: Process all frames together in training (when sequences are equal length)
+        # # (because it enables batch-norm to operate on whole sequence)
+        # # but not during testing (when sequences are different lengths)
+        # x, unmerge = merge_dims(images, 0, 2)
+        # with tf.name_scope('frame_cnn') as scope:
+        #     with tf.variable_scope('frame_cnn'):
+        #         # Pass name scope from above, otherwise makes new name scope
+        #         # within name scope created by variable scope.
+        #         r = input_cnn(x, num_outputs=lstm_dim, name=scope)
+        # r = unmerge(r, 0)
+
         y = []
         ht, ct = h_init, c_init
         for t in range(o.ntimesteps):
@@ -1828,18 +1873,16 @@ class RNN_conv_asymm(object):
                     yt = output_cnn(ht, name=scope)
             y.append(yt)
             # tf.get_variable_scope().reuse_variables()
-        y = tf.stack(y, axis=1) # list to tensor
         h_last, c_last = ht, ct
+        y = tf.stack(y, axis=1) # list to tensor
+
+        # with tf.name_scope('out_cnn') as scope:
+        #     with tf.variable_scope('out_cnn', reuse=(t > 0)):
+        #         y = output_cnn(z, name=scope)
 
         if o.param_histogram:
             for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
                 tf.summary.histogram(v.name, v)
-
-        field = cnnutil.find_rf(xt, rt)
-        print 'CNN receptive field:'
-        print '  size:', field.rect.size()
-        print '  center offset:', field.rect.int_center()
-        print '  stride:', field.stride
 
         # with tf.name_scope('loss'):
         #     loss_pred = get_loss(outputs, example['labels'], example['inputs_valid'], example['inputs_HW'], o,
