@@ -88,15 +88,15 @@ def _single_to_batch(x, batch_size):
 
 def evaluate(sess, inputs, model, sequences, visualize=None):
     '''
-    Args: 
-        nbatches_: the number of batches to evaluate 
+    Args:
+        nbatches_: the number of batches to evaluate
     Returns:
         results: a dictionary that contains evaluation results
     '''
     sequences = list(sequences)
     sequence_results = []
-    pbar = ProgressBar(maxval=len(sequences), 
-            widgets=['sequence ', Counter(), '/{} ('.format(len(sequences)), 
+    pbar = ProgressBar(maxval=len(sequences),
+            widgets=['sequence ', Counter(), '/{} ('.format(len(sequences)),
                 Percentage(), ') ', Bar(), ' ', ETA()]).start()
     for i, sequence in enumerate(sequences):
         if len(sequence['image_files']) < 2:
@@ -149,49 +149,35 @@ def evaluate_track(pred, gt, is_valid):
     gt = gt[is_valid]
     pred = pred[is_valid]
 
+    # iou and cle
     iou = _compute_iou(pred, gt)
-    cle = _compute_precision(pred, gt)
+    cle = _compute_cle(pred, gt)
 
-    # Success plot 
-    # 1. mean iou over only valid length
-    # 2. success counter over only valid length (for success plot and auc)
-    # 3. area under curve
-    # iou_valid = iou[is_valid]
-    iou_valid = iou
-    success_rate_thresholds = np.append(np.arange(0,1,0.05), 1)
-    success_rate_thresholds = np.tile(
-            success_rate_thresholds, (iou_valid.size,1))
-    success_rate_table = iou_valid[:,np.newaxis] > success_rate_thresholds
+    # Success plot: 1. iou, 2. success rates, 3. area under curve
+    success_thresholds = np.append(np.arange(0,1,0.05), 1)
+    success_thresholds = np.tile(success_thresholds, (iou.size,1))
+    success_table = iou[:,np.newaxis] > success_thresholds
+    iou_mean        = np.mean(iou)
+    success_rates   = np.mean(success_table, axis=0)
+    auc             = np.mean(success_rates)
 
-    iou_mean = np.mean(iou_valid)
-    success_rates = np.mean(success_rate_table, axis=0)
-    auc = np.mean(success_rates)
-
-    # Precision plot; 
-    # 1. center location error 
-    # 2. precision plot
-    # 3. representative precision error
-    # cle_valid = cle[is_valid]
-    cle_valid = cle
-    precision_rate_thresholds = np.arange(0, 60, 5)
-    precision_rate_thresholds = np.tile(
-            precision_rate_thresholds, (cle_valid.size,1))
-    precision_rate_table = cle_valid[:,np.newaxis] < precision_rate_thresholds
+    # Precision plot: 1. cle, 2. precision rates, 3. representative precision error
+    precision_thresholds = np.arange(0, 60, 5)
+    precision_thresholds_rep = np.tile(precision_thresholds, (cle.size,1))
+    precision_table = cle[:,np.newaxis] < precision_thresholds_rep
     representative_precision_threshold = 20 # benchmark
-
-    cle_mean = np.mean(cle_valid)
-    precision_rates = np.mean(precision_rate_table, axis=0)
-    # TODO: This can result in mean of empty list (nan).
-    cle_representative = np.mean(
-            cle_valid[cle_valid < representative_precision_threshold])
+    cle_mean            = np.mean(cle)
+    precision_rates     = np.mean(precision_table, axis=0)
+    cle_representative  = precision_rates[
+        np.where(precision_thresholds == representative_precision_threshold)][0]
 
     results = {}
-    results['iou_mean'] = iou_mean
-    results['success_rates'] = success_rates
-    results['auc'] = auc
-    results['cle_mean'] = cle_mean
-    results['precision_rates'] = precision_rates
-    results['cle_representative'] = cle_representative
+    results['iou_mean']             = iou_mean
+    results['success_rates']        = success_rates
+    results['auc']                  = auc
+    results['cle_mean']             = cle_mean
+    results['precision_rates']      = precision_rates
+    results['cle_representative']   = cle_representative
     return results
 
 def _compute_iou(boxA, boxB):
@@ -205,19 +191,17 @@ def _compute_iou(boxA, boxB):
     interArea = np.maximum((xB - xA), 0) * np.maximum((yB - yA), 0)
 
     # compute the area of both the prediction and ground-truth rectangles
-    boxAArea = ((boxA[:,2] - boxA[:,0]) *
-                (boxA[:,3] - boxA[:,1]))
-    boxBArea = ((boxB[:,2] - boxB[:,0]) *
-                (boxB[:,3] - boxB[:,1]))
+    boxAArea = ((boxA[:,2] - boxA[:,0]) * (boxA[:,3] - boxA[:,1]))
+    boxBArea = ((boxB[:,2] - boxB[:,0]) * (boxB[:,3] - boxB[:,1]))
 
-    # compute the intersection over union by taking the intersection area and 
-    # dividing it by the sum of prediction + ground-truth areas - the 
+    # compute the intersection over union by taking the intersection area and
+    # dividing it by the sum of prediction + ground-truth areas - the
     # interesection area
     iou = interArea / (boxAArea + boxBArea - interArea)
     return iou.astype(np.float32)
 
-def _compute_precision(boxA, boxB):
-    # for precision computation (center location error)
+def _compute_cle(boxA, boxB):
+    # compute center location error
     centerA_x = (np.array(boxA[:,0]) + np.array(boxA[:,2]))/2
     centerA_y = (np.array(boxA[:,1]) + np.array(boxA[:,3]))/2
     centerB_x = (np.array(boxB[:,0]) + np.array(boxB[:,2]))/2
