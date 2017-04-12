@@ -5,6 +5,7 @@ import json
 import numpy as np
 import os
 from PIL import Image
+import tensorflow as tf
 
 def get_time():
     dt = datetime.datetime.now()
@@ -61,3 +62,38 @@ def cache_json(filename, func):
         with open(filename, 'w') as w:
             json.dump(result, w)
     return result
+
+
+def merge_dims(x, a, b):
+    '''Merges dimensions a to b-1
+
+    Returns:
+        Reshaped tensor and a function to restore the shape.
+    '''
+    # Group dimensions of x into a, b-a, n-b:
+    #     [0, ..., a-1 | a, ..., b-1 | b, ..., n-1]
+    # Then y has dimensions grouped in: a, 1, n-b:
+    #     [0, ..., a-1 | a | a+1, ..., a+n-b]
+    # giving a total length of m = n-b+a+1.
+    x_dynamic = tf.shape(x)
+    x_static = x.shape.as_list()
+    n = len(x_static)
+
+    def restore(v, c):
+        '''Restores dimensions [c] to dimensions [a, ..., b-1].'''
+        v_dynamic = tf.shape(v)
+        v_static = v.shape.as_list()
+        m = len(v_static)
+        # Substitute the static size where possible.
+        u_dynamic = ([v_static[i] or v_dynamic[i] for i in range(0, c)] +
+                     [x_static[i] or x_dynamic[i] for i in range(a, b)] +
+                     [v_static[i] or v_dynamic[i] for i in range(c+1, m)])
+        u = tf.reshape(v, u_dynamic)
+        return u
+
+    # Substitute the static size where possible.
+    y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, a)] +
+                 [tf.reduce_prod(x_dynamic[a:b])] +
+                 [x_static[i] or x_dynamic[i] for i in range(b, n)])
+    y = tf.reshape(x, y_dynamic)
+    return y, restore
