@@ -101,15 +101,21 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
 
     The function `get_example_filenames` returns a function that calls this function.
     '''
-    for example in examples:
-        if coord.should_stop():
-            return
-        sess.run(enqueue, feed_dict={
-            placeholder['image_files']:    example['image_files'],
-            placeholder['labels']:         example['labels'],
-            placeholder['label_is_valid']: example['label_is_valid'],
-        })
-    coord.request_stop()
+    ok = True
+    try:
+        for example in examples:
+            if coord.should_stop():
+                return
+            sess.run(enqueue, feed_dict={
+                placeholder['image_files']:    example['image_files'],
+                placeholder['labels']:         example['labels'],
+                placeholder['label_is_valid']: example['label_is_valid'],
+            })
+    except Exception as ex: # tf.errors.CancelledError?
+        ok = False
+        coord.request_stop(ex)
+    if ok:
+        coord.request_stop()
 
 
 def load_images(example, capacity=32, num_threads=1, image_size=[None, None, None],
