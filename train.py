@@ -192,11 +192,9 @@ def train(create_model, datasets, val_sets, o):
                         print 'done: save model'
                         prev_ckpt = global_step
 
-                # **after a certain iteration, perform the followings
-                # - evaluate on train/test/val set
-                # - print results (loss, eval resutls, time, etc.)
+                # intermediate evaluation of model
                 period_assess = o.period_assess if not o.debugmode else 10
-                if global_step > 0 and global_step % period_assess == 0: # evaluate model
+                if global_step > 0 and global_step % period_assess == 0:
                     iter_id = 'iteration{}'.format(global_step)
                     for eval_id, sampler in val_sets.iteritems():
                         vis_dir = os.path.join(o.path_output, iter_id, eval_id)
@@ -233,12 +231,7 @@ def train(create_model, datasets, val_sets, o):
                     dur = time.time() - start
                 loss_ep.append(loss)
 
-                # **results after every batch
-                if o.verbose_train:
-                    print ('ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
-                        '|loss:{5:.5f} |time:{6:.2f}').format(
-                        ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur)
-
+                newval = False
                 # Evaluate validation error.
                 if global_step % o.period_summary == 0:
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
@@ -247,17 +240,22 @@ def train(create_model, datasets, val_sets, o):
                         summary_var = (summary_vars_with_preview['val']
                                        if global_step % o.period_preview == 0
                                        else summary_vars['val'])
-                        loss, summary = sess.run([loss_vars['val'], summary_var],
+                        loss_val, summary = sess.run([loss_vars['val'], summary_var],
                                 feed_dict={example['val']['use_gt']: True})
-                        dur = time.time() - start
+                        dur_val = time.time() - start
                         writer['val'].add_summary(summary, global_step=global_step)
-                        if o.verbose_train:
-                            print ('[val] ep {0:d}/{1:d}, batch {2:d}/{3:d} (BATCH:{4:d}) '
-                                '|loss:{5:.5f} |time:{6:.2f}').format(
-                                ie+1, nepoch, ib+1, nbatch, o.batchsz, loss, dur)
                         ib_val += 1
+                        newval = True
 
-            print 'ep {:d}/{:d} (global_step: {:d}) |loss: {:.4f}, time:{:.2f}'.format(
+                # Print result of one batch update
+                if o.verbose_train:
+                    losstime = '|loss:{:.5f}/{:.5f} (time:{:.2f}/{:.2f}) - with val'.format(
+                            loss, loss_val, dur, dur_val) if newval else \
+                            '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
+                    print 'ep {}/{}, batch {}/{} (bsz:{}), global_step {} {}'.format(
+                            ie+1, nepoch, ib+1, nbatch, o.batchsz, global_step, losstime)
+
+            print '[Epoch finished] ep {:d}/{:d}, global_step {:d} |loss:{:.5f} (time:{:.2f})'.format(
                     ie+1, nepoch, global_step_var.eval(), np.mean(loss_ep), time.time()-t_epoch)
 
         # **training finished
@@ -358,7 +356,7 @@ def iter_examples(dataset, o, num_epochs=None):
     else:
         epochs = itertools.count()
     for i in epochs:
-        sequences = sample.sample(dataset, o.ntimesteps,
+        sequences = sample.sample(dataset, ntimesteps=o.ntimesteps,
             seqtype='sampling', shuffle=True)
         for sequence in sequences:
             yield sequence

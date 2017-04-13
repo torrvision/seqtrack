@@ -17,10 +17,10 @@ def parse_arguments():
             '--verbose', help='print arguments',
             action='store_true')
     parser.add_argument(
-            '--verbose_train', help='print train losses during train', 
+            '--verbose_train', help='print train losses during train',
             action='store_true')
     parser.add_argument(
-            '--mode', help='choose mode (train, test)', 
+            '--mode', help='choose mode (train, test)',
             type=str, default='')
     parser.add_argument(
             '--debugmode', help='used for debugging',
@@ -101,14 +101,14 @@ def parse_arguments():
             '--path_data_home', help='location of datasets',
             type=str, default='./data')
     parser.add_argument(
-            '--nosave', help='no need to save results?', 
-            action='store_true') 
+            '--nosave', help='no need to save results?',
+            action='store_true')
     parser.add_argument(
             '--restore', help='to load a pretrained model (for test)',
             action='store_true')
     parser.add_argument(
-            '--restore_model', help='model to restore', 
-            type=str) 
+            '--restore_model', help='model to restore',
+            type=str)
     parser.add_argument(
             '--resume', help='to resume training',
             action='store_true')
@@ -120,7 +120,7 @@ def parse_arguments():
             type=int, default=10000)
 
     parser.add_argument(
-            '--gpu_frac', help='fraction of gpu memory', 
+            '--gpu_frac', help='fraction of gpu memory',
             type=float, default=0.4)
 
     args = parser.parse_args()
@@ -142,24 +142,28 @@ if __name__ == "__main__":
     otb100       = data.Data_OTB('OTB-100', o)
     val_sets = {
         'ILSVRC-train-full':
-            lambda: random.sample(list(sample.all_tracks_full(ilsvrc_train)), 100),
+            lambda: random.sample(list(sample.sample(ilsvrc_train, seqtype='full')), 100),
         'ILSVRC-val-full':
-            lambda: random.sample(list(sample.all_tracks_full(ilsvrc_val)), 100),
+            lambda: random.sample(list(sample.sample(ilsvrc_val, seqtype='full')), 100),
+        'ILSVRC-train-sample':
+            lambda: random.sample(list(sample.sample(ilsvrc_train, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
+        'ILSVRC-val-sample':
+            lambda: random.sample(list(sample.sample(ilsvrc_val, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
         'OTB-50-full':
-            lambda: sample.all_tracks_full(otb50),
+            lambda: sample.sample(otb50, seqtype='full'),
         'OTB-100-full':
-            lambda: sample.all_tracks_full(otb100),
+            lambda: sample.sample(otb100, seqtype='full'),
         'OTB-50-sample':
-            lambda: sample.sample(otb50, o.ntimesteps, seqtype='sampling', shuffle=False),
+            lambda: sample.sample(otb50, ntimesteps=o.ntimesteps, seqtype='sampling'),
         'OTB-100-sample':
-            lambda: sample.sample(otb100, o.ntimesteps, seqtype='sampling', shuffle=False),
+            lambda: sample.sample(otb100, ntimesteps=o.ntimesteps, seqtype='sampling'),
     }
-    # m = lambda inputs: model.load_model(inputs, o)
     m = lambda inputs, is_training=True, summaries_collections=None: \
         model.RNN_conv_asymm(inputs, o,
                              is_training=is_training,
                              summaries_collections=summaries_collections,
-                             model_opts={'input_batch_norm': True})
+                             # model_opts={'input_batch_norm': True})
+                             model_opts={})
 
     assert(o.mode == 'train')
     train.train(m, datasets, val_sets, o)
