@@ -135,7 +135,7 @@ if __name__ == "__main__":
     o.update_by_sysarg(args=args)
     o.initialize()
 
-    dataset = data.load_data(o)
+    datasets = data.load_data(o)
     ilsvrc_train = data.Data_ILSVRC('train', o)
     ilsvrc_val   = data.Data_ILSVRC('val', o)
     otb50        = data.Data_OTB('OTB-50', o)
@@ -154,7 +154,12 @@ if __name__ == "__main__":
         'OTB-100-sample':
             lambda: sample.sample(otb100, o.ntimesteps, seqtype='sampling', shuffle=False),
     }
-    m = lambda inputs: model.load_model(inputs, o)
+    # m = lambda inputs: model.load_model(inputs, o)
+    m = lambda inputs, is_training=True, summaries_collections=None: \
+        model.RNN_conv_asymm(inputs, o,
+                             is_training=is_training,
+                             summaries_collections=summaries_collections,
+                             model_opts={'input_batch_norm': True})
 
     assert(o.mode == 'train')
-    train.train(m, dataset, val_sets, o)
+    train.train(m, datasets, val_sets, o)

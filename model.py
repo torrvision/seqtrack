@@ -1717,7 +1717,15 @@ class RNN_dual(object):
 
 
 class RNN_conv_asymm(object):
-    def __init__(self, inputs, o, is_training=True, model_opts=None):
+    def __init__(self, inputs, o, model_opts=None,
+            is_training=True,
+            summaries_collections=None):
+        '''
+        Args:
+            is_training: Different graph constructed for training (e.g. batch-norm).
+            summaries_collections: Collections to add summaries to.
+                Overrides default (GraphKeys.SUMMARIES) if not None.
+        '''
         self.is_train = True if o.mode == 'train' else False
         model_opts = model_opts or {}
         outputs, state = self._load_model(inputs, o, is_training=True, **model_opts)
@@ -1731,6 +1739,7 @@ class RNN_conv_asymm(object):
 
     def _load_model(self, inputs, o,
             is_training=True, # Used by batch_norm, dropout.
+            summaries_collections=None,
             # Model parameters:
             input_num_layers=3,
             input_kernel_size=[7, 5, 3],
@@ -1785,7 +1794,7 @@ class RNN_conv_asymm(object):
                             if o.activ_histogram:
                                 with tf.name_scope('summary'):
                                     for k, v in layers.iteritems():
-                                        tf.summary.histogram(k, v)
+                                        tf.summary.histogram(k, v, collections=summaries_collections)
             return x
 
         def conv_lstm(x, h_prev, c_prev, state_dim, name='conv_lstm'):
@@ -1810,7 +1819,7 @@ class RNN_conv_asymm(object):
                     if o.activ_histogram:
                         with tf.name_scope('summary'):
                             for k, v in layers.iteritems():
-                                tf.summary.histogram(k, v)
+                                tf.summary.histogram(k, v, collections=summaries_collections)
             return h, c
 
         def output_cnn(x, name='output_cnn'):
@@ -1831,7 +1840,7 @@ class RNN_conv_asymm(object):
                         if o.activ_histogram:
                             with tf.name_scope('summary'):
                                 for k, v in layers.iteritems():
-                                    tf.summary.histogram(k, v)
+                                    tf.summary.histogram(k, v, collections=summaries_collections)
             return x
 
         lstm_dim = 64
@@ -1882,20 +1891,7 @@ class RNN_conv_asymm(object):
 
         if o.param_histogram:
             for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
-                tf.summary.histogram(v.name, v)
-
-        # with tf.name_scope('loss'):
-        #     loss_pred = get_loss(outputs, example['labels'], example['inputs_valid'], example['inputs_HW'], o,
-        #                          outtype='rectangle',
-        #                          name='pred')
-        #     loss_reg = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-        #     loss_total = loss_pred + loss_reg
-        #     # tf.add_to_collection('losses', loss)
-        #     # loss_total = tf.reduce_sum(tf.get_collection('losses'), name='loss_total')
-        #     with tf.name_scope('summary'):
-        #         tf.summary.scalar('pred', loss_pred)
-        #         tf.summary.scalar('reg', loss_reg)
-        #         tf.summary.scalar('total', loss_total)
+                tf.summary.histogram(v.name, v, collections=summaries_collections)
 
         outputs = {'y': y}
         state = {'h': (h_init, h_last), 'c': (c_init, c_last)}
