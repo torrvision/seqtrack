@@ -796,9 +796,9 @@ class Data_OTB(object):
                     gt_file = 'groundtruth_rect.txt'
                 else:
                     gt_file = 'groundtruth_rect.{}.txt'.format(j+1)
-                rects = load_rectangles(os.path.join(video_dir, gt_file))
-                if len(rects) == 0:
+                if video == 'Human4' and gt_file == 'groundtruth_rect.1.txt':
                     continue
+                rects = load_rectangles(os.path.join(video_dir, gt_file))
                 # Normalize by image size.
                 rects = rects / np.array([width, height, width, height])
                 # Create track from rectangles and offset.
@@ -816,8 +816,7 @@ class Data_OTB(object):
                 rects = np.loadtxt(fname, dtype=np.float32, delimiter=',')
             except:
                 rects = np.loadtxt(fname, dtype=np.float32)
-            if len(rects) == 0:
-                return []
+            assert(len(rects) > 0)
             # label reformat [x1,y1,w,h] -> [x1,y1,x2,y2]
             rects[:,(2,3)] = rects[:,(0,1)] + rects[:,(2,3)]
             # Assume rectangles are meant for use with Matlab's imshow() and rectangle().
