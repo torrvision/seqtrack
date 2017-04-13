@@ -2129,9 +2129,9 @@ def rnn_conv_asymm(example, o,
     outputs = {'y': y}
     state = {'h': (h_init, h_last), 'c': (c_init, c_last)}
 
+    # TODO: JV: I saw this somewhere. Is it OK?
     class Model:
         pass
-
     model = Model()
     model.outputs = outputs
     model.state   = state

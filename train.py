@@ -89,6 +89,9 @@ def train(create_model, datasets, val_sets, o):
                 # TODO: Ensure that get_loss does not create any variables?
                 loss_vars[mode] = get_loss(example[mode], model[mode].outputs, o,
                     summaries_collections=['summaries_' + mode])
+                r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+                tf.summary.scalar('regularization', r, collections=['summaries_' + mode])
+                loss_vars[mode] += r
                 # In next loop, reuse variables.
                 vs.reuse_variables()
 
@@ -328,13 +331,9 @@ def _whiten(example_raw, o, stat=None, name='whiten'):
     with tf.name_scope(name) as scope:
         # Normalize mean and variance.
         assert(stat is not None)
-        # with tf.variable_scope('image_stats'):
-        if stat:
-            mean = tf.constant(stat['mean'], o.dtype, name='mean')
-            std  = tf.constant(stat['std'],  o.dtype, name='std')
-        else:
-            mean = tf.constant(0.0, o.dtype, name='mean')
-            std  = tf.constant(1.0, o.dtype, name='std')
+        # TODO: Check that this does not create two variables:
+        mean = tf.constant(stat['mean'] if stat else 0.0, o.dtype, name='mean')
+        std = tf.constant(stat['std'] if stat else 1.0,  o.dtype, name='std')
         example = dict(example_raw) # Copy dictionary before modifying.
         # Replace raw x (images) with whitened x (images).
         example['x'] = _whiten_image(example['x_raw'], mean, std, name='x')
@@ -357,7 +356,7 @@ def iter_examples(dataset, o, num_epochs=None):
         epochs = itertools.count()
     for i in epochs:
         sequences = sample.sample(dataset, ntimesteps=o.ntimesteps,
-            seqtype='freq-range-fit', shuffle=True)
+            seqtype='freq-range-fit', min_freq=15, max_freq=60, shuffle=True)
         for sequence in sequences:
             yield sequence
 
