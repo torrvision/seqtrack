@@ -1,5 +1,6 @@
 import pdb
 import argparse
+import functools
 import random
 import tensorflow as tf
 
@@ -158,12 +159,8 @@ if __name__ == "__main__":
         'OTB-100-sample':
             lambda: sample.sample(otb100, ntimesteps=o.ntimesteps, seqtype='sampling'),
     }
-    m = lambda inputs, is_training=True, summaries_collections=None: \
-        model.RNN_conv_asymm(inputs, o,
-                             is_training=is_training,
-                             summaries_collections=summaries_collections,
-                             # model_opts={'input_batch_norm': True})
-                             model_opts={})
+    # TODO: Set model_opts from command-line or JSON file?
+    m = model.load_model(o, model_params={'input_batch_norm': True})
 
     assert(o.mode == 'train')
     train.train(m, datasets, val_sets, o)

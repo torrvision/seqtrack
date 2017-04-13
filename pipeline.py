@@ -111,9 +111,13 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
                 placeholder['labels']:         example['labels'],
                 placeholder['label_is_valid']: example['label_is_valid'],
             })
-    except Exception as ex: # tf.errors.CancelledError?
+    except (tf.errors.OutOfRangeError, tf.errors.CancelledError) as ex:
         ok = False
         coord.request_stop(ex)
+    # except Exception as ex:
+    #     ok = False
+    #     coord.request_stop(ex)
+    #     raise
     if ok:
         coord.request_stop()
 
