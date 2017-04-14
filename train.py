@@ -82,10 +82,10 @@ def train(create_model, datasets, val_sets, o):
             with tf.name_scope(mode):
                 # Necessary to have separate collections of summaries.
                 # Otherwise evaluating the summary op will dequeue an example!
-                # TODO: Use tf.make_template?
+                # TODO: Use tf.make_template? But how to have different collections?
                 model[mode] = create_model(_whiten(example[mode], o, stat=stat),
-                                            is_training=(mode == 'train'),
-                                            summaries_collections=['summaries_' + mode])
+                                           is_training=(mode == 'train'),
+                                           summaries_collections=['summaries_' + mode])
                 # TODO: Ensure that get_loss does not create any variables?
                 loss_vars[mode] = get_loss(example[mode], model[mode].outputs, o,
                     summaries_collections=['summaries_' + mode])
@@ -104,15 +104,19 @@ def train(create_model, datasets, val_sets, o):
     with tf.name_scope('summary'):
         for mode in modes:
             with tf.name_scope(mode):
-                # Create a preview and add it to the list of summaries.
-                preview = tf.summary.image('box',
-                    _draw_bounding_boxes(example[mode], model[mode]),
-                    max_outputs=o.ntimesteps+1,
-                    collections=[])
                 # Merge model summaries with others (e.g. pipeline).
                 summaries = (global_summaries + tf.get_collection('summaries_' + mode))
                 summary_vars[mode] = tf.summary.merge(summaries)
+                # Create a preview and add it to the list of summaries.
+                preview = tf.summary.image('box',
+                    _draw_bounding_boxes(example[mode], model[mode]),
+                    max_outputs=o.ntimesteps+1, collections=[])
                 summaries.append(preview)
+                # Produce an image summary of the heatmap.
+                if 'hmap' in model[mode].outputs:
+                    hmap = tf.summary.image('hmap', _draw_heatmap(model[mode]),
+                        max_outputs=o.ntimesteps+1, collections=[])
+                    summaries.append(hmap)
                 summary_vars_with_preview[mode] = tf.summary.merge(summaries)
 
     nepoch     = o.nepoch if not o.debugmode else 2
@@ -425,3 +429,8 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         coords = tf.unstack(y, axis=2)
         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
         return tf.image.draw_bounding_boxes(image, boxes, name=scope)
+
+def _draw_heatmap(model, time_stride=1, name='draw_heatmap'):
+    with tf.name_scope(name) as scope:
+        # model.outputs['hmap'] -- [b, t, frmsz, frmsz, 2]
+        return tf.nn.softmax(model.outputs['hmap'][0,::time_stride,:,:,0:1])
