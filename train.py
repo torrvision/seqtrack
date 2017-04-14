@@ -98,6 +98,8 @@ def train(create_model, datasets, val_sets, o):
 
     summary_vars = {}
     summary_vars_with_preview = {}
+    # This must contain only summaries that do not pull from the queues.
+    # For example, fraction of pipeline that is full.
     global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
     with tf.name_scope('summary'):
         for mode in modes:
@@ -363,12 +365,14 @@ def iter_examples(dataset, o, num_epochs=None):
 
 
 def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
-    y          = example['y']
-    y_is_valid = example['y_is_valid']
-    assert(y.get_shape().as_list()[1] == o.ntimesteps)
-    hmap = convert_rec_to_heatmap(y, o)
-
     with tf.name_scope(name) as scope:
+        y          = example['y']
+        y_is_valid = example['y_is_valid']
+        assert(y.get_shape().as_list()[1] == o.ntimesteps)
+        # TODO: What happens with NaN rectangles here?
+        # hmap = convert_rec_to_heatmap(y, o, min_size=1.0)
+        hmap = convert_rec_to_heatmap(y, o, min_size=1.0)
+
         losses = dict()
 
         # loss1: sum of two l1 distances for left-top and right-bottom

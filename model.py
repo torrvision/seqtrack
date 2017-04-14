@@ -541,18 +541,18 @@ class RNN_attention_st(object):
         return outputs 
 
 
-def convert_rec_to_heatmap(rec, o):
+def convert_rec_to_heatmap(rec, o, min_size=None):
     '''Create heatmap from rectangle
     Args:
         rec: [batchsz x ntimesteps] ground-truth rectangle labels
     Return:
         heatmap: [batchsz x ntimesteps x o.frmsz x o.frmsz x 2] # fg + bg
     '''
-    masks = []
-    for t in range(o.ntimesteps):
-        masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
-    masks = tf.stack(masks, axis=1)
-    return masks
+    with tf.name_scope('heatmaps') as scope:
+        masks = []
+        for t in range(o.ntimesteps):
+            masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg', min_size=min_size))
+        return tf.stack(masks, axis=1, name=scope)
 
 # weight variable; created variables are new and will not be shared.
 def get_weight_variable(
@@ -599,50 +599,55 @@ def activate(input_, activation_='relu'):
     else:
         raise ValueError('no available activation type!')
 
-def get_masks_from_rectangles(rec, o, kind='fg', typecast=True):
-    # create mask using rec; typically rec=y_prev
-    x1 = rec[:,0] * o.frmsz
-    y1 = rec[:,1] * o.frmsz
-    x2 = rec[:,2] * o.frmsz
-    y2 = rec[:,3] * o.frmsz
-    x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, 1.0)
-    grid_x, grid_y = tf.meshgrid(
-            tf.range(o.frmsz, dtype=o.dtype),
-            tf.range(o.frmsz, dtype=o.dtype))
-    # resize tensors so that they can be compared
-    x1 = tf.expand_dims(tf.expand_dims(x1,1),2)
-    x2 = tf.expand_dims(tf.expand_dims(x2,1),2)
-    y1 = tf.expand_dims(tf.expand_dims(y1,1),2)
-    y2 = tf.expand_dims(tf.expand_dims(y2,1),2)
-    # JV: Not necessary due to broadcast rules.
-    # grid_x = tf.tile(tf.expand_dims(grid_x,0), [o.batchsz,1,1])
-    # grid_y = tf.tile(tf.expand_dims(grid_y,0), [o.batchsz,1,1])
-    # mask
-    masks = tf.logical_and(
-        tf.logical_and(tf.less_equal(x1, grid_x), 
-            tf.less_equal(grid_x, x2)),
-        tf.logical_and(tf.less_equal(y1, grid_y), 
-            tf.less_equal(grid_y, y2)))
+def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, name='mask'):
+    with tf.name_scope(name) as scope:
+        # create mask using rec; typically rec=y_prev
+        # rec -- [b, 4]
+        rec *= float(o.frmsz)
+        # x1, y1, x2, y2 -- [b]
+        x1, y1, x2, y2 = tf.unstack(rec, axis=1)
+        if min_size is not None:
+            x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, min_size=min_size)
+        # grid_x, grid_y -- [frmsz, frmsz]
+        frmsz = tf.constant(o.frmsz)
+        grid_x, grid_y = tf.meshgrid(tf.cast(tf.range(frmsz), dtype=o.dtype),
+                                     tf.cast(tf.range(frmsz), dtype=o.dtype))
+        # resize tensors so that they can be compared
+        # x1, y1, x2, y2 -- [b, 1, 1]
+        x1 = tf.expand_dims(tf.expand_dims(x1,1),2)
+        x2 = tf.expand_dims(tf.expand_dims(x2,1),2)
+        y1 = tf.expand_dims(tf.expand_dims(y1,1),2)
+        y2 = tf.expand_dims(tf.expand_dims(y2,1),2)
+        # JV: Not necessary due to broadcast rules.
+        # grid_x = tf.tile(tf.expand_dims(grid_x,0), [o.batchsz,1,1])
+        # grid_y = tf.tile(tf.expand_dims(grid_y,0), [o.batchsz,1,1])
+        # masks -- [b, frmsz, frmsz]
+        masks = tf.logical_and(
+            tf.logical_and(tf.less_equal(x1, grid_x), 
+                           tf.less_equal(grid_x, x2)),
+            tf.logical_and(tf.less_equal(y1, grid_y), 
+                           tf.less_equal(grid_y, y2)))
 
-    if kind == 'fg': # only foreground mask
-        masks = tf.expand_dims(masks, 3) # to have channel dim
-    elif kind == 'bg': # add background mask
-        masks_bg = tf.logical_not(masks)
-        masks = tf.concat(
-                (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
-    if typecast: # type cast so that it can be concatenated with x
-        masks = tf.cast(masks, o.dtype)
-    return masks
+        if kind == 'fg': # only foreground mask
+            masks = tf.expand_dims(masks, 3) # to have channel dim
+        elif kind == 'bg': # add background mask
+            masks_bg = tf.logical_not(masks)
+            masks = tf.concat(
+                    (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
+        if typecast: # type cast so that it can be concatenated with x
+            masks = tf.cast(masks, o.dtype)
+        return masks
 
-def enforce_min_size(x1, y1, x2, y2, min=1.0):
-    # Ensure that x2-x1 > 1
-    xc, xs = 0.5*(x1 + x2), x2-x1
-    yc, ys = 0.5*(y1 + y2), y2-y1
-    xs = tf.maximum(min, xs)
-    ys = tf.maximum(min, ys)
-    x1, x2 = xc-xs/2, xc+xs/2
-    y1, y2 = yc-ys/2, yc+ys/2
-    return x1, y1, x2, y2
+def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
+    with tf.name_scope(name) as scope:
+        # Ensure that x2-x1 > 1
+        xc, xs = 0.5*(x1 + x2), x2-x1
+        yc, ys = 0.5*(y1 + y2), y2-y1
+        xs = tf.maximum(min_size, xs)
+        ys = tf.maximum(min_size, ys)
+        x1, x2 = xc-xs/2, xc+xs/2
+        y1, y2 = yc-ys/2, yc+ys/2
+        return x1, y1, x2, y2
 
 
 class RNN_basic(object):
