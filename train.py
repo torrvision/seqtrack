@@ -92,6 +92,7 @@ def train(create_model, datasets, val_sets, o):
                 r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
                 tf.summary.scalar('regularization', r, collections=['summaries_' + mode])
                 loss_vars[mode] += r
+                tf.summary.scalar('total', loss_vars[mode], collections=['summaries_' + mode])
                 # In next loop, reuse variables.
                 vs.reuse_variables()
 
