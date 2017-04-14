@@ -30,98 +30,6 @@ import numpy as np
 import cnnutil
 from helpers import merge_dims
 
-# Model interface:
-#
-# Inputs:
-# inputs_raw -- Images for frames {t .. t+T}.
-# inputs_valid -- Boolean for frames {t .. t+T}.
-# inputs_HW -- Dimension of video.
-# labels -- Location of object in frames {t .. t+T}.
-# x0_raw -- Image for frame 0 (perhaps t != 0).
-# y0 -- Location of object in frame 0.
-# target_raw -- Image of object in frame 0, centered and masked.
-#
-# A model may also define a collection of state variables.
-# The state variables will be fed only when the segment is being continued
-# from a previous segment.
-
-# def make_input_placeholders(o, stat=None):
-#     '''
-#     Feed images to 'inputs_raw', 'x0_raw', etc.
-#     Compute functions of 'inputs', 'x0', etc.
-#     '''
-# 
-#     # placeholders for inputs
-#     inputs_raw = tf.placeholder(o.dtype,
-#             shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel],
-#             name='inputs_raw')
-#     inputs_valid = tf.placeholder(tf.bool,
-#             shape=[o.batchsz, o.ntimesteps+1],
-#             name='inputs_valid')
-#     inputs_HW = tf.placeholder(o.dtype,
-#             shape=[o.batchsz, 2],
-#             name='inputs_HW')
-#     labels = tf.placeholder(o.dtype,
-#             shape=[o.batchsz, o.ntimesteps+1, o.outdim],
-#             name='labels')
-# 
-#     # placeholders for initializations of full-length sequences
-#     # y_init = tf.placeholder_with_default(
-#     #         labels[:,0],
-#     #         shape=[o.batchsz, o.outdim], name='y_init')
-#     y_init = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y_init')
-# 
-#     # placeholders for x0 and y0. This is used for full-length sequences
-#     # NOTE: when it's not first segment, you should always feed x0, y0
-#     # otherwise it will use GT as default. It will be wrong then.
-#     # x0_raw = tf.placeholder_with_default(
-#     #         inputs_raw[:,0],
-#     #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0_raw')
-#     # y0 = tf.placeholder_with_default(o.dtype
-#     #         labels[:,0],
-#     #         shape=[o.batchsz, o.outdim], name='y0')
-#     x0_raw = tf.placeholder(o.dtype,
-#             shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
-#             name='x0_raw')
-#     y0 = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y0')
-#     # NOTE: when it's not first segment, be careful what is passed to target.
-#     # Make sure to pass x0, not the first frame of every segments.
-#     target_raw = tf.placeholder(o.dtype,
-#             shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
-#             name='target_raw')
-# 
-#     assert(stat is not None)
-#     with tf.name_scope('image_stats') as scope:
-#         if stat:
-#             mean = tf.constant(stat['mean'], o.dtype, name='mean')
-#             std  = tf.constant(stat['std'],  o.dtype, name='std')
-#         else:
-#             mean = tf.constant(0.0, o.dtype, name='mean')
-#             std  = tf.constant(1.0, o.dtype, name='std')
-#     inputs = whiten(inputs_raw, mean, std, name='inputs')
-#     x0     = whiten(x0_raw,     mean, std, name='x0')
-#     target = whiten(target_raw, mean, std, name='target')
-# 
-#     return {
-#             'inputs_raw':   inputs_raw,
-#             'inputs':       inputs,
-#             'inputs_valid': inputs_valid,
-#             'inputs_HW':    inputs_HW,
-#             'labels':       labels,
-#            #'outputs':      outputs,
-#            #'loss':         loss_total,
-#             'y_init':       y_init,
-#            #'y_last':       y_curr,
-#             'x0_raw':       x0_raw,
-#             'x0':           x0,
-#             'y0':           y0,
-#             'target_raw':   target_raw,
-#             'target':       target,
-#             }
-# 
-# def whiten(x, mean, std, name='whiten'):
-#     with tf.name_scope(name) as scope:
-#         return tf.divide(x - mean, std, name=scope)
 
 class RNN_attention_s(object):
     def __init__(self, o, is_train):
@@ -1721,8 +1629,11 @@ class RNN_dual(object):
     '''
     This model has two RNNs (ConvLSTM for Dynamics and LSTM for Appearances).
     '''
-    def __init__(self, inputs, o):
-        self.is_train = True if o.mode == 'train' else False
+    def __init__(self, inputs, o,
+                 is_training=True,
+                 summaries_collections=None):
+        # Ignore is_training  - model does not change in training vs testing.
+        # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
@@ -1765,7 +1676,7 @@ class RNN_dual(object):
             with tf.name_scope(name):
                 ft, it, ct_tilda, ot = tf.split(
                     slim.fully_connected(
-                        tf.concat_v2((h_prev, x), 1),
+                        tf.concat((h_prev, x), 1),
                         o.nunits*4,
                         activation_fn=None,
                         weights_initializer=tf.truncated_normal_initializer(stddev=0.01),
@@ -2333,12 +2244,14 @@ def load_model(o, model_params=None):
     Its keys should include 'inputs', 'labels', 'x0', 'y0'.
     '''
     model_params = model_params or {}
+    assert('is_training' not in model_params)
+    assert('summaries_collections' not in model_params)
     # if o.model == 'RNN_basic':
     #     model = RNN_basic(o)
     # elif o.model == 'RNN_new':
     #     model = RNN_new(example, o)
     if o.model == 'RNN_dual':
-        model = functools.partial(RNN_dual, o=o)
+        model = functools.partial(RNN_dual, o=o, **model_params)
     elif o.model == 'RNN_conv_asymm':
         model = functools.partial(rnn_conv_asymm, o=o, **model_params)
     # elif o.model == 'CNN':

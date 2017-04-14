@@ -160,7 +160,7 @@ if __name__ == "__main__":
             lambda: sample.sample(otb100, ntimesteps=o.ntimesteps, seqtype='sampling'),
     }
     # TODO: Set model_opts from command-line or JSON file?
-    m = model.load_model(o, model_params={'input_batch_norm': True})
+    m = model.load_model(o, model_params={})
 
     assert(o.mode == 'train')
     train.train(m, datasets, val_sets, o)
