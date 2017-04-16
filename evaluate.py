@@ -7,7 +7,7 @@ from progressbar import ProgressBar, Bar, Counter, ETA, Percentage # pip install
 
 import draw
 import data
-from helpers import load_image, im_to_arr
+from helpers import load_image, im_to_arr, pad_to
 
 
 def track(sess, inputs, model, sequence):
@@ -50,7 +50,7 @@ def track(sess, inputs, model, sequence):
                      sequence['image_files'][start:start+chunk_len])
         # Create single array of all images.
         images = np.array(map(im_to_arr, images))
-        images = _single_to_batch(_pad_to(images, model.sequence_len), model.batch_size)
+        images = _single_to_batch(pad_to(images, model.sequence_len), model.batch_size)
         # Create fake y values.
         y_gt = np.zeros(list(images.shape[:2])+[4])
         feed_dict = {
@@ -74,16 +74,11 @@ def track(sess, inputs, model, sequence):
     y_pred = np.concatenate(y_pred_chunks)
     return y_pred
 
-def _pad_to(x, n, mode='constant', axis=0):
-    width = [(0, 0) for s in x.shape]
-    width[axis] = (0, n - x.shape[axis])
-    return np.pad(x, width, mode=mode)
-
 def _single_to_batch(x, batch_size):
     x = np.expand_dims(x, 0)
     if batch_size is None:
         return x
-    return _pad_to(x, batch_size)
+    return pad_to(x, batch_size)
 
 
 def evaluate(sess, inputs, model, sequences, visualize=None):

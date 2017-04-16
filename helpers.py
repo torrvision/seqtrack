@@ -38,15 +38,22 @@ def load_image(fname, size=None, resize=False):
     if im.mode != 'RGB':
         im = im.convert('RGB')
     if size is not None:
+        size = tuple(size)
         if im.size != size:
             if resize:
                 im = im.resize(size)
             else:
+                pdb.set_trace()
                 raise ValueError('size does not match')
     return im
 
-def im_to_arr(x):
-    return np.array(x, dtype=np.float32)
+def im_to_arr(x, dtype=np.float32):
+    return np.array(x, dtype=dtype)
+
+def pad_to(x, n, axis=0, mode='constant'):
+    width = [(0, 0) for s in x.shape]
+    width[axis] = (0, n - x.shape[axis])
+    return np.pad(x, width, mode=mode)
 
 def cache_json(filename, func):
     '''Caches the result of a function in a file.

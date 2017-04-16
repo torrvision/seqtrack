@@ -15,9 +15,12 @@ import sample
 import visualize
 
 from model import convert_rec_to_heatmap
+from helpers import load_image, im_to_arr, pad_to
+
+EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
 
 
-def train(create_model, datasets, val_sets, o):
+def train(create_model, datasets, val_sets, o, use_queues=False):
     '''Trains a network.
 
     Args:
@@ -43,10 +46,10 @@ def train(create_model, datasets, val_sets, o):
 
     The input dictionary has fields::
 
-        'x'         # Input images, shape [b, n+1, h, w, 3]
-        'x0'        # First image in sequence, shape [b, h, w, 3]
-        'y0'        # Position of target in first image, shape [b, 4]
-        'y_valid'   # Booleans indicating presence of frame, shape [b, n]
+        'x0'         # First image in sequence, shape [b, h, w, 3]
+        'y0'         # Position of target in first image, shape [b, 4]
+        'x'          # Input images, shape [b, n, h, w, 3]
+        'y_is_valid' # Booleans indicating presence of frame, shape [b, n]
 
     and the output dictionary has fields::
 
@@ -64,13 +67,17 @@ def train(create_model, datasets, val_sets, o):
 
     modes = ['train', 'val']
 
-    example   = {}
-    feed_loop = {}
+    example   = {} # Each value is a dictionary of tensors.
+    feed_loop = {} # Each value is a function to call in a thread.
     # Create a queue for each set.
     with tf.name_scope('input'):
         for mode in modes:
             with tf.name_scope(mode):
-                example[mode], feed_loop[mode] = _setup_input(o)
+                from_queue = None
+                if use_queues:
+                    from_queue, feed_loop[mode] = _make_input_pipeline(o,
+                        num_load_threads=4, num_batch_threads=1)
+                example[mode] = _make_placeholders(o, default=from_queue)
 
     model     = {}
     loss_vars = {}
@@ -160,14 +167,15 @@ def train(create_model, datasets, val_sets, o):
         else:
             sess.run(init_op)
 
-        coord = tf.train.Coordinator()
-        tf.train.start_queue_runners(sess, coord)
-        # Run the feed loops in another thread.
-        threads = [threading.Thread(target=feed_loop[mode],
-                                    args=(sess, coord, sequences[mode]))
-                   for mode in modes]
-        for t in threads:
-            t.start()
+        if use_queues:
+            coord = tf.train.Coordinator()
+            tf.train.start_queue_runners(sess, coord)
+            # Run the feed loops in another thread.
+            threads = [threading.Thread(target=feed_loop[mode],
+                                        args=(sess, coord, sequences[mode]))
+                       for mode in modes]
+            for t in threads:
+                t.start()
 
         writer = {}
         for mode in modes:
@@ -227,17 +235,23 @@ def train(create_model, datasets, val_sets, o):
 
                 # Take a training step.
                 start = time.time()
+                feed_dict = {}
+                if not use_queues:
+                    batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
+                    batch = _load_batch(batch_seqs, o)
+                    feed_dict = {example['train'][k]: v for k, v in batch.iteritems()}
+                    dur_load = time.time() - start
+                feed_dict.update({example['train']['use_gt']: True})
                 if global_step % o.period_summary == 0:
                     summary_var = (summary_vars_with_preview['train']
                                    if global_step % o.period_preview == 0
                                    else summary_vars['train'])
                     _, loss, summary = sess.run([optimize_op, loss_vars['train'], summary_var],
-                            feed_dict={example['train']['use_gt']: True})
+                                                feed_dict=feed_dict)
                     dur = time.time() - start
                     writer['train'].add_summary(summary, global_step=global_step)
                 else:
-                    _, loss = sess.run([optimize_op, loss_vars['train']],
-                            feed_dict={example['train']['use_gt']: True})
+                    _, loss = sess.run([optimize_op, loss_vars['train']], feed_dict=feed_dict)
                     dur = time.time() - start
                 loss_ep.append(loss)
 
@@ -247,11 +261,19 @@ def train(create_model, datasets, val_sets, o):
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
+                        feed_dict = {}
+                        if not use_queues:
+                            batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
+                            batch = _load_batch(batch_seqs, o)
+                            feed_dict = {example['val'][k]: v for k, v in batch.iteritems()}
+                            dur_load = time.time() - start
+                        # Use same conditions in validation to assess over-fitting to data.
+                        feed_dict.update({example['val']['use_gt']: True})
                         summary_var = (summary_vars_with_preview['val']
                                        if global_step % o.period_preview == 0
                                        else summary_vars['val'])
                         loss_val, summary = sess.run([loss_vars['val'], summary_var],
-                                feed_dict={example['val']['use_gt']: True})
+                                                     feed_dict=feed_dict)
                         dur_val = time.time() - start
                         writer['val'].add_summary(summary, global_step=global_step)
                         ib_val += 1
@@ -317,21 +339,28 @@ def _make_input_pipeline(o, dtype=tf.float32,
         return example_batch, feed_loop
 
 
-def _setup_input(o):
-    def shape_var_batch(x):
-        shape = x.shape.as_list()
-        return [None] + shape[1:]
-    # Tune numbers of threads to adjust which queues are full.
-    example_queue, feed_loop = _make_input_pipeline(o,
-        num_load_threads=4, num_batch_threads=1)
-    # Create placeholders with variable batch size.
-    # These can be fed manually in evaluation (instead of reading from queues).
-    example = {k: tf.placeholder_with_default(example_queue[k],
-                                              shape_var_batch(example_queue[k]))
-               for k in example_queue}
+def _make_placeholders(o, default=None):
+    shapes = {
+        'x0_raw':     [None, o.frmsz, o.frmsz, 3],
+        'y0':         [None, 4],
+        'x_raw':      [None, o.ntimesteps, o.frmsz, o.frmsz, 3],
+        'y':          [None, o.ntimesteps, 4],
+        'y_is_valid': [None, o.ntimesteps],
+    }
+    dtype = lambda k: tf.bool if k.endswith('_is_valid') else o.dtype
+
+    if default is not None:
+        assert(set(default.keys()) == set(shapes.keys()))
+        example = {
+            k: tf.placeholder_with_default(default[k], shapes[k], name='placeholder_'+k)
+            for k in shapes.keys()}
+    else:
+        example = {
+            k: tf.placeholder(dtype(k), shapes[k], name='placeholder_'+k)
+            for k in EXAMPLE_KEYS}
     # Add a placeholder for models that use ground-truth during training.
     example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
-    return example, feed_loop
+    return example
 
 
 def _whiten(example_raw, o, stat=None, name='whiten'):
@@ -434,3 +463,42 @@ def _draw_heatmap(model, time_stride=1, name='draw_heatmap'):
     with tf.name_scope(name) as scope:
         # model.outputs['hmap'] -- [b, t, frmsz, frmsz, 2]
         return tf.nn.softmax(model.outputs['hmap'][0,::time_stride,:,:,0:1])
+
+
+def _load_sequence(seq, o):
+    '''
+    Sequence has keys:
+        'image_files'    # Tensor with shape [n] containing strings.
+        'labels'         # Tensor with shape [n, 4] containing rectangles.
+        'label_is_valid' # Tensor with shape [n] containing booleans.
+    Example has keys:
+        'x0_raw'     # First image in sequence, shape [h, w, 3]
+        'y0'         # Position of target in first image, shape [4]
+        'x_raw'      # Input images, shape [n-1, h, w, 3]
+        'y'          # Position of target in following frames, shape [n-1, 4]
+        'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
+    '''
+    seq_len = len(seq['image_files'])
+    assert(len(seq['labels']) == seq_len)
+    assert(len(seq['label_is_valid']) == seq_len)
+    assert(seq['label_is_valid'][0] == True)
+    # TODO: Use o.dtype here? Numpy complains.
+    f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
+                            dtype=np.float32)
+    images = map(f, seq['image_files'])
+    return {
+        'x0_raw':     np.array(images[0]),
+        'y0':         np.array(seq['labels'][0]),
+        'x_raw':      np.array(images[1:]),
+        'y':          np.array(seq['labels'][1:]),
+        'y_is_valid': np.array(seq['label_is_valid'][1:]),
+    }
+
+def _load_batch(seqs, o):
+    sequence_keys = set(['x_raw', 'y', 'y_is_valid'])
+    examples = map(lambda x: _load_sequence(x, o), seqs)
+    # Pad all sequences to o.ntimesteps.
+    return {k: np.stack([pad_to(x[k], o.ntimesteps, axis=0)
+                             if k in sequence_keys else x[k]
+                         for x in examples])
+            for k in EXAMPLE_KEYS}
