@@ -42,6 +42,9 @@ def parse_arguments():
     # NOTE: (NL) any reason to have two arguments for this option?
     parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)
+    parser.add_argument(
+            '--use_queues', help='enable queues for asynchronous data loading',
+            action='store_true')
 
     parser.add_argument(
             '--model', help='model!',
@@ -166,4 +169,4 @@ if __name__ == "__main__":
     m = model.load_model(o, model_params={})
 
     assert(o.mode == 'train')
-    train.train(m, datasets, val_sets, o)
+    train.train(m, datasets, val_sets, o, use_queues=o.use_queues)

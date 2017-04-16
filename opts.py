@@ -32,6 +32,7 @@ class Opts(object):
         self.ninchannel         = None
         self.outdim             = None
         self.useresizedimg      = True
+        self.use_queues         = False
 
         #----------------------------------------------------------------------
         # model - general
