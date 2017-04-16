@@ -86,15 +86,15 @@ def merge_dims(x, a, b):
     x_static = x.shape.as_list()
     n = len(x_static)
 
-    def restore(v, c):
-        '''Restores dimensions [c] to dimensions [a, ..., b-1].'''
+    def restore(v, axis):
+        '''Restores dimensions [axis] to dimensions [a, ..., b-1].'''
         v_dynamic = tf.shape(v)
         v_static = v.shape.as_list()
         m = len(v_static)
         # Substitute the static size where possible.
-        u_dynamic = ([v_static[i] or v_dynamic[i] for i in range(0, c)] +
+        u_dynamic = ([v_static[i] or v_dynamic[i] for i in range(0, axis)] +
                      [x_static[i] or x_dynamic[i] for i in range(a, b)] +
-                     [v_static[i] or v_dynamic[i] for i in range(c+1, m)])
+                     [v_static[i] or v_dynamic[i] for i in range(axis+1, m)])
         u = tf.reshape(v, u_dynamic)
         return u
 

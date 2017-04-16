@@ -544,15 +544,19 @@ class RNN_attention_st(object):
 def convert_rec_to_heatmap(rec, o, min_size=None):
     '''Create heatmap from rectangle
     Args:
-        rec: [batchsz x ntimesteps] ground-truth rectangle labels
+        rec: [batchsz x ntimesteps x 4] ground-truth rectangle labels
     Return:
         heatmap: [batchsz x ntimesteps x o.frmsz x o.frmsz x 2] # fg + bg
     '''
     with tf.name_scope('heatmaps') as scope:
-        masks = []
-        for t in range(o.ntimesteps):
-            masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg', min_size=min_size))
-        return tf.stack(masks, axis=1, name=scope)
+        # JV: This causes a seg-fault in save when two loss functions are constructed?!
+        # masks = []
+        # for t in range(o.ntimesteps):
+        #     masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
+        # return tf.stack(masks, axis=1, name=scope)
+        rec, unmerge = merge_dims(rec, 0, 2)
+        masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size)
+        return unmerge(masks, 0)
 
 # weight variable; created variables are new and will not be shared.
 def get_weight_variable(
@@ -608,19 +612,16 @@ def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, n
         x1, y1, x2, y2 = tf.unstack(rec, axis=1)
         if min_size is not None:
             x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, min_size=min_size)
-        # grid_x, grid_y -- [frmsz, frmsz]
-        frmsz = tf.constant(o.frmsz)
-        grid_x, grid_y = tf.meshgrid(tf.cast(tf.range(frmsz), dtype=o.dtype),
-                                     tf.cast(tf.range(frmsz), dtype=o.dtype))
+        # grid_x -- [1, frmsz]
+        # grid_y -- [frmsz, 1]
+        grid_x = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 0)
+        grid_y = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 1)
         # resize tensors so that they can be compared
         # x1, y1, x2, y2 -- [b, 1, 1]
-        x1 = tf.expand_dims(tf.expand_dims(x1,1),2)
-        x2 = tf.expand_dims(tf.expand_dims(x2,1),2)
-        y1 = tf.expand_dims(tf.expand_dims(y1,1),2)
-        y2 = tf.expand_dims(tf.expand_dims(y2,1),2)
-        # JV: Not necessary due to broadcast rules.
-        # grid_x = tf.tile(tf.expand_dims(grid_x,0), [o.batchsz,1,1])
-        # grid_y = tf.tile(tf.expand_dims(grid_y,0), [o.batchsz,1,1])
+        x1 = tf.expand_dims(tf.expand_dims(x1, -1), -1)
+        x2 = tf.expand_dims(tf.expand_dims(x2, -1), -1)
+        y1 = tf.expand_dims(tf.expand_dims(y1, -1), -1)
+        y2 = tf.expand_dims(tf.expand_dims(y2, -1), -1)
         # masks -- [b, frmsz, frmsz]
         masks = tf.logical_and(
             tf.logical_and(tf.less_equal(x1, grid_x), 
@@ -643,6 +644,7 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
         # Ensure that x2-x1 > 1
         xc, xs = 0.5*(x1 + x2), x2-x1
         yc, ys = 0.5*(y1 + y2), y2-y1
+        # TODO: Does this propagate NaNs?
         xs = tf.maximum(min_size, xs)
         ys = tf.maximum(min_size, ys)
         x1, x2 = xc-xs/2, xc+xs/2

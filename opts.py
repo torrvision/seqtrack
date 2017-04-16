@@ -17,6 +17,7 @@ class Opts(object):
         self.verbose_train      = False
         self.mode               = '' # 'train' or 'test'
         self.debugmode          = False # True or False
+        self.tfdb               = False # True or False
         self.seed_global        = 9
         self.dtype              = tf.float32
         self.exectime           = helpers.get_time()

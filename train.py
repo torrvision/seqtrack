@@ -2,6 +2,7 @@ import pdb
 import sys
 import numpy as np
 import tensorflow as tf
+from tensorflow.python import debug as tf_debug
 import time
 import os
 import itertools
@@ -177,6 +178,9 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
             for t in threads:
                 t.start()
 
+        if o.tfdb:
+            sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+
         writer = {}
         for mode in modes:
             path_summary = os.path.join(o.path_summary, mode)
@@ -211,7 +215,7 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                         prev_ckpt = global_step
 
                 # intermediate evaluation of model
-                period_assess = o.period_assess if not o.debugmode else 10
+                period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step % period_assess == 0:
                     iter_id = 'iteration{}'.format(global_step)
                     for eval_id, sampler in val_sets.iteritems():
@@ -220,9 +224,9 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                         visualizer = visualize.VideoFileWriter(vis_dir)
                         # Run the tracker on a full epoch.
                         print 'evaluation: {}'.format(eval_id)
-                        sequences = sampler()
-                        result = evaluate.evaluate(sess, example['val'], model['val'], sequences,
-                            visualize=visualizer.visualize)
+                        eval_sequences = sampler()
+                        result = evaluate.evaluate(sess, example['val'], model['val'],
+                            eval_sequences, visualize=visualizer.visualize)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])
                     # print 'ep {:d}/{:d} (STEP-{:d}) '\
@@ -402,8 +406,6 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         y          = example['y']
         y_is_valid = example['y_is_valid']
         assert(y.get_shape().as_list()[1] == o.ntimesteps)
-        # TODO: What happens with NaN rectangles here?
-        # hmap = convert_rec_to_heatmap(y, o, min_size=1.0)
         hmap = convert_rec_to_heatmap(y, o, min_size=1.0)
 
         losses = dict()
