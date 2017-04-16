@@ -145,22 +145,22 @@ if __name__ == "__main__":
     otb50        = data.Data_OTB('OTB-50', o)
     otb100       = data.Data_OTB('OTB-100', o)
     val_sets = {
-        # 'ILSVRC-train-full':
-        #     lambda: random.sample(list(sample.sample(ilsvrc_train, seqtype='full')), 100),
-        # 'ILSVRC-val-full':
-        #     lambda: random.sample(list(sample.sample(ilsvrc_val, seqtype='full')), 100),
-        # 'ILSVRC-train-sample':
-        #     lambda: random.sample(list(sample.sample(ilsvrc_train, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
-        # 'ILSVRC-val-sample':
-        #     lambda: random.sample(list(sample.sample(ilsvrc_val, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
-        # 'OTB-50-full':
-        #     lambda: sample.sample(otb50, seqtype='full'),
-        # 'OTB-100-full':
-        #     lambda: sample.sample(otb100, seqtype='full'),
+        'ILSVRC-train-full':
+            lambda: random.sample(list(sample.sample(ilsvrc_train, seqtype='full')), 100),
+        'ILSVRC-val-full':
+            lambda: random.sample(list(sample.sample(ilsvrc_val, seqtype='full')), 100),
+        'ILSVRC-train-sample':
+            lambda: random.sample(list(sample.sample(ilsvrc_train, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
+        'ILSVRC-val-sample':
+            lambda: random.sample(list(sample.sample(ilsvrc_val, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
+        'OTB-50-full':
+            lambda: sample.sample(otb50, seqtype='full'),
+        'OTB-100-full':
+            lambda: sample.sample(otb100, seqtype='full'),
         'OTB-50-sample':
             lambda: sample.sample(otb50, ntimesteps=o.ntimesteps, seqtype='sampling'),
-        # 'OTB-100-sample':
-        #     lambda: sample.sample(otb100, ntimesteps=o.ntimesteps, seqtype='sampling'),
+        'OTB-100-sample':
+            lambda: sample.sample(otb100, ntimesteps=o.ntimesteps, seqtype='sampling'),
     }
     # TODO: Set model_opts from command-line or JSON file?
     m = model.load_model(o, model_params={})
