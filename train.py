@@ -2,6 +2,7 @@ import pdb
 import sys
 import numpy as np
 import tensorflow as tf
+import tensorflow.python.debug as tf_debug
 import time
 import os
 import itertools
@@ -140,6 +141,8 @@ def train(create_model, datasets, val_sets, o):
 
         coord = tf.train.Coordinator()
         tf.train.start_queue_runners(sess, coord)
+        #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+
         # Run the feed_loop in another thread.
         threads = [
             threading.Thread(target=feed_loop_train, args=(sess, coord, examples_train)),
@@ -201,8 +204,16 @@ def train(create_model, datasets, val_sets, o):
                             else summary_vars['train'])
                     _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
                             feed_dict={queue_index: 0, example['use_gt']: True})
+                    #_, loss, summary, y_pred, h2 = sess.run([optimize_op, loss_var, summary_var,
+                    #    model.dbg['y_pred'], model.dbg['h2']],
+                            feed_dict={queue_index: 0, example['use_gt']: True})
                     dur = time.time() - start
                     train_writer.add_summary(summary, global_step=global_step)
+                    #print 'global_step: {}    -------------------------------'.format(global_step)
+                    #print '        h2 :', np.mean(h2[0], axis=(1,2,3))[::4]
+                    #print '    y_pred :', np.mean(y_pred[0], axis=1)[::4]
+                    #print ' (example) :'
+                    #print y_pred[0,::4,:]
                 else:
                     _, loss = sess.run([optimize_op, loss_var],
                             feed_dict={queue_index: 0, example['use_gt']: True})
@@ -332,15 +343,27 @@ def get_loss(example, outputs, o, name='loss'):
     with tf.name_scope(name) as scope:
         losses = dict()
 
-        # loss1: sum of two l1 distances for left-top and right-bottom
-        if 'l1' in o.losses: # TODO: double check
+        # l1 distances for left-top and right-bottom
+        if 'l1' in o.losses:
             y_pred = outputs['y']
             y_valid = tf.boolean_mask(y, y_is_valid)
             y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
             loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid))
             losses['l1'] = loss_l1
 
-        # loss1: cross-entropy between probabilty maps (need to change label)
+        # CLE (center location error). Measured in l2 distance.
+        if 'cle' in o.losses:
+            y_pred = outputs['y']
+            y_valid = tf.boolean_mask(y, y_is_valid)
+            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            x_center = (y_valid[:,2] - y_valid[:,0]) * 0.5
+            y_center = (y_valid[:,3] - y_valid[:,1]) * 0.5
+            x_pred_center = (y_pred_valid[:,2] - y_pred_valid[:,0]) * 0.5
+            y_pred_center = (y_pred_valid[:,3] - y_pred_valid[:,1]) * 0.5
+            loss_cle = tf.reduce_mean(tf.sqrt((x_center - x_pred_center)**2 + (y_center - y_pred_center)**2))
+            losses['cle'] = loss_cle
+        
+        # Cross-entropy between probabilty maps (need to change label)
         if 'ce' in o.losses:
             hmap_pred = outputs['hmap']
             hmap_valid = tf.boolean_mask(hmap, y_is_valid)

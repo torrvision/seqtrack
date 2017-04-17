@@ -31,7 +31,7 @@ def parse_arguments():
             type=str, default='')
     parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
-            type=int, default=0)
+            type=int, default=9)
 
     parser.add_argument(
             '--frmsz', help='size of a square image', type=int, default=100)
@@ -120,6 +120,9 @@ def parse_arguments():
             type=int, default=10000)
 
     parser.add_argument(
+            '--gpu_device', help='set `CUDA_VISIBLE_DEVICES`',
+            type=int, default=0)
+    parser.add_argument(
             '--gpu_frac', help='fraction of gpu memory',
             type=float, default=0.4)
 
@@ -143,20 +146,20 @@ if __name__ == "__main__":
     val_sets = {
         'ILSVRC-train-full':
             lambda: random.sample(list(sample.sample(ilsvrc_train, seqtype='full')), 100),
-        'ILSVRC-val-full':
-            lambda: random.sample(list(sample.sample(ilsvrc_val, seqtype='full')), 100),
+        # 'ILSVRC-val-full':
+        #     lambda: random.sample(list(sample.sample(ilsvrc_val, seqtype='full')), 100),
         'ILSVRC-train-sample':
             lambda: random.sample(list(sample.sample(ilsvrc_train, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
-        'ILSVRC-val-sample':
-            lambda: random.sample(list(sample.sample(ilsvrc_val, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
-        'OTB-50-full':
-            lambda: sample.sample(otb50, seqtype='full'),
-        'OTB-100-full':
-            lambda: sample.sample(otb100, seqtype='full'),
-        'OTB-50-sample':
-            lambda: sample.sample(otb50, ntimesteps=o.ntimesteps, seqtype='sampling'),
-        'OTB-100-sample':
-            lambda: sample.sample(otb100, ntimesteps=o.ntimesteps, seqtype='sampling'),
+        # 'ILSVRC-val-sample':
+        #     lambda: random.sample(list(sample.sample(ilsvrc_val, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
+        #'OTB-50-full':
+        #    lambda: sample.sample(otb50, seqtype='full'),
+        #'OTB-100-full':
+        #    lambda: sample.sample(otb100, seqtype='full'),
+        #'OTB-50-sample':
+        #    lambda: sample.sample(otb50, ntimesteps=o.ntimesteps, seqtype='sampling'),
+        #'OTB-100-sample':
+        #    lambda: sample.sample(otb100, ntimesteps=o.ntimesteps, seqtype='sampling'),
     }
 
     m = lambda inputs: model.load_model(inputs, o)

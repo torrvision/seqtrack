@@ -26,7 +26,7 @@ class Opts(object):
         # data set specific parameters 
         # TODO: only params that need to change; otherwise put it in data class
         self.dataset            = '' # (bouncing_mnist, etc.)
-        self.trainsplit         = 0 # 0,1,2,3 or 9 for all train sets
+        self.trainsplit         = 9 # 0,1,2,3 or 9 for all train sets
         self.frmsz              = None
         self.ninchannel         = None
         self.outdim             = None
@@ -90,7 +90,7 @@ class Opts(object):
         self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
         self.period_ckpt        = 10000 # this is based only on global_step; batchsz not considered
-        self.period_assess      = self.period_ckpt
+        self.period_assess      = 10000
         self.period_summary     = 10
         self.period_preview     = 100 # Ensure that period_preview % period_summary == 0.
         self.activ_histogram    = False
@@ -104,6 +104,7 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # device memory allocation 
+        self.gpu_device         = 0 # set `CUDA_VISIBLE_DEVICES` gpu number
         self.gpu_manctrl        = True # set it always True and control gpu_frac
         self.gpu_frac           = 0.4 # option for memory allocation
 
@@ -145,6 +146,9 @@ class Opts(object):
         self.path_data = os.path.join(self.path_data_home, self.dataset)
 
     def _set_gpu_config(self):
+        # set `CUDA_VISIBLE_DEVICES`
+        os.environ['CUDA_VISIBLE_DEVICES'] = '{}'.format(self.gpu_device)
+        # set tfconfig 
         self.tfconfig = tf.ConfigProto()
         # TODO: not sure if this should be always true.
         self.tfconfig.allow_soft_placement = True

@@ -47,17 +47,17 @@ def track(sess, inputs, model, sequence):
         # Feed the next `chunk_len` frames into the model.
         chunk_len = min(rem, model.sequence_len)
         images = map(lambda x: load_image(x, model.image_size, resize=True),
-                     sequence['image_files'][start:start+chunk_len])
-        # Create single array of all images.
+                     sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
         images = np.array(map(im_to_arr, images))
         images = _single_to_batch(_pad_to(images, model.sequence_len), model.batch_size)
-        # Create fake y values.
-        y_gt = np.zeros(list(images.shape[:2])+[4])
+        y_gt = np.array(sequence['labels'][start:start+chunk_len])
+        y_gt = _single_to_batch(_pad_to(y_gt, model.sequence_len), model.batch_size)
         feed_dict = {
             inputs['x_raw']:  images,
             inputs['x0_raw']: first_image,
             inputs['y0']:     first_label,
             inputs['y']:      y_gt,
+            inputs['use_gt']: True,
         }
         if start > 1:
             # This is not the first chunk.

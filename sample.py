@@ -148,7 +148,8 @@ def sample(dataset, ntimesteps=None, seqtype=None, shuffle=False):
             Adaptive frequency or gradually increasing frequency as a
             Curriculum Learning might be tried.
             '''
-            freq = 10
+            #freq = 10
+            freq = 2
             sampled_frames = range(random.choice(frames_with_label), len(frame_is_valid), freq)
             return sampled_frames[:ntimesteps+1]
         elif seqtype == 'full':
