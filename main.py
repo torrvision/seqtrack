@@ -39,7 +39,7 @@ def parse_arguments():
             type=int, default=9)
 
     parser.add_argument(
-            '--frmsz', help='size of a square image', type=int, default=100)
+            '--frmsz', help='size of a square image', type=int, default=241)
     # NOTE: (NL) any reason to have two arguments for this option?
     parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)

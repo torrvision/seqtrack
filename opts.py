@@ -28,9 +28,7 @@ class Opts(object):
         # TODO: only params that need to change; otherwise put it in data class
         self.dataset            = '' # (bouncing_mnist, etc.)
         self.trainsplit         = 9 # 0,1,2,3 or 9 for all train sets
-        self.frmsz              = None
-        self.ninchannel         = None
-        self.outdim             = None
+        self.frmsz              = 241
         self.useresizedimg      = True
         self.use_queues         = False
 
@@ -40,36 +38,22 @@ class Opts(object):
         self.losses             = None
 
         #----------------------------------------------------------------------
-        # model - attention
-        self.h_concat_ratio     = 1
-
-        #----------------------------------------------------------------------
         # model parameters - rnn
-        self.cell_type          = 'LSTM' 
         self.nunits             = 256
         self.ntimesteps         = 20
-        self.rnn_nlayers        = 1
         self.dropout_rnn        = False
-        self.keep_ratio         = 0.5
-        self.lstmforgetbias     = False
-        self.yprev_mode         = '' # nouse, concat_abs, concat_spatial (later), weight
-        self.pass_yinit         = False
 
         #----------------------------------------------------------------------
         # model parameters - cnn (or feature extractor)
         self.cnn_pretrain       = False 
         self.cnn_model          = 'vgg' # vgg, resnet, imagenet, etc.
         self.dropout_cnn        = False
-        self.keep_ratio_cnn     = 0.1
-        # TODO: add dropout and batch norm option
 
         #----------------------------------------------------------------------
         # training policies
         self.nepoch             = 20
         self.batchsz            = 1
         self.optimizer          = 'adam' # sgd, adam, rmsprop
-        # self.lr                 = 0.0001
-        # self.lr_update          = False
         self.lr_init            = 1e-3
         self.lr_decay_rate      = 1 # No decay.
         self.lr_decay_steps     = 10000
@@ -94,8 +78,6 @@ class Opts(object):
         self.path_ckpt          = './ckpt'
         self.path_output        = './output'
         self.path_summary       = './summary'
-        self.restore            = False 
-        self.restore_model      = None # 'specify_pretrained_model.cpkt' 
         self.resume             = False
         self.period_ckpt        = 10000 # this is based only on global_step; batchsz not considered
         self.period_assess      = 10000
@@ -139,18 +121,7 @@ class Opts(object):
         self.param_histogram = self.histograms
 
     def _set_dataset_params(self):
-        if self.dataset in ['moving_mnist', 'bouncing_mnist']:
-            self.frmsz = 100 # image size (assuming square)
-            self.ninchannel = 1 # number of image channels
-            self.outdim = 4 # rnn final output
-        elif self.dataset in ['ILSVRC', 'OTB-50', 'OTB-100']:
-            # TODO: try different frmsz
-            if not self.frmsz:
-                self.frmsz = 100 # image (re)size, width and height. assuming square
-            self.ninchannel = 3
-            self.outdim = 4 # rnn final output
-        else:
-            raise ValueError('not implemented yet, coming soon..')
+        assert(self.dataset in ['moving_mnist', 'bouncing_mnist', 'ILSVRC'])
         self.path_data = os.path.join(self.path_data_home, self.dataset)
 
     def _set_gpu_config(self):
