@@ -20,6 +20,7 @@ The `outputs` dictionary should have a key 'y' and may have other keys such as '
 '''
 
 import pdb
+import functools
 import tensorflow as tf
 from tensorflow.contrib import slim
 import os
@@ -27,99 +28,8 @@ import os
 import numpy as np
 
 import cnnutil
+from helpers import merge_dims
 
-# Model interface:
-#
-# Inputs:
-# inputs_raw -- Images for frames {t .. t+T}.
-# inputs_valid -- Boolean for frames {t .. t+T}.
-# inputs_HW -- Dimension of video.
-# labels -- Location of object in frames {t .. t+T}.
-# x0_raw -- Image for frame 0 (perhaps t != 0).
-# y0 -- Location of object in frame 0.
-# target_raw -- Image of object in frame 0, centered and masked.
-#
-# A model may also define a collection of state variables.
-# The state variables will be fed only when the segment is being continued
-# from a previous segment.
-
-# def make_input_placeholders(o, stat=None):
-#     '''
-#     Feed images to 'inputs_raw', 'x0_raw', etc.
-#     Compute functions of 'inputs', 'x0', etc.
-#     '''
-# 
-#     # placeholders for inputs
-#     inputs_raw = tf.placeholder(o.dtype,
-#             shape=[o.batchsz, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel],
-#             name='inputs_raw')
-#     inputs_valid = tf.placeholder(tf.bool,
-#             shape=[o.batchsz, o.ntimesteps+1],
-#             name='inputs_valid')
-#     inputs_HW = tf.placeholder(o.dtype,
-#             shape=[o.batchsz, 2],
-#             name='inputs_HW')
-#     labels = tf.placeholder(o.dtype,
-#             shape=[o.batchsz, o.ntimesteps+1, o.outdim],
-#             name='labels')
-# 
-#     # placeholders for initializations of full-length sequences
-#     # y_init = tf.placeholder_with_default(
-#     #         labels[:,0],
-#     #         shape=[o.batchsz, o.outdim], name='y_init')
-#     y_init = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y_init')
-# 
-#     # placeholders for x0 and y0. This is used for full-length sequences
-#     # NOTE: when it's not first segment, you should always feed x0, y0
-#     # otherwise it will use GT as default. It will be wrong then.
-#     # x0_raw = tf.placeholder_with_default(
-#     #         inputs_raw[:,0],
-#     #         shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel], name='x0_raw')
-#     # y0 = tf.placeholder_with_default(o.dtype
-#     #         labels[:,0],
-#     #         shape=[o.batchsz, o.outdim], name='y0')
-#     x0_raw = tf.placeholder(o.dtype,
-#             shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
-#             name='x0_raw')
-#     y0 = tf.placeholder(o.dtype, shape=[o.batchsz, o.outdim], name='y0')
-#     # NOTE: when it's not first segment, be careful what is passed to target.
-#     # Make sure to pass x0, not the first frame of every segments.
-#     target_raw = tf.placeholder(o.dtype,
-#             shape=[o.batchsz, o.frmsz, o.frmsz, o.ninchannel],
-#             name='target_raw')
-# 
-#     assert(stat is not None)
-#     with tf.name_scope('image_stats') as scope:
-#         if stat:
-#             mean = tf.constant(stat['mean'], o.dtype, name='mean')
-#             std  = tf.constant(stat['std'],  o.dtype, name='std')
-#         else:
-#             mean = tf.constant(0.0, o.dtype, name='mean')
-#             std  = tf.constant(1.0, o.dtype, name='std')
-#     inputs = whiten(inputs_raw, mean, std, name='inputs')
-#     x0     = whiten(x0_raw,     mean, std, name='x0')
-#     target = whiten(target_raw, mean, std, name='target')
-# 
-#     return {
-#             'inputs_raw':   inputs_raw,
-#             'inputs':       inputs,
-#             'inputs_valid': inputs_valid,
-#             'inputs_HW':    inputs_HW,
-#             'labels':       labels,
-#            #'outputs':      outputs,
-#            #'loss':         loss_total,
-#             'y_init':       y_init,
-#            #'y_last':       y_curr,
-#             'x0_raw':       x0_raw,
-#             'x0':           x0,
-#             'y0':           y0,
-#             'target_raw':   target_raw,
-#             'target':       target,
-#             }
-# 
-# def whiten(x, mean, std, name='whiten'):
-#     with tf.name_scope(name) as scope:
-#         return tf.divide(x - mean, std, name=scope)
 
 class RNN_attention_s(object):
     def __init__(self, o, is_train):
@@ -631,18 +541,22 @@ class RNN_attention_st(object):
         return outputs 
 
 
-def convert_rec_to_heatmap(rec, o):
+def convert_rec_to_heatmap(rec, o, min_size=None):
     '''Create heatmap from rectangle
     Args:
-        rec: [batchsz x ntimesteps] ground-truth rectangle labels
+        rec: [batchsz x ntimesteps x 4] ground-truth rectangle labels
     Return:
         heatmap: [batchsz x ntimesteps x o.frmsz x o.frmsz x 2] # fg + bg
     '''
-    masks = []
-    for t in range(o.ntimesteps):
-        masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
-    masks = tf.stack(masks, axis=1)
-    return masks
+    with tf.name_scope('heatmaps') as scope:
+        # JV: This causes a seg-fault in save when two loss functions are constructed?!
+        # masks = []
+        # for t in range(o.ntimesteps):
+        #     masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
+        # return tf.stack(masks, axis=1, name=scope)
+        rec, unmerge = merge_dims(rec, 0, 2)
+        masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size)
+        return unmerge(masks, 0)
 
 # weight variable; created variables are new and will not be shared.
 def get_weight_variable(
@@ -689,50 +603,53 @@ def activate(input_, activation_='relu'):
     else:
         raise ValueError('no available activation type!')
 
-def get_masks_from_rectangles(rec, o, kind='fg', typecast=True):
-    # create mask using rec; typically rec=y_prev
-    x1 = rec[:,0] * o.frmsz
-    y1 = rec[:,1] * o.frmsz
-    x2 = rec[:,2] * o.frmsz
-    y2 = rec[:,3] * o.frmsz
-    x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, 1.0)
-    grid_x, grid_y = tf.meshgrid(
-            tf.range(o.frmsz, dtype=o.dtype),
-            tf.range(o.frmsz, dtype=o.dtype))
-    # resize tensors so that they can be compared
-    x1 = tf.expand_dims(tf.expand_dims(x1,1),2)
-    x2 = tf.expand_dims(tf.expand_dims(x2,1),2)
-    y1 = tf.expand_dims(tf.expand_dims(y1,1),2)
-    y2 = tf.expand_dims(tf.expand_dims(y2,1),2)
-    # JV: Not necessary due to broadcast rules.
-    # grid_x = tf.tile(tf.expand_dims(grid_x,0), [o.batchsz,1,1])
-    # grid_y = tf.tile(tf.expand_dims(grid_y,0), [o.batchsz,1,1])
-    # mask
-    masks = tf.logical_and(
-        tf.logical_and(tf.less_equal(x1, grid_x), 
-            tf.less_equal(grid_x, x2)),
-        tf.logical_and(tf.less_equal(y1, grid_y), 
-            tf.less_equal(grid_y, y2)))
+def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, name='mask'):
+    with tf.name_scope(name) as scope:
+        # create mask using rec; typically rec=y_prev
+        # rec -- [b, 4]
+        rec *= float(o.frmsz)
+        # x1, y1, x2, y2 -- [b]
+        x1, y1, x2, y2 = tf.unstack(rec, axis=1)
+        if min_size is not None:
+            x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, min_size=min_size)
+        # grid_x -- [1, frmsz]
+        # grid_y -- [frmsz, 1]
+        grid_x = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 0)
+        grid_y = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 1)
+        # resize tensors so that they can be compared
+        # x1, y1, x2, y2 -- [b, 1, 1]
+        x1 = tf.expand_dims(tf.expand_dims(x1, -1), -1)
+        x2 = tf.expand_dims(tf.expand_dims(x2, -1), -1)
+        y1 = tf.expand_dims(tf.expand_dims(y1, -1), -1)
+        y2 = tf.expand_dims(tf.expand_dims(y2, -1), -1)
+        # masks -- [b, frmsz, frmsz]
+        masks = tf.logical_and(
+            tf.logical_and(tf.less_equal(x1, grid_x), 
+                           tf.less_equal(grid_x, x2)),
+            tf.logical_and(tf.less_equal(y1, grid_y), 
+                           tf.less_equal(grid_y, y2)))
 
-    if kind == 'fg': # only foreground mask
-        masks = tf.expand_dims(masks, 3) # to have channel dim
-    elif kind == 'bg': # add background mask
-        masks_bg = tf.logical_not(masks)
-        masks = tf.concat(
-                (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
-    if typecast: # type cast so that it can be concatenated with x
-        masks = tf.cast(masks, o.dtype)
-    return masks
+        if kind == 'fg': # only foreground mask
+            masks = tf.expand_dims(masks, 3) # to have channel dim
+        elif kind == 'bg': # add background mask
+            masks_bg = tf.logical_not(masks)
+            masks = tf.concat(
+                    (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
+        if typecast: # type cast so that it can be concatenated with x
+            masks = tf.cast(masks, o.dtype)
+        return masks
 
-def enforce_min_size(x1, y1, x2, y2, min=1.0):
-    # Ensure that x2-x1 > 1
-    xc, xs = 0.5*(x1 + x2), x2-x1
-    yc, ys = 0.5*(y1 + y2), y2-y1
-    xs = tf.maximum(min, xs)
-    ys = tf.maximum(min, ys)
-    x1, x2 = xc-xs/2, xc+xs/2
-    y1, y2 = yc-ys/2, yc+ys/2
-    return x1, y1, x2, y2
+def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
+    with tf.name_scope(name) as scope:
+        # Ensure that x2-x1 > 1
+        xc, xs = 0.5*(x1 + x2), x2-x1
+        yc, ys = 0.5*(y1 + y2), y2-y1
+        # TODO: Does this propagate NaNs?
+        xs = tf.maximum(min_size, xs)
+        ys = tf.maximum(min_size, ys)
+        x1, x2 = xc-xs/2, xc+xs/2
+        y1, y2 = yc-ys/2, yc+ys/2
+        return x1, y1, x2, y2
 
 
 class RNN_basic(object):
@@ -1719,8 +1636,11 @@ class RNN_dual(object):
     '''
     This model has two RNNs (ConvLSTM for Dynamics and LSTM for Appearances).
     '''
-    def __init__(self, inputs, o):
-        self.is_train = True if o.mode == 'train' else False
+    def __init__(self, inputs, o,
+                 is_training=True,
+                 summaries_collections=None):
+        # Ignore is_training  - model does not change in training vs testing.
+        # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
@@ -1762,7 +1682,7 @@ class RNN_dual(object):
             with tf.name_scope(name):
                 ft, it, ct_tilda, ot = tf.split(
                     slim.fully_connected(
-                        tf.concat_v2((h_prev, x), 1),
+                        tf.concat((h_prev, x), 1),
                         o.nunits*4,
                         activation_fn=None,
                         weights_regularizer=slim.l2_regularizer(0.0005)),
@@ -1991,7 +1911,11 @@ class RNN_dual_rec(object):
     '''
     This model has two RNNs (ConvLSTM for Dynamics and LSTM for Appearances).
     '''
-    def __init__(self, inputs, o):
+    def __init__(self, inputs, o,
+                 is_training=True,
+                 summaries_collections=None):
+        # Ignore is_training  - model does not change in training vs testing.
+        # Ignore sumaries_collections - model does not generate any summaries.
         self.is_train = True if o.mode == 'train' else False
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -2188,148 +2112,187 @@ class RNN_dual_rec(object):
         return outputs, state, dbg
 
 
-class RNN_conv_asymm(object):
-    def __init__(self, inputs, o):
-        self.is_train = True if o.mode == 'train' else False
-        outputs, state = self._load_model(inputs, o)
-        self.outputs = outputs
-        self.state   = state
-        self.image_size   = (o.frmsz, o.frmsz)
-        self.sequence_len = o.ntimesteps
-        self.batch_size   = None
+def rnn_conv_asymm(example, o,
+                   is_training=True,
+                   summaries_collections=None,
+                   # Model parameters:
+                   input_num_layers=3,
+                   input_kernel_size=[7, 5, 3],
+                   input_num_channels=[16, 32, 64],
+                   input_stride=[2, 1, 1],
+                   input_pool=[True, True, True],
+                   input_pool_stride=[2, 2, 2],
+                   input_pool_kernel_size=[3, 3, 3],
+                   input_batch_norm=False):
+                   # lstm_num_layers=1,
+                   # lstm_kernel_size=[3]):
 
-    def _load_model(self, inputs, o):
-        # net = make_input_placeholders(o)
-        images = inputs['x']
-        x0     = inputs['x0']
-        y0     = inputs['y0']
-        masks = get_masks_from_rectangles(y0, o)
-        init_input = tf.concat([x0, masks], axis=3)
+    images = example['x']
+    x0     = example['x0']
+    y0     = example['y0']
+    masks = get_masks_from_rectangles(y0, o)
+    if o.debugmode:
+        with tf.name_scope('input_preview'):
+            tf.summary.image('x', images[0], collections=summaries_collections)
+            target = tf.concat([images[0, 0], masks[0]], axis=2)
+            tf.summary.image('target', tf.expand_dims(target, axis=0),
+                             collections=summaries_collections)
+    if o.activ_histogram:
+        with tf.name_scope('input_histogram'):
+            tf.summary.histogram('x', images, collections=summaries_collections)
+    init_input = tf.concat([x0, masks], axis=3)
 
-        def input_cnn(x, num_outputs, name='input_cnn'):
-            with tf.name_scope(name):
-                with slim.arg_scope([slim.conv2d, slim.max_pool2d], padding='SAME'):
-                    with slim.arg_scope([slim.conv2d],
-                                        weights_regularizer=slim.l2_regularizer(o.wd)):
-                        layers = {}
-                        x = slim.conv2d(x, 16, kernel_size=7, stride=2, scope='conv1')
-                        layers['conv1'] = x
-                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool1')
-                        x = slim.conv2d(x, 32, kernel_size=5, stride=1, scope='conv2')
-                        layers['conv2'] = x
-                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool2')
-                        x = slim.conv2d(x, num_outputs, kernel_size=3, stride=1, scope='conv3')
-                        layers['conv3'] = x
-                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool3')
-                        if o.activ_histogram:
-                            with tf.name_scope('summary'):
-                                for k, v in layers.iteritems():
-                                    tf.summary.histogram(k, v)
-            return x
+    assert(len(input_kernel_size)      == input_num_layers)
+    assert(len(input_num_channels)     == input_num_layers)
+    assert(len(input_stride)           == input_num_layers)
+    assert(len(input_pool)             == input_num_layers)
+    assert(len(input_pool_stride)      == input_num_layers)
+    assert(len(input_pool_kernel_size) == input_num_layers)
+    # assert(len(lstm_kernel_size) == lstm_num_layers)
 
-        def conv_lstm(x, h_prev, c_prev, state_dim, name='conv_lstm'):
-            with tf.name_scope(name) as scope:
-                with slim.arg_scope([slim.conv2d],
-                                    num_outputs=state_dim,
-                                    kernel_size=3,
-                                    padding='SAME',
-                                    activation_fn=None,
+    def input_cnn(x, num_outputs, name='input_cnn'):
+        with tf.name_scope(name):
+            with slim.arg_scope([slim.conv2d, slim.max_pool2d], padding='SAME'):
+                normalizer_fn = None
+                conv2d_params = {'weights_regularizer': slim.l2_regularizer(o.wd)}
+                if input_batch_norm:
+                    conv2d_params.update({
+                        'normalizer_fn': slim.batch_norm,
+                        'normalizer_params': {
+                            'is_training': is_training,
+                        }})
+                with slim.arg_scope([slim.conv2d], **conv2d_params):
+                    layers = {}
+                    for i in range(input_num_layers):
+                        conv_name = 'conv{}'.format(i+1)
+                        x = slim.conv2d(x, input_num_channels[i],
+                                           kernel_size=input_kernel_size[i],
+                                           stride=input_stride[i],
+                                           scope=conv_name)
+                        layers[conv_name] = x
+                        if input_pool[i]:
+                            pool_name = 'pool{}'.format(i+1)
+                            x = slim.max_pool2d(x, kernel_size=input_pool_kernel_size[i],
+                                                   stride=input_pool_stride[i],
+                                                   scope=pool_name)
+                    # if o.activ_histogram:
+                    #     with tf.name_scope('summary'):
+                    #         for k, v in layers.iteritems():
+                    #             tf.summary.histogram(k, v, collections=summaries_collections)
+        return x
+
+    def conv_lstm(x, h_prev, c_prev, state_dim, name='conv_lstm'):
+        with tf.name_scope(name) as scope:
+            with slim.arg_scope([slim.conv2d],
+                                num_outputs=state_dim,
+                                kernel_size=3,
+                                padding='SAME',
+                                activation_fn=None,
+                                weights_regularizer=slim.l2_regularizer(o.wd)):
+                i = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
+                                  slim.conv2d(h_prev, scope='hi', biases_initializer=None))
+                f = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
+                                  slim.conv2d(h_prev, scope='hf', biases_initializer=None))
+                y = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
+                                  slim.conv2d(h_prev, scope='ho', biases_initializer=None))
+                c_tilde = tf.nn.tanh(slim.conv2d(x, scope='xc') +
+                                     slim.conv2d(h_prev, scope='hc', biases_initializer=None))
+                c = (f * c_prev) + (i * c_tilde)
+                h = y * tf.nn.tanh(c)
+                layers = {'i': i, 'f': f, 'o': y, 'c_tilde': c, 'c': c, 'h': h}
+                # if o.activ_histogram:
+                #     with tf.name_scope('summary'):
+                #         for k, v in layers.iteritems():
+                #             tf.summary.histogram(k, v, collections=summaries_collections)
+        return h, c
+
+    def output_cnn(x, name='output_cnn'):
+        with tf.name_scope(name):
+            with slim.arg_scope([slim.conv2d, slim.max_pool2d], padding='SAME'):
+                with slim.arg_scope([slim.conv2d, slim.fully_connected],
                                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                    i = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
-                                      slim.conv2d(h_prev, scope='hi', biases_initializer=None))
-                    f = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
-                                      slim.conv2d(h_prev, scope='hf', biases_initializer=None))
-                    y = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
-                                      slim.conv2d(h_prev, scope='ho', biases_initializer=None))
-                    c_tilde = tf.nn.tanh(slim.conv2d(x, scope='xc') +
-                                         slim.conv2d(h_prev, scope='hc', biases_initializer=None))
-                    c = (f * c_prev) + (i * c_tilde)
-                    h = y * tf.nn.tanh(c)
-                    layers = {'i': i, 'f': f, 'o': y, 'c_tilde': c, 'c': c, 'h': h}
-                    if o.activ_histogram:
-                        with tf.name_scope('summary'):
-                            for k, v in layers.iteritems():
-                                tf.summary.histogram(k, v)
-            return h, c
+                    layers = {}
+                    x = slim.conv2d(x, 128, kernel_size=3, stride=2, scope='conv1')
+                    layers['conv1'] = x
+                    x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool1')
+                    x = slim.conv2d(x, 256, kernel_size=3, stride=1, scope='conv2')
+                    layers['conv2'] = x
+                    x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool2')
+                    x = slim.flatten(x)
+                    x = slim.fully_connected(x, 4, scope='predict')
+                    layers['predict'] = x
+                    # if o.activ_histogram:
+                    #     with tf.name_scope('summary'):
+                    #         for k, v in layers.iteritems():
+                    #             tf.summary.histogram(k, v, collections=summaries_collections)
+        return x
 
-        def output_cnn(x, name='output_cnn'):
-            with tf.name_scope(name):
-                with slim.arg_scope([slim.conv2d, slim.max_pool2d], padding='SAME'):
-                    with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                                        weights_regularizer=slim.l2_regularizer(o.wd)):
-                        layers = {}
-                        x = slim.conv2d(x, 128, kernel_size=3, stride=2, scope='conv1')
-                        layers['conv1'] = x
-                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool1')
-                        x = slim.conv2d(x, 256, kernel_size=3, stride=1, scope='conv2')
-                        layers['conv2'] = x
-                        x = slim.max_pool2d(x, kernel_size=3, stride=2, scope='pool2')
-                        x = slim.flatten(x)
-                        x = slim.fully_connected(x, 4, scope='predict')
-                        layers['predict'] = x
-                        if o.activ_histogram:
-                            with tf.name_scope('summary'):
-                                for k, v in layers.iteritems():
-                                    tf.summary.histogram(k, v)
-            return x
+    lstm_dim = 64
+    # At start of sequence, compute hidden state from first example.
+    # Feed (h_init, c_init) to resume tracking from previous state.
+    # Do NOT feed (h_init, c_init) when starting new sequence.
+    with tf.name_scope('h_init') as scope:
+        with tf.variable_scope('h_init'):
+            h_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
+    with tf.name_scope('c_init') as scope:
+        with tf.variable_scope('c_init'):
+            c_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
 
-        lstm_dim = 64
-        # At start of sequence, compute hidden state from first example.
-        # Feed (h_init, c_init) to resume tracking from previous state.
-        # Do NOT feed (h_init, c_init) when starting new sequence.
-        with tf.name_scope('h_init') as scope:
-            with tf.variable_scope('h_init'):
-                h_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
-        with tf.name_scope('c_init') as scope:
-            with tf.variable_scope('c_init'):
-                c_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
+    # # TODO: Process all frames together in training (when sequences are equal length)
+    # # (because it enables batch-norm to operate on whole sequence)
+    # # but not during testing (when sequences are different lengths)
+    # x, unmerge = merge_dims(images, 0, 2)
+    # with tf.name_scope('frame_cnn') as scope:
+    #     with tf.variable_scope('frame_cnn'):
+    #         # Pass name scope from above, otherwise makes new name scope
+    #         # within name scope created by variable scope.
+    #         r = input_cnn(x, num_outputs=lstm_dim, name=scope)
+    # r = unmerge(r, 0)
 
-        y = []
-        ht, ct = h_init, c_init
-        for t in range(o.ntimesteps):
-            xt = images[:, t]
-            with tf.name_scope('frame_cnn_{}'.format(t)) as scope:
-                with tf.variable_scope('frame_cnn', reuse=(t > 0)):
-                    # Pass name scope from above, otherwise makes new name scope
-                    # within name scope created by variable scope.
-                    rt = input_cnn(xt, num_outputs=lstm_dim, name=scope)
-            with tf.name_scope('conv_lstm_{}'.format(t)) as scope:
-                with tf.variable_scope('conv_lstm', reuse=(t > 0)):
-                    ht, ct = conv_lstm(rt, ht, ct, state_dim=lstm_dim, name=scope)
-            with tf.name_scope('out_cnn_{}'.format(t)) as scope:
-                with tf.variable_scope('out_cnn', reuse=(t > 0)):
-                    yt = output_cnn(ht, name=scope)
-            y.append(yt)
-            # tf.get_variable_scope().reuse_variables()
-        y = tf.stack(y, axis=1) # list to tensor
-        h_last, c_last = ht, ct
+    y = []
+    ht, ct = h_init, c_init
+    for t in range(o.ntimesteps):
+        xt = images[:, t]
+        with tf.name_scope('frame_cnn_{}'.format(t)) as scope:
+            with tf.variable_scope('frame_cnn', reuse=(t > 0)):
+                # Pass name scope from above, otherwise makes new name scope
+                # within name scope created by variable scope.
+                rt = input_cnn(xt, num_outputs=lstm_dim, name=scope)
+        with tf.name_scope('conv_lstm_{}'.format(t)) as scope:
+            with tf.variable_scope('conv_lstm', reuse=(t > 0)):
+                ht, ct = conv_lstm(rt, ht, ct, state_dim=lstm_dim, name=scope)
+        with tf.name_scope('out_cnn_{}'.format(t)) as scope:
+            with tf.variable_scope('out_cnn', reuse=(t > 0)):
+                yt = output_cnn(ht, name=scope)
+        y.append(yt)
+        # tf.get_variable_scope().reuse_variables()
+    h_last, c_last = ht, ct
+    y = tf.stack(y, axis=1) # list to tensor
 
+    # with tf.name_scope('out_cnn') as scope:
+    #     with tf.variable_scope('out_cnn', reuse=(t > 0)):
+    #         y = output_cnn(z, name=scope)
+
+    with tf.name_scope('summary'):
+        if o.activ_histogram:
+            tf.summary.histogram('rect', y, collections=summaries_collections)
         if o.param_histogram:
             for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
-                tf.summary.histogram(v.name, v)
+                tf.summary.histogram(v.name, v, collections=summaries_collections)
 
-        field = cnnutil.find_rf(xt, rt)
-        print 'CNN receptive field:'
-        print '  size:', field.rect.size()
-        print '  center offset:', field.rect.int_center()
-        print '  stride:', field.stride
+    outputs = {'y': y}
+    state = {'h': (h_init, h_last), 'c': (c_init, c_last)}
 
-        # with tf.name_scope('loss'):
-        #     loss_pred = get_loss(outputs, example['labels'], example['inputs_valid'], example['inputs_HW'], o,
-        #                          outtype='rectangle',
-        #                          name='pred')
-        #     loss_reg = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-        #     loss_total = loss_pred + loss_reg
-        #     # tf.add_to_collection('losses', loss)
-        #     # loss_total = tf.reduce_sum(tf.get_collection('losses'), name='loss_total')
-        #     with tf.name_scope('summary'):
-        #         tf.summary.scalar('pred', loss_pred)
-        #         tf.summary.scalar('reg', loss_reg)
-        #         tf.summary.scalar('total', loss_total)
-
-        outputs = {'y': y}
-        state = {'h': (h_init, h_last), 'c': (c_init, c_last)}
-        return outputs, state
+    class Model:
+        pass
+    model = Model()
+    model.outputs = outputs
+    model.state   = state
+    # Properties of instantiated model:
+    model.image_size   = (o.frmsz, o.frmsz)
+    model.sequence_len = o.ntimesteps # Static length of unrolled RNN.
+    model.batch_size   = None # Model accepts variable batch size.
+    return model
 
 
 class NonRecur(object):
@@ -2517,23 +2480,26 @@ class NonRecur(object):
         return net
 
 
-def load_model(example, o):
+def load_model(o, model_params=None):
     '''
     example is a dictionary that maps strings to Tensors.
     Its keys should include 'inputs', 'labels', 'x0', 'y0'.
     '''
-    if o.model == 'RNN_basic':
-        model = RNN_basic(o)
-    elif o.model == 'RNN_new':
-        model = RNN_new(example, o)
-    elif o.model == 'RNN_dual':
-        model = RNN_dual(example, o)
+    model_params = model_params or {}
+    assert('is_training' not in model_params)
+    assert('summaries_collections' not in model_params)
+    # if o.model == 'RNN_basic':
+    #     model = RNN_basic(o)
+    # elif o.model == 'RNN_new':
+    #     model = RNN_new(example, o)
+    if o.model == 'RNN_dual':
+        model = functools.partial(RNN_dual, o=o, **model_params)
     elif o.model == 'RNN_dual_rec':
-        model = RNN_dual_rec(example, o)
+        model = functools.partial(RNN_dual_rec, o=o, **model_params)
     elif o.model == 'RNN_conv_asymm':
-        model = RNN_conv_asymm(example, o)
-    elif o.model == 'CNN':
-        model = NonRecur(o)
+        model = functools.partial(rnn_conv_asymm, o=o, **model_params)
+    # elif o.model == 'CNN':
+    #     model = NonRecur(o)
     else:
         raise ValueError ('model not available')
     return model

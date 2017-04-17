@@ -1,5 +1,6 @@
 import pdb
 import argparse
+import functools
 import random
 import tensorflow as tf
 
@@ -25,6 +26,12 @@ def parse_arguments():
     parser.add_argument(
             '--debugmode', help='used for debugging',
             action='store_true')
+    parser.add_argument(
+            '--histograms', help='generate histograms in summary',
+            action='store_true')
+    parser.add_argument(
+            '--tfdb', help='run tensorflow debugger',
+            action='store_true')
 
     parser.add_argument(
             '--dataset', help='specify the name of dataset',
@@ -38,6 +45,9 @@ def parse_arguments():
     # NOTE: (NL) any reason to have two arguments for this option?
     parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)
+    parser.add_argument(
+            '--use_queues', help='enable queues for asynchronous data loading',
+            action='store_true')
 
     parser.add_argument(
             '--model', help='model!',
@@ -47,9 +57,6 @@ def parse_arguments():
             type=str) # example [l1, iou]
 
     parser.add_argument(
-            '--cell_type', help='rnn cell type',
-            type=str, default='LSTM')
-    parser.add_argument(
             '--nunits', help='number of hidden units in rnn cell',
             type=int, default=256)
     parser.add_argument(
@@ -57,12 +64,6 @@ def parse_arguments():
             type=int, default=20)
     parser.add_argument(
             '--dropout_rnn', help='set dropout for rnn',
-            action='store_true')
-    parser.add_argument(
-            '--yprev_mode', help='way of using y_prev',
-            type=str, default='')
-    parser.add_argument(
-            '--pass_yinit', help='pass gt y instead pred y during training',
             action='store_true')
 
     parser.add_argument(
@@ -87,12 +88,6 @@ def parse_arguments():
     parser.add_argument(
             '--lr_decay_steps', help='period for decaying learning rate',
             type=int, default=10000)
-    # parser.add_argument(
-    #         '--lr', help='learning rate',
-    #         type=float, default=0.0001)
-    # parser.add_argument(
-    #         '--lr_update', help='adaptive learning rate',
-    #         action='store_true')
     parser.add_argument(
             '--wd', help='weight decay',
             type=float, default=1e-3)
@@ -103,12 +98,6 @@ def parse_arguments():
     parser.add_argument(
             '--nosave', help='no need to save results?',
             action='store_true')
-    parser.add_argument(
-            '--restore', help='to load a pretrained model (for test)',
-            action='store_true')
-    parser.add_argument(
-            '--restore_model', help='model to restore',
-            type=str)
     parser.add_argument(
             '--resume', help='to resume training',
             action='store_true')
@@ -138,7 +127,7 @@ if __name__ == "__main__":
     o.update_by_sysarg(args=args)
     o.initialize()
 
-    dataset = data.load_data(o)
+    datasets = data.load_data(o)
     ilsvrc_train = data.Data_ILSVRC('train', o)
     ilsvrc_val   = data.Data_ILSVRC('val', o)
     otb50        = data.Data_OTB('OTB-50', o)
@@ -161,8 +150,8 @@ if __name__ == "__main__":
         #'OTB-100-sample':
         #    lambda: sample.sample(otb100, ntimesteps=o.ntimesteps, seqtype='sampling'),
     }
-
-    m = lambda inputs: model.load_model(inputs, o)
+    # TODO: Set model_opts from command-line or JSON file?
+    m = model.load_model(o, model_params={})
 
     assert(o.mode == 'train')
-    train.train(m, dataset, val_sets, o)
+    train.train(m, datasets, val_sets, o, use_queues=o.use_queues)

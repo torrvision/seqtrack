@@ -16,9 +16,12 @@ import sample
 import visualize
 
 from model import convert_rec_to_heatmap
+from helpers import load_image, im_to_arr, pad_to
+
+EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
 
 
-def train(create_model, datasets, val_sets, o):
+def train(create_model, datasets, val_sets, o, use_queues=False):
     '''Trains a network.
 
     Args:
@@ -44,10 +47,10 @@ def train(create_model, datasets, val_sets, o):
 
     The input dictionary has fields::
 
-        'x'         # Input images, shape [b, n+1, h, w, 3]
-        'x0'        # First image in sequence, shape [b, h, w, 3]
-        'y0'        # Position of target in first image, shape [b, 4]
-        'y_valid'   # Booleans indicating presence of frame, shape [b, n]
+        'x0'         # First image in sequence, shape [b, h, w, 3]
+        'y0'         # Position of target in first image, shape [b, 4]
+        'x'          # Input images, shape [b, n, h, w, 3]
+        'y_is_valid' # Booleans indicating presence of frame, shape [b, n]
 
     and the output dictionary has fields::
 
@@ -63,33 +66,66 @@ def train(create_model, datasets, val_sets, o):
     # since there are separate summary ops for training and validation (with different names).
     # Option 2 is to use FIFOQueue.from_list()
 
-    # Tune these numbers to adjust which queues are full.
-    NUM_LOAD_THREADS = 4
-    NUM_BATCH_THREADS = 1
-    NUM_MULTIPLEX_THREADS = 1
+    modes = ['train', 'val']
 
-    with tf.name_scope('pipeline'):
-        # Create a queue for each set.
-        example_train, feed_loop_train = _make_input_pipeline(o,
-            num_load_threads=NUM_LOAD_THREADS, num_batch_threads=NUM_BATCH_THREADS,
-            name='train')
-        example_val, feed_loop_val = _make_input_pipeline(o,
-            num_load_threads=NUM_LOAD_THREADS, num_batch_threads=NUM_BATCH_THREADS,
-            name='val')
-        queue_index, example = pipeline.make_multiplexer([example_train, example_val],
-            num_threads=NUM_MULTIPLEX_THREADS)
+    example   = {} # Each value is a dictionary of tensors.
+    feed_loop = {} # Each value is a function to call in a thread.
+    # Create a queue for each set.
+    with tf.name_scope('input'):
+        for mode in modes:
+            with tf.name_scope(mode):
+                from_queue = None
+                if use_queues:
+                    from_queue, feed_loop[mode] = _make_input_pipeline(o,
+                        num_load_threads=4, num_batch_threads=1)
+                example[mode] = _make_placeholders(o, default=from_queue)
 
-    # Create placeholders with variable batch size.
-    clear_batch_size = lambda shape: [None] + shape[1:]
-    example = {k: tf.placeholder_with_default(example[k],
-                      clear_batch_size(example[k].shape.as_list()))
-               for k in example}
+    model     = {}
+    loss_vars = {}
+    # Always use same statistics for whitening (not set dependent).
+    stat = datasets['train'].stat
+    # Create copies of model.
+    with tf.variable_scope('model', reuse=False) as vs:
+        for i, mode in enumerate(modes):
+            with tf.name_scope(mode):
+                # Necessary to have separate collections of summaries.
+                # Otherwise evaluating the summary op will dequeue an example!
+                # TODO: Use tf.make_template? But how to have different collections?
+                model[mode] = create_model(_whiten(example[mode], o, stat=stat),
+                                           is_training=(mode == 'train'),
+                                           summaries_collections=['summaries_' + mode])
+                # TODO: Ensure that get_loss does not create any variables?
+                loss_vars[mode] = get_loss(example[mode], model[mode].outputs, o,
+                    summaries_collections=['summaries_' + mode])
+                r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+                tf.summary.scalar('regularization', r, collections=['summaries_' + mode])
+                loss_vars[mode] += r
+                tf.summary.scalar('total', loss_vars[mode], collections=['summaries_' + mode])
+                # In next loop, reuse variables.
+                vs.reuse_variables()
 
-    # Add a placeholder for models that use ground-truth during training.
-    example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
-    model = create_model(_whiten(example, o, stat=datasets['train'].stat))
-
-    loss_var = get_loss(example, model.outputs, o)
+    summary_vars = {}
+    summary_vars_with_preview = {}
+    # This must contain only summaries that do not pull from the queues.
+    # For example, fraction of pipeline that is full.
+    global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
+    with tf.name_scope('summary'):
+        for mode in modes:
+            with tf.name_scope(mode):
+                # Merge model summaries with others (e.g. pipeline).
+                summaries = (global_summaries + tf.get_collection('summaries_' + mode))
+                summary_vars[mode] = tf.summary.merge(summaries)
+                # Create a preview and add it to the list of summaries.
+                preview = tf.summary.image('box',
+                    _draw_bounding_boxes(example[mode], model[mode]),
+                    max_outputs=o.ntimesteps+1, collections=[])
+                summaries.append(preview)
+                # Produce an image summary of the heatmap.
+                if 'hmap' in model[mode].outputs:
+                    hmap = tf.summary.image('hmap', _draw_heatmap(model[mode]),
+                        max_outputs=o.ntimesteps+1, collections=[])
+                    summaries.append(hmap)
+                summary_vars_with_preview[mode] = tf.summary.merge(summaries)
 
     nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
@@ -103,22 +139,15 @@ def train(create_model, datasets, val_sets, o):
                                     decay_steps=o.lr_decay_steps,
                                     decay_rate=o.lr_decay_rate,
                                     staircase=True)
+    tf.summary.scalar('lr', lr, collections=['summaries_train'])
     optimizer = _get_optimizer(lr, o)
-    optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
+    optimize_op = optimizer.minimize(loss_vars['train'], global_step=global_step_var)
 
     init_op = tf.global_variables_initializer()
-    # Optimization summary might include gradients, learning rate, etc.
-    summary_vars = {'val': tf.summary.merge_all()}
-    summary_vars['train'] = tf.summary.merge([summary_vars['val'],
-        tf.summary.scalar('lr', lr)])
     saver = tf.train.Saver()
 
-    preview = tf.summary.image('box', _draw_bounding_boxes(example, model), max_outputs=o.ntimesteps+1)
-    summary_vars_with_preview = {k: tf.summary.merge([v, preview])
-        for k, v in summary_vars.iteritems()}
-
-    examples_train = iter_examples(datasets['train'], o, num_epochs=None)
-    examples_val = iter_examples(datasets['val'], o, num_epochs=None)
+    sequences = {mode: iter_examples(datasets[mode], o, num_epochs=None)
+                 for mode in modes}
 
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
@@ -139,22 +168,27 @@ def train(create_model, datasets, val_sets, o):
         else:
             sess.run(init_op)
 
-        coord = tf.train.Coordinator()
-        tf.train.start_queue_runners(sess, coord)
-        #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+        if use_queues:
+            coord = tf.train.Coordinator()
+            tf.train.start_queue_runners(sess, coord)
+            # Run the feed loops in another thread.
+            threads = [threading.Thread(target=feed_loop[mode],
+                                        args=(sess, coord, sequences[mode]))
+                       for mode in modes]
+            for t in threads:
+                t.start()
 
-        # Run the feed_loop in another thread.
-        threads = [
-            threading.Thread(target=feed_loop_train, args=(sess, coord, examples_train)),
-            threading.Thread(target=feed_loop_val, args=(sess, coord, examples_val)),
-        ]
-        for t in threads:
-            t.start()
+        if o.tfdb:
+            sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
-        path_summary_train = os.path.join(o.path_summary, 'train')
-        path_summary_val = os.path.join(o.path_summary, 'val')
-        train_writer = tf.summary.FileWriter(path_summary_train, sess.graph)
-        val_writer = tf.summary.FileWriter(path_summary_val)
+        writer = {}
+        for mode in modes:
+            path_summary = os.path.join(o.path_summary, mode)
+            # Only include graph in one summary.
+            if mode == 'train':
+                writer[mode] = tf.summary.FileWriter(path_summary, sess.graph)
+            else:
+                writer[mode] = tf.summary.FileWriter(path_summary)
 
         while True: # Loop over epochs
             global_step = global_step_var.eval() # Number of steps taken.
@@ -181,7 +215,7 @@ def train(create_model, datasets, val_sets, o):
                         prev_ckpt = global_step
 
                 # intermediate evaluation of model
-                period_assess = o.period_assess if not o.debugmode else 10
+                period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step % period_assess == 0:
                     iter_id = 'iteration{}'.format(global_step)
                     for eval_id, sampler in val_sets.iteritems():
@@ -190,48 +224,55 @@ def train(create_model, datasets, val_sets, o):
                         visualizer = visualize.VideoFileWriter(vis_dir)
                         # Run the tracker on a full epoch.
                         print 'evaluation: {}'.format(eval_id)
-                        sequences = sampler()
-                        result = evaluate.evaluate(sess, example, model, sequences,
-                            visualize=visualizer.visualize)
+                        eval_sequences = sampler()
+                        result = evaluate.evaluate(sess, example['val'], model['val'],
+                            eval_sequences, visualize=visualizer.visualize)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])
 
                 # Take a training step.
                 start = time.time()
+                feed_dict = {}
+                if not use_queues:
+                    batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
+                    batch = _load_batch(batch_seqs, o)
+                    feed_dict = {example['train'][k]: v for k, v in batch.iteritems()}
+                    dur_load = time.time() - start
+                feed_dict.update({example['train']['use_gt']: True})
                 if global_step % o.period_summary == 0:
                     summary_var = (summary_vars_with_preview['train']
-                            if global_step % o.period_preview == 0
-                            else summary_vars['train'])
-                    _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
-                            feed_dict={queue_index: 0, example['use_gt']: True})
-                    #_, loss, summary, y_pred, h2 = sess.run([optimize_op, loss_var, summary_var,
-                    #    model.dbg['y_pred'], model.dbg['h2']],
-                            feed_dict={queue_index: 0, example['use_gt']: True})
+                                   if global_step % o.period_preview == 0
+                                   else summary_vars['train'])
+                    _, loss, summary = sess.run([optimize_op, loss_vars['train'], summary_var],
+                                                feed_dict=feed_dict)
                     dur = time.time() - start
-                    train_writer.add_summary(summary, global_step=global_step)
-                    #print 'global_step: {}    -------------------------------'.format(global_step)
-                    #print '        h2 :', np.mean(h2[0], axis=(1,2,3))[::4]
-                    #print '    y_pred :', np.mean(y_pred[0], axis=1)[::4]
-                    #print ' (example) :'
-                    #print y_pred[0,::4,:]
+                    writer['train'].add_summary(summary, global_step=global_step)
                 else:
-                    _, loss = sess.run([optimize_op, loss_var],
-                            feed_dict={queue_index: 0, example['use_gt']: True})
+                    _, loss = sess.run([optimize_op, loss_vars['train']], feed_dict=feed_dict)
                     dur = time.time() - start
                 loss_ep.append(loss)
 
+                newval = False
                 # Evaluate validation error.
                 if global_step % o.period_summary == 0:
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
+                        feed_dict = {}
+                        if not use_queues:
+                            batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
+                            batch = _load_batch(batch_seqs, o)
+                            feed_dict = {example['val'][k]: v for k, v in batch.iteritems()}
+                            dur_load = time.time() - start
+                        # Use same conditions in validation to assess over-fitting to data.
+                        feed_dict.update({example['val']['use_gt']: True})
                         summary_var = (summary_vars_with_preview['val']
-                                if global_step % o.period_preview == 0
-                                else summary_vars['val'])
-                        loss_val, summary_val = sess.run([loss_var, summary_var],
-                                feed_dict={queue_index: 1, example['use_gt']: True})
+                                       if global_step % o.period_preview == 0
+                                       else summary_vars['val'])
+                        loss_val, summary = sess.run([loss_vars['val'], summary_var],
+                                                     feed_dict=feed_dict)
                         dur_val = time.time() - start
-                        val_writer.add_summary(summary_val, global_step=global_step)
+                        writer['val'].add_summary(summary, global_step=global_step)
                         ib_val += 1
                         newval = True
 
@@ -242,7 +283,6 @@ def train(create_model, datasets, val_sets, o):
                             '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
                     print 'ep {}/{}, batch {}/{} (bsz:{}), global_step {} {}'.format(
                             ie+1, nepoch, ib+1, nbatch, o.batchsz, global_step, losstime)
-                    newval = False
 
             print '[Epoch finished] ep {:d}/{:d}, global_step {:d} |loss:{:.5f} (time:{:.2f})'.format(
                     ie+1, nepoch, global_step_var.eval(), np.mean(loss_ep), time.time()-t_epoch)
@@ -296,17 +336,37 @@ def _make_input_pipeline(o, dtype=tf.float32,
         return example_batch, feed_loop
 
 
+def _make_placeholders(o, default=None):
+    shapes = {
+        'x0_raw':     [None, o.frmsz, o.frmsz, 3],
+        'y0':         [None, 4],
+        'x_raw':      [None, o.ntimesteps, o.frmsz, o.frmsz, 3],
+        'y':          [None, o.ntimesteps, 4],
+        'y_is_valid': [None, o.ntimesteps],
+    }
+    dtype = lambda k: tf.bool if k.endswith('_is_valid') else o.dtype
+
+    if default is not None:
+        assert(set(default.keys()) == set(shapes.keys()))
+        example = {
+            k: tf.placeholder_with_default(default[k], shapes[k], name='placeholder_'+k)
+            for k in shapes.keys()}
+    else:
+        example = {
+            k: tf.placeholder(dtype(k), shapes[k], name='placeholder_'+k)
+            for k in EXAMPLE_KEYS}
+    # Add a placeholder for models that use ground-truth during training.
+    example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
+    return example
+
+
 def _whiten(example_raw, o, stat=None, name='whiten'):
     with tf.name_scope(name) as scope:
         # Normalize mean and variance.
         assert(stat is not None)
-        # with tf.variable_scope('image_stats'):
-        if stat:
-            mean = tf.constant(stat['mean'], o.dtype, name='mean')
-            std  = tf.constant(stat['std'],  o.dtype, name='std')
-        else:
-            mean = tf.constant(0.0, o.dtype, name='mean')
-            std  = tf.constant(1.0, o.dtype, name='std')
+        # TODO: Check that this does not create two variables:
+        mean = tf.constant(stat['mean'] if stat else 0.0, o.dtype, name='mean')
+        std = tf.constant(stat['std'] if stat else 1.0,  o.dtype, name='std')
         example = dict(example_raw) # Copy dictionary before modifying.
         # Replace raw x (images) with whitened x (images).
         example['x'] = _whiten_image(example['x_raw'], mean, std, name='x')
@@ -328,19 +388,21 @@ def iter_examples(dataset, o, num_epochs=None):
     else:
         epochs = itertools.count()
     for i in epochs:
+        #sequences = sample.sample(dataset, ntimesteps=o.ntimesteps,
+        #    seqtype='freq-range-fit', min_freq=15, max_freq=60, shuffle=True)
         sequences = sample.sample(dataset, ntimesteps=o.ntimesteps,
-            seqtype='sampling', shuffle=True)
+            seqtype='regular', freq=2, shuffle=True)
         for sequence in sequences:
             yield sequence
 
 
-def get_loss(example, outputs, o, name='loss'):
-    y          = example['y']
-    y_is_valid = example['y_is_valid']
-    assert(y.get_shape().as_list()[1] == o.ntimesteps)
-    hmap = convert_rec_to_heatmap(y, o)
-
+def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
     with tf.name_scope(name) as scope:
+        y          = example['y']
+        y_is_valid = example['y_is_valid']
+        assert(y.get_shape().as_list()[1] == o.ntimesteps)
+        hmap = convert_rec_to_heatmap(y, o, min_size=1.0)
+
         losses = dict()
 
         # l1 distances for left-top and right-bottom
@@ -373,26 +435,16 @@ def get_loss(example, outputs, o, name='loss'):
                         labels=tf.reshape(hmap_valid, [-1, 2]),
                         logits=tf.reshape(hmap_pred_valid, [-1, 2])))
             losses['ce'] = loss_ce
-            #y_flat = tf.reshape(hmap_valid, [-1, o.frmsz**2])
-            #y_pred_flat = tf.reshape(hmap_pred_valid, [-1, o.frmsz**2])
-            #assert_finite = lambda x: tf.Assert(tf.reduce_all(tf.is_finite(x)), [x])
-            #with tf.control_dependencies([assert_finite(hmap_pred_valid)]):
-            #    hmap_pred_valid = tf.identity(hmap_pred_valid)
-            #loss_ce = tf.nn.softmax_cross_entropy_with_logits(labels=y_flat, logits=y_pred_flat)
-            ## Wrap with assertion that loss is finite.
-            #with tf.control_dependencies([assert_finite(loss_ce)]):
-            #    loss_ce = tf.identity(loss_ce)
-            #loss_ce = tf.reduce_mean(loss_ce)
-            #losses['ce'] = loss_ce
 
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
-                tf.summary.scalar(name, loss)
+                tf.summary.scalar(name, loss, collections=summaries_collections)
 
         return tf.reduce_sum(losses.values(), name=scope)
 
 
 def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
+    # Note: This will produce INT_MIN when casting NaN to int.
     with tf.name_scope(name) as scope:
         # example['x_raw']   -- [b, t, h, w, 3]
         # example['y']       -- [b, t, 4]
@@ -405,3 +457,48 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         coords = tf.unstack(y, axis=2)
         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
         return tf.image.draw_bounding_boxes(image, boxes, name=scope)
+
+def _draw_heatmap(model, time_stride=1, name='draw_heatmap'):
+    with tf.name_scope(name) as scope:
+        # model.outputs['hmap'] -- [b, t, frmsz, frmsz, 2]
+        return tf.nn.softmax(model.outputs['hmap'][0,::time_stride,:,:,0:1])
+
+
+def _load_sequence(seq, o):
+    '''
+    Sequence has keys:
+        'image_files'    # Tensor with shape [n] containing strings.
+        'labels'         # Tensor with shape [n, 4] containing rectangles.
+        'label_is_valid' # Tensor with shape [n] containing booleans.
+    Example has keys:
+        'x0_raw'     # First image in sequence, shape [h, w, 3]
+        'y0'         # Position of target in first image, shape [4]
+        'x_raw'      # Input images, shape [n-1, h, w, 3]
+        'y'          # Position of target in following frames, shape [n-1, 4]
+        'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
+    '''
+    seq_len = len(seq['image_files'])
+    assert(len(seq['labels']) == seq_len)
+    assert(len(seq['label_is_valid']) == seq_len)
+    assert(seq['label_is_valid'][0] == True)
+    # TODO: Use o.dtype here? Numpy complains.
+    f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
+                            dtype=np.float32)
+    images = map(f, seq['image_files'])
+    return {
+        'x0_raw':     np.array(images[0]),
+        'y0':         np.array(seq['labels'][0]),
+        'x_raw':      np.array(images[1:]),
+        'y':          np.array(seq['labels'][1:]),
+        'y_is_valid': np.array(seq['label_is_valid'][1:]),
+    }
+
+def _load_batch(seqs, o):
+    sequence_keys = set(['x_raw', 'y', 'y_is_valid'])
+    examples = map(lambda x: _load_sequence(x, o), seqs)
+    # Pad all sequences to o.ntimesteps.
+    # NOTE: Assumes that none of the arrays to be padded are empty.
+    return {k: np.stack([pad_to(x[k], o.ntimesteps, axis=0)
+                             if k in sequence_keys else x[k]
+                         for x in examples])
+            for k in EXAMPLE_KEYS}
