@@ -1907,6 +1907,15 @@ def rnn_conv_asymm(example, o,
     x0     = example['x0']
     y0     = example['y0']
     masks = get_masks_from_rectangles(y0, o)
+    if o.debugmode:
+        with tf.name_scope('input_preview'):
+            tf.summary.image('x', images[0], collections=summaries_collections)
+            target = tf.concat([images[0, 0], masks[0]], axis=2)
+            tf.summary.image('target', tf.expand_dims(target, axis=0),
+                             collections=summaries_collections)
+    if o.activ_histogram:
+        with tf.name_scope('input_histogram'):
+            tf.summary.histogram('x', images, collections=summaries_collections)
     init_input = tf.concat([x0, masks], axis=3)
 
     assert(len(input_kernel_size)      == input_num_layers)
@@ -1942,10 +1951,10 @@ def rnn_conv_asymm(example, o,
                             x = slim.max_pool2d(x, kernel_size=input_pool_kernel_size[i],
                                                    stride=input_pool_stride[i],
                                                    scope=pool_name)
-                        if o.activ_histogram:
-                            with tf.name_scope('summary'):
-                                for k, v in layers.iteritems():
-                                    tf.summary.histogram(k, v, collections=summaries_collections)
+                    # if o.activ_histogram:
+                    #     with tf.name_scope('summary'):
+                    #         for k, v in layers.iteritems():
+                    #             tf.summary.histogram(k, v, collections=summaries_collections)
         return x
 
     def conv_lstm(x, h_prev, c_prev, state_dim, name='conv_lstm'):
@@ -1967,10 +1976,10 @@ def rnn_conv_asymm(example, o,
                 c = (f * c_prev) + (i * c_tilde)
                 h = y * tf.nn.tanh(c)
                 layers = {'i': i, 'f': f, 'o': y, 'c_tilde': c, 'c': c, 'h': h}
-                if o.activ_histogram:
-                    with tf.name_scope('summary'):
-                        for k, v in layers.iteritems():
-                            tf.summary.histogram(k, v, collections=summaries_collections)
+                # if o.activ_histogram:
+                #     with tf.name_scope('summary'):
+                #         for k, v in layers.iteritems():
+                #             tf.summary.histogram(k, v, collections=summaries_collections)
         return h, c
 
     def output_cnn(x, name='output_cnn'):
@@ -1988,10 +1997,10 @@ def rnn_conv_asymm(example, o,
                     x = slim.flatten(x)
                     x = slim.fully_connected(x, 4, scope='predict')
                     layers['predict'] = x
-                    if o.activ_histogram:
-                        with tf.name_scope('summary'):
-                            for k, v in layers.iteritems():
-                                tf.summary.histogram(k, v, collections=summaries_collections)
+                    # if o.activ_histogram:
+                    #     with tf.name_scope('summary'):
+                    #         for k, v in layers.iteritems():
+                    #             tf.summary.histogram(k, v, collections=summaries_collections)
         return x
 
     lstm_dim = 64
@@ -2040,14 +2049,16 @@ def rnn_conv_asymm(example, o,
     #     with tf.variable_scope('out_cnn', reuse=(t > 0)):
     #         y = output_cnn(z, name=scope)
 
-    if o.param_histogram:
-        for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
-            tf.summary.histogram(v.name, v, collections=summaries_collections)
+    with tf.name_scope('summary'):
+        if o.activ_histogram:
+            tf.summary.histogram('rect', y, collections=summaries_collections)
+        if o.param_histogram:
+            for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
+                tf.summary.histogram(v.name, v, collections=summaries_collections)
 
     outputs = {'y': y}
     state = {'h': (h_init, h_last), 'c': (c_init, c_last)}
 
-    # TODO: JV: I saw this somewhere. Is it OK?
     class Model:
         pass
     model = Model()

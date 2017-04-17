@@ -27,6 +27,9 @@ def parse_arguments():
             '--debugmode', help='used for debugging',
             action='store_true')
     parser.add_argument(
+            '--histograms', help='generate histograms in summary',
+            action='store_true')
+    parser.add_argument(
             '--tfdb', help='run tensorflow debugger',
             action='store_true')
 

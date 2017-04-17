@@ -17,6 +17,7 @@ class Opts(object):
         self.verbose_train      = False
         self.mode               = '' # 'train' or 'test'
         self.debugmode          = False # True or False
+        self.histograms         = False # True or False
         self.tfdb               = False # True or False
         self.seed_global        = 9
         self.dtype              = tf.float32
@@ -95,8 +96,6 @@ class Opts(object):
         self.period_assess      = self.period_ckpt
         self.period_summary     = 10
         self.period_preview     = 100 # Ensure that period_preview % period_summary == 0.
-        self.activ_histogram    = False
-        self.param_histogram    = False
 
         #----------------------------------------------------------------------
         # custom libraries
@@ -130,6 +129,8 @@ class Opts(object):
         self._run_sanitycheck()
         self._set_gpu_config()
         self._set_dataset_params()
+        self.activ_histogram = self.histograms
+        self.param_histogram = self.histograms
 
     def _set_dataset_params(self):
         if self.dataset in ['moving_mnist', 'bouncing_mnist']:
