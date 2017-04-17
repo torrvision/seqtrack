@@ -21,9 +21,6 @@ def parse_arguments():
             '--verbose_train', help='print train losses during train',
             action='store_true')
     parser.add_argument(
-            '--mode', help='choose mode (train, test)',
-            type=str, default='')
-    parser.add_argument(
             '--debugmode', help='used for debugging',
             action='store_true')
     parser.add_argument(
@@ -89,8 +86,21 @@ def parse_arguments():
             '--lr_decay_steps', help='period for decaying learning rate',
             type=int, default=10000)
     parser.add_argument(
-            '--wd', help='weight decay',
-            type=float, default=1e-3)
+            '--wd', help='weight decay', type=float, default=1e-3)
+
+    # parser.add_argument(
+    #         '--sampler', help='JSON string specifying sampler',
+    #         type=json.loads, default={'kind': 'regular', 'freq': 2})
+    parser.add_argument(
+            '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker',
+            type=str, default=['ILSVRC-train'])
+    # parser.add_argument(
+    #         '--eval_samplers', nargs='+', help='JSON string specifying sampler',
+    #         type=json.loads,
+    #         default=[{'kind': 'regular', 'freq': 2, 'ntimesteps': 20, 'max_sequences': 100}])
+    parser.add_argument(
+            '--eval_samplers', nargs='+', help='',
+            type=str, default=['custom'])
 
     parser.add_argument(
             '--path_data_home', help='location of datasets',
@@ -127,31 +137,33 @@ if __name__ == "__main__":
     o.update_by_sysarg(args=args)
     o.initialize()
 
-    datasets = data.load_data(o)
-    ilsvrc_train = data.Data_ILSVRC('train', o)
-    ilsvrc_val   = data.Data_ILSVRC('val', o)
-    otb50        = data.Data_OTB('OTB-50', o)
-    otb100       = data.Data_OTB('OTB-100', o)
-    val_sets = {
-        'ILSVRC-train-full':
-            lambda: random.sample(list(sample.sample(ilsvrc_train, seqtype='full')), 100),
-        # 'ILSVRC-val-full':
-        #     lambda: random.sample(list(sample.sample(ilsvrc_val, seqtype='full')), 100),
-        'ILSVRC-train-sample':
-            lambda: random.sample(list(sample.sample(ilsvrc_train, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
-        # 'ILSVRC-val-sample':
-        #     lambda: random.sample(list(sample.sample(ilsvrc_val, ntimesteps=o.ntimesteps, seqtype='sampling')), 100),
-        #'OTB-50-full':
-        #    lambda: sample.sample(otb50, seqtype='full'),
-        #'OTB-100-full':
-        #    lambda: sample.sample(otb100, seqtype='full'),
-        #'OTB-50-sample':
-        #    lambda: sample.sample(otb50, ntimesteps=o.ntimesteps, seqtype='sampling'),
-        #'OTB-100-sample':
-        #    lambda: sample.sample(otb100, ntimesteps=o.ntimesteps, seqtype='sampling'),
+    # datasets = data.load_data(o)
+    datasets = {
+        'ILSVRC-train': data.Data_ILSVRC('train', o),
+        'ILSVRC-val':   data.Data_ILSVRC('val', o),
+        'OTB-50':       data.Data_OTB('OTB-50', o),
+        'OTB-100':      data.Data_OTB('OTB-100', o),
     }
+
+    sampler_presets = {
+        'full':   functools.partial(sample.sample, kind='full'),
+        'custom': functools.partial(sample.sample, kind='regular', freq=2,
+            ntimesteps=o.ntimesteps),
+    }
+    # Take all dataset-sampler combinations.
+    eval_sets = {
+        d+'-'+s: lambda: sampler_presets[s](datasets[d], max_sequences=100)
+        for d in o.eval_datasets
+        for s in o.eval_samplers
+    }
+    # eval_sets = {
+    #     d+'-'+json.dumps(s): lambda: sample.sample(datasets[d], **s)
+    #     for d in o.eval_datasets
+    #     for s in o.eval_samplers
+    # }
+
     # TODO: Set model_opts from command-line or JSON file?
     m = model.load_model(o, model_params={})
 
-    assert(o.mode == 'train')
-    train.train(m, datasets, val_sets, o, use_queues=o.use_queues)
+    train.train(m, {'train': datasets['ILSVRC-train'], 'val': datasets['ILSVRC-val']},
+                eval_sets, o, use_queues=o.use_queues)

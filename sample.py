@@ -9,8 +9,8 @@ import math
 import os
 import random
 
-def sample(dataset, ntimesteps=None, seqtype=None, shuffle=False,
-           freq=10, min_freq=10, max_freq=60):
+def sample(dataset, ntimesteps=None, kind=None, shuffle=False,
+           freq=10, min_freq=10, max_freq=60, max_sequences=None):
     '''
     Args:
         dataset: Dataset object such as ILSVRC or OTB.
@@ -18,10 +18,10 @@ def sample(dataset, ntimesteps=None, seqtype=None, shuffle=False,
             If None, then there is no limit.
     '''
     def _select_frames(is_valid, valid):
-        if seqtype == 'sampling':
+        if kind == 'sampling':
             k = min(len(valid), ntimesteps+1)
             return sorted(random.sample(valid, k))
-        elif seqtype == 'freq-range-fit':
+        elif kind == 'freq-range-fit':
             # TODO: The scope of this sampler should include
             # choosing objects within videos.
             video_len = len(is_valid)
@@ -43,7 +43,7 @@ def sample(dataset, ntimesteps=None, seqtype=None, shuffle=False,
             # Choose first frame such that all frames are present.
             a = random.choice([a for a in valid if a + n <= video_len - 1])
             return [int(round(a + f*t)) for t in range(0, ntimesteps+1)]
-        elif seqtype == 'regular':
+        elif kind == 'regular':
             ''' Sample frames with `freq`, regardless of label
             (only the first frame need to have label).
             Thus, the returned frames can be `SPARSE`, e.g., [1,1,1,0,1,0,0].
@@ -53,18 +53,20 @@ def sample(dataset, ntimesteps=None, seqtype=None, shuffle=False,
             '''
             frames = range(random.choice(valid), len(is_valid), freq)
             return frames[:ntimesteps+1]
-        elif seqtype == 'full':
+        elif kind == 'full':
             ''' The full sequence from first 1 to last 1, regardless of label.
             Thus, the returned frames can be `SPARSE`, e.g., [1,1,1,1,0,0,1,1].
             This option is used to evaluate full-length sequences.
             '''
             return range(valid[0], valid[-1]+1)
 
+    assert((ntimesteps is None) == (kind == 'full'))
     num_videos = len(dataset.videos)
     indices = np.random.permutation(num_videos) if shuffle else range(num_videos)
     videos = list(dataset.videos[i] for i in indices)
+    num_sequences = 0
     for video in videos:
-        if ntimesteps and seqtype is not 'full':
+        if kind is not 'full':
             trajectories = [random.choice(dataset.tracks[video])]
         else:
             trajectories = dataset.tracks[video]
@@ -74,16 +76,19 @@ def sample(dataset, ntimesteps=None, seqtype=None, shuffle=False,
             if not frames:
                 continue
             label_is_valid = [(t in trajectory) for t in frames]
-            # Skip sequences with no labels.
+            # Skip sequences with no labels (after first label).
             num_labels = sum(1 for x in label_is_valid if x)
             if num_labels < 2:
                 continue
+            num_sequences += 1
             yield {
                 'image_files':    [dataset.image_file(video, t) for t in frames],
                 'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
                 'label_is_valid': label_is_valid,
                 'original_image_size': dataset.original_image_size[video],
             }
+            if max_sequences is not None and num_sequences >= max_sequences:
+                return
 
 def _invalid_rect():
     return [float('nan')] * 4

@@ -15,7 +15,6 @@ class Opts(object):
         #----------------------------------------------------------------------
         # settings 
         self.verbose_train      = False
-        self.mode               = '' # 'train' or 'test'
         self.debugmode          = False # True or False
         self.histograms         = False # True or False
         self.tfdb               = False # True or False
@@ -77,6 +76,11 @@ class Opts(object):
         self.wd                 = 0.0 # weight decay for regularization
         self.grad_clip          = False
         self.max_grad_norm      = 5.0
+
+        #----------------------------------------------------------------------
+        # Options for sampler
+        self.eval_datasets      = ['ILSVRC-train']
+        self.eval_samplers      = ['custom']
 
         #----------------------------------------------------------------------
         # save (save training results), load (test), resume (keep training)
@@ -164,14 +168,7 @@ class Opts(object):
     def _run_sanitycheck(self):
         '''Options sanity check!
         '''
-        assert(self.mode == 'train' or self.mode == 'test')
-        assert((not self.restore and self.restore_model is None) or 
-                (self.restore and self.restore_model is not None))
-        assert(
-                (self.mode=='test' 
-                    and self.restore and self.restore_model is not None) or 
-                (self.mode=='train' 
-                    and not self.restore and self.restore_model is None))
+        pass
 
 
 if __name__ == '__main__':

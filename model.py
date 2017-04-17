@@ -381,7 +381,6 @@ class RNN_dual_rec(object):
                  summaries_collections=None):
         # Ignore is_training  - model does not change in training vs testing.
         # Ignore sumaries_collections - model does not generate any summaries.
-        self.is_train = True if o.mode == 'train' else False
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
