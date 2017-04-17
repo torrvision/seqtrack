@@ -1,6 +1,7 @@
 import pdb
 import argparse
 import functools
+import json
 import random
 import tensorflow as tf
 
@@ -88,16 +89,12 @@ def parse_arguments():
     parser.add_argument(
             '--wd', help='weight decay', type=float, default=1e-3)
 
-    # parser.add_argument(
-    #         '--sampler', help='JSON string specifying sampler',
-    #         type=json.loads, default={'kind': 'regular', 'freq': 2})
+    parser.add_argument(
+            '--sampler_params', help='JSON string specifying sampler',
+            type=json.loads, default={'kind': 'regular', 'freq': 2})
     parser.add_argument(
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker',
             type=str, default=['ILSVRC-train'])
-    # parser.add_argument(
-    #         '--eval_samplers', nargs='+', help='JSON string specifying sampler',
-    #         type=json.loads,
-    #         default=[{'kind': 'regular', 'freq': 2, 'ntimesteps': 20, 'max_sequences': 100}])
     parser.add_argument(
             '--eval_samplers', nargs='+', help='',
             type=str, default=['custom'])
@@ -156,11 +153,6 @@ if __name__ == "__main__":
         for d in o.eval_datasets
         for s in o.eval_samplers
     }
-    # eval_sets = {
-    #     d+'-'+json.dumps(s): lambda: sample.sample(datasets[d], **s)
-    #     for d in o.eval_datasets
-    #     for s in o.eval_samplers
-    # }
 
     # TODO: Set model_opts from command-line or JSON file?
     m = model.load_model(o, model_params={})

@@ -388,10 +388,8 @@ def iter_examples(dataset, o, num_epochs=None):
     else:
         epochs = itertools.count()
     for i in epochs:
-        #sequences = sample.sample(dataset, ntimesteps=o.ntimesteps,
-        #    seqtype='freq-range-fit', min_freq=15, max_freq=60, shuffle=True)
         sequences = sample.sample(dataset, ntimesteps=o.ntimesteps, shuffle=True,
-                                  kind='regular', freq=2)
+                                  **o.sampler_params)
         for sequence in sequences:
             yield sequence
 
