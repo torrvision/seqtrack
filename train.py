@@ -448,6 +448,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 
 
 def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
+    # Note: This will produce INT_MIN when casting NaN to int.
     with tf.name_scope(name) as scope:
         # example['x_raw']   -- [b, t, h, w, 3]
         # example['y']       -- [b, t, 4]
