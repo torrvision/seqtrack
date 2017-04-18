@@ -85,7 +85,7 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
     # Always use same statistics for whitening (not set dependent).
     stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(_whiten(example, o, stat=stat))
+    model = create_model(_whiten(_guard_labels(example), o, stat=stat))
     loss_var = get_loss(example, model.outputs, o)
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
@@ -351,6 +351,22 @@ def _make_placeholders(o, default=None):
     # Add a placeholder that specifies training mode for e.g. batch_norm.
     example['is_training'] = tf.placeholder_with_default(False, [], name='is_training')
     return example
+
+
+def _guard_labels(unsafe):
+    '''Hides the 'y' labels if 'use_gt' is False.
+
+    This prevents the model from accidentally using 'y'.
+    '''
+    # unsafe['x_raw'] -- [b, t, h, w, 3]
+    # unsafe['y']     -- [b, t, 4]
+    images = unsafe['x_raw']
+    safe = dict(unsafe)
+    safe['y'] = tf.cond(unsafe['use_gt'],
+        lambda: unsafe['y'],
+        lambda: tf.fill(tf.concat([tf.shape(images)[0:2], [4]], axis=0), float('nan')),
+        name='labels_safe')
+    return safe
 
 
 def _whiten(example_raw, o, stat=None, name='whiten'):
