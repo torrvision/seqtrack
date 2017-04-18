@@ -6,7 +6,6 @@ The sequences can be returned as a list or the functions can act as generators.
 import pdb
 import math
 import os
-import random
 
 def sample(dataset, generator=None, shuffle=False, kind=None, ntimesteps=None,
            freq=10, min_freq=10, max_freq=60, max_sequences=None):
@@ -59,14 +58,12 @@ def sample(dataset, generator=None, shuffle=False, kind=None, ntimesteps=None,
             '''
             return range(valid[0], valid[-1]+1)
 
-    # Use global generator if none supplied.
-    generator = generator or random
     assert((ntimesteps is None) == (kind == 'full'))
     num_videos = len(dataset.videos)
     # indices = np.generator.permutation(num_videos) if shuffle else range(num_videos)
     indices = range(num_videos)
     if shuffle:
-        random.shuffle(indices)
+        generator.shuffle(indices)
     videos = list(dataset.videos[i] for i in indices)
     num_sequences = 0
     for video in videos:

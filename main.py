@@ -159,7 +159,9 @@ if __name__ == "__main__":
     }
     # Take all dataset-sampler combinations.
     eval_sets = {
-        d+'-'+s: lambda: sampler_presets[s](datasets[d], max_sequences=100)
+        # TODO: This will use same set for every evaluation round? Good or bad?
+        d+'-'+s: lambda: sampler_presets[s](datasets[d], max_sequences=100,
+                                            generator=random.Random(o.seed_global))
         for d in o.eval_datasets
         for s in o.eval_samplers
     }
