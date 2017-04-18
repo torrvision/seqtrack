@@ -30,6 +30,7 @@ import numpy as np
 import cnnutil
 from helpers import merge_dims
 
+concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
 
 def convert_rec_to_heatmap(rec, o, min_size=None):
     '''Create heatmap from rectangle
@@ -78,7 +79,7 @@ def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, n
             masks = tf.expand_dims(masks, 3) # to have channel dim
         elif kind == 'bg': # add background mask
             masks_bg = tf.logical_not(masks)
-            masks = tf.concat(
+            masks = concat(
                     (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
         if typecast: # type cast so that it can be concatenated with x
             masks = tf.cast(masks, o.dtype)
@@ -147,7 +148,7 @@ class RNN_dual(object):
             with tf.name_scope(name):
                 ft, it, ct_tilda, ot = tf.split(
                     slim.fully_connected(
-                        tf.concat((h_prev, x), 1),
+                        concat((h_prev, x), 1),
                         o.nunits*4,
                         activation_fn=None,
                         weights_regularizer=slim.l2_regularizer(o.wd)),
@@ -314,7 +315,7 @@ class RNN_dual(object):
                         hmap = tf.cond(use_gt,
                             lambda: get_masks_from_rectangles(yt, o),
                             lambda: tf.expand_dims(tf.nn.softmax(hmapt_pred)[:,:,:,0], 3))
-                    xy = tf.concat([xt, hmap], axis=3)
+                    xy = concat([xt, hmap], axis=3)
                     cnn2out = pass_cnn2(xy, scope)
 
             with tf.name_scope('lstm1_{}'.format(t)) as scope:
@@ -424,7 +425,7 @@ class RNN_dual_rec(object):
             with tf.name_scope(name):
                 ft, it, ct_tilda, ot = tf.split(
                     slim.fully_connected(
-                        tf.concat_v2((h_prev, x), 1),
+                        concat((h_prev, x), 1),
                         o.nunits*4,
                         activation_fn=None,
                         weights_regularizer=slim.l2_regularizer(o.wd)),
@@ -532,7 +533,7 @@ class RNN_dual_rec(object):
             with tf.name_scope('cnn2_{}'.format(t)) as scope:
                 with tf.variable_scope('cnn2', reuse=(t > 0)):
                     hmap = get_masks_from_rectangles(y_prev, o)
-                    xy = tf.concat([x_prev, hmap], axis=3)
+                    xy = concat([x_prev, hmap], axis=3)
                     cnn2out = pass_cnn2(xy, scope)
 
             with tf.name_scope('lstm1_{}'.format(t)) as scope:
@@ -598,13 +599,13 @@ def rnn_conv_asymm(example, o,
     if o.debugmode:
         with tf.name_scope('input_preview'):
             tf.summary.image('x', images[0], collections=summaries_collections)
-            target = tf.concat([images[0, 0], masks[0]], axis=2)
+            target = concat([images[0, 0], masks[0]], axis=2)
             tf.summary.image('target', tf.expand_dims(target, axis=0),
                              collections=summaries_collections)
     if o.activ_histogram:
         with tf.name_scope('input_histogram'):
             tf.summary.histogram('x', images, collections=summaries_collections)
-    init_input = tf.concat([x0, masks], axis=3)
+    init_input = concat([x0, masks], axis=3)
 
     assert(len(input_kernel_size)      == input_num_layers)
     assert(len(input_num_channels)     == input_num_layers)
