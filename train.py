@@ -79,7 +79,7 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                     num_load_threads=4, num_batch_threads=1, name='pipeline_'+mode)
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues,
-                capacity=32, num_threads=1)
+                capacity=4, num_threads=1)
         example = _make_placeholders(o, default=from_queue)
 
     # Always use same statistics for whitening (not set dependent).
@@ -298,8 +298,8 @@ def _get_optimizer(lr, o):
 
 
 def _make_input_pipeline(o, dtype=tf.float32,
-        example_capacity=512, load_capacity=128, batch_capacity=32,
-        num_load_threads=8, num_batch_threads=8,
+        example_capacity=4, load_capacity=4, batch_capacity=4,
+        num_load_threads=4, num_batch_threads=4,
         name='pipeline'):
     with tf.name_scope(name) as scope:
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
