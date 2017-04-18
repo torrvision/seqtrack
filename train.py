@@ -1,11 +1,12 @@
 import pdb
 import sys
+import itertools
 import numpy as np
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 import time
 import os
-import itertools
+import random
 import threading
 
 import draw
@@ -133,7 +134,10 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver()
 
-    sequences = {mode: iter_examples(datasets[mode], o, num_epochs=None)
+    # Use a separate random number generator for each sampler.
+    sequences = {mode: iter_examples(datasets[mode], o,
+                                     generator=random.Random(o.seed_global),
+                                     num_epochs=None)
                  for mode in modes}
 
     t_total = time.time()
@@ -390,15 +394,15 @@ def _whiten_image(x, mean, std, name='whiten_image'):
         return tf.divide(x - mean, std, name=scope)
 
 
-def iter_examples(dataset, o, num_epochs=None):
+def iter_examples(dataset, o, generator=None, num_epochs=None):
     '''Generator that produces multiple epochs of examples for SGD.'''
     if num_epochs:
         epochs = xrange(num_epochs)
     else:
         epochs = itertools.count()
     for i in epochs:
-        sequences = sample.sample(dataset, ntimesteps=o.ntimesteps, shuffle=True,
-                                  **o.sampler_params)
+        sequences = sample.sample(dataset, generator=generator, shuffle=True,
+                                  ntimesteps=o.ntimesteps, **o.sampler_params)
         for sequence in sequences:
             yield sequence
 

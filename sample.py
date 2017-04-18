@@ -4,12 +4,11 @@ The sequences can be returned as a list or the functions can act as generators.
 '''
 
 import pdb
-import numpy as np
 import math
 import os
 import random
 
-def sample(dataset, ntimesteps=None, kind=None, shuffle=False,
+def sample(dataset, generator=None, shuffle=False, kind=None, ntimesteps=None,
            freq=10, min_freq=10, max_freq=60, max_sequences=None):
     '''
     Args:
@@ -20,7 +19,7 @@ def sample(dataset, ntimesteps=None, kind=None, shuffle=False,
     def _select_frames(is_valid, valid):
         if kind == 'sampling':
             k = min(len(valid), ntimesteps+1)
-            return sorted(random.sample(valid, k))
+            return sorted(generator.sample(valid, k))
         elif kind == 'freq-range-fit':
             # TODO: The scope of this sampler should include
             # choosing objects within videos.
@@ -37,11 +36,11 @@ def sample(dataset, ntimesteps=None, kind=None, shuffle=False,
             v = min(max_freq, float((video_len - 1) - valid[0]) / ntimesteps)
             if not u <= v:
                 return None
-            f = math.exp(random.uniform(math.log(u), math.log(v)))
+            f = math.exp(generator.uniform(math.log(u), math.log(v)))
             # Let n = ntimesteps*f.
             n = int(round(ntimesteps * f))
             # Choose first frame such that all frames are present.
-            a = random.choice([a for a in valid if a + n <= video_len - 1])
+            a = generator.choice([a for a in valid if a + n <= video_len - 1])
             return [int(round(a + f*t)) for t in range(0, ntimesteps+1)]
         elif kind == 'regular':
             ''' Sample frames with `freq`, regardless of label
@@ -51,7 +50,7 @@ def sample(dataset, ntimesteps=None, kind=None, shuffle=False,
             Adaptive frequency or gradually increasing frequency as a
             Curriculum Learning might be tried.
             '''
-            frames = range(random.choice(valid), len(is_valid), freq)
+            frames = range(generator.choice(valid), len(is_valid), freq)
             return frames[:ntimesteps+1]
         elif kind == 'full':
             ''' The full sequence from first 1 to last 1, regardless of label.
@@ -60,14 +59,19 @@ def sample(dataset, ntimesteps=None, kind=None, shuffle=False,
             '''
             return range(valid[0], valid[-1]+1)
 
+    # Use global generator if none supplied.
+    generator = generator or random
     assert((ntimesteps is None) == (kind == 'full'))
     num_videos = len(dataset.videos)
-    indices = np.random.permutation(num_videos) if shuffle else range(num_videos)
+    # indices = np.generator.permutation(num_videos) if shuffle else range(num_videos)
+    indices = range(num_videos)
+    if shuffle:
+        random.shuffle(indices)
     videos = list(dataset.videos[i] for i in indices)
     num_sequences = 0
     for video in videos:
         if kind is not 'full':
-            trajectories = [random.choice(dataset.tracks[video])]
+            trajectories = [generator.choice(dataset.tracks[video])]
         else:
             trajectories = dataset.tracks[video]
         for trajectory in trajectories:
