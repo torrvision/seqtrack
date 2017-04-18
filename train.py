@@ -107,7 +107,9 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                                     staircase=True)
     tf.summary.scalar('lr', lr, collections=['summaries_train'])
     optimizer = _get_optimizer(lr, o)
-    optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
+    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    with tf.control_dependencies(update_ops):
+        optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
 
     summary_vars = {}
     summary_vars_with_preview = {}

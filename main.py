@@ -71,6 +71,9 @@ def parse_arguments():
     parser.add_argument(
             '--dropout_cnn', help='dropout in cnn (only during train)',
             action='store_true')
+    parser.add_argument(
+            '--model_params', help='JSON string specifying model',
+            type=json.loads, default={})
 
     parser.add_argument(
             '--nepoch', help='number of epochs',
@@ -167,7 +170,7 @@ if __name__ == "__main__":
     }
 
     # TODO: Set model_opts from command-line or JSON file?
-    m = model.load_model(o, model_params={})
+    m = model.load_model(o, model_params=o.model_params)
 
     train.train(m, {'train': datasets['ILSVRC-train'], 'val': datasets['ILSVRC-val']},
                 eval_sets, o, use_queues=o.use_queues)

@@ -48,6 +48,7 @@ class Opts(object):
         self.cnn_pretrain       = False 
         self.cnn_model          = 'vgg' # vgg, resnet, imagenet, etc.
         self.dropout_cnn        = False
+        self.model_params       = {}
 
         #----------------------------------------------------------------------
         # training policies
