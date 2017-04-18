@@ -1,4 +1,5 @@
 import pdb
+import sys
 import argparse
 import functools
 import json
@@ -36,6 +37,9 @@ def parse_arguments():
             type=str, default='')
     parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
+            type=int, default=9)
+    parser.add_argument(
+            '--seed_global', help='random seed',
             type=int, default=9)
 
     parser.add_argument(
@@ -128,7 +132,13 @@ def parse_arguments():
     if args.verbose: print args
     return args
 
+def trace(frame, event, arg):
+    print "%s, %s:%d" % (event, frame.f_code.co_filename, frame.f_lineno)
+    return trace
+
 if __name__ == "__main__":
+    # sys.settrace(trace) # Use this to find segfaults.
+
     args = parse_arguments()
     o = Opts()
     o.update_by_sysarg(args=args)
