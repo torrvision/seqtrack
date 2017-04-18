@@ -2,7 +2,7 @@ import pdb
 import sys
 import numpy as np
 import tensorflow as tf
-import tensorflow.python.debug as tf_debug
+from tensorflow.python import debug as tf_debug
 import time
 import os
 import itertools
@@ -212,6 +212,7 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                         print 'save model'
                         saver.save(sess, fname)
                         print 'done: save model'
+                        sys.stdout.flush()
                         prev_ckpt = global_step
 
                 # intermediate evaluation of model
