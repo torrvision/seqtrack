@@ -87,7 +87,7 @@ def parse_arguments():
             '--lr_decay_steps', help='period for decaying learning rate',
             type=int, default=10000)
     parser.add_argument(
-            '--wd', help='weight decay', type=float, default=1e-3)
+            '--wd', help='weight decay', type=float, default=0.0)
 
     parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
