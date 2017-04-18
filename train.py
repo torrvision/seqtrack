@@ -77,7 +77,7 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
             for mode in modes:
                 # Create a queue each for training and validation data.
                 queue, feed_loop[mode] = _make_input_pipeline(o,
-                    num_load_threads=4, num_batch_threads=1, name='pipeline_'+mode)
+                    num_load_threads=1, num_batch_threads=1, name='pipeline_'+mode)
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues,
                 capacity=4, num_threads=1)
@@ -303,7 +303,7 @@ def _get_optimizer(lr, o):
 
 def _make_input_pipeline(o, dtype=tf.float32,
         example_capacity=4, load_capacity=4, batch_capacity=4,
-        num_load_threads=4, num_batch_threads=4,
+        num_load_threads=1, num_batch_threads=1,
         name='pipeline'):
     with tf.name_scope(name) as scope:
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
