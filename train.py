@@ -68,64 +68,29 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
 
     modes = ['train', 'val']
 
-    example   = {} # Each value is a dictionary of tensors.
     feed_loop = {} # Each value is a function to call in a thread.
-    # Create a queue for each set.
     with tf.name_scope('input'):
-        for mode in modes:
-            with tf.name_scope(mode):
-                from_queue = None
-                if use_queues:
-                    from_queue, feed_loop[mode] = _make_input_pipeline(o,
-                        num_load_threads=4, num_batch_threads=1)
-                example[mode] = _make_placeholders(o, default=from_queue)
+        from_queue = None
+        if use_queues:
+            queues = []
+            for mode in modes:
+                # Create a queue each for training and validation data.
+                queue, feed_loop[mode] = _make_input_pipeline(o,
+                    num_load_threads=4, num_batch_threads=1, name='pipeline_'+mode)
+                queues.append(queue)
+            queue_index, from_queue = pipeline.make_multiplexer(queues,
+                capacity=32, num_threads=1)
+        example = _make_placeholders(o, default=from_queue)
 
-    model     = {}
-    loss_vars = {}
     # Always use same statistics for whitening (not set dependent).
     stat = datasets['train'].stat
-    # Create copies of model.
-    with tf.variable_scope('model', reuse=False) as vs:
-        for i, mode in enumerate(modes):
-            with tf.name_scope(mode):
-                # Necessary to have separate collections of summaries.
-                # Otherwise evaluating the summary op will dequeue an example!
-                # TODO: Use tf.make_template? But how to have different collections?
-                model[mode] = create_model(_whiten(example[mode], o, stat=stat),
-                                           is_training=(mode == 'train'),
-                                           summaries_collections=['summaries_' + mode])
-                # TODO: Ensure that get_loss does not create any variables?
-                loss_vars[mode] = get_loss(example[mode], model[mode].outputs, o,
-                    summaries_collections=['summaries_' + mode])
-                r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-                tf.summary.scalar('regularization', r, collections=['summaries_' + mode])
-                loss_vars[mode] += r
-                tf.summary.scalar('total', loss_vars[mode], collections=['summaries_' + mode])
-                # In next loop, reuse variables.
-                vs.reuse_variables()
-
-    summary_vars = {}
-    summary_vars_with_preview = {}
-    # This must contain only summaries that do not pull from the queues.
-    # For example, fraction of pipeline that is full.
-    global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
-    with tf.name_scope('summary'):
-        for mode in modes:
-            with tf.name_scope(mode):
-                # Merge model summaries with others (e.g. pipeline).
-                summaries = (global_summaries + tf.get_collection('summaries_' + mode))
-                summary_vars[mode] = tf.summary.merge(summaries)
-                # Create a preview and add it to the list of summaries.
-                preview = tf.summary.image('box',
-                    _draw_bounding_boxes(example[mode], model[mode]),
-                    max_outputs=o.ntimesteps+1, collections=[])
-                summaries.append(preview)
-                # Produce an image summary of the heatmap.
-                if 'hmap' in model[mode].outputs:
-                    hmap = tf.summary.image('hmap', _draw_heatmap(model[mode]),
-                        max_outputs=o.ntimesteps+1, collections=[])
-                    summaries.append(hmap)
-                summary_vars_with_preview[mode] = tf.summary.merge(summaries)
+    # TODO: Mask y with use_gt to prevent accidental use.
+    model = create_model(_whiten(example, o, stat=stat))
+    loss_var = get_loss(example, model.outputs, o)
+    r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+    tf.summary.scalar('regularization', r)
+    loss_var += r
+    tf.summary.scalar('total', loss_var)
 
     nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
@@ -141,7 +106,29 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                                     staircase=True)
     tf.summary.scalar('lr', lr, collections=['summaries_train'])
     optimizer = _get_optimizer(lr, o)
-    optimize_op = optimizer.minimize(loss_vars['train'], global_step=global_step_var)
+    optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
+
+    summary_vars = {}
+    summary_vars_with_preview = {}
+    global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
+    with tf.name_scope('summary'):
+        # Create a preview and add it to the list of summaries.
+        boxes = tf.summary.image('box',
+            _draw_bounding_boxes(example, model),
+            max_outputs=o.ntimesteps+1, collections=[])
+        image_summaries = [boxes]
+        # Produce an image summary of the heatmap.
+        if 'hmap' in model.outputs:
+            hmap = tf.summary.image('hmap', _draw_heatmap(model),
+                max_outputs=o.ntimesteps+1, collections=[])
+            image_summaries.append(hmap)
+        for mode in modes:
+            with tf.name_scope(mode):
+                # Merge summaries with any that are specific to the mode.
+                summaries = (global_summaries + tf.get_collection('summaries_' + mode))
+                summary_vars[mode] = tf.summary.merge(summaries)
+                summaries.extend(image_summaries)
+                summary_vars_with_preview[mode] = tf.summary.merge(summaries)
 
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver()
@@ -226,30 +213,32 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                         # Run the tracker on a full epoch.
                         print 'evaluation: {}'.format(eval_id)
                         eval_sequences = sampler()
-                        result = evaluate.evaluate(sess, example['val'], model['val'],
+                        result = evaluate.evaluate(sess, example, model,
                             eval_sequences, visualize=visualizer.visualize)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])
 
                 # Take a training step.
                 start = time.time()
-                feed_dict = {}
-                if not use_queues:
+                feed_dict = {example['use_gt']:      True,
+                             example['is_training']: True}
+                if use_queues:
+                    feed_dict.update({queue_index: 0}) # Choose validation queue.
+                else:
                     batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
                     batch = _load_batch(batch_seqs, o)
-                    feed_dict = {example['train'][k]: v for k, v in batch.iteritems()}
+                    feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                     dur_load = time.time() - start
-                feed_dict.update({example['train']['use_gt']: True})
                 if global_step % o.period_summary == 0:
                     summary_var = (summary_vars_with_preview['train']
                                    if global_step % o.period_preview == 0
                                    else summary_vars['train'])
-                    _, loss, summary = sess.run([optimize_op, loss_vars['train'], summary_var],
+                    _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
                                                 feed_dict=feed_dict)
                     dur = time.time() - start
                     writer['train'].add_summary(summary, global_step=global_step)
                 else:
-                    _, loss = sess.run([optimize_op, loss_vars['train']], feed_dict=feed_dict)
+                    _, loss = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
                     dur = time.time() - start
                 loss_ep.append(loss)
 
@@ -259,18 +248,19 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
-                        feed_dict = {}
-                        if not use_queues:
+                        feed_dict = {example['use_gt']:      True,  # Match training.
+                                     example['is_training']: False} # Do not update bnorm stats.
+                        if use_queues:
+                            feed_dict.update({queue_index: 1}) # Choose validation queue.
+                        else:
                             batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
                             batch = _load_batch(batch_seqs, o)
-                            feed_dict = {example['val'][k]: v for k, v in batch.iteritems()}
+                            feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                             dur_load = time.time() - start
-                        # Use same conditions in validation to assess over-fitting to data.
-                        feed_dict.update({example['val']['use_gt']: True})
                         summary_var = (summary_vars_with_preview['val']
                                        if global_step % o.period_preview == 0
                                        else summary_vars['val'])
-                        loss_val, summary = sess.run([loss_vars['val'], summary_var],
+                        loss_val, summary = sess.run([loss_var, summary_var],
                                                      feed_dict=feed_dict)
                         dur_val = time.time() - start
                         writer['val'].add_summary(summary, global_step=global_step)
@@ -358,6 +348,8 @@ def _make_placeholders(o, default=None):
             for k in EXAMPLE_KEYS}
     # Add a placeholder for models that use ground-truth during training.
     example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
+    # Add a placeholder that specifies training mode for e.g. batch_norm.
+    example['is_training'] = tf.placeholder_with_default(False, [], name='is_training')
     return example
 
 

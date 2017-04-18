@@ -103,9 +103,7 @@ class RNN_dual(object):
     This model has two RNNs (ConvLSTM for Dynamics and LSTM for Appearances).
     '''
     def __init__(self, inputs, o,
-                 is_training=True,
                  summaries_collections=None):
-        # Ignore is_training  - model does not change in training vs testing.
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -378,9 +376,7 @@ class RNN_dual_rec(object):
     This model has two RNNs (ConvLSTM for Dynamics and LSTM for Appearances).
     '''
     def __init__(self, inputs, o,
-                 is_training=True,
                  summaries_collections=None):
-        # Ignore is_training  - model does not change in training vs testing.
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -578,7 +574,6 @@ class RNN_dual_rec(object):
 
 
 def rnn_conv_asymm(example, o,
-                   is_training=True,
                    summaries_collections=None,
                    # Model parameters:
                    input_num_layers=3,
@@ -595,6 +590,7 @@ def rnn_conv_asymm(example, o,
     images = example['x']
     x0     = example['x0']
     y0     = example['y0']
+    is_training = example['is_training']
     masks = get_masks_from_rectangles(y0, o)
     if o.debugmode:
         with tf.name_scope('input_preview'):
@@ -766,7 +762,6 @@ def load_model(o, model_params=None):
     Its keys should include 'inputs', 'labels', 'x0', 'y0'.
     '''
     model_params = model_params or {}
-    assert('is_training' not in model_params)
     assert('summaries_collections' not in model_params)
     if o.model == 'RNN_dual':
         model = functools.partial(RNN_dual, o=o, **model_params)
