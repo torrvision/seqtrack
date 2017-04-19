@@ -15,10 +15,10 @@ def sample(dataset, generator=None, shuffle=False, kind=None, ntimesteps=None,
         ntimesteps: Maximum number of frames after first frame.
             If None, then there is no limit.
     '''
-    def _select_frames(is_valid, valid):
+    def _select_frames(is_valid, valid_frames):
         if kind == 'sampling':
-            k = min(len(valid), ntimesteps+1)
-            return sorted(generator.sample(valid, k))
+            k = min(len(valid_frames), ntimesteps+1)
+            return sorted(generator.sample(valid_frames, k))
         elif kind == 'freq-range-fit':
             # TODO: The scope of this sampler should include
             # choosing objects within videos.
@@ -27,19 +27,19 @@ def sample(dataset, generator=None, shuffle=False, kind=None, ntimesteps=None,
             #   a, round(a+freq), round(a+2*freq), round(a+3*freq), ...
             # Therefore, for frames [0, ..., ntimesteps], we need:
             #   a + ntimesteps*freq <= video_len - 1
-            # The smallest possible value of a is valid[0]
-            #   valid[0] + ntimesteps*freq <= video_len - 1
-            #   ntimesteps*freq <= video_len - 1 - valid[0]
-            #   freq <= (video_len - 1 - valid[0]) / ntimesteps
+            # The smallest possible value of a is valid_frames[0]
+            #   valid_frames[0] + ntimesteps*freq <= video_len - 1
+            #   ntimesteps*freq <= video_len - 1 - valid_frames[0]
+            #   freq <= (video_len - 1 - valid_frames[0]) / ntimesteps
             u = min_freq
-            v = min(max_freq, float((video_len - 1) - valid[0]) / ntimesteps)
+            v = min(max_freq, float((video_len - 1) - valid_frames[0]) / ntimesteps)
             if not u <= v:
                 return None
             f = math.exp(generator.uniform(math.log(u), math.log(v)))
             # Let n = ntimesteps*f.
             n = int(round(ntimesteps * f))
             # Choose first frame such that all frames are present.
-            a = generator.choice([a for a in valid if a + n <= video_len - 1])
+            a = generator.choice([a for a in valid_frames if a + n <= video_len - 1])
             return [int(round(a + f*t)) for t in range(0, ntimesteps+1)]
         elif kind == 'regular':
             ''' Sample frames with `freq`, regardless of label
@@ -49,14 +49,15 @@ def sample(dataset, generator=None, shuffle=False, kind=None, ntimesteps=None,
             Adaptive frequency or gradually increasing frequency as a
             Curriculum Learning might be tried.
             '''
-            frames = range(generator.choice(valid), len(is_valid), freq)
+            num_frames = len(is_valid)
+            frames = range(generator.choice(valid_frames), num_frames, freq)
             return frames[:ntimesteps+1]
         elif kind == 'full':
             ''' The full sequence from first 1 to last 1, regardless of label.
             Thus, the returned frames can be `SPARSE`, e.g., [1,1,1,1,0,0,1,1].
             This option is used to evaluate full-length sequences.
             '''
-            return range(valid[0], valid[-1]+1)
+            return range(valid_frames[0], valid_frames[-1]+1)
 
     assert((ntimesteps is None) == (kind == 'full'))
     num_videos = len(dataset.videos)

@@ -413,7 +413,8 @@ class RNN_dual_rec(object):
                         x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv3')
                         x = slim.max_pool2d(x, 2, scope='pool2')
                         x = slim.flatten(x)
-                        x = slim.fully_connected(x, 256, scope='fc1')
+                        x = slim.fully_connected(x, 1024, scope='fc1')
+                        x = slim.fully_connected(x, 1024, scope='fc2')
             return x
 
         def pass_lstm1(x, h_prev, c_prev, name):
@@ -457,7 +458,7 @@ class RNN_dual_rec(object):
                 with slim.arg_scope([slim.conv2d],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     x = slim.conv2d(x, 32, [1, 1], scope='conv1')
-                    x = slim.conv2d(x, 2,  [1, 1], scope='conv2')
+                    x = slim.conv2d(x, 16,  [1, 1], scope='conv2')
             return x
 
         def pass_lstm2(x, h_prev, c_prev, name):
@@ -467,7 +468,7 @@ class RNN_dual_rec(object):
             # TODO: multiple layers
             with tf.name_scope(name):
                 with slim.arg_scope([slim.conv2d],
-                        num_outputs=2,
+                        num_outputs=16,
                         kernel_size=3,
                         activation_fn=None,
                         weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -486,8 +487,8 @@ class RNN_dual_rec(object):
                 with slim.arg_scope([slim.fully_connected],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     x = slim.flatten(x)
-                    x = slim.fully_connected(x, 512, scope='fc1')
-                    x = slim.fully_connected(x, 256, scope='fc2')
+                    x = slim.fully_connected(x, 512, scope='fc1') # TODO: depending on x's channel.
+                    x = slim.fully_connected(x, 512, scope='fc2')
                     x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
@@ -503,8 +504,8 @@ class RNN_dual_rec(object):
                     regularizer=slim.l2_regularizer(o.wd)):
                 h1_init_single = slim.model_variable('lstm1_h_init', shape=[o.nunits])
                 c1_init_single = slim.model_variable('lstm1_c_init', shape=[o.nunits])
-                h2_init_single = slim.model_variable('lstm2_h_init', shape=[11, 11, 2]) # TODO: adaptive
-                c2_init_single = slim.model_variable('lstm2_c_init', shape=[11, 11, 2])
+                h2_init_single = slim.model_variable('lstm2_h_init', shape=[11, 11, 16]) # TODO: adaptive
+                c2_init_single = slim.model_variable('lstm2_c_init', shape=[11, 11, 16])
                 h1_init = tf.stack([h1_init_single] * o.batchsz)
                 c1_init = tf.stack([c1_init_single] * o.batchsz)
                 h2_init = tf.stack([h2_init_single] * o.batchsz)
