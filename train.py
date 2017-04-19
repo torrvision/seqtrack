@@ -465,7 +465,7 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         # example['y']       -- [b, t, 4]
         # model.outputs['y'] -- [b, t, 4]
         # Just do the first example in the batch.
-        image = example['x_raw'][0][::time_stride]
+        image = (1.0/255)*example['x_raw'][0][::time_stride]
         y_gt = example['y'][0][::time_stride]
         y_pred = model.outputs['y'][0][::time_stride]
         y = tf.stack([y_gt, y_pred], axis=1)
