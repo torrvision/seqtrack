@@ -429,13 +429,15 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
             y_pred = outputs['y']
             y_valid = tf.boolean_mask(y, y_is_valid)
             y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
-            x_center = (y_valid[:,2] - y_valid[:,0]) * 0.5
-            y_center = (y_valid[:,3] - y_valid[:,1]) * 0.5
-            x_pred_center = (y_pred_valid[:,2] - y_pred_valid[:,0]) * 0.5
-            y_pred_center = (y_pred_valid[:,3] - y_pred_valid[:,1]) * 0.5
-            loss_cle = tf.reduce_mean(tf.sqrt((x_center - x_pred_center)**2 + (y_center - y_pred_center)**2))
+            x_center = (y_valid[:,2] + y_valid[:,0]) * 0.5
+            y_center = (y_valid[:,3] + y_valid[:,1]) * 0.5
+            x_pred_center = (y_pred_valid[:,2] + y_pred_valid[:,0]) * 0.5
+            y_pred_center = (y_pred_valid[:,3] + y_pred_valid[:,1]) * 0.5
+            loss_cle = tf.reduce_mean(
+                    tf.norm(tf.stack([x_center - x_pred_center, y_center - y_pred_center], axis=1),
+                    axis=1))
             losses['cle'] = loss_cle
-        
+
         # Cross-entropy between probabilty maps (need to change label)
         if 'ce' in o.losses:
             hmap_pred = outputs['hmap']
