@@ -57,7 +57,7 @@ def track(sess, inputs, model, sequence):
             inputs['x0_raw']: first_image,
             inputs['y0']:     first_label,
             inputs['y']:      y_gt,
-            inputs['use_gt']: True,
+            #inputs['use_gt']: True,
         }
         if start > 1:
             # This is not the first chunk.

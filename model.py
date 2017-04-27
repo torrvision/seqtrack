@@ -386,89 +386,258 @@ class RNN_dual_rec(object):
     def _load_model(self, inputs, o):
 
         def pass_cnn1(x, name):
-            # NOTE: whether severe intermediate downsampling was truly necessary?
-            # -> Maybe not for cnn1 -> Dilated convolution.
-            # Dilated convolution will remove the need of pooling or subsampling.
+            ''' CNN for search space
+            '''
+            out = []
             with tf.name_scope(name):
                 with slim.arg_scope([slim.conv2d],
-                        padding='VALID',
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    x = slim.conv2d(x, 16, [7, 7], stride=3, scope='conv1')
-                    x = slim.conv2d(x, 32, [5, 5], stride=2, scope='conv2')
-                    x = slim.max_pool2d(x, 2, stride=2, scope='pool1')
-                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv3')
-                    x = slim.conv2d(x, 64, [3, 3], stride=1, rate=2, scope='conv3')
-                    x = slim.conv2d(x, 64, [3, 3], stride=1, rate=2, scope='conv4')
-            return x
+                    x = slim.conv2d(x, 16, [7, 7], stride=3, scope='conv1'); out.append(x)
+                    x = slim.conv2d(x, 32, [5, 5], stride=2, scope='conv2'); out.append(x)
+                    x = slim.max_pool2d(x, 2, scope='pool1'); out.append(x)
+                    x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv3'); out.append(x)
+                    x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv4'); out.append(x)
+                    x = slim.max_pool2d(x, 2, scope='pool2'); out.append(x)
+                    x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv5'); out.append(x)
+                    x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv6'); out.append(x)
+                    x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv7'); out.append(x)
+                    x = slim.max_pool2d(x, 2, scope='pool3'); out.append(x)
+                    x = slim.conv2d(x, 256, [3, 3], stride=1, scope='conv8'); out.append(x)
+                    x = slim.conv2d(x, 256, [3, 3], stride=1, scope='conv9'); out.append(x)
+                    # same depth model
+                    #x = slim.conv2d(x, 64, [7, 7], stride=3, scope='conv1'); out.append(x)
+                    #x = slim.conv2d(x, 64, [5, 5], stride=2, scope='conv2'); out.append(x)
+                    #x = slim.max_pool2d(x, 2, scope='pool1'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv3'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv4'); out.append(x)
+                    #x = slim.max_pool2d(x, 2, scope='pool2'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv5'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv6'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv7'); out.append(x)
+                    #x = slim.max_pool2d(x, 2, scope='pool3'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv8'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv9'); out.append(x)
+                ## previous (shallow) model; with padding of `VALID`
+                #with slim.arg_scope([slim.conv2d],
+                #        padding='VALID',
+                #        weights_regularizer=slim.l2_regularizer(o.wd)):
+                #    x = slim.conv2d(x, 64, [7, 7], stride=3, scope='conv1'); out.append(x)
+                #    x = slim.conv2d(x, 64, [5, 5], stride=2, scope='conv2'); out.append(x)
+                #    x = slim.max_pool2d(x, 2, stride=2, scope='pool1'); out.append(x)
+                #    x = slim.conv2d(x, 64, [3, 3], stride=1, rate=2, scope='conv3'); out.append(x)
+                #    x = slim.conv2d(x, 64, [3, 3], stride=1, rate=2, scope='conv4'); out.append(x)
+            return out
 
         def pass_cnn2(x, name):
+            ''' CNN for appearance
+            '''
             with tf.name_scope(name):
                 with slim.arg_scope([slim.conv2d, slim.fully_connected],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    with slim.arg_scope([slim.conv2d],
-                            padding='VALID'):
-                        x = slim.conv2d(x, 16, [7, 7], stride=3, scope='conv1')
-                        x = slim.conv2d(x, 32, [5, 5], stride=2, scope='conv2')
-                        x = slim.max_pool2d(x, 2, scope='pool1')
-                        x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv3')
-                        x = slim.max_pool2d(x, 2, scope='pool2')
-                        x = slim.flatten(x)
-                        x = slim.fully_connected(x, 1024, scope='fc1')
-                        x = slim.fully_connected(x, 1024, scope='fc2')
+                    x = slim.conv2d(x, 16, [7, 7], stride=3, scope='conv1')
+                    x = slim.conv2d(x, 32, [5, 5], stride=2, scope='conv2')
+                    x = slim.max_pool2d(x, 2, scope='pool1')
+                    x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv3')
+                    x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv4')
+                    x = slim.max_pool2d(x, 2, scope='pool2')
+                    x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv5')
+                    x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv6')
+                    x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv7')
+                    x = slim.max_pool2d(x, 2, scope='pool3')
+                    x = slim.conv2d(x, 256, [3, 3], stride=1, scope='conv8')
+                    x = slim.conv2d(x, 256, [3, 3], stride=1, scope='conv9')
+                    x = slim.flatten(x)
+                    x = slim.fully_connected(x, 1024, scope='fc1')
+                    x = slim.fully_connected(x, 1024, scope='fc2')
+                    # same depth model
+                    #x = slim.conv2d(x, 64, [7, 7], stride=3, scope='conv1')
+                    #x = slim.conv2d(x, 64, [5, 5], stride=2, scope='conv2')
+                    #x = slim.max_pool2d(x, 2, scope='pool1')
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv3')
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv4')
+                    #x = slim.max_pool2d(x, 2, scope='pool2')
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv5')
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv6')
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv7')
+                    #x = slim.max_pool2d(x, 2, scope='pool3')
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv8')
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv9')
+                    #x = slim.flatten(x)
+                    #x = slim.fully_connected(x, 1024, scope='fc1')
+                    #x = slim.fully_connected(x, 1024, scope='fc2')
+                    ## previous (shallow) model
+                    #with slim.arg_scope([slim.conv2d],
+                    #        padding='VALID'):
+                    #    x = slim.conv2d(x, 16, [7, 7], stride=3, scope='conv1')
+                    #    x = slim.conv2d(x, 32, [5, 5], stride=2, scope='conv2')
+                    #    x = slim.max_pool2d(x, 2, scope='pool1')
+                    #    x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv3')
+                    #    x = slim.max_pool2d(x, 2, scope='pool2')
+                    #    x = slim.flatten(x)
+                    #    x = slim.fully_connected(x, 1024, scope='fc1')
+                    #    x = slim.fully_connected(x, 1024, scope='fc2')
             return x
+
+        def pass_cnn3(x, name):
+            ''' CNN for flow
+            '''
+            out = []
+            with tf.name_scope(name):
+                with slim.arg_scope([slim.conv2d],
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    x = slim.conv2d(x, 16, [7, 7], stride=3, scope='conv1'); out.append(x)
+                    x = slim.conv2d(x, 32, [5, 5], stride=2, scope='conv2'); out.append(x)
+                    x = slim.max_pool2d(x, 2, scope='pool1'); out.append(x)
+                    x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv3'); out.append(x)
+                    x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv4'); out.append(x)
+                    x = slim.max_pool2d(x, 2, scope='pool2'); out.append(x)
+                    x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv5'); out.append(x)
+                    x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv6'); out.append(x)
+                    x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv7'); out.append(x)
+                    x = slim.max_pool2d(x, 2, scope='pool3'); out.append(x)
+                    x = slim.conv2d(x, 256, [3, 3], stride=1, scope='conv8'); out.append(x)
+                    x = slim.conv2d(x, 256, [3, 3], stride=1, scope='conv9'); out.append(x)
+                    # same depth model
+                    #x = slim.conv2d(x, 64, [7, 7], stride=3, scope='conv1'); out.append(x)
+                    #x = slim.conv2d(x, 64, [5, 5], stride=2, scope='conv2'); out.append(x)
+                    #x = slim.max_pool2d(x, 2, scope='pool1'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv3'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv4'); out.append(x)
+                    #x = slim.max_pool2d(x, 2, scope='pool2'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv5'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv6'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv7'); out.append(x)
+                    #x = slim.max_pool2d(x, 2, scope='pool3'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv8'); out.append(x)
+                    #x = slim.conv2d(x, 64, [3, 3], stride=1, scope='conv9'); out.append(x)
+                ## previous (shallow) model
+                #with slim.arg_scope([slim.conv2d],
+                #        padding='VALID',
+                #        weights_regularizer=slim.l2_regularizer(o.wd)):
+                #    x = slim.conv2d(x, 64, [7, 7], stride=3, scope='conv1'); out.append(x)
+                #    x = slim.conv2d(x, 64, [5, 5], stride=2, scope='conv2'); out.append(x)
+                #    x = slim.max_pool2d(x, 2, stride=2, scope='pool1'); out.append(x)
+                #    x = slim.conv2d(x, 64, [3, 3], stride=1, rate=2, scope='conv3'); out.append(x)
+                #    x = slim.conv2d(x, 64, [3, 3], stride=1, rate=2, scope='conv4'); out.append(x)
+            return out
+
+        def pass_memory_attention(memory, appearance, name):
+            appearance = tf.expand_dims(appearance, axis=1)
+            with tf.name_scope(name):
+                with slim.arg_scope([slim.fully_connected],
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    similarity = tf.reduce_sum(
+                            memory * tf.nn.l2_normalize(appearance, dim=2),
+                            axis=2, keep_dims=True)
+                    appearance_att = tf.reduce_sum(similarity * memory, axis=1)
+                    appearance_att = slim.fully_connected(appearance_att, o.nunits, scope='fc1')
+                    appearance_att = slim.fully_connected(appearance_att, 64, scope='fc2')
+                    memory = tf.nn.l2_normalize(concat((memory[:,1:,:], appearance), 1), dim=2)
+            return memory, appearance_att
 
         def pass_lstm1(x, h_prev, c_prev, name):
             # TODO: multiple layers
             with tf.name_scope(name):
-                ft, it, ct_tilda, ot = tf.split(
-                    slim.fully_connected(
-                        concat((h_prev, x), 1),
-                        o.nunits*4,
+                with slim.arg_scope([slim.fully_connected],
+                        num_outputs=o.nunits,
                         activation_fn=None,
-                        weights_regularizer=slim.l2_regularizer(o.wd)),
-                    4, 1)
-                ct = (tf.nn.sigmoid(ft) * c_prev) + (tf.nn.sigmoid(it) * tf.nn.tanh(ct_tilda))
-                ht = tf.nn.sigmoid(ot) * tf.nn.tanh(ct)
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    # NOTE: `An Empirical Exploration of Recurrent Neural Network Architecture`.
+                    # Initialize forget bias to be 1.
+                    # They also use `tanh` instead of `sigmoid` for input gate. (yet not employed here)
+                    ft = slim.fully_connected(concat((h_prev, x), 1), biases_initializer=tf.ones_initializer(), scope='hf')
+                    it = slim.fully_connected(concat((h_prev, x), 1), scope='hi')
+                    ct_tilda = slim.fully_connected(concat((h_prev, x), 1), scope='hc')
+                    ot = slim.fully_connected(concat((h_prev, x), 1), scope='ho')
+                    ct = (tf.nn.sigmoid(ft) * c_prev) + (tf.nn.sigmoid(it) * tf.nn.tanh(ct_tilda))
+                    ht = tf.nn.sigmoid(ot) * tf.nn.tanh(ct)
             return ht, ct
 
-        def pass_project_for_cross_correlation(h, name):
-            # TODO: maybe do not reduce the feature vector size to much.
+        def pass_multi_level_cross_correlation(search, filt, name):
+            ''' Multi-level cross-correlation function producing scoremaps.
+            Option 1: depth-wise convolution
+            Option 2: similarity score (-> doesn't work well)
+            Note that depth-wise convolution with 1x1 filter is actually same as
+            channel-wise (and element-wise) multiplication.
+            '''
+            # TODO: sigmoid or softmax over scoremap?
+            # channel-wise l2 normalization as in Universal Correspondence Network?
+            scoremap = []
             with tf.name_scope(name):
-                out = slim.fully_connected(h, 64)
-                out = tf.expand_dims(out, 1)
-                out = tf.expand_dims(out, 1)
-            return out
-
-        def pass_cross_correlation(search, filt, name):
-            # TODO: mutli-scale cross-correlation.
-            # TODO: How can I achieve this without using o.batchsz?
-            with tf.name_scope(name):
-                scoremap = []
-                for i in range(o.batchsz):
-                    searchimg = tf.expand_dims(search[i],0)
-                    filtimg = tf.expand_dims(filt[i],3)
-                    scoremap.append(
-                        tf.nn.depthwise_conv2d(searchimg, filtimg, [1,1,1,1], 'SAME'))
-                scoremap = tf.squeeze(tf.stack(scoremap, axis=0), squeeze_dims=1)
-                scoremap.set_shape([None, None, None, 64]) # TODO: is this working?
+                with slim.arg_scope([slim.fully_connected],
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    for i in range(len(search)):
+                        depth = search[i].shape.as_list()[-1]
+                        scoremap.append(search[i] *
+                                tf.expand_dims(tf.expand_dims(slim.fully_connected(filt, depth), 1), 1))
+            # same depth model
+            #with tf.name_scope(name):
+            #    scoremap = [search[i]*filt for i in range(len(search))]
             return scoremap
 
-        def pass_project_for_lstm2(x, name):
+        def pass_multi_level_cross_correlation_memory(search, filt, name):
+            ''' Multi-level cross-correlation function producing scoremaps.
+            '''
+            filt = tf.expand_dims(tf.expand_dims(filt,1),1)
+            with tf.name_scope(name): # depth-wise convolution
+                scoremap = [search[i]*filt for i in range(len(search))]
+            return scoremap
+
+        #def pass_multi_level_integration_correlation_and_flow(correlation, correlation_memory, flow, name):
+        def pass_multi_level_integration_correlation_and_flow(correlation, flow, name):
+            ''' Multi-level integration of correlation and flow outputs.
+            Using sum.
+            '''
+            with tf.name_scope(name):
+                scoremap = [correlation[i]+flow[i] for i in range(len(correlation))]
+                #scoremap = [correlation[i]+correlation_memory[i]+flow[i] for i in range(len(correlation))]
+            return scoremap
+
+        def pass_multi_level_deconvolution(x, name):
+            ''' Multi-level deconvolutions.
+            This is in a way similar to HourglassNet.
+            Using sum.
+            '''
+            deconv = x[-1]
             with tf.name_scope(name):
                 with slim.arg_scope([slim.conv2d],
+                        kernel_size=[3,3],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    x = slim.conv2d(x, 32, [1, 1], scope='conv1')
-                    x = slim.conv2d(x, 16,  [1, 1], scope='conv2')
-            return x
+                    for i in range(len(x)-1):
+                        shape_to = x[len(x)-2-i].shape.as_list()
+                        deconv = slim.conv2d(
+                                tf.image.resize_images(deconv, shape_to[1:3]),
+                                num_outputs=shape_to[-1],
+                                scope='deconv{}'.format(i+1))
+                        deconv = deconv + x[len(x)-2-i] # TODO: try concat
+                        deconv = slim.conv2d(deconv,
+                                num_outputs=shape_to[-1],
+                                kernel_size=[1,1],
+                                scope='conv{}'.format(i+1))
+            return deconv
+            ## previous
+            #deconv = x[-1]
+            #with tf.name_scope(name):
+            #    with slim.arg_scope([slim.conv2d],
+            #            num_outputs=x[-1].shape.as_list()[-1],
+            #            kernel_size=[3,3], # TODO: Is it okay?
+            #            weights_regularizer=slim.l2_regularizer(o.wd)):
+            #        for i in range(len(x)-1):
+            #            deconv = slim.conv2d(
+            #                    tf.image.resize_images(deconv, x[len(x)-2-i].shape.as_list()[1:3]),
+            #                    scope='deconv{}'.format(i))
+            #            deconv = deconv + x[len(x)-2-i]
+            #            deconv = slim.conv2d(deconv, kernel_size=[1,1], scope='conv{}'.format(i))
+            #return deconv
 
         def pass_lstm2(x, h_prev, c_prev, name):
             ''' ConvLSTM
-            h and c have the same dimension as x (padding can be used)
+            h and c have the same spatial dimension as x.
             '''
             # TODO: multiple layers
             with tf.name_scope(name):
                 with slim.arg_scope([slim.conv2d],
-                        num_outputs=16,
+                        num_outputs=2,
                         kernel_size=3,
                         activation_fn=None,
                         weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -487,8 +656,8 @@ class RNN_dual_rec(object):
                 with slim.arg_scope([slim.fully_connected],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     x = slim.flatten(x)
-                    x = slim.fully_connected(x, 512, scope='fc1') # TODO: depending on x's channel.
-                    x = slim.fully_connected(x, 512, scope='fc2')
+                    x = slim.fully_connected(x, 1024, scope='fc1')
+                    x = slim.fully_connected(x, 1024, scope='fc2')
                     x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
@@ -497,6 +666,7 @@ class RNN_dual_rec(object):
         x0      = inputs['x0'] # shape [b, h, w, 3]
         y0      = inputs['y0'] # shape [b, 4]
         y       = inputs['y']  # shape [b, ntimesteps, 4]
+        use_gt  = inputs['use_gt']
 
         with tf.name_scope('lstm_initial'):
             with slim.arg_scope([slim.model_variable],
@@ -504,22 +674,46 @@ class RNN_dual_rec(object):
                     regularizer=slim.l2_regularizer(o.wd)):
                 h1_init_single = slim.model_variable('lstm1_h_init', shape=[o.nunits])
                 c1_init_single = slim.model_variable('lstm1_c_init', shape=[o.nunits])
-                h2_init_single = slim.model_variable('lstm2_h_init', shape=[11, 11, 16]) # TODO: adaptive
-                c2_init_single = slim.model_variable('lstm2_c_init', shape=[11, 11, 16])
+                #h2_init_single = slim.model_variable('lstm2_h_init', shape=[11, 11, 2]) # TODO: adaptive
+                #c2_init_single = slim.model_variable('lstm2_c_init', shape=[11, 11, 2])
+                #h2_init_single = slim.model_variable('lstm2_h_init', shape=[79, 79, 2]) # TODO: adaptive
+                #c2_init_single = slim.model_variable('lstm2_c_init', shape=[79, 79, 2])
+                h2_init_single = slim.model_variable('lstm2_h_init', shape=[81, 81, 2]) # TODO: adaptive
+                c2_init_single = slim.model_variable('lstm2_c_init', shape=[81, 81, 2])
                 h1_init = tf.stack([h1_init_single] * o.batchsz)
                 c1_init = tf.stack([c1_init_single] * o.batchsz)
                 h2_init = tf.stack([h2_init_single] * o.batchsz)
                 c2_init = tf.stack([c2_init_single] * o.batchsz)
 
+        with tf.name_scope('noise'):
+            noise = tf.truncated_normal(tf.shape(y), mean=0.0, stddev=0.05,
+            #noise = tf.truncated_normal(tf.shape(y), mean=0.0, stddev=0.1,
+                                        dtype=o.dtype, seed=o.seed_global, name='noise')
+
+        with tf.name_scope('memory'):
+            capacity = 100
+            memory = tf.truncated_normal([o.batchsz, capacity, 1024],
+                                         mean=0.0, stddev=0.01, dtype=o.dtype,
+                                         seed=o.seed_global, name='memory')
+            memory = tf.nn.l2_normalize(memory, dim=2)
+
+
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
         y_init = tf.identity(y0)
+        m_init = tf.identity(memory)
         x_prev = x_init
         y_prev = y_init
+        m_prev = m_init
         h1_prev, c1_prev = h1_init, c1_init
         h2_prev, c2_prev = h2_init, c2_init
         y_pred = []
+
+        scoremaps = []
+        searchs = []
+        filts = []
         h2 = []
+
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr = y[:, t]
@@ -533,21 +727,35 @@ class RNN_dual_rec(object):
                     xy = concat([x_prev, hmap], axis=3)
                     cnn2out = pass_cnn2(xy, scope)
 
+            with tf.name_scope('cnn3_{}'.format(t)) as scope:
+                with tf.variable_scope('cnn3', reuse=(t > 0)):
+                    cnn3out = pass_cnn3(tf.concat([x_prev, x_curr], axis=3), scope)
+
+            #with tf.name_scope('memory_update_{}'.format(t)) as scope:
+            #    with tf.variable_scope('memory_update', reuse=(t > 0)):
+            #        m_curr, appearance_att = pass_memory_attention(m_prev, cnn2out, scope)
+
             with tf.name_scope('lstm1_{}'.format(t)) as scope:
                 with tf.variable_scope('lstm1', reuse=(t > 0)):
                     h1_curr, c1_curr = pass_lstm1(cnn2out, h1_prev, c1_prev, scope)
 
-            with tf.name_scope('project_for_cross_correlation_{}'.format(t)) as scope:
-                with tf.variable_scope('project_for_cross_correlation', reuse=(t > 0)):
-                    h1_curr_proj = pass_project_for_cross_correlation(h1_curr, scope)
+            with tf.name_scope('multi_level_cross_correlation_{}'.format(t)) as scope:
+                with tf.variable_scope('multi_level_cross_correlation', reuse=(t > 0)):
+                    scoremap = pass_multi_level_cross_correlation(cnn1out, h1_curr, scope)
 
-            with tf.name_scope('cross_correlation_{}'.format(t)) as scope:
-                with tf.variable_scope('cross_correlation', reuse=(t > 0)):
-                    scoremap = pass_cross_correlation(cnn1out, h1_curr_proj, scope)
+            #with tf.name_scope('multi_level_cross_correlation_memory_{}'.format(t)) as scope:
+            #    with tf.variable_scope('multi_level_cross_correlation_memory', reuse=(t > 0)):
+            #        scoremap_memory = pass_multi_level_cross_correlation_memory(cnn1out, appearance_att, scope)
 
-            with tf.name_scope('project_for_lstm2_{}'.format(t)) as scope:
-                with tf.variable_scope('project_for_lstm2', reuse=(t > 0)):
-                    scoremap = pass_project_for_lstm2(scoremap, scope)
+            with tf.name_scope('multi_level_integration_correlation_and_flow_{}'.format(t)) as scope:
+                with tf.variable_scope('multi_level_integration_correlation_and_flow', reuse=(t > 0)):
+                    scoremap = pass_multi_level_integration_correlation_and_flow(
+                            scoremap, cnn3out, scope)
+                            #scoremap, scoremap_memory, cnn3out, scope)
+
+            with tf.name_scope('multi_level_deconvolution_{}'.format(t)) as scope:
+                with tf.variable_scope('multi_level_deconvolution', reuse=(t > 0)):
+                    scoremap = pass_multi_level_deconvolution(scoremap, scope)
 
             with tf.name_scope('lstm2_{}'.format(t)) as scope:
                 with tf.variable_scope('lstm2', reuse=(t > 0)):
@@ -558,19 +766,23 @@ class RNN_dual_rec(object):
                     y_curr_pred = pass_cnn_out_rec(h2_curr, scope)
 
             x_prev = x_curr
-            y_prev = y_curr # TODO: 'use_gt'
+            y_prev = tf.cond(use_gt, lambda: y_curr + noise[:,t],
+                                     lambda: y_curr_pred) # NOTE: Do not pass GT during eval
             h1_prev, c1_prev = h1_curr, c1_curr
             h2_prev, c2_prev = h2_curr, c2_curr
+            #m_prev = m_curr
+
             y_pred.append(y_curr_pred)
-            h2.append(h2_curr)
 
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
 
         outputs = {'y': y_pred}
         state = {'h1': (h1_init, h1_curr), 'c1': (c1_init, c1_curr),
                  'h2': (h2_init, h2_curr), 'c2': (c2_init, c2_curr),
-                 'x': (x_init, x_curr), 'y': (y_init, y_curr)} # TODO: 'use_gt'
-        dbg = {'y_pred': y_pred, 'h2': tf.stack(h2, axis=1)}
+                 'x': (x_init, x_prev), 'y': (y_init, y_prev)}
+                 #'memory': (m_init, m_curr)}
+        #dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
+        dbg = {}
         return outputs, state, dbg
 
 

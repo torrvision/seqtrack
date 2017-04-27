@@ -63,7 +63,7 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # Options for sampler
-        self.sampler_params     = {'kind': 'regular', 'freq': 2}
+        self.sampler_params     = {'kind': 'regular', 'freq': 10}
         self.eval_datasets      = ['ILSVRC-train']
         self.eval_samplers      = ['custom']
 

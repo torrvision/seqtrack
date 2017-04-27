@@ -95,7 +95,7 @@ def parse_arguments():
 
     parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
-            type=json.loads, default={'kind': 'regular', 'freq': 2})
+            type=json.loads, default={'kind': 'regular', 'freq': 10})
     parser.add_argument(
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker',
             type=str, default=['ILSVRC-train'])
@@ -154,14 +154,15 @@ if __name__ == "__main__":
 
     sampler_presets = {
         'full':   functools.partial(sample.sample, kind='full'),
-        'custom': functools.partial(sample.sample, kind='regular', freq=2,
+        #'custom': functools.partial(sample.sample, kind='regular', freq=10,
+        'custom': functools.partial(sample.sample, kind='regular', freq=o.sampler_params['freq'],
             ntimesteps=o.ntimesteps),
     }
     # Take all dataset-sampler combinations.
     eval_sets = {
         # TODO: This will use same set for every evaluation round? Good or bad?
-        d+'-'+s: lambda: sampler_presets[s](datasets[d], max_sequences=100,
-                                            generator=random.Random(o.seed_global))
+        d+'-'+s: functools.partial(sampler_presets[s], datasets[d], max_sequences=100,
+                                   generator=random.Random(o.seed_global))
         for d in o.eval_datasets
         for s in o.eval_samplers
     }
