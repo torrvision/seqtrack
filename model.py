@@ -649,8 +649,8 @@ class RNN_dual_rec(object):
                     ht = ot * tf.nn.tanh(ct)
             return ht, ct
 
-        def pass_cnn_out_rec(x, name):
-            ''' Another cnn for output rectangle
+        def pass_out_rectangle(x, name):
+            ''' Regress output rectangle.
             '''
             with tf.name_scope(name):
                 with slim.arg_scope([slim.fully_connected],
@@ -659,6 +659,19 @@ class RNN_dual_rec(object):
                     x = slim.fully_connected(x, 1024, scope='fc1')
                     x = slim.fully_connected(x, 1024, scope='fc2')
                     x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
+            return x
+
+        def pass_out_heatmap(x, name):
+            ''' Upsample and generate spatial heatmap.
+            Two 1x1 convolutions for output hmap
+            '''
+            with tf.name_scope(name):
+                with slim.arg_scope([slim.conv2d],
+                        num_outputs=x.shape.as_list()[-1],
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    x = slim.conv2d(tf.image.resize_images(x, [241, 241]), kernel_size=[3, 3], scope='deconv')
+                    x = slim.conv2d(x, kernel_size=[1, 1], scope='conv1')
+                    x = slim.conv2d(x, kernel_size=[1, 1], activation_fn=None, scope='conv2')
             return x
 
 
@@ -708,6 +721,7 @@ class RNN_dual_rec(object):
         h1_prev, c1_prev = h1_init, c1_init
         h2_prev, c2_prev = h2_init, c2_init
         y_pred = []
+        hmap_pred = []
 
         scoremaps = []
         searchs = []
@@ -763,7 +777,11 @@ class RNN_dual_rec(object):
 
             with tf.name_scope('cnn_out_rec_{}'.format(t)) as scope:
                 with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
-                    y_curr_pred = pass_cnn_out_rec(h2_curr, scope)
+                    y_curr_pred = pass_out_rectangle(h2_curr, scope)
+
+            with tf.name_scope('cnn_out_hmap_{}'.format(t)) as scope:
+                with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
+                    hmap_curr_pred = pass_out_heatmap(h2_curr, scope)
 
             x_prev = x_curr
             y_prev = tf.cond(use_gt, lambda: y_curr + noise[:,t],
@@ -773,10 +791,12 @@ class RNN_dual_rec(object):
             #m_prev = m_curr
 
             y_pred.append(y_curr_pred)
+            hmap_pred.append(hmap_curr_pred)
 
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
+        hmap_pred = tf.stack(hmap_pred, axis=1)
 
-        outputs = {'y': y_pred}
+        outputs = {'y': y_pred, 'hmap': hmap_pred}
         state = {'h1': (h1_init, h1_curr), 'c1': (c1_init, c1_curr),
                  'h2': (h2_init, h2_curr), 'c2': (c2_init, c2_curr),
                  'x': (x_init, x_prev), 'y': (y_init, y_prev)}
