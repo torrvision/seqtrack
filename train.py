@@ -107,7 +107,9 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                                     staircase=True)
     tf.summary.scalar('lr', lr, collections=['summaries_train'])
     optimizer = _get_optimizer(lr, o)
-    optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
+    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+    with tf.control_dependencies(update_ops):
+        optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
 
     summary_vars = {}
     summary_vars_with_preview = {}
@@ -463,7 +465,7 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         # example['y']       -- [b, t, 4]
         # model.outputs['y'] -- [b, t, 4]
         # Just do the first example in the batch.
-        image = example['x_raw'][0][::time_stride]
+        image = (1.0/255)*example['x_raw'][0][::time_stride]
         y_gt = example['y'][0][::time_stride]
         y_pred = model.outputs['y'][0][::time_stride]
         y = tf.stack([y_gt, y_pred], axis=1)
