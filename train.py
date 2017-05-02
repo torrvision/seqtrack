@@ -486,7 +486,10 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
 def _draw_heatmap(model, time_stride=1, name='draw_heatmap'):
     with tf.name_scope(name) as scope:
         # model.outputs['hmap'] -- [b, t, frmsz, frmsz, 2]
-        return tf.nn.softmax(model.outputs['hmap'][0,::time_stride,:,:,0:1])
+        # return tf.nn.softmax(model.outputs['hmap'][0,::time_stride,:,:,0:1])
+        p = tf.nn.softmax(model.outputs['hmap'][0,::time_stride])
+        # Take first channel and convert to int.
+        return tf.cast(tf.round(255*p[:,:,:,0:1]), tf.uint8)
 
 
 def _load_sequence(seq, o):
