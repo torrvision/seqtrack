@@ -156,7 +156,7 @@ if __name__ == "__main__":
     }
 
     # These are the possible choices for evaluation sampler.
-    # No need to specify `shuffle`, `max_videos`, `max_objecst` here,
+    # No need to specify `shuffle`, `max_videos`, `max_objects` here,
     # but `ntimesteps` should be set if applicable.
     sampler_presets = {
         'full':   functools.partial(sample.sample, kind='full'),
