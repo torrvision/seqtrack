@@ -40,7 +40,17 @@ if ! (cd $src && env/bin/pip freeze) >"$dir/requirements.txt" ; then
 	echo 'cannot get pip requirements'
 	exit 1
 fi
+if ! mkdir "$dir/workspace/" ; then
+	echo 'cannot create workspace dir'
+	exit 1
+fi
 
 ( cd $dir &&  ./create-experiment.sh )
+
+# TODO: Come up with a better place to put aux/ files.
+if ! rsync -a "$src/aux" "$dir/repo/" ; then
+	echo 'cannot copy auxiliary files'
+	exit 1
+fi
 
 echo "workspace: $dir"
