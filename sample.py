@@ -1,19 +1,39 @@
-'''The functions in this file create collections of sequences from datasets.
+'''A sampler is a function that maps a dataset to an ordered collection of sequences.
 
-The sequences can be returned as a list or the functions can act as generators.
+The sequences can be returned as a list or the functions can be generators.
 '''
 
 import pdb
 import math
 import os
 
-def sample(dataset, generator=None, shuffle=False, kind=None, ntimesteps=None,
-           freq=10, min_freq=10, max_freq=60, max_sequences=None):
+def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=None,
+           kind=None, ntimesteps=None, freq=10, min_freq=10, max_freq=60):
     '''
+    For training, set `shuffle=True`, `max_objects=1`, `ntimesteps` as required.
+
+    Note that all samplers for training use `ntimesteps` to limit the sequence length.
+    The `full` sampler does not use `ntimesteps`.
+
+    This sampler comprises options that are used to choose a list of trajectories
+    (`shuffle`, `max_videos`, `max_objects`)
+    and options that are used to choose a list of frames
+    (`kind`, `ntimesteps`, `freq`, ...).
+
     Args:
         dataset: Dataset object such as ILSVRC or OTB.
-        ntimesteps: Maximum number of frames after first frame.
-            If None, then there is no limit.
+        generator: Random number generator (can be module `random`).
+        shuffle: Whether to shuffle the videos.
+            Note that if shuffled sequences are desired,
+            then max_objects should be 1,
+            otherwise all trajectories from the same video
+            will be returned together.
+        max_videos: Maximum number of videos to use, or None.
+            There may still be multiple tracks per video.
+        max_objects: Maximum number of objects per video, or None.
+        kind: Type of sampler to use.
+            {'full', 'sampling', 'regular', 'freq-range-fit'}
+        ntimesteps: Maximum number of frames after first frame, or None.
     '''
     def _select_frames(is_valid, valid_frames):
         if kind == 'sampling':
@@ -60,18 +80,20 @@ def sample(dataset, generator=None, shuffle=False, kind=None, ntimesteps=None,
             return range(valid_frames[0], valid_frames[-1]+1)
 
     assert((ntimesteps is None) == (kind == 'full'))
-    num_videos = len(dataset.videos)
-    # indices = np.generator.permutation(num_videos) if shuffle else range(num_videos)
-    indices = range(num_videos)
-    if shuffle:
-        generator.shuffle(indices)
-    videos = list(dataset.videos[i] for i in indices)
-    num_sequences = 0
+    videos = list(dataset.videos) # copy
+    if max_videos is not None and len(videos) > max_videos:
+        videos = generator.sample(videos, max_videos)
+    else:
+        if shuffle:
+            generator.shuffle(videos)
+
     for video in videos:
-        if kind is not 'full':
-            trajectories = [generator.choice(dataset.tracks[video])]
-        else:
-            trajectories = dataset.tracks[video]
+        trajectories = dataset.tracks[video]
+        if max_objects is not None and len(trajectories) > max_objects:
+            trajectories = generator.sample(trajectories, max_objects)
+        # Do not shuffle objects within a sequence.
+        # Assume that if the sampler is used for SGD, then max_objects = 1.
+
         for trajectory in trajectories:
             frame_is_valid = [(t in trajectory) for t in range(dataset.video_length[video])]
             frames = _select_frames(frame_is_valid, trajectory.keys())
@@ -82,15 +104,12 @@ def sample(dataset, generator=None, shuffle=False, kind=None, ntimesteps=None,
             num_labels = sum(1 for x in label_is_valid if x)
             if num_labels < 2:
                 continue
-            num_sequences += 1
             yield {
                 'image_files':    [dataset.image_file(video, t) for t in frames],
                 'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
                 'label_is_valid': label_is_valid,
                 'original_image_size': dataset.original_image_size[video],
             }
-            if max_sequences is not None and num_sequences >= max_sequences:
-                return
 
 def _invalid_rect():
     return [float('nan')] * 4

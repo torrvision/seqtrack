@@ -86,7 +86,7 @@ def parse_arguments():
             type=str, default='adam')
     parser.add_argument(
             '--lr_init', help='initial learning rate',
-            type=float, default=1e-3)
+            type=float, default=1e-4)
     parser.add_argument(
             '--lr_decay_rate', help='geometric step for learning rate decay',
             type=float, default=1)
@@ -156,7 +156,8 @@ if __name__ == "__main__":
     }
 
     # These are the possible choices for evaluation sampler.
-    # No need to specify `shuffle` here, but you should specify `ntimesteps` if applicable.
+    # No need to specify `shuffle`, `max_videos`, `max_objecst` here,
+    # but `ntimesteps` should be set if applicable.
     sampler_presets = {
         'full':   functools.partial(sample.sample, kind='full'),
         # The 'train' sampler is the same as used during training.
@@ -168,11 +169,17 @@ if __name__ == "__main__":
                                     ntimesteps=o.ntimesteps),
     }
     # Take all dataset-sampler combinations.
+    # Different policies are used for choosing trajectories in OTB and ILSVRC:
+    # ILSVRC is large and therefore a random subset of videos are used,
+    # with 1 object per video.
+    # OTB is small and therefore all tracks in all videos are used.
     eval_sets = {
-        # TODO: This will use same set for every evaluation round? Good or bad?
+        # Give each evaluation set its own random seed.
         d+'-'+s: functools.partial(sampler_presets[s], datasets[d],
-            max_sequences=100,
-            generator=random.Random(o.seed_global))
+            generator=random.Random(o.seed_global),
+            max_videos=None if d.startswith('OTB-') else o.max_eval_videos,
+            shuffle=False if d.startswith('OTB-') else True,
+            max_objects=None if d.startswith('OTB-') else 1)
         for d in o.eval_datasets
         for s in o.eval_samplers
     }

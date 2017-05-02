@@ -55,7 +55,7 @@ class Opts(object):
         self.nepoch             = 20
         self.batchsz            = 1
         self.optimizer          = 'adam' # sgd, adam, rmsprop
-        self.lr_init            = 1e-3
+        self.lr_init            = 1e-4
         self.lr_decay_rate      = 1 # No decay.
         self.lr_decay_steps     = 10000
         self.wd                 = 0.0 # weight decay for regularization
@@ -70,6 +70,7 @@ class Opts(object):
         # Dataset and sampler to use for evaluation.
         self.eval_datasets      = ['ILSVRC-train']
         self.eval_samplers      = ['custom']
+        self.max_eval_videos    = 100
 
         #----------------------------------------------------------------------
         # save (save training results), load (test), resume (keep training)

@@ -22,18 +22,19 @@ from helpers import load_image, im_to_arr, pad_to, cache_json
 EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
 
 
-def train(create_model, datasets, val_sets, o, use_queues=False):
+def train(create_model, datasets, eval_sets, o, use_queues=False):
     '''Trains a network.
 
     Args:
         create_model: Function that takes as input a dictionary of tensors and
             returns a model object.
         datasets: Dictionary of datasets with keys 'train' and 'val'.
-        val_sets: A dictionary of collections of sequences on which to evaluate the tracker.
+        eval_sets: A dictionary of sampling functions which return collections
+            of sequences on which to evaluate the tracker.
 
     Returns:
         The results obtained using the tracker at different stages of training.
-        This is a dictionary with the same keys as val_sets:
+        This is a dictionary with the same keys as eval_sets:
             all_results[val_set] = list of (iter_num, results)
         Note that this is represented as a list of pairs instead of a dictionary
         to facilitate saving to JSON (does not support integer keys).
@@ -59,6 +60,9 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
         'heatmap' # (optional) Score for pixel belonging to target, shape [b, n, h, w, 1]
 
     The images provided to the model are already normalized (e.g. dataset mean subtracted).
+
+    Each sampler in the eval_sets dictionary is a function that
+    returns a collection of sequences or is a finite generator of sequences.
     '''
 
     # How should we compute training and validation error with pipelines?
@@ -212,7 +216,7 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                 period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step % period_assess == 0:
                     iter_id = 'iteration{}'.format(global_step)
-                    for eval_id, sampler in val_sets.iteritems():
+                    for eval_id, sampler in eval_sets.iteritems():
                         vis_dir = os.path.join(o.path_output, iter_id, eval_id)
                         if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
                         visualizer = visualize.VideoFileWriter(vis_dir)
@@ -408,8 +412,9 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
     else:
         epochs = itertools.count()
     for i in epochs:
-        sequences = sample.sample(dataset, generator=generator, shuffle=True,
-                                  ntimesteps=o.ntimesteps, **o.sampler_params)
+        sequences = sample.sample(dataset, generator=generator,
+                                  shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
+                                  **o.sampler_params)
         for sequence in sequences:
             yield sequence
 
