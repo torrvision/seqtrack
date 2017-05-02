@@ -55,7 +55,7 @@ def pad_to(x, n, axis=0, mode='constant'):
     width[axis] = (0, n - x.shape[axis])
     return np.pad(x, width, mode=mode)
 
-def cache_json(filename, func):
+def cache_json(filename, func, makedir=False):
     '''Caches the result of a function in a file.
 
     Args:
@@ -65,6 +65,9 @@ def cache_json(filename, func):
         with open(filename, 'r') as r:
             result = json.load(r)
     else:
+        if makedir:
+            if not os.path.exists(os.path.dirname(filename)):
+                os.makedirs(os.path.dirname(filename))
         result = func()
         with open(filename, 'w') as w:
             json.dump(result, w)

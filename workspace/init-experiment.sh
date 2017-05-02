@@ -32,7 +32,7 @@ if ! (cd $src && git log -1 --format="%H") >"$dir/commit.txt" ; then
 	echo 'cannot get git commit'
 	exit 1
 fi
-if ! (cd $src && git config --get remote.origin.url) >"$dir/remote.txt" ; then
+if ! (cd $src && git config --get remote.local.url) >"$dir/remote.txt" ; then
 	echo 'cannot get git remote url'
 	exit 1
 fi

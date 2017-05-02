@@ -17,7 +17,7 @@ import sample
 import visualize
 
 from model import convert_rec_to_heatmap
-from helpers import load_image, im_to_arr, pad_to
+from helpers import load_image, im_to_arr, pad_to, cache_json
 
 EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
 
@@ -219,8 +219,13 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                         # Run the tracker on a full epoch.
                         print 'evaluation: {}'.format(eval_id)
                         eval_sequences = sampler()
-                        result = evaluate.evaluate(sess, example, model,
-                            eval_sequences, visualize=visualizer.visualize)
+                        # Cache the results.
+                        result_file = os.path.join(o.path_output, 'assess', eval_id,
+                            'iter-{}.json'.format(iter_id))
+                        result = cache_json(result_file,
+                            lambda: evaluate.evaluate(sess, example, model,
+                                eval_sequences, visualize=visualizer.visualize),
+                            makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])
 

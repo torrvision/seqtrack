@@ -116,7 +116,7 @@ def evaluate(sess, inputs, model, sequences, visualize=None):
     results = {}
     assert(len(sequence_results) > 0)
     for k in sequence_results[0]:
-        results[k] = np.mean([r[k] for r in sequence_results], axis=0)
+        results[k] = np.mean([r[k] for r in sequence_results], axis=0).tolist()
     return results
 
 
