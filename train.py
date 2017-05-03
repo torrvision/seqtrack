@@ -134,7 +134,7 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                 summary_vars_with_preview[mode] = tf.summary.merge(summaries)
 
     init_op = tf.global_variables_initializer()
-    saver = tf.train.Saver()
+    saver = tf.train.Saver(max_to_keep=10)
 
     # Use a separate random number generator for each sampler.
     sequences = {mode: iter_examples(datasets[mode], o,
@@ -203,7 +203,8 @@ def train(create_model, datasets, val_sets, o, use_queues=False):
                         fname = os.path.join(o.path_ckpt, 'iteration{}.ckpt'.format(global_step))
                         # saved_model = saver.save(sess, fname)
                         print 'save model'
-                        saver.save(sess, fname)
+                        #saver.save(sess, fname)
+                        saver.save(sess, o.path_ckpt+'/iteration', global_step=global_step)
                         print 'done: save model'
                         sys.stdout.flush()
                         prev_ckpt = global_step
