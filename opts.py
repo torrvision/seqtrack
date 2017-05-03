@@ -64,7 +64,10 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # Options for sampler
+        # The sampler to use for training.
+        # Do not specify `ntimesteps` or `shuffle` here.
         self.sampler_params     = {'kind': 'regular', 'freq': 10}
+        # Dataset and sampler to use for evaluation.
         self.eval_datasets      = ['ILSVRC-train']
         self.eval_samplers      = ['custom']
 

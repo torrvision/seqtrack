@@ -155,11 +155,17 @@ if __name__ == "__main__":
         'OTB-100':      data.Data_OTB('OTB-100', o),
     }
 
+    # These are the possible choices for evaluation sampler.
+    # No need to specify `shuffle` here, but you should specify `ntimesteps` if applicable.
     sampler_presets = {
         'full':   functools.partial(sample.sample, kind='full'),
-        #'custom': functools.partial(sample.sample, kind='regular', freq=10,
-        'custom': functools.partial(sample.sample, kind='regular', freq=o.sampler_params['freq'],
-            ntimesteps=o.ntimesteps),
+        # The 'train' sampler is the same as used during training.
+        # This may be useful for detecting over-fitting.
+        'train':  functools.partial(sample.sample, ntimesteps=o.ntimesteps, **o.sampler_params),
+        # The 'custom' sampler can be modified for a quick and dirty test.
+        'custom': functools.partial(sample.sample, kind='regular',
+                                    freq=o.sampler_params.get('freq', 10),
+                                    ntimesteps=o.ntimesteps),
     }
     # Take all dataset-sampler combinations.
     eval_sets = {
