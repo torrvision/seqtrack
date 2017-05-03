@@ -104,7 +104,7 @@ def parse_arguments():
             type=str, default=['ILSVRC-train'])
     parser.add_argument(
             '--eval_samplers', nargs='+', help='',
-            type=str, default=['custom'])
+            type=str, default=['train'])
 
     parser.add_argument(
             '--path_data_home', help='location of datasets',
