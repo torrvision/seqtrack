@@ -28,6 +28,14 @@ if ! cp $src/workspace/install/* "$dir/" ; then
 	echo 'cannot copy workspace scripts'
 	exit 1
 fi
+if ! mkdir "$dir/workspace" ; then
+	echo 'cannot create workspace directory'
+	exit 1
+fi
+if ! touch "$dir/workspace/run.sh" ; then
+	echo 'cannot touch run.sh'
+	exit 1
+fi
 if ! (cd $src && git log -1 --format="%H") >"$dir/commit.txt" ; then
 	echo 'cannot get git commit'
 	exit 1
@@ -47,8 +55,8 @@ fi
 
 ( cd $dir &&  ./create-experiment.sh )
 
-# TODO: Come up with a better place to put aux/ files.
-if ! rsync -a "$src/aux" "$dir/repo/" ; then
+# TODO: Come up with a better place to put aux/ files?
+if ! rsync -a "$src/aux/" "$dir/repo/aux/" ; then
 	echo 'cannot copy auxiliary files'
 	exit 1
 fi
