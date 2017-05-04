@@ -460,8 +460,9 @@ def rnn_conv_asymm(example, o,
                    input_pool=[True, True, True],
                    input_pool_stride=[2, 2, 2],
                    input_pool_kernel_size=[3, 3, 3],
-                   input_batch_norm=False):
-                   # lstm_num_layers=1,
+                   input_batch_norm=False,
+                   lstm_num_channels=64,
+                   lstm_num_layers=1):
                    # lstm_kernel_size=[3]):
 
     images = example['x']
@@ -486,6 +487,7 @@ def rnn_conv_asymm(example, o,
     assert(len(input_pool)             == input_num_layers)
     assert(len(input_pool_stride)      == input_num_layers)
     assert(len(input_pool_kernel_size) == input_num_layers)
+    assert(lstm_num_layers >= 1)
     # assert(len(lstm_kernel_size) == lstm_num_layers)
 
     def input_cnn(x, num_outputs, name='input_cnn'):
@@ -537,7 +539,7 @@ def rnn_conv_asymm(example, o,
                                      slim.conv2d(h_prev, scope='hc', biases_initializer=None))
                 c = (f * c_prev) + (i * c_tilde)
                 h = y * tf.nn.tanh(c)
-                layers = {'i': i, 'f': f, 'o': y, 'c_tilde': c, 'c': c, 'h': h}
+                # layers = {'i': i, 'f': f, 'o': y, 'c_tilde': c, 'c': c, 'h': h}
                 # if o.activ_histogram:
                 #     with tf.name_scope('summary'):
                 #         for k, v in layers.iteritems():
@@ -565,16 +567,19 @@ def rnn_conv_asymm(example, o,
                     #             tf.summary.histogram(k, v, collections=summaries_collections)
         return x
 
-    lstm_dim = 64
     # At start of sequence, compute hidden state from first example.
     # Feed (h_init, c_init) to resume tracking from previous state.
     # Do NOT feed (h_init, c_init) when starting new sequence.
-    with tf.name_scope('h_init') as scope:
-        with tf.variable_scope('h_init'):
-            h_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
-    with tf.name_scope('c_init') as scope:
-        with tf.variable_scope('c_init'):
-            c_init = input_cnn(init_input, num_outputs=lstm_dim, name=scope)
+    # TODO: Share some layers?
+    h_init = [None] * lstm_num_layers
+    c_init = [None] * lstm_num_layers
+    with tf.variable_scope('lstm_init'):
+        for j in range(lstm_num_layers):
+            with tf.variable_scope('layer_{}'.format(j+1)):
+                with tf.variable_scope('h_init'):
+                    h_init[j] = input_cnn(init_input, num_outputs=lstm_num_channels)
+                with tf.variable_scope('c_init'):
+                    c_init[j] = input_cnn(init_input, num_outputs=lstm_num_channels)
 
     # # TODO: Process all frames together in training (when sequences are equal length)
     # # (because it enables batch-norm to operate on whole sequence)
@@ -584,7 +589,7 @@ def rnn_conv_asymm(example, o,
     #     with tf.variable_scope('frame_cnn'):
     #         # Pass name scope from above, otherwise makes new name scope
     #         # within name scope created by variable scope.
-    #         r = input_cnn(x, num_outputs=lstm_dim, name=scope)
+    #         r = input_cnn(x, num_outputs=lstm_num_channels, name=scope)
     # r = unmerge(r, 0)
 
     y = []
@@ -595,13 +600,18 @@ def rnn_conv_asymm(example, o,
             with tf.variable_scope('frame_cnn', reuse=(t > 0)):
                 # Pass name scope from above, otherwise makes new name scope
                 # within name scope created by variable scope.
-                rt = input_cnn(xt, num_outputs=lstm_dim, name=scope)
-        with tf.name_scope('conv_lstm_{}'.format(t)) as scope:
+                xt = input_cnn(xt, num_outputs=lstm_num_channels, name=scope)
+        with tf.name_scope('conv_lstm_{}'.format(t)):
             with tf.variable_scope('conv_lstm', reuse=(t > 0)):
-                ht, ct = conv_lstm(rt, ht, ct, state_dim=lstm_dim, name=scope)
+                for j in range(lstm_num_layers):
+                    layer_name = 'layer_{}'.format(j+1)
+                    with tf.variable_scope(layer_name, reuse=(t > 0)):
+                        ht[j], ct[j] = conv_lstm(xt, ht[j], ct[j],
+                                                 state_dim=lstm_num_channels)
+                    xt = ht[j]
         with tf.name_scope('out_cnn_{}'.format(t)) as scope:
             with tf.variable_scope('out_cnn', reuse=(t > 0)):
-                yt = output_cnn(ht, name=scope)
+                yt = output_cnn(xt, name=scope)
         y.append(yt)
         # tf.get_variable_scope().reuse_variables()
     h_last, c_last = ht, ct
