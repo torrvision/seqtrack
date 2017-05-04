@@ -629,7 +629,11 @@ def rnn_conv_asymm(example, o,
                 tf.summary.histogram(v.name, v, collections=summaries_collections)
 
     outputs = {'y': y}
-    state = {'h': (h_init, h_last), 'c': (c_init, c_last)}
+    state = {}
+    state.update({'h_{}'.format(j+1): (h_init[j], h_last[j])
+                  for j in range(lstm_num_layers)})
+    state.update({'c_{}'.format(j+1): (c_init[j], c_last[j])
+                  for j in range(lstm_num_layers)})
 
     class Model:
         pass
