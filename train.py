@@ -226,7 +226,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                         eval_sequences = sampler()
                         # Cache the results.
                         result_file = os.path.join(o.path_output, 'assess', eval_id,
-                            'iter-{}.json'.format(iter_id))
+                            iter_id+'.json')
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model,
                                 eval_sequences, visualize=visualizer.visualize),

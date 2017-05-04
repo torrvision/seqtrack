@@ -40,9 +40,13 @@ class VideoFileWriter:
                           '-i', self.pattern,
                           '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
                           os.path.join(os.path.abspath(self.root), sequence_name+'.mp4')]
-        p = subprocess.Popen(args, cwd=sequence_dir)
-        p.wait()
-        shutil.rmtree(sequence_dir)
+        try:
+            p = subprocess.Popen(args, cwd=sequence_dir)
+            p.wait()
+        except Exception as inst:
+            print 'error:', inst
+        finally:
+            shutil.rmtree(sequence_dir)
 
 
 def _unnormalize_rect(r, size):

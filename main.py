@@ -3,7 +3,10 @@ import sys
 import argparse
 import functools
 import json
+import numpy as np
+import os
 import random
+import re
 import tensorflow as tf
 
 from opts           import Opts
@@ -21,6 +24,9 @@ def parse_arguments():
             action='store_true')
     parser.add_argument(
             '--verbose_train', help='print train losses during train',
+            action='store_true')
+    parser.add_argument(
+            '--report', help='generate report after training',
             action='store_true')
     parser.add_argument(
             '--debugmode', help='used for debugging',
@@ -135,11 +141,7 @@ def parse_arguments():
     if args.verbose: print args
     return args
 
-def trace(frame, event, arg):
-    print "%s, %s:%d" % (event, frame.f_code.co_filename, frame.f_lineno)
-    return trace
-
-if __name__ == "__main__":
+def main():
     # sys.settrace(trace) # Use this to find segfaults.
 
     args = parse_arguments()
@@ -184,8 +186,54 @@ if __name__ == "__main__":
         for s in o.eval_samplers
     }
 
+    if o.report:
+        generate_report(sorted(eval_sets.keys()), o)
+        return
+
     # TODO: Set model_opts from command-line or JSON file?
     m = model.load_model(o, model_params=o.model_params)
 
     train.train(m, {'train': datasets['ILSVRC-train'], 'val': datasets['ILSVRC-val']},
                 eval_sets, o, use_queues=o.use_queues)
+
+
+def generate_report(eval_ids, o, fields=['auc', 'iou_mean', 'cle_mean']):
+    '''Finds all results for each evaluation distribution.
+
+    Identifies the best result for each metric.
+    Caution: More frequent evaluations might lead to better results.
+    '''
+    pattern = re.compile(r'^iteration(\d+)\.json$')
+    for eval_id in eval_ids:
+        results = {}
+        dirname = os.path.join(o.path_output, 'assess', eval_id)
+        for f in os.listdir(dirname):
+            if not os.path.isfile(os.path.join(dirname, f)):
+                continue
+            match = pattern.match(f)
+            if not match:
+                continue
+            step = int(match.group(1))
+            with open(os.path.join(dirname, f), 'r') as r:
+                results[step] = json.load(r)
+        if not results:
+            print 'no results found:', eval_id
+            continue
+
+        print '==== evaluation: {} ===='.format(eval_id)
+        steps = sorted(results.keys())
+        for step in steps:
+            print 'iter {}:  {}'.format(step,
+                '; '.join(['{}: {:.3g}'.format(field, results[step][field]) for field in fields]))
+        for field in fields:
+            values = [results[s][field] for s in steps]
+            print '{}:  min: {:.3g}; max: {:.3g}'.format(field,
+                np.amin(values).tolist(),
+                np.amax(values).tolist())
+
+def trace(frame, event, arg):
+    print "%s, %s:%d" % (event, frame.f_code.co_filename, frame.f_lineno)
+    return trace
+
+if __name__ == "__main__":
+    main()
