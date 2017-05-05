@@ -320,22 +320,39 @@ class RNN_dual(object):
         y       = inputs['y']  # shape [b, ntimesteps, 4]
         use_gt  = inputs['use_gt']
 
+        # TODO: receive model specs from JSON 
+        lstm1_num_layers = 2
+        lstm2_num_layers = 2
+        h1_init = [None] * lstm1_num_layers
+        c1_init = [None] * lstm1_num_layers
+        h2_init = [None] * lstm2_num_layers
+        c2_init = [None] * lstm2_num_layers
         with tf.name_scope('lstm_initial'):
             with slim.arg_scope([slim.model_variable],
                     initializer=tf.truncated_normal_initializer(stddev=0.01),
                     regularizer=slim.l2_regularizer(o.wd)):
-                h1_init_single = slim.model_variable('lstm1_h_init', shape=[o.nunits])
-                c1_init_single = slim.model_variable('lstm1_c_init', shape=[o.nunits])
-                #h2_init_single = slim.model_variable('lstm2_h_init', shape=[11, 11, 2]) # TODO: adaptive
-                #c2_init_single = slim.model_variable('lstm2_c_init', shape=[11, 11, 2])
-                #h2_init_single = slim.model_variable('lstm2_h_init', shape=[79, 79, 2]) # TODO: adaptive
-                #c2_init_single = slim.model_variable('lstm2_c_init', shape=[79, 79, 2])
-                h2_init_single = slim.model_variable('lstm2_h_init', shape=[81, 81, 2]) # TODO: adaptive
-                c2_init_single = slim.model_variable('lstm2_c_init', shape=[81, 81, 2])
-                h1_init = tf.stack([h1_init_single] * o.batchsz)
-                c1_init = tf.stack([c1_init_single] * o.batchsz)
-                h2_init = tf.stack([h2_init_single] * o.batchsz)
-                c2_init = tf.stack([c2_init_single] * o.batchsz)
+                for i in range(lstm1_num_layers):
+                    h1_init_single = slim.model_variable('lstm1_h_init_{}'.format(i+1), shape=[o.nunits])
+                    c1_init_single = slim.model_variable('lstm1_c_init_{}'.format(i+1), shape=[o.nunits])
+                    h1_init[i] = tf.stack([h1_init_single] * o.batchsz)
+                    c1_init[i] = tf.stack([c1_init_single] * o.batchsz)
+                for i in range(lstm2_num_layers):
+                    h2_init_single = slim.model_variable('lstm2_h_init_{}'.format(i+1), shape=[81, 81, 2]) # TODO: adaptive
+                    c2_init_single = slim.model_variable('lstm2_c_init_{}'.format(i+1), shape=[81, 81, 2])
+                    h2_init[i] = tf.stack([h2_init_single] * o.batchsz)
+                    c2_init[i] = tf.stack([c2_init_single] * o.batchsz)
+                #h1_init_single = slim.model_variable('lstm1_h_init', shape=[o.nunits])
+                #c1_init_single = slim.model_variable('lstm1_c_init', shape=[o.nunits])
+                ##h2_init_single = slim.model_variable('lstm2_h_init', shape=[11, 11, 2]) # TODO: adaptive
+                ##c2_init_single = slim.model_variable('lstm2_c_init', shape=[11, 11, 2])
+                ##h2_init_single = slim.model_variable('lstm2_h_init', shape=[79, 79, 2]) # TODO: adaptive
+                ##c2_init_single = slim.model_variable('lstm2_c_init', shape=[79, 79, 2])
+                #h2_init_single = slim.model_variable('lstm2_h_init', shape=[81, 81, 2]) # TODO: adaptive
+                #c2_init_single = slim.model_variable('lstm2_c_init', shape=[81, 81, 2])
+                #h1_init = tf.stack([h1_init_single] * o.batchsz)
+                #c1_init = tf.stack([c1_init_single] * o.batchsz)
+                #h2_init = tf.stack([h2_init_single] * o.batchsz)
+                #c2_init = tf.stack([c2_init_single] * o.batchsz)
 
         with tf.name_scope('noise'):
             noise = tf.truncated_normal(tf.shape(y), mean=0.0, stddev=0.05,
@@ -392,13 +409,21 @@ class RNN_dual(object):
             #    with tf.variable_scope('memory_update', reuse=(t > 0)):
             #        m_curr, appearance_att = pass_memory_attention(m_prev, cnn2out, scope)
 
+            h1_curr = [None] * lstm1_num_layers
+            c1_curr = [None] * lstm1_num_layers
             with tf.name_scope('lstm1_{}'.format(t)) as scope:
                 with tf.variable_scope('lstm1', reuse=(t > 0)):
-                    h1_curr, c1_curr = pass_lstm1(cnn2out, h1_prev, c1_prev, scope)
+                    input_to_lstm1 = tf.identity(cnn2out)
+                    for i in range(lstm1_num_layers):
+                        with tf.variable_scope('layer_{}'.format(i+1), reuse=(t > 0)):
+                            h1_curr[i], c1_curr[i] = pass_lstm1(input_to_lstm1, h1_prev[i], c1_prev[i], scope)
+                        input_to_lstm1 = h1_curr[i]
+                    #h1_curr, c1_curr = pass_lstm1(cnn2out, h1_prev, c1_prev, scope) # single-layer lstm1
 
             with tf.name_scope('multi_level_cross_correlation_{}'.format(t)) as scope:
                 with tf.variable_scope('multi_level_cross_correlation', reuse=(t > 0)):
-                    scoremap = pass_multi_level_cross_correlation(cnn1out, h1_curr, scope)
+                    scoremap = pass_multi_level_cross_correlation(cnn1out, h1_curr[-1], scope) # multi-layer lstm1
+                    #scoremap = pass_multi_level_cross_correlation(cnn1out, h1_curr, scope)
 
             #with tf.name_scope('multi_level_cross_correlation_memory_{}'.format(t)) as scope:
             #    with tf.variable_scope('multi_level_cross_correlation_memory', reuse=(t > 0)):
@@ -414,17 +439,26 @@ class RNN_dual(object):
                 with tf.variable_scope('multi_level_deconvolution', reuse=(t > 0)):
                     scoremap = pass_multi_level_deconvolution(scoremap, scope)
 
+            h2_curr = [None] * lstm2_num_layers
+            c2_curr = [None] * lstm2_num_layers
             with tf.name_scope('lstm2_{}'.format(t)) as scope:
                 with tf.variable_scope('lstm2', reuse=(t > 0)):
-                    h2_curr, c2_curr = pass_lstm2(scoremap, h2_prev, c2_prev, scope)
+                    input_to_lstm2 = tf.identity(scoremap)
+                    for i in range(lstm2_num_layers):
+                        with tf.variable_scope('layer_{}'.format(i+1), reuse=(t > 0)):
+                            h2_curr[i], c2_curr[i] = pass_lstm2(input_to_lstm2, h2_prev[i], c2_prev[i], scope)
+                        input_to_lstm2 = h2_curr[i]
+                    #h2_curr, c2_curr = pass_lstm2(scoremap, h2_prev, c2_prev, scope)
 
             with tf.name_scope('cnn_out_rec_{}'.format(t)) as scope:
                 with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
-                    y_curr_pred = pass_out_rectangle(h2_curr, scope)
+                    y_curr_pred = pass_out_rectangle(h2_curr[-1], scope) # multi-layer lstm2
+                    #y_curr_pred = pass_out_rectangle(h2_curr, scope)
 
             with tf.name_scope('cnn_out_hmap_{}'.format(t)) as scope:
                 with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
-                    hmap_curr = pass_out_heatmap(h2_curr, scope)
+                    hmap_curr = pass_out_heatmap(h2_curr[-1], scope) # multi-layer lstm2
+                    #hmap_curr = pass_out_heatmap(h2_curr, scope)
 
             x_prev = x_curr
             y_prev = tf.cond(use_gt, lambda: y_curr + noise[:,t],
@@ -441,10 +475,16 @@ class RNN_dual(object):
         hmap_pred = tf.stack(hmap_pred, axis=1)
 
         outputs = {'y': y_pred, 'hmap': hmap_pred}
-        state = {'h1': (h1_init, h1_curr), 'c1': (c1_init, c1_curr),
-                 'h2': (h2_init, h2_curr), 'c2': (c2_init, c2_curr),
-                 'x': (x_init, x_prev), 'y': (y_init, y_prev)}
-                 #'memory': (m_init, m_curr)}
+        #state = {'h1': (h1_init, h1_curr), 'c1': (c1_init, c1_curr),
+        #         'h2': (h2_init, h2_curr), 'c2': (c2_init, c2_curr),
+        #         'x': (x_init, x_prev), 'y': (y_init, y_prev)}
+        #         #'memory': (m_init, m_curr)}
+        state = {}
+        state.update({'h1_{}'.format(i+1): (h1_init[i], h1_curr[i]) for i in range(lstm1_num_layers)})
+        state.update({'c1_{}'.format(i+1): (c1_init[i], c1_curr[i]) for i in range(lstm1_num_layers)})
+        state.update({'h2_{}'.format(i+1): (h2_init[i], h2_curr[i]) for i in range(lstm2_num_layers)})
+        state.update({'c2_{}'.format(i+1): (c2_init[i], c2_curr[i]) for i in range(lstm2_num_layers)})
+        state.update({'x': (x_init, x_prev), 'y': (y_init, y_prev)})
         #dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
         dbg = {}
         return outputs, state, dbg
