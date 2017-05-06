@@ -105,10 +105,19 @@ class RNN_dual(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  lstm1_nlayers=1,
-                 lstm2_nlayers=1):
+                 lstm2_nlayers=1,
+                 pass_hmap=False,
+                 dropout_rnn=False,
+                 dropout_cnn=False,
+                 keep_prob=0.2, # following `Recurrent Neural Network Regularization, Zaremba et al.
+                 ):
         # model parameters
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
+        self.pass_hmap     = pass_hmap
+        self.dropout_rnn   = dropout_rnn
+        self.dropout_cnn   = dropout_cnn
+        self.keep_prob     = keep_prob
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -158,6 +167,8 @@ class RNN_dual(object):
                     x = slim.conv2d(x, 256, [3, 3], stride=1, scope='conv9')
                     x = slim.flatten(x)
                     x = slim.fully_connected(x, 1024, scope='fc1')
+                    if self.dropout_cnn:
+                        x = slim.dropout(x, keep_prob=self.keep_prob, is_training=is_training, scope='dropout1')
                     x = slim.fully_connected(x, 1024, scope='fc2')
             return x
 
@@ -285,7 +296,8 @@ class RNN_dual(object):
             '''
             with tf.name_scope(name):
                 with slim.arg_scope([slim.conv2d],
-                        num_outputs=x.shape.as_list()[-1],
+                        #num_outputs=x.shape.as_list()[-1],
+                        num_outputs=2, # NOTE: hmap before lstm2 -> reduce the output channel to 2 here.
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     x = slim.conv2d(tf.image.resize_images(x, [241, 241]), kernel_size=[3, 3], scope='deconv')
                     x = slim.conv2d(x, kernel_size=[1, 1], scope='conv1')
@@ -293,13 +305,15 @@ class RNN_dual(object):
             return x
 
 
-        x       = inputs['x']  # shape [b, ntimesteps, h, w, 3]
-        x0      = inputs['x0'] # shape [b, h, w, 3]
-        y0      = inputs['y0'] # shape [b, 4]
-        y       = inputs['y']  # shape [b, ntimesteps, 4]
-        use_gt  = inputs['use_gt']
+        x           = inputs['x']  # shape [b, ntimesteps, h, w, 3]
+        x0          = inputs['x0'] # shape [b, h, w, 3]
+        y0          = inputs['y0'] # shape [b, 4]
+        y           = inputs['y']  # shape [b, ntimesteps, 4]
+        use_gt      = inputs['use_gt']
+        gt_ratio    = inputs['gt_ratio']
+        is_training = inputs['is_training']
 
-        # TODO: receive model specs from JSON 
+        # TODO: receive model specs from JSON
         h1_init = [None] * self.lstm1_nlayers
         c1_init = [None] * self.lstm1_nlayers
         h2_init = [None] * self.lstm2_nlayers
@@ -337,11 +351,6 @@ class RNN_dual(object):
         y_pred = []
         hmap_pred = []
 
-        scoremaps = []
-        searchs = []
-        filts = []
-        h2 = []
-
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr = y[:, t]
@@ -353,8 +362,10 @@ class RNN_dual(object):
                 with tf.variable_scope('cnn2', reuse=(t > 0)):
                     # use both `hmap_prev` along with `y_prev_{GT or pred}`
                     hmap_from_rec = get_masks_from_rectangles(y_prev, o)
-                    #xy = concat([x_prev, hmap_from_rec], axis=3)
-                    xy = concat([x_prev, hmap_from_rec, hmap_prev], axis=3) # TODO: backpropagation-able?
+                    if self.pass_hmap:
+                        xy = concat([x_prev, hmap_from_rec, hmap_prev], axis=3) # TODO: backpropagation-able?
+                    else:
+                        xy = concat([x_prev, hmap_from_rec], axis=3)
                     cnn2out = pass_cnn2(xy, scope)
 
             with tf.name_scope('cnn3_{}'.format(t)) as scope:
@@ -369,7 +380,13 @@ class RNN_dual(object):
                     for i in range(self.lstm1_nlayers):
                         with tf.variable_scope('layer_{}'.format(i+1), reuse=(t > 0)):
                             h1_curr[i], c1_curr[i] = pass_lstm1(input_to_lstm1, h1_prev[i], c1_prev[i], scope)
-                        input_to_lstm1 = h1_curr[i]
+                        if self.dropout_rnn:
+                            input_to_lstm1 = slim.dropout(h1_curr[i],
+                                                          keep_prob=self.keep_prob,
+                                                          is_training=is_training, scope='dropout')
+                        else:
+                            input_to_lstm1 = h1_curr[i]
+
 
             with tf.name_scope('multi_level_cross_correlation_{}'.format(t)) as scope:
                 with tf.variable_scope('multi_level_cross_correlation', reuse=(t > 0)):
@@ -384,6 +401,10 @@ class RNN_dual(object):
                 with tf.variable_scope('multi_level_deconvolution', reuse=(t > 0)):
                     scoremap = pass_multi_level_deconvolution(scoremap, scope)
 
+            with tf.name_scope('cnn_out_hmap_{}'.format(t)) as scope:
+                with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
+                    hmap_curr = pass_out_heatmap(scoremap, scope)
+
             h2_curr = [None] * self.lstm2_nlayers
             c2_curr = [None] * self.lstm2_nlayers
             with tf.name_scope('lstm2_{}'.format(t)) as scope:
@@ -392,19 +413,26 @@ class RNN_dual(object):
                     for i in range(self.lstm2_nlayers):
                         with tf.variable_scope('layer_{}'.format(i+1), reuse=(t > 0)):
                             h2_curr[i], c2_curr[i] = pass_lstm2(input_to_lstm2, h2_prev[i], c2_prev[i], scope)
-                        input_to_lstm2 = h2_curr[i]
+                        if self.dropout_rnn:
+                            input_to_lstm2 = slim.dropout(h2_curr[i],
+                                                          keep_prob=self.keep_prob,
+                                                          is_training=is_training, scope='dropout')
+                        else:
+                            input_to_lstm2 = h2_curr[i]
 
             with tf.name_scope('cnn_out_rec_{}'.format(t)) as scope:
                 with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
                     y_curr_pred = pass_out_rectangle(h2_curr[-1], scope) # multi-layer lstm2
 
-            with tf.name_scope('cnn_out_hmap_{}'.format(t)) as scope:
-                with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
-                    hmap_curr = pass_out_heatmap(h2_curr[-1], scope) # multi-layer lstm2
+            #with tf.name_scope('cnn_out_hmap_{}'.format(t)) as scope:
+            #    with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
+            #        hmap_curr = pass_out_heatmap(h2_curr[-1], scope) # multi-layer lstm2
 
             x_prev = x_curr
-            y_prev = tf.cond(use_gt, lambda: y_curr + noise[:,t],
-                                     lambda: y_curr_pred) # NOTE: Do not pass GT during eval
+            rand_prob = tf.random_uniform([], minval=0, maxval=1)
+            gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
+            y_prev = tf.cond(gt_condition, lambda: y_curr + noise[:,t], # TODO: should noise be gone?
+                                           lambda: y_curr_pred)
             h1_prev, c1_prev = h1_curr, c1_curr
             h2_prev, c2_prev = h2_curr, c2_curr
             hmap_prev = hmap_curr

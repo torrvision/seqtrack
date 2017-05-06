@@ -237,7 +237,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 # Take a training step.
                 start = time.time()
                 feed_dict = {example['use_gt']:      True,
-                             example['is_training']: True}
+                             example['is_training']: True,
+                             example['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)}
                 if use_queues:
                     feed_dict.update({queue_index: 0}) # Choose validation queue.
                 else:
@@ -366,6 +367,8 @@ def _make_placeholders(o, default=None):
     example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
     # Add a placeholder that specifies training mode for e.g. batch_norm.
     example['is_training'] = tf.placeholder_with_default(False, [], name='is_training')
+    # Add a placeholder for scheduled sampling of y_prev_GT during training
+    example['gt_ratio'] = tf.placeholder_with_default(1.0, [], name='gt_ratio')
     return example
 
 
