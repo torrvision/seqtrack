@@ -627,7 +627,17 @@ def rnn_conv_asymm(example, o,
 
 
 def rnn_multi_res(example, o,
-                  summaries_collections=None):
+                  summaries_collections=None,
+                  # Model options:
+                  use_batch_norm=False,
+                  conv_num_groups=5,
+                  conv_num_layers=[2, 2, 3, 3, 3],
+                  conv_use_lstm=[True, True, True, True, True],
+                  conv_dim_first=32,
+                  conv_dim_last=128,
+                  fc_num_layers=2,
+                  fc_dim=256,
+                  ):
 
     images = example['x']
     x0     = example['x0']
@@ -670,10 +680,13 @@ def rnn_multi_res(example, o,
                 #             tf.summary.histogram(k, v, collections=summaries_collections)
         return h, c
 
-    dim_first, dim_last = 32, 128
-    num_strides = 5
-    dims = np.linspace(math.log10(dim_first), math.log10(dim_last), num_strides)
+    dims = np.linspace(math.log10(conv_dim_first),
+                       math.log10(conv_dim_last),
+                       conv_num_groups)
     dims = np.round(dims).astype(np.int)
+
+    assert(len(conv_num_layers) == conv_num_groups)
+    assert(len(conv_use_lstm) == conv_num_groups)
 
     # At start of sequence, compute hidden state from first example.
     # Feed (h_init, c_init) to resume tracking from previous state.
@@ -682,111 +695,61 @@ def rnn_multi_res(example, o,
     h_init = {}
     c_init = {}
     with tf.variable_scope('lstm_init'):
-        x = init_input
-        h = {}
-        c = {}
-        # x = slim.repeat(x, 2, slim.conv2d, dims[0], [3, 3], scope='conv1')
-        x = slim.repeat(x, 1, slim.conv2d, dims[0], [3, 3], scope='conv1')
-        name = 'lstm1'
-        h_init[name] = slim.conv2d(x, dims[0], [3, 3], scope=name+'_h')
-        c_init[name] = slim.conv2d(x, dims[0], [3, 3], scope=name+'_c')
-        x = slim.conv2d(x, dims[0], [3, 3])
-        x = slim.max_pool2d(x, [3, 3], scope='pool1')
-
-        # x = slim.repeat(x, 2, slim.conv2d, dims[1], [3, 3], scope='conv2')
-        x = slim.repeat(x, 1, slim.conv2d, dims[1], [3, 3], scope='conv2')
-        name = 'lstm2'
-        h_init[name] = slim.conv2d(x, dims[1], [3, 3], scope=name+'_h')
-        c_init[name] = slim.conv2d(x, dims[1], [3, 3], scope=name+'_c')
-        x = slim.conv2d(x, dims[1], [3, 3])
-        x = slim.max_pool2d(x, [3, 3], scope='pool2')
-
-        # x = slim.repeat(x, 3, slim.conv2d, dims[2], [3, 3], scope='conv3')
-        x = slim.repeat(x, 2, slim.conv2d, dims[2], [3, 3], scope='conv3')
-        name = 'lstm3'
-        h_init[name] = slim.conv2d(x, dims[2], [3, 3], scope=name+'_h')
-        c_init[name] = slim.conv2d(x, dims[2], [3, 3], scope=name+'_c')
-        x = slim.conv2d(x, dims[2], [3, 3])
-        x = slim.max_pool2d(x, [3, 3], scope='pool3')
-
-        # x = slim.repeat(x, 3, slim.conv2d, dims[3], [3, 3], scope='conv4')
-        x = slim.repeat(x, 2, slim.conv2d, dims[3], [3, 3], scope='conv4')
-        name = 'lstm4'
-        h_init[name] = slim.conv2d(x, dims[3], [3, 3], scope=name+'_h')
-        c_init[name] = slim.conv2d(x, dims[3], [3, 3], scope=name+'_c')
-        x = slim.conv2d(x, dims[3], [3, 3])
-        x = slim.max_pool2d(x, [3, 3], scope='pool4')
-
-        # x = slim.repeat(x, 3, slim.conv2d, dims[4], [3, 3], scope='conv5')
-        x = slim.repeat(x, 2, slim.conv2d, dims[4], [3, 3], scope='conv5')
-        name = 'lstm5'
-        h_init[name] = slim.conv2d(x, dims[4], [3, 3], scope=name+'_h')
-        c_init[name] = slim.conv2d(x, dims[4], [3, 3], scope=name+'_c')
-        # x = slim.conv2d(x, dims[4], [3, 3])
-        # x = slim.max_pool2d(x, [3, 3], scope='pool5')
+        with slim.arg_scope([slim.conv2d],
+                            kernel_size=3,
+                            weights_regularizer=slim.l2_regularizer(o.wd)):
+            with slim.arg_scope([slim.max_pool2d],
+                                kernel_size=3,
+                                padding='SAME'):
+                conv_name = lambda grp, ind: 'conv{}_{}'.format(grp+1, ind+1)
+                x = init_input
+                for j in range(conv_num_groups):
+                    for k in range(conv_num_layers[j]-1):
+                        x = slim.conv2d(x, dims[j], scope=conv_name(j, k))
+                    if conv_use_lstm[j]:
+                        lstm_name = 'lstm{}'.format(j+1)
+                        h_init[lstm_name] = slim.conv2d(x, dims[j], scope=lstm_name+'_h')
+                        c_init[lstm_name] = slim.conv2d(x, dims[j], scope=lstm_name+'_c')
+                    if not any(conv_use_lstm[j+1:]):
+                        break # Do not add unnecessary layers.
+                    x = slim.conv2d(x, dims[j], scope=conv_name(j, conv_num_layers[j]-1))
+                    x = slim.max_pool2d(x, scope='pool{}'.format(j+1))
 
     y = []
     h_prev, c_prev = h_init, c_init
     for t in range(o.ntimesteps):
         with tf.name_scope('t{}'.format(t)):
             with tf.variable_scope('frame', reuse=(t > 0)):
-                # with slim.arg_scope([slim.conv2d, slim.fully_connected, slim.max_pool2d],
-                #         outputs_collections=end_points_collection):
                 x = images[:, t]
                 h = {}
                 c = {}
-                # x = slim.repeat(x, 2, slim.conv2d, dims[0], [3, 3], scope='conv1')
-                x = slim.repeat(x, 1, slim.conv2d, dims[0], [3, 3], scope='conv1')
-                name = 'lstm1'
-                with tf.variable_scope(name):
-                    h[name], c[name] = conv_lstm(x, h_prev[name], c_prev[name],
-                                                 state_dim=dims[0], name=name)
-                    x = h[name]
-                x = slim.max_pool2d(x, [3, 3], scope='pool1')
-
-                # x = slim.repeat(x, 2, slim.conv2d, dims[1], [3, 3], scope='conv2')
-                x = slim.repeat(x, 1, slim.conv2d, dims[1], [3, 3], scope='conv2')
-                name = 'lstm2'
-                with tf.variable_scope(name):
-                    h[name], c[name] = conv_lstm(x, h_prev[name], c_prev[name],
-                                                 state_dim=dims[1], name=name)
-                    x = h[name]
-                x = slim.max_pool2d(x, [3, 3], scope='pool2')
-
-                # x = slim.repeat(x, 3, slim.conv2d, dims[2], [3, 3], scope='conv3')
-                x = slim.repeat(x, 2, slim.conv2d, dims[2], [3, 3], scope='conv3')
-                name = 'lstm3'
-                with tf.variable_scope(name):
-                    h[name], c[name] = conv_lstm(x, h_prev[name], c_prev[name],
-                                                 state_dim=dims[2], name=name)
-                    x = h[name]
-                x = slim.max_pool2d(x, [3, 3], scope='pool3')
-
-                # x = slim.repeat(x, 3, slim.conv2d, dims[3], [3, 3], scope='conv4')
-                x = slim.repeat(x, 2, slim.conv2d, dims[3], [3, 3], scope='conv4')
-                name = 'lstm4'
-                with tf.variable_scope(name):
-                    h[name], c[name] = conv_lstm(x, h_prev[name], c_prev[name],
-                                                 state_dim=dims[3], name=name)
-                    x = h[name]
-                x = slim.max_pool2d(x, [3, 3], scope='pool4')
-
-                # x = slim.repeat(x, 3, slim.conv2d, dims[4], [3, 3], scope='conv5')
-                x = slim.repeat(x, 2, slim.conv2d, dims[4], [3, 3], scope='conv5')
-                name = 'lstm5'
-                with tf.variable_scope(name):
-                    h[name], c[name] = conv_lstm(x, h_prev[name], c_prev[name],
-                                                 state_dim=dims[4], name=name)
-                    x = h[name]
-                x = slim.max_pool2d(x, [3, 3], scope='pool5')
-
+                # Convolutional stage.
+                with slim.arg_scope([slim.conv2d],
+                                    kernel_size=3,
+                                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                    with slim.arg_scope([slim.max_pool2d],
+                                        kernel_size=3,
+                                        padding='SAME'):
+                        conv_name = lambda grp, ind: 'conv{}_{}'.format(grp+1, ind+1)
+                        for j in range(conv_num_groups):
+                            for k in range(conv_num_layers[j]-1):
+                                x = slim.conv2d(x, dims[j], scope=conv_name(j, k))
+                            if conv_use_lstm[j]:
+                                lstm_name = 'lstm{}'.format(j+1)
+                                with tf.variable_scope(lstm_name):
+                                    h_, c_ = h_prev[lstm_name], c_prev[lstm_name]
+                                    h_, c_ = conv_lstm(x, h_, c_, state_dim=dims[j], name=lstm_name)
+                                    x, h[lstm_name], c[lstm_name] = h_, h_, c_
+                            # TODO: Is it OK to go straight from LSTM to pooling? Seems strange.
+                            x = slim.max_pool2d(x, scope='pool{}'.format(j+1))
+                # Fully-connected stage.
                 x = slim.flatten(x)
-                x = slim.fully_connected(x, 256, scope='fc6')
-                # x = slim.dropout(x, dropout_keep_prob, is_training=is_training, scope='dropout6')
-                x = slim.fully_connected(x, 256, scope='fc7')
-                # x = slim.dropout(x, dropout_keep_prob, is_training=is_training, scope='dropout7')
-                x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None, scope='fc8')
-
+                fc_name = lambda ind: 'fc{}'.format(conv_num_groups + ind + 1)
+                for j in range(fc_num_layers):
+                    x = slim.fully_connected(x, fc_dim, scope=fc_name(j))
+                # Make prediction.
+                x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None,
+                                         scope=fc_name(fc_num_layers))
                 y.append(x)
                 h_prev = h
                 c_prev = c
