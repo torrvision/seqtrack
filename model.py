@@ -23,9 +23,9 @@ import pdb
 import functools
 import tensorflow as tf
 from tensorflow.contrib import slim
-import os
-
+import math
 import numpy as np
+import os
 
 import cnnutil
 from helpers import merge_dims
@@ -647,6 +647,197 @@ def rnn_conv_asymm(example, o,
     return model
 
 
+def rnn_multi_res(example, o,
+                  summaries_collections=None):
+
+    images = example['x']
+    x0     = example['x0']
+    y0     = example['y0']
+    is_training = example['is_training']
+    masks = get_masks_from_rectangles(y0, o)
+    if o.debugmode:
+        with tf.name_scope('input_preview'):
+            tf.summary.image('x', images[0], collections=summaries_collections)
+            target = concat([images[0, 0], masks[0]], axis=2)
+            tf.summary.image('target', tf.expand_dims(target, axis=0),
+                             collections=summaries_collections)
+    if o.activ_histogram:
+        with tf.name_scope('input_histogram'):
+            tf.summary.histogram('x', images, collections=summaries_collections)
+    init_input = concat([x0, masks], axis=3)
+
+    def conv_lstm(x, h_prev, c_prev, state_dim, name='clstm'):
+        with tf.name_scope(name) as scope:
+            with slim.arg_scope([slim.conv2d],
+                                num_outputs=state_dim,
+                                kernel_size=3,
+                                padding='SAME',
+                                activation_fn=None,
+                                weights_regularizer=slim.l2_regularizer(o.wd)):
+                i = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
+                                  slim.conv2d(h_prev, scope='hi', biases_initializer=None))
+                f = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
+                                  slim.conv2d(h_prev, scope='hf', biases_initializer=None))
+                y = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
+                                  slim.conv2d(h_prev, scope='ho', biases_initializer=None))
+                c_tilde = tf.nn.tanh(slim.conv2d(x, scope='xc') +
+                                     slim.conv2d(h_prev, scope='hc', biases_initializer=None))
+                c = (f * c_prev) + (i * c_tilde)
+                h = y * tf.nn.tanh(c)
+                # layers = {'i': i, 'f': f, 'o': y, 'c_tilde': c, 'c': c, 'h': h}
+                # if o.activ_histogram:
+                #     with tf.name_scope('summary'):
+                #         for k, v in layers.iteritems():
+                #             tf.summary.histogram(k, v, collections=summaries_collections)
+        return h, c
+
+    dim_first, dim_last = 32, 128
+    num_strides = 5
+    dims = np.linspace(math.log10(dim_first), math.log10(dim_last), num_strides)
+    dims = np.round(dims).astype(np.int)
+
+    # At start of sequence, compute hidden state from first example.
+    # Feed (h_init, c_init) to resume tracking from previous state.
+    # Do NOT feed (h_init, c_init) when starting new sequence.
+    # TODO: Share some layers?
+    h_init = {}
+    c_init = {}
+    with tf.variable_scope('lstm_init'):
+        x = init_input
+        h = {}
+        c = {}
+        # x = slim.repeat(x, 2, slim.conv2d, dims[0], [3, 3], scope='conv1')
+        x = slim.repeat(x, 1, slim.conv2d, dims[0], [3, 3], scope='conv1')
+        name = 'lstm1'
+        h_init[name] = slim.conv2d(x, dims[0], [3, 3], scope=name+'_h')
+        c_init[name] = slim.conv2d(x, dims[0], [3, 3], scope=name+'_c')
+        x = slim.conv2d(x, dims[0], [3, 3])
+        x = slim.max_pool2d(x, [3, 3], scope='pool1')
+
+        # x = slim.repeat(x, 2, slim.conv2d, dims[1], [3, 3], scope='conv2')
+        x = slim.repeat(x, 1, slim.conv2d, dims[1], [3, 3], scope='conv2')
+        name = 'lstm2'
+        h_init[name] = slim.conv2d(x, dims[1], [3, 3], scope=name+'_h')
+        c_init[name] = slim.conv2d(x, dims[1], [3, 3], scope=name+'_c')
+        x = slim.conv2d(x, dims[1], [3, 3])
+        x = slim.max_pool2d(x, [3, 3], scope='pool2')
+
+        # x = slim.repeat(x, 3, slim.conv2d, dims[2], [3, 3], scope='conv3')
+        x = slim.repeat(x, 2, slim.conv2d, dims[2], [3, 3], scope='conv3')
+        name = 'lstm3'
+        h_init[name] = slim.conv2d(x, dims[2], [3, 3], scope=name+'_h')
+        c_init[name] = slim.conv2d(x, dims[2], [3, 3], scope=name+'_c')
+        x = slim.conv2d(x, dims[2], [3, 3])
+        x = slim.max_pool2d(x, [3, 3], scope='pool3')
+
+        # x = slim.repeat(x, 3, slim.conv2d, dims[3], [3, 3], scope='conv4')
+        x = slim.repeat(x, 2, slim.conv2d, dims[3], [3, 3], scope='conv4')
+        name = 'lstm4'
+        h_init[name] = slim.conv2d(x, dims[3], [3, 3], scope=name+'_h')
+        c_init[name] = slim.conv2d(x, dims[3], [3, 3], scope=name+'_c')
+        x = slim.conv2d(x, dims[3], [3, 3])
+        x = slim.max_pool2d(x, [3, 3], scope='pool4')
+
+        # x = slim.repeat(x, 3, slim.conv2d, dims[4], [3, 3], scope='conv5')
+        x = slim.repeat(x, 2, slim.conv2d, dims[4], [3, 3], scope='conv5')
+        name = 'lstm5'
+        h_init[name] = slim.conv2d(x, dims[4], [3, 3], scope=name+'_h')
+        c_init[name] = slim.conv2d(x, dims[4], [3, 3], scope=name+'_c')
+        # x = slim.conv2d(x, dims[4], [3, 3])
+        # x = slim.max_pool2d(x, [3, 3], scope='pool5')
+
+    y = []
+    h_prev, c_prev = h_init, c_init
+    for t in range(o.ntimesteps):
+        with tf.name_scope('t{}'.format(t)):
+            with tf.variable_scope('frame', reuse=(t > 0)):
+                # with slim.arg_scope([slim.conv2d, slim.fully_connected, slim.max_pool2d],
+                #         outputs_collections=end_points_collection):
+                x = images[:, t]
+                h = {}
+                c = {}
+                # x = slim.repeat(x, 2, slim.conv2d, dims[0], [3, 3], scope='conv1')
+                x = slim.repeat(x, 1, slim.conv2d, dims[0], [3, 3], scope='conv1')
+                name = 'lstm1'
+                with tf.variable_scope(name):
+                    h[name], c[name] = conv_lstm(x, h_prev[name], c_prev[name],
+                                                 state_dim=dims[0], name=name)
+                    x = h[name]
+                x = slim.max_pool2d(x, [3, 3], scope='pool1')
+
+                # x = slim.repeat(x, 2, slim.conv2d, dims[1], [3, 3], scope='conv2')
+                x = slim.repeat(x, 1, slim.conv2d, dims[1], [3, 3], scope='conv2')
+                name = 'lstm2'
+                with tf.variable_scope(name):
+                    h[name], c[name] = conv_lstm(x, h_prev[name], c_prev[name],
+                                                 state_dim=dims[1], name=name)
+                    x = h[name]
+                x = slim.max_pool2d(x, [3, 3], scope='pool2')
+
+                # x = slim.repeat(x, 3, slim.conv2d, dims[2], [3, 3], scope='conv3')
+                x = slim.repeat(x, 2, slim.conv2d, dims[2], [3, 3], scope='conv3')
+                name = 'lstm3'
+                with tf.variable_scope(name):
+                    h[name], c[name] = conv_lstm(x, h_prev[name], c_prev[name],
+                                                 state_dim=dims[2], name=name)
+                    x = h[name]
+                x = slim.max_pool2d(x, [3, 3], scope='pool3')
+
+                # x = slim.repeat(x, 3, slim.conv2d, dims[3], [3, 3], scope='conv4')
+                x = slim.repeat(x, 2, slim.conv2d, dims[3], [3, 3], scope='conv4')
+                name = 'lstm4'
+                with tf.variable_scope(name):
+                    h[name], c[name] = conv_lstm(x, h_prev[name], c_prev[name],
+                                                 state_dim=dims[3], name=name)
+                    x = h[name]
+                x = slim.max_pool2d(x, [3, 3], scope='pool4')
+
+                # x = slim.repeat(x, 3, slim.conv2d, dims[4], [3, 3], scope='conv5')
+                x = slim.repeat(x, 2, slim.conv2d, dims[4], [3, 3], scope='conv5')
+                name = 'lstm5'
+                with tf.variable_scope(name):
+                    h[name], c[name] = conv_lstm(x, h_prev[name], c_prev[name],
+                                                 state_dim=dims[4], name=name)
+                    x = h[name]
+                x = slim.max_pool2d(x, [3, 3], scope='pool5')
+
+                x = slim.flatten(x)
+                x = slim.fully_connected(x, 256, scope='fc6')
+                # x = slim.dropout(x, dropout_keep_prob, is_training=is_training, scope='dropout6')
+                x = slim.fully_connected(x, 256, scope='fc7')
+                # x = slim.dropout(x, dropout_keep_prob, is_training=is_training, scope='dropout7')
+                x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None, scope='fc8')
+
+                y.append(x)
+                h_prev = h
+                c_prev = c
+
+    y = tf.stack(y, axis=1) # list to tensor
+
+    # with tf.name_scope('summary'):
+    #     if o.activ_histogram:
+    #         tf.summary.histogram('rect', y, collections=summaries_collections)
+    #     if o.param_histogram:
+    #         for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
+    #             tf.summary.histogram(v.name, v, collections=summaries_collections)
+
+    outputs = {'y': y}
+    state = {}
+    state.update({'{}_h'.format(k) : (h_init[k], h[k]) for k in h})
+    state.update({'{}_c'.format(k) : (c_init[k], c[k]) for k in h})
+
+    class Model:
+        pass
+    model = Model()
+    model.outputs = outputs
+    model.state   = state
+    # Properties of instantiated model:
+    model.image_size   = (o.frmsz, o.frmsz)
+    model.sequence_len = o.ntimesteps # Static length of unrolled RNN.
+    model.batch_size   = None # Model accepts variable batch size.
+    return model
+
+
 def load_model(o, model_params=None):
     '''
     example is a dictionary that maps strings to Tensors.
@@ -658,6 +849,8 @@ def load_model(o, model_params=None):
         model = functools.partial(RNN_dual, o=o, **model_params)
     elif o.model == 'RNN_conv_asymm':
         model = functools.partial(rnn_conv_asymm, o=o, **model_params)
+    elif o.model == 'RNN_multi_res':
+        model = functools.partial(rnn_multi_res, o=o, **model_params)
     else:
         raise ValueError ('model not available')
     return model
