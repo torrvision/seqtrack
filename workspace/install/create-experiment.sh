@@ -18,6 +18,15 @@ if ! virtualenv env ; then
 	exit 1
 fi
 
+touch pip.conf
+if ! cp pip.conf env/pip.conf ; then
+    echo 'could copy pip configuration'
+    exit 1
+fi
+if ! env/bin/pip install --upgrade pip ; then
+    echo 'could not upgrade pip'
+    exit 1
+fi
 if ! env/bin/pip install -r requirements.txt ; then
     echo 'could not install pip requirements'
     exit 1

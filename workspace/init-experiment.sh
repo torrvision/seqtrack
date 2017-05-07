@@ -48,6 +48,11 @@ if ! (cd $src && env/bin/pip freeze) >"$dir/requirements.txt" ; then
 	echo 'cannot get pip requirements'
 	exit 1
 fi
+touch "$src/env/pip.conf"
+if ! cp "$src/env/pip.conf" "$dir/pip.conf" ; then
+	echo 'cannot copy pip configuration'
+	exit 1
+fi
 
 ( cd $dir &&  ./create-experiment.sh )
 
