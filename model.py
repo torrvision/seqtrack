@@ -23,9 +23,9 @@ import pdb
 import functools
 import tensorflow as tf
 from tensorflow.contrib import slim
-import os
-
+import math
 import numpy as np
+import os
 
 import cnnutil
 from helpers import merge_dims
@@ -655,6 +655,160 @@ def rnn_conv_asymm(example, o,
     return model
 
 
+def rnn_multi_res(example, o,
+                  summaries_collections=None,
+                  # Model options:
+                  use_batch_norm=False,
+                  conv_num_groups=5,
+                  conv_num_layers=[2, 2, 3, 3, 3],
+                  conv_use_lstm=[True, True, True, True, True],
+                  conv_dim_first=32,
+                  conv_dim_last=128,
+                  fc_num_layers=2,
+                  fc_dim=256,
+                  ):
+
+    images = example['x']
+    x0     = example['x0']
+    y0     = example['y0']
+    is_training = example['is_training']
+    masks = get_masks_from_rectangles(y0, o)
+    if o.debugmode:
+        with tf.name_scope('input_preview'):
+            tf.summary.image('x', images[0], collections=summaries_collections)
+            target = concat([images[0, 0], masks[0]], axis=2)
+            tf.summary.image('target', tf.expand_dims(target, axis=0),
+                             collections=summaries_collections)
+    if o.activ_histogram:
+        with tf.name_scope('input_histogram'):
+            tf.summary.histogram('x', images, collections=summaries_collections)
+    init_input = concat([x0, masks], axis=3)
+
+    def conv_lstm(x, h_prev, c_prev, state_dim, name='clstm'):
+        with tf.name_scope(name) as scope:
+            with slim.arg_scope([slim.conv2d],
+                                num_outputs=state_dim,
+                                kernel_size=3,
+                                padding='SAME',
+                                activation_fn=None,
+                                weights_regularizer=slim.l2_regularizer(o.wd)):
+                i = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
+                                  slim.conv2d(h_prev, scope='hi', biases_initializer=None))
+                f = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
+                                  slim.conv2d(h_prev, scope='hf', biases_initializer=None))
+                y = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
+                                  slim.conv2d(h_prev, scope='ho', biases_initializer=None))
+                c_tilde = tf.nn.tanh(slim.conv2d(x, scope='xc') +
+                                     slim.conv2d(h_prev, scope='hc', biases_initializer=None))
+                c = (f * c_prev) + (i * c_tilde)
+                h = y * tf.nn.tanh(c)
+                # layers = {'i': i, 'f': f, 'o': y, 'c_tilde': c, 'c': c, 'h': h}
+                # if o.activ_histogram:
+                #     with tf.name_scope('summary'):
+                #         for k, v in layers.iteritems():
+                #             tf.summary.histogram(k, v, collections=summaries_collections)
+        return h, c
+
+    dims = np.linspace(math.log10(conv_dim_first),
+                       math.log10(conv_dim_last),
+                       conv_num_groups)
+    dims = np.round(dims).astype(np.int)
+
+    assert(len(conv_num_layers) == conv_num_groups)
+    assert(len(conv_use_lstm) == conv_num_groups)
+
+    # At start of sequence, compute hidden state from first example.
+    # Feed (h_init, c_init) to resume tracking from previous state.
+    # Do NOT feed (h_init, c_init) when starting new sequence.
+    # TODO: Share some layers?
+    h_init = {}
+    c_init = {}
+    with tf.variable_scope('lstm_init'):
+        with slim.arg_scope([slim.conv2d],
+                            kernel_size=3,
+                            weights_regularizer=slim.l2_regularizer(o.wd)):
+            with slim.arg_scope([slim.max_pool2d],
+                                kernel_size=3,
+                                padding='SAME'):
+                conv_name = lambda grp, ind: 'conv{}_{}'.format(grp+1, ind+1)
+                x = init_input
+                for j in range(conv_num_groups):
+                    for k in range(conv_num_layers[j]-1):
+                        x = slim.conv2d(x, dims[j], scope=conv_name(j, k))
+                    if conv_use_lstm[j]:
+                        lstm_name = 'lstm{}'.format(j+1)
+                        h_init[lstm_name] = slim.conv2d(x, dims[j], scope=lstm_name+'_h')
+                        c_init[lstm_name] = slim.conv2d(x, dims[j], scope=lstm_name+'_c')
+                    if not any(conv_use_lstm[j+1:]):
+                        break # Do not add unnecessary layers.
+                    x = slim.conv2d(x, dims[j], scope=conv_name(j, conv_num_layers[j]-1))
+                    x = slim.max_pool2d(x, scope='pool{}'.format(j+1))
+
+    y = []
+    h_prev, c_prev = h_init, c_init
+    for t in range(o.ntimesteps):
+        with tf.name_scope('t{}'.format(t)):
+            with tf.variable_scope('frame', reuse=(t > 0)):
+                x = images[:, t]
+                h = {}
+                c = {}
+                # Convolutional stage.
+                with slim.arg_scope([slim.conv2d],
+                                    kernel_size=3,
+                                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                    with slim.arg_scope([slim.max_pool2d],
+                                        kernel_size=3,
+                                        padding='SAME'):
+                        conv_name = lambda grp, ind: 'conv{}_{}'.format(grp+1, ind+1)
+                        for j in range(conv_num_groups):
+                            for k in range(conv_num_layers[j]-1):
+                                x = slim.conv2d(x, dims[j], scope=conv_name(j, k))
+                            if conv_use_lstm[j]:
+                                lstm_name = 'lstm{}'.format(j+1)
+                                with tf.variable_scope(lstm_name):
+                                    h_, c_ = h_prev[lstm_name], c_prev[lstm_name]
+                                    h_, c_ = conv_lstm(x, h_, c_, state_dim=dims[j], name=lstm_name)
+                                    x, h[lstm_name], c[lstm_name] = h_, h_, c_
+                            # TODO: Is it OK to go straight from LSTM to pooling? Seems strange.
+                            x = slim.max_pool2d(x, scope='pool{}'.format(j+1))
+                # Fully-connected stage.
+                x = slim.flatten(x)
+                fc_name = lambda ind: 'fc{}'.format(conv_num_groups + ind + 1)
+                for j in range(fc_num_layers):
+                    x = slim.fully_connected(x, fc_dim, scope=fc_name(j))
+                # Make prediction.
+                x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None,
+                                         scope=fc_name(fc_num_layers))
+                y.append(x)
+                h_prev = h
+                c_prev = c
+
+    y = tf.stack(y, axis=1) # list to tensor
+
+    # with tf.name_scope('summary'):
+    #     if o.activ_histogram:
+    #         tf.summary.histogram('rect', y, collections=summaries_collections)
+    #     if o.param_histogram:
+    #         for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
+    #             tf.summary.histogram(v.name, v, collections=summaries_collections)
+
+    outputs = {'y': y}
+    state = {}
+    state.update({'{}_h'.format(k) : (h_init[k], h[k]) for k in h})
+    state.update({'{}_c'.format(k) : (c_init[k], c[k]) for k in h})
+
+    class Model:
+        pass
+    model = Model()
+    model.outputs = outputs
+    model.state   = state
+    # Properties of instantiated model:
+    model.image_size   = (o.frmsz, o.frmsz)
+    model.sequence_len = o.ntimesteps # Static length of unrolled RNN.
+    model.batch_size   = None # Model accepts variable batch size.
+    return model
+
+
 def load_model(o, model_params=None):
     '''
     example is a dictionary that maps strings to Tensors.
@@ -666,6 +820,8 @@ def load_model(o, model_params=None):
         model = functools.partial(RNN_dual, o=o, **model_params)
     elif o.model == 'RNN_conv_asymm':
         model = functools.partial(rnn_conv_asymm, o=o, **model_params)
+    elif o.model == 'RNN_multi_res':
+        model = functools.partial(rnn_multi_res, o=o, **model_params)
     else:
         raise ValueError ('model not available')
     return model
