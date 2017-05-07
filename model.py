@@ -364,6 +364,7 @@ class RNN_dual(object):
                     hmap_from_rec = get_masks_from_rectangles(y_prev, o)
                     if self.pass_hmap:
                         xy = concat([x_prev, hmap_from_rec, hmap_prev], axis=3) # TODO: backpropagation-able?
+                        xy = tf.stop_gradient(xy)
                     else:
                         xy = concat([x_prev, hmap_from_rec], axis=3)
                     cnn2out = pass_cnn2(xy, scope)
