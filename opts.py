@@ -42,13 +42,11 @@ class Opts(object):
         # model parameters - rnn
         self.nunits             = 256
         self.ntimesteps         = 20
-        self.dropout_rnn        = False
 
         #----------------------------------------------------------------------
         # model parameters - cnn (or feature extractor)
         self.cnn_pretrain       = False 
         self.cnn_model          = 'vgg' # vgg, resnet, imagenet, etc.
-        self.dropout_cnn        = False
         self.model_params       = {}
 
         #----------------------------------------------------------------------
@@ -62,6 +60,8 @@ class Opts(object):
         self.wd                 = 0.0 # weight decay for regularization
         self.grad_clip          = False
         self.max_grad_norm      = 5.0
+        self.gt_decay_rate      = -1e-2
+        self.min_gt_ratio       = 0.75
 
         #----------------------------------------------------------------------
         # Options for sampler

@@ -70,13 +70,7 @@ def parse_arguments():
     parser.add_argument(
             '--ntimesteps', help='number of time steps for rnn',
             type=int, default=20)
-    parser.add_argument(
-            '--dropout_rnn', help='set dropout for rnn',
-            action='store_true')
 
-    parser.add_argument(
-            '--dropout_cnn', help='dropout in cnn (only during train)',
-            action='store_true')
     parser.add_argument(
             '--model_params', help='JSON string specifying model',
             type=json.loads, default={})
@@ -101,6 +95,12 @@ def parse_arguments():
             type=int, default=10000)
     parser.add_argument(
             '--wd', help='weight decay', type=float, default=0.0)
+    parser.add_argument(
+            '--gt_decay_rate', help='decay rate for gt_ratio',
+            type=float, default=-1e-2)
+    parser.add_argument(
+            '--min_gt_ratio', help='lower bound for gt_ratio',
+            type=float, default=0.75)
 
     parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
