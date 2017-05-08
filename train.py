@@ -119,7 +119,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
             gradients, variables = zip(*optimizer.compute_gradients(loss_var))
             gradients = [None if gradient is None else tf.clip_by_norm(gradient, o.max_grad_norm)
                          for gradient in gradients]
-            optimize_op = optimizer.apply_gradients(zip(gradients, variables))
+            optimize_op = optimizer.apply_gradients(zip(gradients, variables),
+                                                    global_step=global_step_var)
 
     summary_vars = {}
     summary_vars_with_preview = {}
