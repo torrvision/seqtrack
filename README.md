@@ -18,5 +18,24 @@ For more information on the available options, please refer to scripts.
 - (command) CUDA_VISIBLE_DEVICES=gpu_number: 
 
 
+# To run experiments in torrnode (using Jack's script)
 
+Create local git repository
+```
+> mkdir ~/projects/rnntracking_dev.git
+> cd ~/projects/rnntracking_dev.git
+> git init --bare
 
+> cd <source directory>
+> git remote add local /your_path/rnntracking_dev.git
+> git push local master
+```
+
+Running
+```
+Enable virtual environment (assuming one global virtual environment)
+> source ~/virenv/bin/activate
+
+Install necessary python packages (if it's your first time running experiments)
+> pip install opencv-python, scipy, pillow, xmltodict, progressbar, matplotlib, h5py plus tensorflow
+```
