@@ -113,7 +113,13 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     optimizer = _get_optimizer(lr, o)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
-        optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
+        if not grad_clip:
+            optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
+        else: # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
+            gradients, variables = zip(*optimizer.compute_gradients(loss_var))
+            gradients = [None if gradient is None else tf.clip_by_norm(gradient, o.max_grad_norm)
+                         for gradient in gradients]
+            optimize_op = optimizer.apply_gradients(zip(gradients, variables))
 
     summary_vars = {}
     summary_vars_with_preview = {}
@@ -266,7 +272,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
                         feed_dict = {example['use_gt']:      True,  # Match training.
-                                     example['is_training']: False} # Do not update bnorm stats.
+                                     example['is_training']: False, # Do not update bnorm stats.
+                                     example['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
                         if use_queues:
                             feed_dict.update({queue_index: 1}) # Choose validation queue.
                         else:

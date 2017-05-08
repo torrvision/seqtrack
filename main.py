@@ -96,6 +96,12 @@ def parse_arguments():
     parser.add_argument(
             '--wd', help='weight decay', type=float, default=0.0)
     parser.add_argument(
+            '--grad_clip', help='gradient clipping flag',
+            action='store_true')
+    parser.add_argument(
+            '--max_grad_norm', help='threshold for gradient clipping',
+            type=float, default=5.0)
+    parser.add_argument(
             '--gt_decay_rate', help='decay rate for gt_ratio',
             type=float, default=-1e-2)
     parser.add_argument(
