@@ -113,7 +113,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     optimizer = _get_optimizer(lr, o)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
-        if not grad_clip:
+        if not o.grad_clip:
             optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
         else: # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
             gradients, variables = zip(*optimizer.compute_gradients(loss_var))
