@@ -661,7 +661,7 @@ def rnn_multi_res(example, o,
                   use_batch_norm=False,
                   conv_num_groups=5,
                   conv_num_layers=[2, 2, 3, 3, 3],
-                  conv_use_lstm=[False, True, True, True, True],
+                  conv_use_lstm=[True, True, True, True, True],
                   conv_dim_first=32,
                   conv_dim_last=128,
                   fc_num_layers=2,
@@ -716,7 +716,6 @@ def rnn_multi_res(example, o,
 
     assert(len(conv_num_layers) == conv_num_groups)
     assert(len(conv_use_lstm) == conv_num_groups)
-    assert(not conv_use_lstm[0])
 
     # At start of sequence, compute hidden state from first example.
     # Feed (h_init, c_init) to resume tracking from previous state.
@@ -734,6 +733,10 @@ def rnn_multi_res(example, o,
                 conv_name = lambda grp, ind: 'conv{}_{}'.format(grp+1, ind+1)
                 x = init_input
                 for j in range(conv_num_groups):
+                    for k in range(conv_num_layers[j]):
+                        x = slim.conv2d(x, dims[j], scope=conv_name(j, k))
+                    # x = slim.conv2d(x, dims[j], scope=conv_name(j, conv_num_layers[j]-1))
+                    x = slim.max_pool2d(x, scope='pool{}'.format(j+1))
                     if conv_use_lstm[j]:
                         lstm_name = 'lstm{}'.format(j+1)
                         h_init[lstm_name] = slim.conv2d(x, dims[j], activation_fn=None,
@@ -742,10 +745,6 @@ def rnn_multi_res(example, o,
                                                                     scope=lstm_name+'_c')
                     if not any(conv_use_lstm[j+1:]):
                         break # Do not add unnecessary layers.
-                    for k in range(conv_num_layers[j]):
-                        x = slim.conv2d(x, dims[j], scope=conv_name(j, k))
-                    # x = slim.conv2d(x, dims[j], scope=conv_name(j, conv_num_layers[j]-1))
-                    x = slim.max_pool2d(x, scope='pool{}'.format(j+1))
 
     y = []
     h_prev, c_prev = h_init, c_init
@@ -764,15 +763,15 @@ def rnn_multi_res(example, o,
                                         padding='SAME'):
                         conv_name = lambda grp, ind: 'conv{}_{}'.format(grp+1, ind+1)
                         for j in range(conv_num_groups):
+                            for k in range(conv_num_layers[j]):
+                                x = slim.conv2d(x, dims[j], scope=conv_name(j, k))
+                            x = slim.max_pool2d(x, scope='pool{}'.format(j+1))
                             if conv_use_lstm[j]:
                                 lstm_name = 'lstm{}'.format(j+1)
                                 with tf.variable_scope(lstm_name):
                                     h_, c_ = h_prev[lstm_name], c_prev[lstm_name]
                                     h_, c_ = conv_lstm(x, h_, c_, state_dim=dims[j], name=lstm_name)
                                     x, h[lstm_name], c[lstm_name] = h_, h_, c_
-                            for k in range(conv_num_layers[j]):
-                                x = slim.conv2d(x, dims[j], scope=conv_name(j, k))
-                            x = slim.max_pool2d(x, scope='pool{}'.format(j+1))
                 # Fully-connected stage.
                 x = slim.flatten(x)
                 fc_name = lambda ind: 'fc{}'.format(conv_num_groups + ind + 1)
