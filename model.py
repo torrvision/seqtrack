@@ -706,7 +706,7 @@ def rnn_multi_res(example, o,
 
     outputs = {'y': y}
     assert(set(s_init.keys()) == set(s.keys()))
-    state = {(s_init[k], s[k]) for k in s}
+    state = {k: (s_init[k], s[k]) for k in s}
 
     class Model:
         pass
