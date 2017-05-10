@@ -107,6 +107,12 @@ def parse_arguments():
     parser.add_argument(
             '--min_gt_ratio', help='lower bound for gt_ratio',
             type=float, default=0.75)
+    parser.add_argument(
+            '--curriculum_learning', help='restore variables from a pre-trained model (on short sequences)',
+            action='store_true')
+    parser.add_argument(
+            '--model_file', help='pretrained model file to be used for curriculum_learning',
+            type=str, default=None)
 
     parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
@@ -133,6 +139,9 @@ def parse_arguments():
     parser.add_argument(
             '--period_assess', help='period to run evaluation',
             type=int, default=10000)
+    parser.add_argument(
+            '--visualize_eval', help='create video during evaluation',
+            action='store_true')
 
     parser.add_argument(
             '--gpu_device', help='set `CUDA_VISIBLE_DEVICES`',

@@ -62,6 +62,8 @@ class Opts(object):
         self.max_grad_norm      = 5.0
         self.gt_decay_rate      = -1e-2
         self.min_gt_ratio       = 0.75
+        self.curriculum_learning= False
+        self.model_file         = None
 
         #----------------------------------------------------------------------
         # Options for sampler
@@ -89,6 +91,7 @@ class Opts(object):
         self.period_assess      = 10000
         self.period_summary     = 10
         self.period_preview     = 100 # Ensure that period_preview % period_summary == 0.
+        self.visualize_eval     = False
 
         #----------------------------------------------------------------------
         # custom libraries
