@@ -153,24 +153,39 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                                      num_epochs=None)
                  for mode in modes}
 
+    if o.curriculum_learning:
+        ''' Curriculum learning.
+        Restore values of trainable variables from pre-trained model on short sequence,
+        to initialize and train a model on longer sequences.
+        Note that since I define restoring variables from `trainable variables`
+        in the current model, if the pre-trained model doesn't have those variables,
+        it will fail to restore by the saver.
+        '''
+        vars_to_restore = list(tf.trainable_variables())
+        saver_pretrained = tf.train.Saver(vars_to_restore)
+
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
         print '\ntraining starts! --------------------------------------------'
 
-        # Either initialize or restore model.
-        model_file = None
+        # 1. resume (full restore), 2. initialize from scratch, 3. curriculume learning (partial restore)
         prev_ckpt = 0
         if o.resume:
             model_file = tf.train.latest_checkpoint(o.path_ckpt)
             if model_file is None:
-                print 'could not find checkpoint'
-        if model_file:
+                raise ValueError('could not find checkpoint')
             print 'restore: {}'.format(model_file)
             saver.restore(sess, model_file)
             print 'done: restore'
             prev_ckpt = global_step_var.eval()
         else:
             sess.run(init_op)
+            if o.curriculum_learning:
+                if o.model_file is None: # e.g., '/some_path/ckpt/iteration-150000'
+                    raise ValueError('could not find checkpoint')
+                print 'restore: {}'.format(o.model_file)
+                saver_pretrained.restore(sess, o.model_file)
+                print 'done: (partial) restore'
 
         if use_queues:
             coord = tf.train.Coordinator()
@@ -211,10 +226,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     if global_step % period_ckpt == 0 and global_step > prev_ckpt:
                         if not os.path.isdir(o.path_ckpt):
                             os.makedirs(o.path_ckpt)
-                        fname = os.path.join(o.path_ckpt, 'iteration{}.ckpt'.format(global_step))
-                        # saved_model = saver.save(sess, fname)
                         print 'save model'
-                        #saver.save(sess, fname)
                         saver.save(sess, o.path_ckpt+'/iteration', global_step=global_step)
                         print 'done: save model'
                         sys.stdout.flush()

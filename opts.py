@@ -62,6 +62,8 @@ class Opts(object):
         self.max_grad_norm      = 5.0
         self.gt_decay_rate      = -1e-2
         self.min_gt_ratio       = 0.75
+        self.curriculum_learning= False
+        self.model_file         = None
 
         #----------------------------------------------------------------------
         # Options for sampler
