@@ -765,7 +765,7 @@ def multi_res_vgg(x, prev, init=False,
     assert(len(conv_num_layers) == conv_num_groups)
     assert(len(conv_use_rnn) == conv_num_groups)
 
-    dims = np.linspace(math.log10(conv_dim_first),
+    dims = np.logspace(math.log10(conv_dim_first),
                        math.log10(conv_dim_last),
                        conv_num_groups)
     dims = np.round(dims).astype(np.int)
