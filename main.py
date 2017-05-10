@@ -139,6 +139,9 @@ def parse_arguments():
     parser.add_argument(
             '--period_assess', help='period to run evaluation',
             type=int, default=10000)
+    parser.add_argument(
+            '--visualize_eval', help='create video during evaluation',
+            action='store_true')
 
     parser.add_argument(
             '--gpu_device', help='set `CUDA_VISIBLE_DEVICES`',

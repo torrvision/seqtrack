@@ -91,6 +91,7 @@ class Opts(object):
         self.period_assess      = 10000
         self.period_summary     = 10
         self.period_preview     = 100 # Ensure that period_preview % period_summary == 0.
+        self.visualize_eval     = False
 
         #----------------------------------------------------------------------
         # custom libraries

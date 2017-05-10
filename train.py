@@ -185,7 +185,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     raise ValueError('could not find checkpoint')
                 print 'restore: {}'.format(o.model_file)
                 saver_pretrained.restore(sess, o.model_file)
-                print 'done: (partial) restore'
+                print 'done: (partial) restore for curriculum learning'
 
         if use_queues:
             coord = tf.train.Coordinator()
@@ -248,7 +248,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                             iter_id+'.json')
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model,
-                                eval_sequences, visualize=visualizer.visualize),
+                                eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None),
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])
