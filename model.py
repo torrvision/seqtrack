@@ -752,7 +752,7 @@ def multi_res_vgg(x, prev, init=False,
         conv_num_layers=[2, 2, 3, 3, 3],
         conv_kernel_size=[3, 3, 3, 3, 3],
         conv_stride=[1, 1, 1, 1, 1],
-        conv_use_rnn=[True, True, True, True, True],
+        conv_rnn_depth=[0, 0, 1, 0, 0],
         conv_dim_first=16,
         conv_dim_last=128,
         fc_num_layers=2,
@@ -763,7 +763,8 @@ def multi_res_vgg(x, prev, init=False,
     '''
 
     assert(len(conv_num_layers) == conv_num_groups)
-    assert(len(conv_use_rnn) == conv_num_groups)
+    assert(len(conv_rnn_depth) == conv_num_groups)
+    conv_use_rnn = map(lambda x: x > 0, conv_rnn_depth)
 
     dims = np.logspace(math.log10(conv_dim_first),
                        math.log10(conv_dim_last),
@@ -788,17 +789,26 @@ def multi_res_vgg(x, prev, init=False,
             # LSTM at end of group.
             if conv_use_rnn[j]:
                 rnn_name = 'rnn{}'.format(j+1)
-                h, c = rnn_name+'_h', rnn_name+'_c'
                 if init:
                     # Produce initial state of RNNs.
-                    # TODO: Why not variable_scope here?
-                    curr[h] = slim.conv2d(x, dims[j], 3, activation_fn=None, scope=h)
-                    curr[c] = slim.conv2d(x, dims[j], 3, activation_fn=None, scope=c)
+                    # TODO: Why not variable_scope here? Only expect one instance?
+                    for d in range(conv_rnn_depth[j]):
+                        layer_name = 'layer{}'.format(d+1)
+                        h = '{}_{}_{}'.format(rnn_name, layer_name, 'h')
+                        c = '{}_{}_{}'.format(rnn_name, layer_name, 'c')
+                        curr[h] = slim.conv2d(x, dims[j], 3, activation_fn=None, scope=h)
+                        curr[c] = slim.conv2d(x, dims[j], 3, activation_fn=None, scope=c)
                 else:
                     # Different scope for different RNNs.
                     with tf.variable_scope(rnn_name):
-                        curr[h], curr[c] = conv_lstm(x, prev[h], prev[c], state_dim=dims[j], name=rnn_name)
-                        x = curr[h]
+                        for d in range(conv_rnn_depth[j]):
+                            layer_name = 'layer{}'.format(d+1)
+                            with tf.variable_scope(layer_name):
+                                h = '{}_{}_{}'.format(rnn_name, layer_name, 'h')
+                                c = '{}_{}_{}'.format(rnn_name, layer_name, 'c')
+                                pdb.set_trace()
+                                curr[h], curr[c] = conv_lstm(x, prev[h], prev[c], state_dim=dims[j])
+                                x = curr[h]
             if init and not any(conv_use_rnn[j+1:]):
                 # Do not add layers to init network that will not be used.
                 return None, curr
