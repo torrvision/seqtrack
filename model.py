@@ -106,6 +106,7 @@ class RNN_dual(object):
                  summaries_collections=None,
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
+                 use_cnn3=False,
                  pass_hmap=False,
                  dropout_rnn=False,
                  dropout_cnn=False,
@@ -114,6 +115,7 @@ class RNN_dual(object):
         # model parameters
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
+        self.use_cnn3      = use_cnn3
         self.pass_hmap     = pass_hmap
         self.dropout_rnn   = dropout_rnn
         self.dropout_cnn   = dropout_cnn
@@ -369,9 +371,10 @@ class RNN_dual(object):
                         xy = concat([x_prev, hmap_from_rec], axis=3)
                     cnn2out = pass_cnn2(xy, scope)
 
-            with tf.name_scope('cnn3_{}'.format(t)) as scope:
-                with tf.variable_scope('cnn3', reuse=(t > 0)):
-                    cnn3out = pass_cnn3(tf.concat([x_prev, x_curr], axis=3), scope)
+            if self.use_cnn3:
+                with tf.name_scope('cnn3_{}'.format(t)) as scope:
+                    with tf.variable_scope('cnn3', reuse=(t > 0)):
+                        cnn3out = pass_cnn3(tf.concat([x_prev, x_curr], axis=3), scope)
 
             h1_curr = [None] * self.lstm1_nlayers
             c1_curr = [None] * self.lstm1_nlayers
@@ -393,10 +396,11 @@ class RNN_dual(object):
                 with tf.variable_scope('multi_level_cross_correlation', reuse=(t > 0)):
                     scoremap = pass_multi_level_cross_correlation(cnn1out, h1_curr[-1], scope) # multi-layer lstm1
 
-            with tf.name_scope('multi_level_integration_correlation_and_flow_{}'.format(t)) as scope:
-                with tf.variable_scope('multi_level_integration_correlation_and_flow', reuse=(t > 0)):
-                    scoremap = pass_multi_level_integration_correlation_and_flow(
-                            scoremap, cnn3out, scope)
+            if self.use_cnn3:
+                with tf.name_scope('multi_level_integration_correlation_and_flow_{}'.format(t)) as scope:
+                    with tf.variable_scope('multi_level_integration_correlation_and_flow', reuse=(t > 0)):
+                        scoremap = pass_multi_level_integration_correlation_and_flow(
+                                scoremap, cnn3out, scope)
 
             with tf.name_scope('multi_level_deconvolution_{}'.format(t)) as scope:
                 with tf.variable_scope('multi_level_deconvolution', reuse=(t > 0)):
