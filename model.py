@@ -806,7 +806,6 @@ def multi_res_vgg(x, prev, init=False,
                             with tf.variable_scope(layer_name):
                                 h = '{}_{}_{}'.format(rnn_name, layer_name, 'h')
                                 c = '{}_{}_{}'.format(rnn_name, layer_name, 'c')
-                                pdb.set_trace()
                                 curr[h], curr[c] = conv_lstm(x, prev[h], prev[c], state_dim=dims[j])
                                 x = curr[h]
             if init and not any(conv_use_rnn[j+1:]):
