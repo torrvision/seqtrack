@@ -1,12 +1,16 @@
 import pdb
 import sys
+import csv
 import itertools
+import json
 import numpy as np
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 import time
 import os
 import random
+import re
+import subprocess
 import threading
 
 import draw
@@ -554,3 +558,89 @@ def _load_batch(seqs, o):
                              if k in sequence_keys else x[k]
                          for x in examples])
             for k in EXAMPLE_KEYS}
+
+def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean']):
+    '''Finds all results for each evaluation distribution.
+
+    Identifies the best result for each metric.
+    Caution: More frequent evaluations might lead to better results.
+    '''
+
+    def load_results(eval_id):
+        '''Returns a dictionary from step number to dictionary of metrics.'''
+        dirname = os.path.join(o.path_output, 'assess', eval_id)
+        pattern = re.compile(r'^iteration(\d+)\.json$')
+        results = {}
+        for f in os.listdir(dirname):
+            if not os.path.isfile(os.path.join(dirname, f)):
+                continue
+            match = pattern.match(f)
+            if not match:
+                continue
+            step = int(match.group(1))
+            with open(os.path.join(dirname, f), 'r') as r:
+                results[step] = json.load(r)
+        if not results:
+            print 'warning: no results found:', eval_id
+        return results
+
+    def write_data_file(f, steps, results):
+        fieldnames = ['step'] + datasets
+        w = csv.DictWriter(f, fieldnames=fieldnames, delimiter='\t')
+        w.writeheader()
+        for step in steps:
+            row = {d: gnuplot_str(results[d].get(step, {}).get(metric, None))
+                   for d in datasets}
+            row['step'] = step
+            w.writerow(row)
+
+    def plot_data(plot_dir, filename):
+        src_dir = os.path.dirname(__file__)
+        args = ['gnuplot',
+            '-e', 'filename = "{}"'.format(filename),
+            os.path.join(src_dir, 'plot_eval_metric.gnuplot')
+        ]
+        p = subprocess.Popen(args, cwd=plot_dir)
+        p.wait()
+        return os.path.join(plot_dir, filename+'.png')
+
+    eval_id_fn = lambda sampler, dataset: '{}-{}'.format(dataset, sampler)
+    best_fn = {'iou_mean': np.amax, 'auc': np.amax, 'cle_mean': np.amin}
+    report_dir = os.path.join(o.path_output, 'report')
+    if not os.path.isdir(report_dir): os.makedirs(report_dir)
+
+    # Plot each metric versus iteration.
+    # Create one plot per sampler, with a line per dataset.
+    for sampler in samplers:
+        # Load all results using this sampler.
+        results = {dataset: load_results(eval_id_fn(sampler, dataset)) for dataset in datasets}
+        # Print results for each dataset.
+        for dataset in datasets:
+            print '==== evaluation: sampler {}, dataset {} ===='.format(sampler, dataset)
+            steps = sorted(results[dataset].keys())
+            for step in steps:
+                print 'iter {}:  {}'.format(step,
+                    '; '.join(['{}: {:.3g}'.format(metric, results[dataset][step][metric])
+                               for metric in metrics]))
+            for metric in metrics:
+                values = [results[dataset][step][metric] for step in steps]
+                print 'best {}: {:.3g}'.format(metric, np.asscalar(best_fn[metric](values)))
+        # Generate plot for each metric.
+        # Take union of steps for all datasets.
+        steps = sorted(set.union(*[set(r.keys()) for r in results.values()]))
+        for metric in metrics:
+            # Plot this metric over time for all datasets.
+            data_file = 'sampler-{}-metric-{}'.format(sampler, metric)
+            with open(os.path.join(report_dir, data_file+'.tsv'), 'w') as f:
+                write_data_file(f, steps, results)
+            try:
+                plot_file = plot_data(report_dir, data_file)
+                print 'plot created:', plot_file
+            except Exception as e:
+                print 'could not create plot:', e
+
+
+def gnuplot_str(x):
+    if x is None:
+        return '?'
+    return str(x)
