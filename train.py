@@ -87,6 +87,9 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 capacity=4, num_threads=1)
         example = _make_placeholders(o, default=from_queue)
 
+    # data augmentation
+    example = _perform_data_augmentation(example, o)
+
     # Always use same statistics for whitening (not set dependent).
     stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
@@ -389,6 +392,52 @@ def _make_placeholders(o, default=None):
     example['is_training'] = tf.placeholder_with_default(False, [], name='is_training')
     # Add a placeholder for scheduled sampling of y_prev_GT during training
     example['gt_ratio'] = tf.placeholder_with_default(1.0, [], name='gt_ratio')
+    return example
+
+
+def _perform_data_augmentation(example_raw, o, name='data_augmentation'):
+
+    example = dict(example_raw)
+
+    xs = tf.concat([tf.expand_dims(example['x0_raw'], 1), example['x_raw']], 1)
+    ys = tf.concat([tf.expand_dims(example['y0'], 1), example['y']], 1)
+
+    max_side_before = tf.reduce_max(tf.maximum(ys[:,:,2]-ys[:,:,0], ys[:,:,3]-ys[:,:,1]), 1)
+    max_side_after = tf.random_uniform(tf.shape(max_side_before), minval=0.05, maxval=1.0)
+    ratio = tf.divide(max_side_after, max_side_before)
+
+    xs_aug = []
+    ys_aug = []
+    for i in range(o.batchsz):
+        def _augment_pad(x, y, ratio):
+            ''' Case: ratio < 1.
+            Frames get resized (smaller) and padded to original size.
+            '''
+            x_resize = tf.image.resize_images(x, [tf.to_int32(ratio*o.frmsz)]*2)
+            offset_h = tf.to_int32(tf.random_uniform([], maxval=o.frmsz*(1-ratio)))
+            offset_w = tf.to_int32(tf.random_uniform([], maxval=o.frmsz*(1-ratio)))
+            # NOTE: `tf.pad` doesn't take pad value and only pad with zeros.
+            x_aug = tf.image.pad_to_bounding_box(x_resize, offset_h, offset_w, o.frmsz, o.frmsz)
+            y_aug = y*ratio + tf.cast(tf.divide(tf.stack([offset_w, offset_h]*2), o.frmsz), o.dtype)
+            return x_aug, y_aug
+        def _augment_crop(x, y, ratio):
+            # TODO: currently no update.
+            return x, y
+        x_aug, y_aug = tf.cond(tf.less(ratio[i], 1.0),
+                               lambda: _augment_pad(xs[i], ys[i], ratio[i]),
+                               lambda: _augment_crop(xs[i], ys[i], ratio[i]))
+        xs_aug.append(x_aug)
+        ys_aug.append(y_aug)
+
+    xs_aug = tf.stack(xs_aug, axis=0)
+    ys_aug = tf.stack(ys_aug, axis=0)
+    example['x0_raw'] = xs_aug[:,0]
+    example['x_raw']  = xs_aug[:,1:]
+    example['y0']     = ys_aug[:,0]
+    example['y']      = ys_aug[:,1:]
+
+    # TODO: Try other augmentations
+    # tf.image.{flip_up_down, random_flip_up_down, flip_left_right, random_flip_left_right, rot90}
     return example
 
 
