@@ -402,10 +402,10 @@ def _perform_data_augmentation(example_raw, o, name='data_augmentation'):
     xs = tf.concat([tf.expand_dims(example['x0_raw'], 1), example['x_raw']], 1)
     ys = tf.concat([tf.expand_dims(example['y0'], 1), example['y']], 1)
 
+    # 1. Scale augmentation
     max_side_before = tf.reduce_max(tf.maximum(ys[:,:,2]-ys[:,:,0], ys[:,:,3]-ys[:,:,1]), 1)
     max_side_after = tf.random_uniform(tf.shape(max_side_before), minval=0.05, maxval=1.0)
     ratio = tf.divide(max_side_after, max_side_before)
-
     xs_aug = []
     ys_aug = []
     for i in range(o.batchsz):
@@ -428,16 +428,19 @@ def _perform_data_augmentation(example_raw, o, name='data_augmentation'):
                                lambda: _augment_crop(xs[i], ys[i], ratio[i]))
         xs_aug.append(x_aug)
         ys_aug.append(y_aug)
-
     xs_aug = tf.stack(xs_aug, axis=0)
     ys_aug = tf.stack(ys_aug, axis=0)
+
+    # 2. Image adjustment
+    x_aug = tf.image.random_brightness(x_aug, 0.5)
+    x_aug = tf.image.random_contrast(x_aug, 0.5, 1.5)
+
+    # TODO: May try other augmentations at expense - tf.image.{flip, rot90, etc.}
+
     example['x0_raw'] = xs_aug[:,0]
     example['x_raw']  = xs_aug[:,1:]
     example['y0']     = ys_aug[:,0]
     example['y']      = ys_aug[:,1:]
-
-    # TODO: Try other augmentations
-    # tf.image.{flip_up_down, random_flip_up_down, flip_left_right, random_flip_left_right, rot90}
     return example
 
 
