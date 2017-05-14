@@ -116,7 +116,17 @@ def evaluate(sess, inputs, model, sequences, visualize=None):
     results = {}
     assert(len(sequence_results) > 0)
     for k in sequence_results[0]:
-        results[k] = np.mean([r[k] for r in sequence_results], axis=0).tolist()
+        # TODO: Store all results and compute this later!
+        # (More flexible but breaks backwards compatibility.)
+        results_k = np.array([r[k] for r in sequence_results])
+        mean = np.mean(results_k, axis=0)
+        var = np.var(results_k, axis=0)
+        # Compute the standard error of the *bootstrap sample* of the mean.
+        # Note that this is different from the standard deviation of a single set.
+        # See page 107 of "All of Statistics" (Wasserman).
+        std_err = np.sqrt(var / len(results_k))
+        results[k]            = mean.tolist() # Convert to list for JSON.
+        results[k+'_std_err'] = std_err.tolist()
     return results
 
 
