@@ -92,6 +92,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         example = _make_placeholders(o, default=from_queue)
 
     # data augmentation
+    example_eval = dict(example) # Copy of example for evaluation
     example = _perform_data_augmentation(example, o)
 
     # Always use same statistics for whitening (not set dependent).
@@ -254,7 +255,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                         result_file = os.path.join(o.path_output, 'assess', eval_id,
                             iter_id+'.json')
                         result = cache_json(result_file,
-                            lambda: evaluate.evaluate(sess, example, model,
+                            lambda: evaluate.evaluate(sess, example_eval, model,
                                 eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None),
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
