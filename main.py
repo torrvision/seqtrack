@@ -118,7 +118,9 @@ def parse_arguments():
                                       'flip_up_down': False,
                                       'flip_left_right': False,
                                       'brightness': False,
-                                      'contrast': False})
+                                      'contrast': False,
+                                      'hue': False,
+                                      'saturation': False})
 
     parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',

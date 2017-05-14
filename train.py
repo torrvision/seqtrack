@@ -417,10 +417,16 @@ def _perform_data_augmentation(example_raw, o, name='data_augmentation'):
         xs_aug, ys_aug = _data_augmentation_flip_left_right(xs_aug, ys_aug, o)
 
     if o.data_augmentation.get('brightness', False):
-        xs_aug = tf.image.random_brightness(xs_aug, 0.5)
+        xs_aug = tf.image.random_brightness(xs_aug, 0.3)
 
     if o.data_augmentation.get('contrast', False):
         xs_aug = tf.image.random_contrast(xs_aug, 0.5, 1.5)
+
+    if o.data_augmentation.get('hue', False):
+        xs_aug = _data_augmentation_hue(xs_aug, o)
+
+    if o.data_augmentation.get('saturation', False):
+        xs_aug = _data_augmentation_saturation(xs_aug, o)
 
     # TODO: May try other augmentations at expense - tf.image.{rot90, etc.}
 
@@ -497,6 +503,30 @@ def _data_augmentation_flip_left_right(xs, ys, o):
         xs_flip.append(x_flip)
         ys_flip.append(y_flip)
     return tf.stack(xs_flip), tf.stack(ys_flip)
+
+
+def _data_augmentation_hue(xs, o, max_delta=0.3):
+    '''
+    This data augmentation is applied by frame, rather than by sequence.
+    Practially, it was merely due to how `tf.image.adjust_hue` is implemented.
+    '''
+    xs_aug = []
+    for i in range(o.batchsz):
+        for t in range(o.ntimesteps+1):
+            xs_aug.append(tf.image.random_hue(xs[i,t], max_delta))
+    return tf.reshape(tf.stack(xs_aug), [-1, o.ntimesteps+1, o.frmsz, o.frmsz, 3])
+
+
+def _data_augmentation_saturation(xs, o, lower=0.7, upper=1.3):
+    '''
+    This data augmentation is applied by frame, rather than by sequence.
+    Practially, it was merely due to how `tf.image.adjust_saturation` is implemented.
+    '''
+    xs_aug = []
+    for i in range(o.batchsz):
+        for t in range(o.ntimesteps+1):
+            xs_aug.append(tf.image.random_saturation(xs[i,t], lower, upper))
+    return tf.reshape(tf.stack(xs_aug), [-1, o.ntimesteps+1, o.frmsz, o.frmsz, 3])
 
 
 def _guard_labels(unsafe):

@@ -71,7 +71,9 @@ class Opts(object):
                                    'flip_up_down': False,
                                    'flip_left_right': False,
                                    'brightness': False,
-                                   'contrast': False}
+                                   'contrast': False,
+                                   'hue': False,
+                                   'saturation': False}
 
         #----------------------------------------------------------------------
         # Options for sampler
