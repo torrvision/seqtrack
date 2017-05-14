@@ -115,6 +115,14 @@ def parse_arguments():
             type=str, default=None)
 
     parser.add_argument(
+            '--data_augmentation', help='JSON string specifying data augmentation',
+            type=json.loads, default={'scale_shift': False,
+                                      'flip_up_down': False,
+                                      'flip_left_right': False,
+                                      'brightness': False,
+                                      'contrast': False})
+
+    parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
             type=json.loads, default={'kind': 'regular', 'freq': 10})
     parser.add_argument(

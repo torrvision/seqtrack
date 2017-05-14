@@ -66,6 +66,14 @@ class Opts(object):
         self.model_file         = None
 
         #----------------------------------------------------------------------
+        # Data augmentation
+        self.data_augmentation  = {'scale_shift': False,
+                                   'flip_up_down': False,
+                                   'flip_left_right': False,
+                                   'brightness': False,
+                                   'contrast': False}
+
+        #----------------------------------------------------------------------
         # Options for sampler
         # The sampler to use for training.
         # Do not specify `ntimesteps` or `shuffle` here.
