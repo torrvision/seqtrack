@@ -92,7 +92,6 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         example = _make_placeholders(o, default=from_queue)
 
     # data augmentation
-    example_eval = dict(example) # Copy of example for evaluation
     example = _perform_data_augmentation(example, o)
 
     # Always use same statistics for whitening (not set dependent).
@@ -255,7 +254,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                         result_file = os.path.join(o.path_output, 'assess', eval_id,
                             iter_id+'.json')
                         result = cache_json(result_file,
-                            lambda: evaluate.evaluate(sess, example_eval, model,
+                            lambda: evaluate.evaluate(sess, example, model,
                                 eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None),
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
@@ -417,7 +416,7 @@ def _perform_data_augmentation(example_raw, o, name='data_augmentation'):
         xs_aug, ys_aug = _data_augmentation_flip_left_right(xs_aug, ys_aug, o)
 
     if o.data_augmentation.get('brightness', False):
-        xs_aug = tf.image.random_brightness(xs_aug, 0.3)
+        xs_aug = tf.image.random_brightness(xs_aug, 0.1)
 
     if o.data_augmentation.get('contrast', False):
         xs_aug = tf.image.random_contrast(xs_aug, 0.5, 1.5)
@@ -448,6 +447,7 @@ def _data_augmentation_scale_shift(xs, ys, o):
             ''' Case: ratio < 1.
             Frames get resized (smaller) and padded to original size.
             '''
+            ratio = tf.maximum(0.2, ratio) # minimum scale
             x_resize = tf.image.resize_images(x, [tf.to_int32(ratio*o.frmsz)]*2)
             offset_h = tf.to_int32(tf.random_uniform([], maxval=o.frmsz*(1-ratio)))
             offset_w = tf.to_int32(tf.random_uniform([], maxval=o.frmsz*(1-ratio)))
@@ -505,7 +505,7 @@ def _data_augmentation_flip_left_right(xs, ys, o):
     return tf.stack(xs_flip), tf.stack(ys_flip)
 
 
-def _data_augmentation_hue(xs, o, max_delta=0.3):
+def _data_augmentation_hue(xs, o, max_delta=0.1):
     '''
     This data augmentation is applied by frame, rather than by sequence.
     Practially, it was merely due to how `tf.image.adjust_hue` is implemented.
@@ -517,7 +517,7 @@ def _data_augmentation_hue(xs, o, max_delta=0.3):
     return tf.reshape(tf.stack(xs_aug), [-1, o.ntimesteps+1, o.frmsz, o.frmsz, 3])
 
 
-def _data_augmentation_saturation(xs, o, lower=0.7, upper=1.3):
+def _data_augmentation_saturation(xs, o, lower=0.9, upper=1.1):
     '''
     This data augmentation is applied by frame, rather than by sequence.
     Practially, it was merely due to how `tf.image.adjust_saturation` is implemented.
