@@ -143,6 +143,13 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
             hmap = tf.summary.image('hmap', _draw_heatmap(model),
                 max_outputs=o.ntimesteps+1, collections=[])
             image_summaries.append(hmap)
+        # Produce an image summary of the LSTM memory states (h or c).
+        if hasattr(model, 'memory'):
+            for mtype in model.memory.keys():
+                if model.memory[mtype][0] is not None:
+                    image_summaries.append(
+                        tf.summary.image(mtype, _draw_memory_state(model, mtype),
+                        max_outputs=o.ntimesteps+1, collections=[]))
         for mode in modes:
             with tf.name_scope(mode):
                 # Merge summaries with any that are specific to the mode.
@@ -652,6 +659,10 @@ def _draw_heatmap(model, time_stride=1, name='draw_heatmap'):
         # Take first channel and convert to int.
         return tf.cast(tf.round(255*p[:,:,:,0:1]), tf.uint8)
 
+def _draw_memory_state(model, mtype, time_stride=1, name='draw_memory_states'):
+    with tf.name_scope(name) as scope:
+        p = tf.nn.softmax(model.memory[mtype][0,::time_stride])
+        return tf.cast(tf.round(255*p[:,:,:,0:1]), tf.uint8)
 
 def _load_sequence(seq, o):
     '''
