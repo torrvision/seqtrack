@@ -520,7 +520,7 @@ def _data_augmentation_hue(xs, o, max_delta=0.1):
     xs_aug = []
     for i in range(o.batchsz):
         for t in range(o.ntimesteps+1):
-            xs_aug.append(tf.image.random_hue(xs[i,t], delta))
+            xs_aug.append(tf.image.random_hue(xs[i,t], max_delta))
     return tf.reshape(tf.stack(xs_aug), [-1, o.ntimesteps+1, o.frmsz, o.frmsz, 3])
 
 
