@@ -287,7 +287,8 @@ class RNN_dual(object):
             with tf.name_scope(name):
                 with slim.arg_scope([slim.fully_connected, slim.conv2d],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    x = slim.conv2d(x, 2, 1, scope='conv1')
+                    if not self.lstm2_nlayers > 0:
+                        x = slim.conv2d(x, 2, 1, scope='conv1')
                     x = slim.flatten(x)
                     x = slim.fully_connected(x, 1024, scope='fc1')
                     x = slim.fully_connected(x, 1024, scope='fc2')
