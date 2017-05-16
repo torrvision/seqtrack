@@ -112,7 +112,6 @@ class RNN_dual(object):
                  dropout_cnn=False,
                  keep_prob=0.2, # following `Recurrent Neural Network Regularization, Zaremba et al.
                  init_memory=False,
-                 add_noise=False,
                  ):
         # model parameters
         self.lstm1_nlayers = lstm1_nlayers
@@ -123,7 +122,6 @@ class RNN_dual(object):
         self.dropout_cnn   = dropout_cnn
         self.keep_prob     = keep_prob
         self.init_memory   = init_memory
-        self.add_noise     = add_noise
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.memory, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -482,7 +480,7 @@ class RNN_dual(object):
             x_prev = x_curr
             rand_prob = tf.random_uniform([], minval=0, maxval=1)
             gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
-            y_prev = tf.cond(gt_condition, lambda: y_curr + noise[:,t] if self.add_noise else y_curr,
+            y_prev = tf.cond(gt_condition, lambda: y_curr + noise[:,t], # TODO: should noise be gone?
                                            lambda: y_curr_pred)
             h1_prev, c1_prev = h1_curr, c1_curr
             h2_prev, c2_prev = h2_curr, c2_curr
