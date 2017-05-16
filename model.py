@@ -111,6 +111,7 @@ class RNN_dual(object):
                  dropout_rnn=False,
                  dropout_cnn=False,
                  keep_prob=0.2, # following `Recurrent Neural Network Regularization, Zaremba et al.
+                 init_memory=False,
                  ):
         # model parameters
         self.lstm1_nlayers = lstm1_nlayers
@@ -120,6 +121,7 @@ class RNN_dual(object):
         self.dropout_rnn   = dropout_rnn
         self.dropout_cnn   = dropout_cnn
         self.keep_prob     = keep_prob
+        self.init_memory   = init_memory
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.memory, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -127,6 +129,16 @@ class RNN_dual(object):
         self.batch_size   = o.batchsz
 
     def _load_model(self, inputs, o):
+
+        def pass_init_lstm2(x, name='pass_init_lstm2'):
+            ''' CNN for memory states in lstm2. Used to initialize.
+            '''
+            with tf.name_scope(name):
+                with slim.arg_scope([slim.conv2d],
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    x = slim.conv2d(x, 2, [7, 7], stride=3, scope='conv1')
+                    x = slim.conv2d(x, 2, [1, 1], stride=1, activation_fn=None, scope='conv2')
+            return x
 
         def pass_cnn1(x, name):
             ''' CNN for search space
@@ -149,7 +161,7 @@ class RNN_dual(object):
                     x = slim.conv2d(x, 256, [3, 3], stride=1, scope='conv9'); out.append(x)
             return out
 
-        def pass_cnn2(x, name):
+        def pass_cnn2(x, outsize=1024, name='pass_cnn2'):
             ''' CNN for appearance
             '''
             with tf.name_scope(name):
@@ -171,7 +183,7 @@ class RNN_dual(object):
                     x = slim.fully_connected(x, 1024, scope='fc1')
                     if self.dropout_cnn:
                         x = slim.dropout(x, keep_prob=self.keep_prob, is_training=is_training, scope='dropout1')
-                    x = slim.fully_connected(x, 1024, scope='fc2')
+                    x = slim.fully_connected(x, outsize, scope='fc2')
             return x
 
         def pass_cnn3(x, name):
@@ -317,34 +329,58 @@ class RNN_dual(object):
         gt_ratio    = inputs['gt_ratio']
         is_training = inputs['is_training']
 
-        # TODO: receive model specs from JSON
+        # Add identity op to ensure that we can feed state here.
+        x_init = tf.identity(x0)
+        y_init = tf.identity(y0)
+        hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='bg'))
+
+        # lstm initial memory states. {random or CNN}.
         h1_init = [None] * self.lstm1_nlayers
         c1_init = [None] * self.lstm1_nlayers
         h2_init = [None] * self.lstm2_nlayers
         c2_init = [None] * self.lstm2_nlayers
-        with tf.name_scope('lstm_initial'):
-            with slim.arg_scope([slim.model_variable],
-                    initializer=tf.truncated_normal_initializer(stddev=0.01),
-                    regularizer=slim.l2_regularizer(o.wd)):
+        if not self.init_memory:
+            with tf.name_scope('lstm_initial'):
+                with slim.arg_scope([slim.model_variable],
+                        initializer=tf.truncated_normal_initializer(stddev=0.01),
+                        regularizer=slim.l2_regularizer(o.wd)):
+                    for i in range(self.lstm1_nlayers):
+                        h1_init_single = slim.model_variable('lstm1_h_init_{}'.format(i+1), shape=[o.nunits])
+                        c1_init_single = slim.model_variable('lstm1_c_init_{}'.format(i+1), shape=[o.nunits])
+                        h1_init[i] = tf.stack([h1_init_single] * o.batchsz)
+                        c1_init[i] = tf.stack([c1_init_single] * o.batchsz)
+                    for i in range(self.lstm2_nlayers):
+                        h2_init_single = slim.model_variable('lstm2_h_init_{}'.format(i+1), shape=[81, 81, 2]) # TODO: adaptive
+                        c2_init_single = slim.model_variable('lstm2_c_init_{}'.format(i+1), shape=[81, 81, 2])
+                        h2_init[i] = tf.stack([h2_init_single] * o.batchsz)
+                        c2_init[i] = tf.stack([c2_init_single] * o.batchsz)
+        else:
+            with tf.name_scope('lstm_initial'):
+                # lstm1
+                hmap_from_rec = get_masks_from_rectangles(y_init, o)
+                if self.pass_hmap:
+                    xy = concat([x_init, hmap_from_rec, hmap_init], axis=3)
+                    xy = tf.stop_gradient(xy)
+                else:
+                    xy = concat([x_init, hmap_from_rec], axis=3)
                 for i in range(self.lstm1_nlayers):
-                    h1_init_single = slim.model_variable('lstm1_h_init_{}'.format(i+1), shape=[o.nunits])
-                    c1_init_single = slim.model_variable('lstm1_c_init_{}'.format(i+1), shape=[o.nunits])
-                    h1_init[i] = tf.stack([h1_init_single] * o.batchsz)
-                    c1_init[i] = tf.stack([c1_init_single] * o.batchsz)
+                    with tf.variable_scope('lstm1_layer_{}'.format(i+1)):
+                        with tf.variable_scope('h_init'):
+                            h1_init[i] = pass_cnn2(xy, o.nunits)
+                        with tf.variable_scope('c_init'):
+                            c1_init[i] = pass_cnn2(xy, o.nunits)
+                # lstm2
                 for i in range(self.lstm2_nlayers):
-                    h2_init_single = slim.model_variable('lstm2_h_init_{}'.format(i+1), shape=[81, 81, 2]) # TODO: adaptive
-                    c2_init_single = slim.model_variable('lstm2_c_init_{}'.format(i+1), shape=[81, 81, 2])
-                    h2_init[i] = tf.stack([h2_init_single] * o.batchsz)
-                    c2_init[i] = tf.stack([c2_init_single] * o.batchsz)
+                    with tf.variable_scope('lstm2_layer_{}'.format(i+1)):
+                        with tf.variable_scope('h_init'):
+                            h2_init[i] = pass_init_lstm2(hmap_init)
+                        with tf.variable_scope('c_init'):
+                            c2_init[i] = pass_init_lstm2(hmap_init)
 
         with tf.name_scope('noise'):
             noise = tf.truncated_normal(tf.shape(y), mean=0.0, stddev=0.05,
                                         dtype=o.dtype, seed=o.seed_global, name='noise')
 
-        # Add identity op to ensure that we can feed state here.
-        x_init = tf.identity(x0)
-        y_init = tf.identity(y0)
-        hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='bg'))
 
         x_prev = x_init
         y_prev = y_init
@@ -373,7 +409,7 @@ class RNN_dual(object):
                         xy = tf.stop_gradient(xy)
                     else:
                         xy = concat([x_prev, hmap_from_rec], axis=3)
-                    cnn2out = pass_cnn2(xy, scope)
+                    cnn2out = pass_cnn2(xy, name=scope)
 
             if self.use_cnn3:
                 with tf.name_scope('cnn3_{}'.format(t)) as scope:
