@@ -266,7 +266,8 @@ class RNN_dual(object):
                     for i in range(len(x)-1):
                         shape_to = x[len(x)-2-i].shape.as_list()
                         deconv = slim.conv2d(
-                                tf.image.resize_images(deconv, shape_to[1:3]),
+                                tf.image.resize_images(deconv, shape_to[1:3],
+                                                       method=tf.image.ResizeMethod.BICUBIC),
                                 num_outputs=shape_to[-1],
                                 scope='deconv{}'.format(i+1))
                         deconv = deconv + x[len(x)-2-i] # TODO: try concat
@@ -317,7 +318,9 @@ class RNN_dual(object):
                         #num_outputs=x.shape.as_list()[-1],
                         num_outputs=2, # NOTE: hmap before lstm2 -> reduce the output channel to 2 here.
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    x = slim.conv2d(tf.image.resize_images(x, [241, 241]), kernel_size=[3, 3], scope='deconv')
+                    x = slim.conv2d(tf.image.resize_images(x, [241, 241],
+                                                           method=tf.image.ResizeMethod.BICUBIC),
+                                    kernel_size=[3, 3], scope='deconv')
                     x = slim.conv2d(x, kernel_size=[1, 1], scope='conv1')
                     x = slim.conv2d(x, kernel_size=[1, 1], activation_fn=None, scope='conv2')
             return x
