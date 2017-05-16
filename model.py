@@ -107,7 +107,6 @@ class RNN_dual(object):
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
                  use_cnn3=False,
-                 use_lstm2=False,
                  pass_hmap=False,
                  dropout_rnn=False,
                  dropout_cnn=False,
@@ -117,7 +116,6 @@ class RNN_dual(object):
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
         self.use_cnn3      = use_cnn3
-        self.use_lstm2     = use_lstm2
         self.pass_hmap     = pass_hmap
         self.dropout_rnn   = dropout_rnn
         self.dropout_cnn   = dropout_cnn
@@ -417,27 +415,25 @@ class RNN_dual(object):
 
             h2_curr = [None] * self.lstm2_nlayers
             c2_curr = [None] * self.lstm2_nlayers
-            if self.use_lstm2:
-                with tf.name_scope('lstm2_{}'.format(t)) as scope:
-                    with tf.variable_scope('lstm2', reuse=(t > 0)):
-                        input_to_lstm2 = tf.identity(scoremap)
-                        for i in range(self.lstm2_nlayers):
-                            with tf.variable_scope('layer_{}'.format(i+1), reuse=(t > 0)):
-                                h2_curr[i], c2_curr[i] = pass_lstm2(input_to_lstm2, h2_prev[i], c2_prev[i], scope)
-                            if self.dropout_rnn:
-                                input_to_lstm2 = slim.dropout(h2_curr[i],
-                                                              keep_prob=self.keep_prob,
-                                                              is_training=is_training, scope='dropout')
-                            else:
-                                input_to_lstm2 = h2_curr[i]
+            with tf.name_scope('lstm2_{}'.format(t)) as scope:
+                with tf.variable_scope('lstm2', reuse=(t > 0)):
+                    input_to_lstm2 = tf.identity(scoremap)
+                    for i in range(self.lstm2_nlayers):
+                        with tf.variable_scope('layer_{}'.format(i+1), reuse=(t > 0)):
+                            h2_curr[i], c2_curr[i] = pass_lstm2(input_to_lstm2, h2_prev[i], c2_prev[i], scope)
+                        if self.dropout_rnn:
+                            input_to_lstm2 = slim.dropout(h2_curr[i],
+                                                          keep_prob=self.keep_prob,
+                                                          is_training=is_training, scope='dropout')
+                        else:
+                            input_to_lstm2 = h2_curr[i]
 
-                with tf.name_scope('cnn_out_rec_{}'.format(t)) as scope:
-                    with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
+            with tf.name_scope('cnn_out_rec_{}'.format(t)) as scope:
+                with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
+                    if self.lstm2_nlayers > 0:
                         y_curr_pred = pass_out_rectangle(h2_curr[-1], scope) # multi-layer lstm2
-            else:
-                with tf.name_scope('cnn_out_rec_{}'.format(t)) as scope:
-                    with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
-                        y_curr_pred = pass_out_rectangle(scoremap, scope)
+                    else:
+                        y_curr_pred = pass_out_rectangle(scoremap, scope) # No LSTM2
 
             #with tf.name_scope('cnn_out_hmap_{}'.format(t)) as scope:
             #    with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
@@ -454,12 +450,12 @@ class RNN_dual(object):
 
             y_pred.append(y_curr_pred)
             hmap_pred.append(hmap_curr)
-            memory_h2.append(h2_curr[-1])
-            memory_c2.append(c2_curr[-1])
+            memory_h2.append(h2_curr[-1] if self.lstm2_nlayers > 0 else None)
+            memory_c2.append(c2_curr[-1] if self.lstm2_nlayers > 0 else None)
 
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
         hmap_pred = tf.stack(hmap_pred, axis=1)
-        if self.use_lstm2:
+        if self.lstm2_nlayers > 0:
             memory_h2 = tf.stack(memory_h2, axis=1)
             memory_c2 = tf.stack(memory_c2, axis=1)
 
