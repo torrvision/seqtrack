@@ -106,12 +106,14 @@ class RNN_dual(object):
                  summaries_collections=None,
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
+                 lstm1_memsz=256,
                  dropout_rnn=False,
                  keep_prob=0.2, # following `Recurrent Neural Network Regularization, Zaremba et al.
                  ):
         # model parameters
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
+        self.lstm1_memsz   = lstm1_memsz
         self.dropout_rnn   = dropout_rnn
         self.keep_prob     = keep_prob
         # Ignore sumaries_collections - model does not generate any summaries.
@@ -132,7 +134,7 @@ class RNN_dual(object):
                     x = slim.conv2d(x, 2, [1, 1], stride=1, activation_fn=tf.nn.tanh, scope='conv2')
             return x
 
-        def pass_cnn(x, init_lstm=False):
+        def pass_cnn(x, last_act=tf.nn.relu, init_lstm=False):
             out = []
             with slim.arg_scope([slim.conv2d, slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -143,10 +145,9 @@ class RNN_dual(object):
                 x = slim.max_pool2d(x, 2, scope='pool2')
                 x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv4'); out.append(x)
                 x = slim.max_pool2d(x, 2, scope='pool3')
-                x = slim.conv2d(x, 256, [3, 3], stride=1, activation_fn=None, scope='conv5'); out.append(x)
+                x = slim.conv2d(x, 256, [3, 3], stride=1, activation_fn=last_act, scope='conv5'); out.append(x)
                 if init_lstm: # used for initializing memory states of lstm1.
-                    x = tf.nn.relu(x)
-                    x = slim.conv2d(x, 1024, [3, 3], stride=1,
+                    x = slim.conv2d(x, self.lstm1_memsz, [3, 3], stride=1,
                                     activation_fn=tf.nn.tanh, scope='conv6'); out.append(x)
             return out
 
@@ -173,7 +174,7 @@ class RNN_dual(object):
             scoremap = []
             for i in range(len(search)): # number of conv layers
                 depth = search[i].shape[3]
-                filt_layer = slim.conv2d(filt, depth, [1, 1], activation_fn=None) #TODO: activation?
+                filt_layer = slim.conv2d(filt, depth, [1, 1], activation_fn=None)
                 filt_layer = tf.stack([filt_layer]*depth, axis=4) # TODO: not sure if this is the right thing.
                 scoremap_layer = []
                 for b in range(o.batchsz):
@@ -269,7 +270,6 @@ class RNN_dual(object):
 
 
         x_prev = tf.identity(x_init)
-        y_prev = tf.identity(y_init)
         hmap_prev = tf.identity(hmap_init)
         h1_prev, c1_prev = tf.identity(h1_init), tf.identity(c1_init)
         h2_prev, c2_prev = tf.identity(h2_init), tf.identity(c2_init)
@@ -285,11 +285,9 @@ class RNN_dual(object):
                 y_curr = y[:, t]
 
                 with tf.variable_scope('cnn1', reuse=(t > 0)):
-                    cnn1out = pass_cnn(x_curr)
+                    cnn1out = pass_cnn(x_curr, last_act=None)
 
-                # use both `hmap_prev` along with `y_prev_{GT or pred}`
-                hmap_from_rec = get_masks_from_rectangles(y_prev, o)
-                xy = tf.stop_gradient(tf.concat([x_prev, hmap_from_rec, hmap_prev], axis=3))
+                xy = tf.stop_gradient(tf.concat([x_prev, hmap_prev], axis=3))
                 with tf.variable_scope('cnn2', reuse=(t > 0)):
                     cnn2out = pass_cnn(xy)
 
@@ -314,7 +312,7 @@ class RNN_dual(object):
                     scoremap = pass_multi_level_deconvolution(scoremap)
 
                 with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
-                    hmap_curr = pass_out_heatmap(scoremap)
+                    hmap_curr_pred = pass_out_heatmap(scoremap)
 
                 h2_curr = [None] * self.lstm2_nlayers
                 c2_curr = [None] * self.lstm2_nlayers
@@ -336,16 +334,17 @@ class RNN_dual(object):
                         y_curr_pred = pass_out_rectangle(scoremap) # No LSTM2
 
                 x_prev = x_curr
-                rand_prob = tf.random_uniform([], minval=0, maxval=1)
-                gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
-                y_prev = tf.cond(gt_condition, lambda: y_curr,
-                                               lambda: y_curr_pred)
                 h1_prev, c1_prev = h1_curr, c1_curr
                 h2_prev, c2_prev = h2_curr, c2_curr
-                hmap_prev = hmap_curr
+
+                rand_prob = tf.random_uniform([], minval=0, maxval=1)
+                gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
+                hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o, kind='bg'))
+                hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
+                                                  lambda: tf.nn.softmax(hmap_curr_pred)) # NOTE: softmax?!
 
                 y_pred.append(y_curr_pred)
-                hmap_pred.append(hmap_curr)
+                hmap_pred.append(hmap_curr_pred)
                 memory_h2.append(h2_curr[-1] if self.lstm2_nlayers > 0 else None)
                 memory_c2.append(c2_curr[-1] if self.lstm2_nlayers > 0 else None)
 
@@ -361,7 +360,7 @@ class RNN_dual(object):
         state.update({'c1_{}'.format(i+1): (c1_init[i], c1_curr[i]) for i in range(self.lstm1_nlayers)})
         state.update({'h2_{}'.format(i+1): (h2_init[i], h2_curr[i]) for i in range(self.lstm2_nlayers)})
         state.update({'c2_{}'.format(i+1): (c2_init[i], c2_curr[i]) for i in range(self.lstm2_nlayers)})
-        state.update({'x': (x_init, x_prev), 'y': (y_init, y_prev)})
+        state.update({'x': (x_init, x_prev)})
         state.update({'hmap': (hmap_init, hmap_prev)})
         memory = {'h2': memory_h2, 'c2': memory_c2}
 
