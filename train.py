@@ -5,6 +5,7 @@ import itertools
 import json
 import numpy as np
 import tensorflow as tf
+import tensorflow.contrib.slim as slim
 from tensorflow.python import debug as tf_debug
 import time
 import os
@@ -21,7 +22,7 @@ import sample
 import visualize
 
 from model import convert_rec_to_heatmap
-from helpers import load_image, im_to_arr, pad_to, cache_json
+from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
 
 EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
 
@@ -592,6 +593,13 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         y_is_valid = example['y_is_valid']
         assert(y.get_shape().as_list()[1] == o.ntimesteps)
         hmap = convert_rec_to_heatmap(y, o, min_size=1.0)
+        if o.heatmap_stride != 1:
+            hmap, unmerge = merge_dims(hmap, 0, 2)
+            hmap = slim.avg_pool2d(hmap,
+                kernel_size=o.heatmap_stride+1,
+                stride=o.heatmap_stride,
+                padding='SAME')
+            hmap = unmerge(hmap, 0)
 
         losses = dict()
 
@@ -620,6 +628,8 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         # Cross-entropy between probabilty maps (need to change label)
         if 'ce' in o.losses:
             hmap_pred = outputs['hmap']
+            print 'hmap_pred.shape:', hmap_pred.shape.as_list()
+            print 'hmap.shape:', hmap.shape.as_list()
             hmap_valid = tf.boolean_mask(hmap, y_is_valid)
             hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
             loss_ce = tf.reduce_mean(

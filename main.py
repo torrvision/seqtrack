@@ -61,6 +61,8 @@ def parse_arguments():
     parser.add_argument(
             '--losses', nargs='+', help='list of losses to be used',
             type=str) # example [l1, iou]
+    parser.add_argument('--heatmap_stride', type=int, default=1,
+            help='stride of heatmap at loss')
 
     parser.add_argument(
             '--nunits', help='number of hidden units in rnn cell',

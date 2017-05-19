@@ -16,7 +16,7 @@ The model constructor should take a dictionary of tensors::
 It may also have 'target' if required.
 Images input to the model are already normalized (e.g. have dataset mean subtracted).
 
-The `outputs` dictionary should have a key 'y' and may have other keys such as 'heatmap'.
+The `outputs` dictionary should have a key 'y' and may have other keys such as 'hmap'.
 '''
 
 import pdb
@@ -29,6 +29,7 @@ import os
 
 import cnnutil
 from helpers import merge_dims
+from upsample import upsample
 
 concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
 
@@ -713,6 +714,7 @@ def rnn_multi_res(example, o,
                   summaries_collections=None,
                   # Model options:
                   kind='vgg',
+                  use_heatmap=False,
                   **model_params):
 
     images = example['x']
@@ -736,7 +738,7 @@ def rnn_multi_res(example, o,
     if kind == 'vgg':
         net_fn = multi_res_vgg
     elif kind == 'resnet':
-        net_fn = multi_res_resnet
+        raise Exception('not implemented')
     else:
         raise ValueError('unknown net type: {}'.format(kind))
 
@@ -746,19 +748,29 @@ def rnn_multi_res(example, o,
                             is_training=is_training):
             # TODO: Share some layers?
             with tf.variable_scope('rnn_init'):
-                _, s_init = net_fn(init_input, None, init=True, **model_params)
+                _, s_init = net_fn(init_input, None, init=True,
+                    use_heatmap=use_heatmap, heatmap_stride=o.heatmap_stride,
+                    **model_params)
 
-            y = []
+            y, heatmap = [], []
             s_prev = s_init
             for t in range(o.ntimesteps):
                 with tf.name_scope('t{}'.format(t)):
                     with tf.variable_scope('frame', reuse=(t > 0)):
-                        yt, s = net_fn(images[:, t], s_prev, init=False, **model_params)
+                        outputs_t, s = net_fn(images[:, t], s_prev, init=False,
+                            use_heatmap=use_heatmap, heatmap_stride=o.heatmap_stride,
+                            **model_params)
                         s_prev = s
-                        y.append(yt)
+                        y.append(outputs_t['y'])
+                        if use_heatmap:
+                            heatmap.append(outputs_t['hmap'])
             y = tf.stack(y, axis=1) # list to tensor
+            if use_heatmap:
+                heatmap = tf.stack(heatmap, axis=1) # list to tensor
 
     outputs = {'y': y}
+    if use_heatmap:
+        outputs['hmap'] = heatmap
     assert(set(s_init.keys()) == set(s.keys()))
     state = {k: (s_init[k], s[k]) for k in s}
 
@@ -799,7 +811,7 @@ def conv_lstm(x, h_prev, c_prev, state_dim, name='clstm'):
     return h, c
 
 
-def multi_res_vgg(x, prev, init=False,
+def multi_res_vgg(x, prev, init, use_heatmap, heatmap_stride,
         # Model parameters:
         use_bnorm=False,
         conv_num_groups=5,
@@ -808,9 +820,10 @@ def multi_res_vgg(x, prev, init=False,
         conv_stride=[1, 1, 1, 1, 1],
         conv_rnn_depth=[0, 0, 1, 0, 0],
         conv_dim_first=16,
-        conv_dim_last=128,
-        fc_num_layers=2,
+        conv_dim_last=256,
+        fc_num_layers=0,
         fc_dim=256,
+        heatmap_input_stride=16,
         ):
     '''
     Layers are conv[1], ..., conv[N], fc[N+1], ..., fc[N+M].
@@ -826,7 +839,10 @@ def multi_res_vgg(x, prev, init=False,
     dims = np.round(dims).astype(np.int)
 
     with slim.arg_scope([slim.batch_norm], fused=True):
+        # Dictionary of state.
         curr = {}
+        # Array of (tensor before op with stride, stride) tuples.
+        stride_steps = []
         if init and not any(conv_use_rnn):
             return None, curr
         bnorm_params = {'normalizer_fn': slim.batch_norm} if use_bnorm else {}
@@ -836,8 +852,11 @@ def multi_res_vgg(x, prev, init=False,
                 conv_name = lambda k: 'conv{}_{}'.format(j+1, k+1)
                 for k in range(conv_num_layers[j]):
                     stride = conv_stride[j] if k == conv_num_layers[j]-1 else 1
+                    if stride != 1:
+                        stride_steps.append((x, stride))
                     x = slim.conv2d(x, dims[j], conv_kernel_size[j], stride=stride,
                                     scope=conv_name(k))
+                stride_steps.append((x, 2))
                 x = slim.max_pool2d(x, 3, padding='SAME', scope='pool{}'.format(j+1))
 
             # LSTM at end of group.
@@ -865,16 +884,46 @@ def multi_res_vgg(x, prev, init=False,
             if init and not any(conv_use_rnn[j+1:]):
                 # Do not add layers to init network that will not be used.
                 return None, curr
-        # Fully-connected stage.
-        x = slim.flatten(x)
+
+        y = x
+
+        outputs = {}
+        if use_heatmap:
+            # Upsample and convolve to get to heatmap.
+            total_stride = np.cumprod([stride for _, stride in stride_steps])
+            input_ind = np.asscalar(np.flatnonzero(np.array(total_stride) == heatmap_input_stride))
+            output_ind = np.asscalar(np.flatnonzero(np.array(total_stride) == heatmap_stride))
+            # TODO: Handle case of using final stride step.
+            heatmap, _ = stride_steps[input_ind+1]
+            # Now total_stride[output_ind] = (___, heatmap_stride).
+            # Our current stride is total_stride[-1].
+            # Work back from current stride to restore resolution.
+            # Note that we don't take the features from stride_steps[output_ind] because
+            # these are the features before the desired stride.
+            # TODO: Make sure this works with heatmap_stride = 1.
+            for j in range(input_ind, output_ind, -1):
+                # Combine current features with features before stride.
+                before_stride, stride = stride_steps[j]
+                heatmap = upsample(heatmap, stride)
+                heatmap = concat([heatmap, before_stride], axis=3)
+                num_outputs = 2 if j == output_ind+1 else before_stride.shape.as_list()[3]
+                activation_fn = None if j == output_ind+1 else tf.nn.relu
+                # TODO: Should the kernel_size be 1, 3, or something else?
+                heatmap = slim.conv2d(heatmap, num_outputs, 1, activation_fn=activation_fn,
+                                      scope='merge{}'.format(j+1))
+            outputs['hmap'] = heatmap
+
+        # Fully-connected stage to get rectangle.
+        y = slim.flatten(y)
         fc_name_fn = lambda ind: 'fc{}'.format(conv_num_groups + ind + 1)
         with slim.arg_scope([slim.fully_connected], **bnorm_params):
             for j in range(fc_num_layers):
-                x = slim.fully_connected(x, fc_dim, scope=fc_name_fn(j))
+                y = slim.fully_connected(y, fc_dim, scope=fc_name_fn(j))
         # Make prediction.
-        x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None,
+        y = slim.fully_connected(y, 4, activation_fn=None, normalizer_fn=None,
                                  scope=fc_name_fn(fc_num_layers))
-        return x, curr
+        outputs['y'] = y
+        return outputs, curr
 
 
 def load_model(o, model_params=None):
