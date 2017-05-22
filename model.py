@@ -107,7 +107,6 @@ class RNN_dual(object):
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
                  use_cnn3=False,
-                 pass_hmap=False,
                  dropout_rnn=False,
                  dropout_cnn=False,
                  keep_prob=0.2, # following `Recurrent Neural Network Regularization, Zaremba et al.
@@ -116,7 +115,6 @@ class RNN_dual(object):
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
         self.use_cnn3      = use_cnn3
-        self.pass_hmap     = pass_hmap
         self.dropout_rnn   = dropout_rnn
         self.dropout_cnn   = dropout_cnn
         self.keep_prob     = keep_prob
@@ -335,17 +333,12 @@ class RNN_dual(object):
                     h2_init[i] = tf.stack([h2_init_single] * o.batchsz)
                     c2_init[i] = tf.stack([c2_init_single] * o.batchsz)
 
-        with tf.name_scope('noise'):
-            noise = tf.truncated_normal(tf.shape(y), mean=0.0, stddev=0.05,
-                                        dtype=o.dtype, seed=o.seed_global, name='noise')
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
-        y_init = tf.identity(y0)
         hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='bg'))
 
         x_prev = x_init
-        y_prev = y_init
         hmap_prev = hmap_init
         h1_prev, c1_prev = h1_init, c1_init
         h2_prev, c2_prev = h2_init, c2_init
@@ -362,13 +355,7 @@ class RNN_dual(object):
 
             with tf.name_scope('cnn2_{}'.format(t)) as scope:
                 with tf.variable_scope('cnn2', reuse=(t > 0)):
-                    # use both `hmap_prev` along with `y_prev_{GT or pred}`
-                    hmap_from_rec = get_masks_from_rectangles(y_prev, o)
-                    if self.pass_hmap:
-                        xy = concat([x_prev, hmap_from_rec, hmap_prev], axis=3) # TODO: backpropagation-able?
-                        xy = tf.stop_gradient(xy)
-                    else:
-                        xy = concat([x_prev, hmap_from_rec], axis=3)
+                    xy = tf.stop_gradient(concat([x_prev, hmap_prev], axis=3))
                     cnn2out = pass_cnn2(xy, scope)
 
             if self.use_cnn3:
@@ -408,7 +395,7 @@ class RNN_dual(object):
 
             with tf.name_scope('cnn_out_hmap_{}'.format(t)) as scope:
                 with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
-                    hmap_curr = pass_out_heatmap(scoremap, scope)
+                    hmap_curr_pred = pass_out_heatmap(scoremap, scope)
 
             h2_curr = [None] * self.lstm2_nlayers
             c2_curr = [None] * self.lstm2_nlayers
@@ -429,21 +416,17 @@ class RNN_dual(object):
                 with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
                     y_curr_pred = pass_out_rectangle(h2_curr[-1], scope) # multi-layer lstm2
 
-            #with tf.name_scope('cnn_out_hmap_{}'.format(t)) as scope:
-            #    with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
-            #        hmap_curr = pass_out_heatmap(h2_curr[-1], scope) # multi-layer lstm2
-
-            x_prev = x_curr
             rand_prob = tf.random_uniform([], minval=0, maxval=1)
             gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
-            y_prev = tf.cond(gt_condition, lambda: y_curr + noise[:,t], # TODO: should noise be gone?
-                                           lambda: y_curr_pred)
+            hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o, kind='bg'))
+            hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
+                                              lambda: tf.nn.softmax(hmap_curr_pred)) # TODO: softmax?
+            x_prev = x_curr
             h1_prev, c1_prev = h1_curr, c1_curr
             h2_prev, c2_prev = h2_curr, c2_curr
-            hmap_prev = hmap_curr
 
             y_pred.append(y_curr_pred)
-            hmap_pred.append(hmap_curr)
+            hmap_pred.append(hmap_curr_pred)
 
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
         hmap_pred = tf.stack(hmap_pred, axis=1)
@@ -454,7 +437,7 @@ class RNN_dual(object):
         state.update({'c1_{}'.format(i+1): (c1_init[i], c1_curr[i]) for i in range(self.lstm1_nlayers)})
         state.update({'h2_{}'.format(i+1): (h2_init[i], h2_curr[i]) for i in range(self.lstm2_nlayers)})
         state.update({'c2_{}'.format(i+1): (c2_init[i], c2_curr[i]) for i in range(self.lstm2_nlayers)})
-        state.update({'x': (x_init, x_prev), 'y': (y_init, y_prev)})
+        state.update({'x': (x_init, x_prev)})
         state.update({'hmap': (hmap_init, hmap_prev)})
 
         #dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
