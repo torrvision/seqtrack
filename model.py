@@ -244,7 +244,6 @@ class RNN_dual(object):
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
-        y_init = tf.identity(y0)
         hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='bg'))
 
         # lstm initial memory states. {random or CNN}.
@@ -252,9 +251,7 @@ class RNN_dual(object):
         c1_init = [None] * self.lstm1_nlayers
         h2_init = [None] * self.lstm2_nlayers
         c2_init = [None] * self.lstm2_nlayers
-        hmap_from_rec = get_masks_from_rectangles(y_init, o)
-        xy = tf.concat([x_init, hmap_from_rec, hmap_init], axis=3)
-        xy = tf.stop_gradient(xy)
+        xy = tf.stop_gradient(tf.concat([x_init, hmap_init], axis=3))
         for i in range(self.lstm1_nlayers):
             with tf.variable_scope('lstm1_layer_{}'.format(i+1)):
                 with tf.variable_scope('h'):
@@ -327,6 +324,7 @@ class RNN_dual(object):
                                                          is_training=is_training, scope='dropout')
                         else:
                             input_to_lstm = h2_curr[i]
+
                 with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
                     if self.lstm2_nlayers > 0:
                         y_curr_pred = pass_out_rectangle(h2_curr[-1]) # multi-layer lstm2
