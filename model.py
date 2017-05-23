@@ -107,12 +107,14 @@ class RNN_dual(object):
                  summaries_collections=None,
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
+                 lstm1_memsz=256,
                  dropout_rnn=False,
                  keep_prob=0.2, # following `Recurrent Neural Network Regularization, Zaremba et al.
                  ):
         # model parameters
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
+        self.lstm1_memsz   = lstm1_memsz
         self.dropout_rnn   = dropout_rnn
         self.keep_prob     = keep_prob
         # Ignore sumaries_collections - model does not generate any summaries.
@@ -123,9 +125,9 @@ class RNN_dual(object):
 
     def _load_model(self, inputs, o):
 
-        def pass_cnn(x, fully_connected):
+        def pass_cnn(x, last_act=tf.nn.relu, init_lstm=False):
             out = []
-            with slim.arg_scope([slim.conv2d],
+            with slim.arg_scope([slim.conv2d, slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 x = slim.conv2d(x, 16, [7, 7], stride=3, scope='conv1'); out.append(x)
                 x = slim.conv2d(x, 32, [5, 5], stride=2, scope='conv2'); out.append(x)
@@ -138,46 +140,80 @@ class RNN_dual(object):
                 x = slim.conv2d(x, 128, [3, 3], stride=1, scope='conv7'); out.append(x)
                 x = slim.max_pool2d(x, 2, scope='pool3'); out.append(x)
                 x = slim.conv2d(x, 256, [3, 3], stride=1, scope='conv8'); out.append(x)
-                x = slim.conv2d(x, 256, [3, 3], stride=1, scope='conv9'); out.append(x)
-                if fully_connected:
-                    x = slim.flatten(x)
-                    x = slim.fully_connected(x, 1024, scope='fc1'); out.append(x)
-                    x = slim.fully_connected(x, 1024, scope='fc2'); out.append(x)
+                x = slim.conv2d(x, 256, [3, 3], stride=1, activation_fn=last_act, scope='conv9'); out.append(x)
+                if init_lstm: # used for initializing memory states of lstm1.
+                    pdb.set_trace()
+                    x = slim.conv2d(x, self.lstm1_memsz, [3, 3], stride=1,
+                                    activation_fn=tf.nn.tanh, scope='conv10'); out.append(x)
             return out
 
-        def pass_lstm1(x, h_prev, c_prev):
-            with slim.arg_scope([slim.fully_connected],
-                    num_outputs=o.nunits,
+        def pass_conv_lstm(x, h_prev, c_prev):
+            with slim.arg_scope([slim.conv2d],
+                    num_outputs=h_prev.shape[3],
+                    kernel_size=3,
                     activation_fn=None,
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                # NOTE: `An Empirical Exploration of Recurrent Neural Network Architecture`.
-                # Initialize forget bias to be 1.
-                # They also use `tanh` instead of `sigmoid` for input gate. (yet not employed here)
-                ft = slim.fully_connected(concat((h_prev, x), 1), biases_initializer=tf.ones_initializer(), scope='hf')
-                it = slim.fully_connected(concat((h_prev, x), 1), scope='hi')
-                ct_tilda = slim.fully_connected(concat((h_prev, x), 1), scope='hc')
-                ot = slim.fully_connected(concat((h_prev, x), 1), scope='ho')
-                ct = (tf.nn.sigmoid(ft) * c_prev) + (tf.nn.sigmoid(it) * tf.nn.tanh(ct_tilda))
-                ht = tf.nn.sigmoid(ot) * tf.nn.tanh(ct)
+                it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') + slim.conv2d(h_prev, scope='hi'))
+                ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') + slim.conv2d(h_prev, scope='hf'))
+                ct_tilda = tf.nn.tanh(slim.conv2d(x, scope='xc') + slim.conv2d(h_prev, scope='hc'))
+                ct = (ft * c_prev) + (it * ct_tilda)
+                ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') + slim.conv2d(h_prev, scope='ho'))
+                ht = ot * tf.nn.tanh(ct)
             return ht, ct
 
-        def pass_multi_level_cross_correlation(search, filt):
+        #def pass_lstm1(x, h_prev, c_prev):
+        #    with slim.arg_scope([slim.fully_connected],
+        #            num_outputs=o.nunits,
+        #            activation_fn=None,
+        #            weights_regularizer=slim.l2_regularizer(o.wd)):
+        #        # NOTE: `An Empirical Exploration of Recurrent Neural Network Architecture`.
+        #        # Initialize forget bias to be 1.
+        #        # They also use `tanh` instead of `sigmoid` for input gate. (yet not employed here)
+        #        ft = slim.fully_connected(concat((h_prev, x), 1), biases_initializer=tf.ones_initializer(), scope='hf')
+        #        it = slim.fully_connected(concat((h_prev, x), 1), scope='hi')
+        #        ct_tilda = slim.fully_connected(concat((h_prev, x), 1), scope='hc')
+        #        ot = slim.fully_connected(concat((h_prev, x), 1), scope='ho')
+        #        ct = (tf.nn.sigmoid(ft) * c_prev) + (tf.nn.sigmoid(it) * tf.nn.tanh(ct_tilda))
+        #        ht = tf.nn.sigmoid(ot) * tf.nn.tanh(ct)
+        #    return ht, ct
+
+        def pass_multi_level_cross_correlation(search, filt, o):
             ''' Multi-level cross-correlation function producing scoremaps.
-            Option 1: depth-wise convolution
-            Option 2: similarity score (-> doesn't work well)
-            Note that depth-wise convolution with 1x1 filter is actually same as
-            channel-wise (and element-wise) multiplication.
+            Regular convolution, instead of depth-wise convolution.
             '''
             # TODO: sigmoid or softmax over scoremap?
             # channel-wise l2 normalization as in Universal Correspondence Network?
             scoremap = []
-            with slim.arg_scope([slim.fully_connected],
-                    weights_regularizer=slim.l2_regularizer(o.wd)):
-                for i in range(len(search)):
-                    depth = search[i].shape.as_list()[-1]
-                    scoremap.append(search[i] *
-                            tf.expand_dims(tf.expand_dims(slim.fully_connected(filt, depth), 1), 1))
+            for i in range(len(search)): # number of conv layers
+                depth = search[i].shape[3]
+                filt_layer = slim.conv2d(filt, depth, [1, 1], activation_fn=None)
+                filt_layer = tf.stack([filt_layer]*depth, axis=4) # TODO: not sure if this is the right thing.
+                scoremap_layer = []
+                for b in range(o.batchsz):
+                    scoremap_layer.append(tf.nn.conv2d(tf.expand_dims(search[i][b], 0),
+                                                       filt_layer[b],
+                                                       strides=[1,1,1,1],
+                                                       padding='SAME')) # Notice that there is no activation.
+                scoremap.append(tf.concat(scoremap_layer, 0))
             return scoremap
+
+        #def pass_multi_level_cross_correlation(search, filt):
+        #    ''' Multi-level cross-correlation function producing scoremaps.
+        #    Option 1: depth-wise convolution
+        #    Option 2: similarity score (-> doesn't work well)
+        #    Note that depth-wise convolution with 1x1 filter is actually same as
+        #    channel-wise (and element-wise) multiplication.
+        #    '''
+        #    # TODO: sigmoid or softmax over scoremap?
+        #    # channel-wise l2 normalization as in Universal Correspondence Network?
+        #    scoremap = []
+        #    with slim.arg_scope([slim.fully_connected],
+        #            weights_regularizer=slim.l2_regularizer(o.wd)):
+        #        for i in range(len(search)):
+        #            depth = search[i].shape.as_list()[-1]
+        #            scoremap.append(search[i] *
+        #                    tf.expand_dims(tf.expand_dims(slim.fully_connected(filt, depth), 1), 1))
+        #    return scoremap
 
         def pass_multi_level_deconvolution(x):
             ''' Multi-level deconvolutions.
@@ -201,23 +237,23 @@ class RNN_dual(object):
                             scope='conv{}'.format(i+1)) # TODO: pass conv before addition
             return deconv
 
-        def pass_lstm2(x, h_prev, c_prev):
-            ''' ConvLSTM
-            h and c have the same spatial dimension as x.
-            '''
-            # TODO: increase size of hidden
-            with slim.arg_scope([slim.conv2d],
-                    num_outputs=2,
-                    kernel_size=3,
-                    activation_fn=None,
-                    weights_regularizer=slim.l2_regularizer(o.wd)):
-                it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') + slim.conv2d(h_prev, scope='hi'))
-                ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') + slim.conv2d(h_prev, scope='hf'))
-                ct_tilda = tf.nn.tanh(slim.conv2d(x, scope='xc') + slim.conv2d(h_prev, scope='hc'))
-                ct = (ft * c_prev) + (it * ct_tilda)
-                ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') + slim.conv2d(h_prev, scope='ho'))
-                ht = ot * tf.nn.tanh(ct)
-            return ht, ct
+        #def pass_lstm2(x, h_prev, c_prev):
+        #    ''' ConvLSTM
+        #    h and c have the same spatial dimension as x.
+        #    '''
+        #    # TODO: increase size of hidden
+        #    with slim.arg_scope([slim.conv2d],
+        #            num_outputs=2,
+        #            kernel_size=3,
+        #            activation_fn=None,
+        #            weights_regularizer=slim.l2_regularizer(o.wd)):
+        #        it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') + slim.conv2d(h_prev, scope='hi'))
+        #        ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') + slim.conv2d(h_prev, scope='hf'))
+        #        ct_tilda = tf.nn.tanh(slim.conv2d(x, scope='xc') + slim.conv2d(h_prev, scope='hc'))
+        #        ct = (ft * c_prev) + (it * ct_tilda)
+        #        ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') + slim.conv2d(h_prev, scope='ho'))
+        #        ht = ot * tf.nn.tanh(ct)
+        #    return ht, ct
 
         def pass_out_rectangle(x):
             ''' Regress output rectangle.
@@ -251,7 +287,6 @@ class RNN_dual(object):
         gt_ratio    = inputs['gt_ratio']
         is_training = inputs['is_training']
 
-        # TODO: receive model specs from JSON
         h1_init = [None] * self.lstm1_nlayers
         c1_init = [None] * self.lstm1_nlayers
         h2_init = [None] * self.lstm2_nlayers
@@ -261,8 +296,10 @@ class RNN_dual(object):
                     initializer=tf.truncated_normal_initializer(stddev=0.01),
                     regularizer=slim.l2_regularizer(o.wd)):
                 for i in range(self.lstm1_nlayers):
-                    h1_init_single = slim.model_variable('h1_{}'.format(i+1), shape=[o.nunits])
-                    c1_init_single = slim.model_variable('c1_{}'.format(i+1), shape=[o.nunits])
+                    #h1_init_single = slim.model_variable('h1_{}'.format(i+1), shape=[o.nunits])
+                    #c1_init_single = slim.model_variable('c1_{}'.format(i+1), shape=[o.nunits])
+                    h1_init_single = slim.model_variable('h1_{}'.format(i+1), shape=[5, 5, self.lstm1_memsz])
+                    c1_init_single = slim.model_variable('c1_{}'.format(i+1), shape=[5, 5, self.lstm1_memsz])
                     h1_init[i] = tf.stack([h1_init_single] * o.batchsz)
                     c1_init[i] = tf.stack([c1_init_single] * o.batchsz)
                 for i in range(self.lstm2_nlayers):
@@ -289,11 +326,11 @@ class RNN_dual(object):
             y_curr = y[:, t]
 
             with tf.variable_scope('cnn1', reuse=(t > 0)):
-                cnn1out = pass_cnn(x_curr, False)
+                cnn1out = pass_cnn(x_curr, last_act=None) # TODO: Try act (rather than relu) for search image.
 
             with tf.variable_scope('cnn2', reuse=(t > 0)):
                 xy = tf.stop_gradient(concat([x_prev, hmap_prev], axis=3))
-                cnn2out = pass_cnn(xy, True)
+                cnn2out = pass_cnn(xy)
 
             h1_curr = [None] * self.lstm1_nlayers
             c1_curr = [None] * self.lstm1_nlayers
@@ -301,7 +338,8 @@ class RNN_dual(object):
                 input_to_lstm1 = tf.identity(cnn2out[-1])
                 for i in range(self.lstm1_nlayers):
                     with tf.variable_scope('layer_{}'.format(i+1), reuse=(t > 0)):
-                        h1_curr[i], c1_curr[i] = pass_lstm1(input_to_lstm1, h1_prev[i], c1_prev[i])
+                        #h1_curr[i], c1_curr[i] = pass_lstm1(input_to_lstm1, h1_prev[i], c1_prev[i])
+                        h1_curr[i], c1_curr[i] = pass_conv_lstm(input_to_lstm1, h1_prev[i], c1_prev[i])
                     if self.dropout_rnn:
                         input_to_lstm1 = slim.dropout(h1_curr[i],
                                                       keep_prob=self.keep_prob,
@@ -310,7 +348,7 @@ class RNN_dual(object):
                         input_to_lstm1 = h1_curr[i]
 
             with tf.variable_scope('multi_level_cross_correlation', reuse=(t > 0)):
-                scoremap = pass_multi_level_cross_correlation(cnn1out, h1_curr[-1]) # multi-layer lstm1
+                scoremap = pass_multi_level_cross_correlation(cnn1out, h1_curr[-1], o) # multi-layer lstm1
 
             with tf.variable_scope('multi_level_deconvolution', reuse=(t > 0)):
                 scoremap = pass_multi_level_deconvolution(scoremap)
@@ -324,7 +362,8 @@ class RNN_dual(object):
                 input_to_lstm2 = tf.identity(scoremap)
                 for i in range(self.lstm2_nlayers):
                     with tf.variable_scope('layer_{}'.format(i+1), reuse=(t > 0)):
-                        h2_curr[i], c2_curr[i] = pass_lstm2(input_to_lstm2, h2_prev[i], c2_prev[i])
+                        #h2_curr[i], c2_curr[i] = pass_lstm2(input_to_lstm2, h2_prev[i], c2_prev[i])
+                        h2_curr[i], c2_curr[i] = pass_conv_lstm(input_to_lstm2, h2_prev[i], c2_prev[i])
                     if self.dropout_rnn:
                         input_to_lstm2 = slim.dropout(h2_curr[i],
                                                       keep_prob=self.keep_prob,
