@@ -53,9 +53,9 @@ def track(sess, inputs, model, sequence):
         y_gt = np.array(sequence['labels'][start:start+chunk_len])
         y_gt = _single_to_batch(pad_to(y_gt, model.sequence_len), model.batch_size)
         feed_dict = {
-            inputs['x_raw']:  images,
             inputs['x0_raw']: first_image,
             inputs['y0']:     first_label,
+            inputs['x_raw']:  images,
             inputs['y']:      y_gt,
             #inputs['use_gt']: True,
         }

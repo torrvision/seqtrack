@@ -926,6 +926,151 @@ def multi_res_vgg(x, prev, init, use_heatmap, heatmap_stride,
         return outputs, curr
 
 
+def simple_search(example, o,
+        summaries_collections=None,
+        # Model parameters:
+        use_rnn=True,
+        ):
+
+    def feat_net(x):
+        with slim.arg_scope([slim.max_pool2d], kernel_size=3, padding='SAME'):
+            # conv1
+            x = slim.conv2d(x, 64, 11, stride=4)
+            x = slim.max_pool2d(x)
+            # conv2
+            x = slim.conv2d(x, 128, 5)
+            x = slim.max_pool2d(x)
+            # conv3
+            x = slim.conv2d(x, 192, 3)
+            # conv4
+            x = slim.conv2d(x, 192, 3)
+            # conv5
+            # TODO: Remove RELU here?
+            x = slim.conv2d(x, 128, 3)
+        return x
+
+    def template_net(x):
+        x = feat_net(x)
+        x = tf.reduce_mean(x, axis=[1, 2], keep_dims=True)
+        return x
+
+    def search(x, f):
+        dim = 256
+        # x.shape is [b, t, hx, wx, c]
+        # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
+        # linear(concat(a, b)) = linear(a) + linear(b)
+        f = slim.conv2d(f, dim, 3)
+        f = tf.expand_dims(f, 1)
+        x, unmerge = merge_dims(x, 0, 2)
+        x = slim.conv2d(x, dim, 3)
+        x = unmerge(x, 0)
+        # Search for f in x.
+        x = tf.add(x, f)
+        # Post-process appearance "similarity".
+        x = slim.conv2d(x, dim, 3)
+        x = slim.conv2d(x, dim, 3)
+        # # Project down to dimension of LSTM state.
+        # x = slim.conv2d(x, 16, 3)
+        return x
+
+    def initial_state_net(x0, y0, state_dim=16):
+        f = get_masks_from_rectangles(y0, o)
+        f = feat_net(f)
+        h = slim.conv2d(f, state_dim, 3, activation_fn=None)
+        c = slim.conv2d(f, state_dim, 3, activation_fn=None)
+        return {'h': h, 'c': c}
+
+    def update(x, prev_state):
+        '''Convert response maps to rectangle.'''
+        h = prev_state['h']
+        c = prev_state['c']
+        h, c = conv_lstm(x, h, c, state_dim=16)
+        x = h
+        state = {'h': h, 'c': c}
+        return x, state
+
+    def output_net(x):
+        # Map output of LSTM to a rectangle.
+        x = slim.conv2d(x, 64, 3)
+        x = slim.max_pool2d(x, 2)
+        x = slim.conv2d(x, 256, 3)
+        x = slim.max_pool2d(x, 2)
+        print 'shape at fc layer:', x.shape.as_list()
+        # Fully-connected layer.
+        x = slim.flatten(x)
+        x = slim.fully_connected(x, 512)
+        x = slim.fully_connected(x, 512)
+        x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None)
+        return x
+
+    def conv_lstm(x, h_prev, c_prev, state_dim, name='clstm'):
+        with tf.name_scope(name) as scope:
+            with slim.arg_scope([slim.conv2d],
+                                num_outputs=state_dim,
+                                kernel_size=3,
+                                padding='SAME',
+                                activation_fn=None):
+                i = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
+                                  slim.conv2d(h_prev, scope='hi', biases_initializer=None))
+                f = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
+                                  slim.conv2d(h_prev, scope='hf', biases_initializer=None))
+                y = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
+                                  slim.conv2d(h_prev, scope='ho', biases_initializer=None))
+                c_tilde = tf.nn.tanh(slim.conv2d(x, scope='xc') +
+                                     slim.conv2d(h_prev, scope='hc', biases_initializer=None))
+                c = (f * c_prev) + (i * c_tilde)
+                h = y * tf.nn.tanh(c)
+        return h, c
+
+    with slim.arg_scope([slim.conv2d, slim.fully_connected],
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+        # Process initial image and label to get "template".
+        with tf.variable_scope('template'):
+            p0 = get_masks_from_rectangles(example['y0'], o)
+            first_image_with_mask = concat([example['x0'], p0], axis=3)
+            template = template_net(first_image_with_mask)
+        # Process all images from all sequences with feature net.
+        with tf.variable_scope('features'):
+            x, unmerge = merge_dims(example['x'], 0, 2)
+            feat = feat_net(x)
+            feat = unmerge(feat, 0)
+        # Search each image using result of template network.
+        similarity = search(feat, template)
+        if use_rnn:
+            # Update abstract "position" of object.
+            with tf.variable_scope('track') as sc:
+                init_state = initial_state_net(example['x0'], example['y0'])
+                curr_state = init_state
+                similarity = tf.unstack(similarity, axis=1)
+                position = [None] * o.ntimesteps
+                for t in range(o.ntimesteps):
+                    position[t], curr_state = update(similarity[t], curr_state)
+                    sc.reuse_variables()
+                position = tf.stack(position, axis=1)
+        else:
+            position = similarity
+        # Transform abstract position into rectangle.
+        with tf.variable_scope('output'):
+            position, unmerge = merge_dims(position, 0, 2)
+            output = output_net(position)
+            output = unmerge(output, 0)
+    if use_rnn:
+        state = {k: (init_state[k], curr_state[k]) for k in curr_state}
+    else:
+        state = {}
+
+    class Model:
+        pass
+    model = Model()
+    model.outputs = {'y': output}
+    model.state   = state
+    # Properties of instantiated model:
+    model.image_size   = (o.frmsz, o.frmsz)
+    model.sequence_len = o.ntimesteps # Static length of unrolled RNN.
+    model.batch_size   = None # Model accepts variable batch size.
+    return model
+
+
 def load_model(o, model_params=None):
     '''
     example is a dictionary that maps strings to Tensors.
@@ -939,6 +1084,8 @@ def load_model(o, model_params=None):
         model = functools.partial(rnn_conv_asymm, o=o, **model_params)
     elif o.model == 'RNN_multi_res':
         model = functools.partial(rnn_multi_res, o=o, **model_params)
+    elif o.model == 'simple_search':
+        model = functools.partial(simple_search, o=o, **model_params)
     else:
         raise ValueError ('model not available')
     return model

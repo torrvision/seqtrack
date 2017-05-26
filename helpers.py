@@ -74,7 +74,7 @@ def cache_json(filename, func, makedir=False):
     return result
 
 
-def merge_dims(x, a, b):
+def merge_dims(x, a, b, name='merge'):
     '''Merges dimensions a to b-1
 
     Returns:
@@ -91,19 +91,21 @@ def merge_dims(x, a, b):
 
     def restore(v, axis):
         '''Restores dimensions [axis] to dimensions [a, ..., b-1].'''
-        v_dynamic = tf.shape(v)
-        v_static = v.shape.as_list()
-        m = len(v_static)
-        # Substitute the static size where possible.
-        u_dynamic = ([v_static[i] or v_dynamic[i] for i in range(0, axis)] +
-                     [x_static[i] or x_dynamic[i] for i in range(a, b)] +
-                     [v_static[i] or v_dynamic[i] for i in range(axis+1, m)])
-        u = tf.reshape(v, u_dynamic)
+        with tf.name_scope(name+'_restore'):
+            v_dynamic = tf.shape(v)
+            v_static = v.shape.as_list()
+            m = len(v_static)
+            # Substitute the static size where possible.
+            u_dynamic = ([v_static[i] or v_dynamic[i] for i in range(0, axis)] +
+                         [x_static[i] or x_dynamic[i] for i in range(a, b)] +
+                         [v_static[i] or v_dynamic[i] for i in range(axis+1, m)])
+            u = tf.reshape(v, u_dynamic)
         return u
 
-    # Substitute the static size where possible.
-    y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, a)] +
-                 [tf.reduce_prod(x_dynamic[a:b])] +
-                 [x_static[i] or x_dynamic[i] for i in range(b, n)])
-    y = tf.reshape(x, y_dynamic)
+    with tf.name_scope(name):
+        # Substitute the static size where possible.
+        y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, a)] +
+                     [tf.reduce_prod(x_dynamic[a:b])] +
+                     [x_static[i] or x_dynamic[i] for i in range(b, n)])
+        y = tf.reshape(x, y_dynamic)
     return y, restore
