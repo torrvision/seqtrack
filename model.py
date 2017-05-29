@@ -33,7 +33,7 @@ from upsample import upsample
 
 concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
 
-def convert_rec_to_heatmap(rec, o, min_size=None):
+def convert_rec_to_heatmap(rec, frmsz, dtype=tf.float32, min_size=None):
     '''Create heatmap from rectangle
     Args:
         rec: [batchsz x ntimesteps x 4] ground-truth rectangle labels
@@ -47,7 +47,7 @@ def convert_rec_to_heatmap(rec, o, min_size=None):
         #     masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
         # return tf.stack(masks, axis=1, name=scope)
         rec, unmerge = merge_dims(rec, 0, 2)
-        masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size)
+        masks = get_masks_from_rectangles(rec, frmsz, dtype=dtype, kind='bg', min_size=min_size)
         return unmerge(masks, 0)
 
 def get_masks_from_rectangles(rec, frmsz, dtype=tf.float32, kind='fg', typecast=True, min_size=None, name='mask'):
@@ -1132,9 +1132,9 @@ def load_model(o, model_params=None):
     elif o.model == 'RNN_multi_res':
         model = functools.partial(rnn_multi_res, o=o, **model_params)
     elif o.model == 'simple_search':
-        model = functools.partial(simple_search, o=o, **model_params)
-    elif o.model == 'mlp':
-        model = functools.partial(mlp, o=o, **model_params)
+        model = functools.partial(simple_search,
+            ntimesteps=o.ntimesteps, frmsz=o.frmsz, weight_decay=o.wd,
+            **model_params)
     else:
         raise ValueError ('model not available')
     return model

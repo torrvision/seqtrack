@@ -99,7 +99,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     # Always use same statistics for whitening (not set dependent).
     stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(_whiten(_guard_labels(example), o, stat=stat))
+    model = create_model(_whiten(_guard_labels(example), dtype=o.dtype, stat=stat))
     loss_var = get_loss(example, model.outputs, o)
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
@@ -593,7 +593,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         y          = example['y']
         y_is_valid = example['y_is_valid']
         assert(y.get_shape().as_list()[1] == o.ntimesteps)
-        hmap = convert_rec_to_heatmap(y, o, min_size=1.0)
+        hmap = convert_rec_to_heatmap(y, o.frmsz, min_size=1.0)
         if o.heatmap_stride != 1:
             hmap, unmerge = merge_dims(hmap, 0, 2)
             hmap = slim.avg_pool2d(hmap,
