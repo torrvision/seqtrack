@@ -90,7 +90,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues,
                 capacity=4, num_threads=1)
-        example = _make_placeholders(o, default=from_queue)
+        example = _make_placeholders(default=from_queue,
+            ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype)
 
     # data augmentation
     example = _perform_data_augmentation(example, o)
@@ -379,15 +380,15 @@ def _make_input_pipeline(o, dtype=tf.float32,
         return example_batch, feed_loop
 
 
-def _make_placeholders(o, default=None):
+def _make_placeholders(ntimesteps, frmsz, dtype, default=None):
     shapes = {
-        'x0_raw':     [None, o.frmsz, o.frmsz, 3],
+        'x0_raw':     [None, frmsz, frmsz, 3],
         'y0':         [None, 4],
-        'x_raw':      [None, o.ntimesteps, o.frmsz, o.frmsz, 3],
-        'y':          [None, o.ntimesteps, 4],
-        'y_is_valid': [None, o.ntimesteps],
+        'x_raw':      [None, ntimesteps, frmsz, frmsz, 3],
+        'y':          [None, ntimesteps, 4],
+        'y_is_valid': [None, ntimesteps],
     }
-    dtype = lambda k: tf.bool if k.endswith('_is_valid') else o.dtype
+    key_dtype = lambda k: tf.bool if k.endswith('_is_valid') else dtype
 
     if default is not None:
         assert(set(default.keys()) == set(shapes.keys()))
@@ -396,7 +397,7 @@ def _make_placeholders(o, default=None):
             for k in shapes.keys()}
     else:
         example = {
-            k: tf.placeholder(dtype(k), shapes[k], name='placeholder_'+k)
+            k: tf.placeholder(key_dtype(k), shapes[k], name='placeholder_'+k)
             for k in EXAMPLE_KEYS}
     # Add a placeholder for models that use ground-truth during training.
     example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
@@ -552,13 +553,13 @@ def _guard_labels(unsafe):
     return safe
 
 
-def _whiten(example_raw, o, stat=None, name='whiten'):
+def _whiten(example_raw, dtype, stat=None, name='whiten'):
     with tf.name_scope(name) as scope:
         # Normalize mean and variance.
         assert(stat is not None)
         # TODO: Check that this does not create two variables:
-        mean = tf.constant(stat['mean'] if stat else 0.0, o.dtype, name='mean')
-        std = tf.constant(stat['std'] if stat else 1.0,  o.dtype, name='std')
+        mean = tf.constant(stat['mean'] if stat else 0.0, dtype, name='mean')
+        std = tf.constant(stat['std'] if stat else 1.0, dtype, name='std')
         example = dict(example_raw) # Copy dictionary before modifying.
         # Replace raw x (images) with whitened x (images).
         example['x'] = _whiten_image(example['x_raw'], mean, std, name='x')

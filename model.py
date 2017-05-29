@@ -50,19 +50,19 @@ def convert_rec_to_heatmap(rec, o, min_size=None):
         masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size)
         return unmerge(masks, 0)
 
-def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, name='mask'):
+def get_masks_from_rectangles(rec, frmsz, dtype=tf.float32, kind='fg', typecast=True, min_size=None, name='mask'):
     with tf.name_scope(name) as scope:
         # create mask using rec; typically rec=y_prev
         # rec -- [b, 4]
-        rec *= float(o.frmsz)
+        rec *= float(frmsz)
         # x1, y1, x2, y2 -- [b]
         x1, y1, x2, y2 = tf.unstack(rec, axis=1)
         if min_size is not None:
             x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, min_size=min_size)
         # grid_x -- [1, frmsz]
         # grid_y -- [frmsz, 1]
-        grid_x = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 0)
-        grid_y = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 1)
+        grid_x = tf.expand_dims(tf.cast(tf.range(frmsz), dtype), 0)
+        grid_y = tf.expand_dims(tf.cast(tf.range(frmsz), dtype), 1)
         # resize tensors so that they can be compared
         # x1, y1, x2, y2 -- [b, 1, 1]
         x1 = tf.expand_dims(tf.expand_dims(x1, -1), -1)
@@ -83,7 +83,7 @@ def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, n
             masks = concat(
                     (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
         if typecast: # type cast so that it can be concatenated with x
-            masks = tf.cast(masks, o.dtype)
+            masks = tf.cast(masks, dtype)
         return masks
 
 def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
@@ -710,7 +710,7 @@ def rnn_conv_asymm(example, o,
     return model
 
 
-def rnn_multi_res(example, o,
+def rnn_multi_res(example, ntimesteps, frmsz, weight_decay=0.0, heatmap_stride=1,
                   summaries_collections=None,
                   # Model options:
                   kind='vgg',
@@ -721,16 +721,16 @@ def rnn_multi_res(example, o,
     x0     = example['x0']
     y0     = example['y0']
     is_training = example['is_training']
-    masks = get_masks_from_rectangles(y0, o)
-    if o.debugmode:
-        with tf.name_scope('input_preview'):
-            tf.summary.image('x', images[0], collections=summaries_collections)
-            target = concat([images[0, 0], masks[0]], axis=2)
-            tf.summary.image('target', tf.expand_dims(target, axis=0),
-                             collections=summaries_collections)
-    if o.activ_histogram:
-        with tf.name_scope('input_histogram'):
-            tf.summary.histogram('x', images, collections=summaries_collections)
+    masks = get_masks_from_rectangles(y0, frmsz=frmsz)
+    # if o.debugmode:
+    #     with tf.name_scope('input_preview'):
+    #         tf.summary.image('x', images[0], collections=summaries_collections)
+    #         target = concat([images[0, 0], masks[0]], axis=2)
+    #         tf.summary.image('target', tf.expand_dims(target, axis=0),
+    #                          collections=summaries_collections)
+    # if o.activ_histogram:
+    #     with tf.name_scope('input_histogram'):
+    #         tf.summary.histogram('x', images, collections=summaries_collections)
     init_input = concat([x0, masks], axis=3)
 
     # net_fn(x, None, init=True, ...) returns None, h_init.
@@ -743,22 +743,22 @@ def rnn_multi_res(example, o,
         raise ValueError('unknown net type: {}'.format(kind))
 
     with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                        weights_regularizer=slim.l2_regularizer(weight_decay)):
         with slim.arg_scope([slim.batch_norm, slim.dropout],
                             is_training=is_training):
             # TODO: Share some layers?
             with tf.variable_scope('rnn_init'):
                 _, s_init = net_fn(init_input, None, init=True,
-                    use_heatmap=use_heatmap, heatmap_stride=o.heatmap_stride,
+                    use_heatmap=use_heatmap, heatmap_stride=heatmap_stride,
                     **model_params)
 
             y, heatmap = [], []
             s_prev = s_init
-            for t in range(o.ntimesteps):
+            for t in range(ntimesteps):
                 with tf.name_scope('t{}'.format(t)):
                     with tf.variable_scope('frame', reuse=(t > 0)):
                         outputs_t, s = net_fn(images[:, t], s_prev, init=False,
-                            use_heatmap=use_heatmap, heatmap_stride=o.heatmap_stride,
+                            use_heatmap=use_heatmap, heatmap_stride=heatmap_stride,
                             **model_params)
                         s_prev = s
                         y.append(outputs_t['y'])
@@ -780,8 +780,8 @@ def rnn_multi_res(example, o,
     model.outputs = outputs
     model.state   = state
     # Properties of instantiated model:
-    model.image_size   = (o.frmsz, o.frmsz)
-    model.sequence_len = o.ntimesteps # Static length of unrolled RNN.
+    model.image_size   = (frmsz, frmsz)
+    model.sequence_len = ntimesteps # Static length of unrolled RNN.
     model.batch_size   = None # Model accepts variable batch size.
     return model
 
@@ -926,7 +926,7 @@ def multi_res_vgg(x, prev, init, use_heatmap, heatmap_stride,
         return outputs, curr
 
 
-def simple_search(example, o,
+def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         summaries_collections=None,
         # Model parameters:
         use_rnn=True,
@@ -954,27 +954,44 @@ def simple_search(example, o,
         x = tf.reduce_mean(x, axis=[1, 2], keep_dims=True)
         return x
 
-    def search(x, f):
+    def search_all(x, f):
         dim = 256
         # x.shape is [b, t, hx, wx, c]
         # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
-        # linear(concat(a, b)) = linear(a) + linear(b)
-        f = slim.conv2d(f, dim, 3)
+        # relu(linear(concat(a, b)) = relu(linear(a) + linear(b))
+        f = slim.conv2d(f, dim, 3, activation_fn=None)
         f = tf.expand_dims(f, 1)
         x, unmerge = merge_dims(x, 0, 2)
-        x = slim.conv2d(x, dim, 3)
+        x = slim.conv2d(x, dim, 3, activation_fn=None)
         x = unmerge(x, 0)
         # Search for f in x.
-        x = tf.add(x, f)
+        x = tf.nn.relu(tf.add(x, f))
         # Post-process appearance "similarity".
+        x, unmerge = merge_dims(x, 0, 2)
         x = slim.conv2d(x, dim, 3)
         x = slim.conv2d(x, dim, 3)
-        # # Project down to dimension of LSTM state.
-        # x = slim.conv2d(x, 16, 3)
+        x = unmerge(x, 0)
         return x
 
+    # def search_one(x, f):
+    #     dim = 256
+    #     # x.shape is [b, t, hx, wx, c]
+    #     # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
+    #     # relu(linear(concat(a, b)) = relu(linear(a) + linear(b))
+    #     f = slim.conv2d(f, dim, 3, activation_fn=None)
+    #     # f = tf.expand_dims(f, 1)
+    #     # x, unmerge = merge_dims(x, 0, 2)
+    #     x = slim.conv2d(x, dim, 3, activation_fn=None)
+    #     # x = unmerge(x, 0)
+    #     # Search for f in x.
+    #     x = tf.nn.relu(tf.add(x, f))
+    #     # Post-process appearance "similarity".
+    #     x = slim.conv2d(x, dim, 3)
+    #     x = slim.conv2d(x, dim, 3)
+    #     return x
+
     def initial_state_net(x0, y0, state_dim=16):
-        f = get_masks_from_rectangles(y0, o)
+        f = get_masks_from_rectangles(y0, frmsz=frmsz)
         f = feat_net(f)
         h = slim.conv2d(f, state_dim, 3, activation_fn=None)
         c = slim.conv2d(f, state_dim, 3, activation_fn=None)
@@ -1023,10 +1040,10 @@ def simple_search(example, o,
         return h, c
 
     with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                        weights_regularizer=slim.l2_regularizer(weight_decay)):
         # Process initial image and label to get "template".
         with tf.variable_scope('template'):
-            p0 = get_masks_from_rectangles(example['y0'], o)
+            p0 = get_masks_from_rectangles(example['y0'], frmsz=frmsz)
             first_image_with_mask = concat([example['x0'], p0], axis=3)
             template = template_net(first_image_with_mask)
         # Process all images from all sequences with feature net.
@@ -1035,17 +1052,18 @@ def simple_search(example, o,
             feat = feat_net(x)
             feat = unmerge(feat, 0)
         # Search each image using result of template network.
-        similarity = search(feat, template)
+        with tf.variable_scope('search'):
+            similarity = search_all(feat, template)
         if use_rnn:
             # Update abstract "position" of object.
-            with tf.variable_scope('track') as sc:
+            with tf.variable_scope('track'):
                 init_state = initial_state_net(example['x0'], example['y0'])
                 curr_state = init_state
                 similarity = tf.unstack(similarity, axis=1)
-                position = [None] * o.ntimesteps
-                for t in range(o.ntimesteps):
-                    position[t], curr_state = update(similarity[t], curr_state)
-                    sc.reuse_variables()
+                position = [None] * ntimesteps
+                for t in range(ntimesteps):
+                    with tf.variable_scope('update', reuse=(t > 0)):
+                        position[t], curr_state = update(similarity[t], curr_state)
                 position = tf.stack(position, axis=1)
         else:
             position = similarity
@@ -1054,6 +1072,7 @@ def simple_search(example, o,
             position, unmerge = merge_dims(position, 0, 2)
             output = output_net(position)
             output = unmerge(output, 0)
+
     if use_rnn:
         state = {k: (init_state[k], curr_state[k]) for k in curr_state}
     else:
@@ -1065,8 +1084,36 @@ def simple_search(example, o,
     model.outputs = {'y': output}
     model.state   = state
     # Properties of instantiated model:
-    model.image_size   = (o.frmsz, o.frmsz)
-    model.sequence_len = o.ntimesteps # Static length of unrolled RNN.
+    model.image_size   = (frmsz, frmsz)
+    model.sequence_len = ntimesteps # Static length of unrolled RNN.
+    model.batch_size   = None # Model accepts variable batch size.
+    return model
+
+
+def mlp(example, ntimesteps, frmsz,
+        summaries_collections=None,
+        hidden_dim=1024):
+    z0 = tf.concat([slim.flatten(example['x0']), example['y0']], axis=1)
+    z0 = slim.fully_connected(z0, hidden_dim)
+    z = []
+    x = tf.unstack(example['x'], axis=1)
+    for t in range(ntimesteps):
+        with tf.variable_scope('frame', reuse=(t > 0)):
+            zt = slim.flatten(x[t])
+            zt = slim.fully_connected(zt, hidden_dim)
+            zt = zt + z0
+            zt = slim.fully_connected(zt, 4, activation_fn=None)
+            z.append(zt)
+    z = tf.stack(z, axis=1)
+
+    class Model:
+        pass
+    model = Model()
+    model.outputs = {'y': z}
+    model.state   = {}
+    # Properties of instantiated model:
+    model.image_size   = (frmsz, frmsz)
+    model.sequence_len = ntimesteps # Static length of unrolled RNN.
     model.batch_size   = None # Model accepts variable batch size.
     return model
 
@@ -1086,6 +1133,8 @@ def load_model(o, model_params=None):
         model = functools.partial(rnn_multi_res, o=o, **model_params)
     elif o.model == 'simple_search':
         model = functools.partial(simple_search, o=o, **model_params)
+    elif o.model == 'mlp':
+        model = functools.partial(mlp, o=o, **model_params)
     else:
         raise ValueError ('model not available')
     return model
