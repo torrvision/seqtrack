@@ -19,8 +19,8 @@ class VideoFileWriter:
         sequence_len = len(sequence['image_files'])
         rects_gt = sequence['labels']
         is_valid_gt = sequence['label_is_valid']
-        color_pred = ImageColor.getrgb('yellow')
-        color_gt = ImageColor.getrgb('blue')
+        color_gt = ImageColor.getrgb('yellow')
+        color_pred = ImageColor.getrgb('blue')
         for t in range(sequence_len):
             im = Image.open(sequence['image_files'][t])
             if im.mode != 'RGB':
