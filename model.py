@@ -274,7 +274,8 @@ class RNN_dual_conv(object):
                         h2_init[i] = tf.stack([h2_init_single] * o.batchsz)
                         c2_init[i] = tf.stack([c2_init_single] * o.batchsz)
         else: # lstm initial memory states. {random or CNN}.
-            xy = tf.stop_gradient(tf.concat([x_init, hmap_init], axis=3))
+            #xy = tf.stop_gradient(tf.concat([x_init, hmap_init], axis=3))
+            xy = tf.concat([x_init, hmap_init], axis=3)
             for i in range(self.lstm1_nlayers):
                 with tf.variable_scope('lstm1_layer_{}'.format(i+1)):
                     with tf.variable_scope('h'):
@@ -304,7 +305,8 @@ class RNN_dual_conv(object):
                 cnn1out = pass_cnn(x_curr, last_act=None) # TODO: Try act (rather than relu) for search image.
 
             with tf.variable_scope('cnn2', reuse=(t > 0)):
-                xy = tf.stop_gradient(concat([x_prev, hmap_prev], axis=3))
+                #xy = tf.stop_gradient(concat([x_prev, hmap_prev], axis=3))
+                xy = concat([x_prev, hmap_prev], axis=3)
                 cnn2out = pass_cnn(xy)
 
             h1_curr = [None] * self.lstm1_nlayers
@@ -570,7 +572,8 @@ class RNN_dual_mix(object):
                 cnn1out = pass_cnn(x_curr, False)
 
             with tf.variable_scope('cnn2', reuse=(t > 0)):
-                xy = tf.stop_gradient(concat([x_prev, hmap_prev], axis=3))
+                #xy = tf.stop_gradient(concat([x_prev, hmap_prev], axis=3))
+                xy = concat([x_prev, hmap_prev], axis=3)
                 cnn2out = pass_cnn(xy, True)
 
             h1_curr = [None] * self.lstm1_nlayers
@@ -795,7 +798,8 @@ class RNN_dual_WIP(object):
         c1_init = [None] * self.lstm1_nlayers
         h2_init = [None] * self.lstm2_nlayers
         c2_init = [None] * self.lstm2_nlayers
-        xy = tf.stop_gradient(tf.concat([x_init, hmap_init], axis=3))
+        #xy = tf.stop_gradient(tf.concat([x_init, hmap_init], axis=3))
+        xy = tf.concat([x_init, hmap_init], axis=3)
         for i in range(self.lstm1_nlayers):
             with tf.variable_scope('lstm1_layer_{}'.format(i+1)):
                 with tf.variable_scope('h'):
@@ -828,7 +832,8 @@ class RNN_dual_WIP(object):
                 with tf.variable_scope('cnn1', reuse=(t > 0)):
                     cnn1out = pass_cnn(x_curr, last_act=None)
 
-                xy = tf.stop_gradient(tf.concat([x_prev, hmap_prev], axis=3))
+                #xy = tf.stop_gradient(tf.concat([x_prev, hmap_prev], axis=3))
+                xy = tf.concat([x_prev, hmap_prev], axis=3)
                 with tf.variable_scope('cnn2', reuse=(t > 0)):
                     cnn2out = pass_cnn(xy)
 
