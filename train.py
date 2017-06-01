@@ -263,14 +263,15 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                             iter_id+'.json')
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model,
-                                eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None),
+                                eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None,
+                                use_gt=o.use_gt_eval),
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])
 
                 # Take a training step.
                 start = time.time()
-                feed_dict = {example['use_gt']:      True,
+                feed_dict = {example['use_gt']:      o.use_gt_train,
                              example['is_training']: True,
                              example['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)}
                 if use_queues:
@@ -299,7 +300,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
-                        feed_dict = {example['use_gt']:      True,  # Match training.
+                        feed_dict = {example['use_gt']:      o.use_gt_train,  # Match training.
                                      example['is_training']: False, # Do not update bnorm stats.
                                      example['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
                         if use_queues:

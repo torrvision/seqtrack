@@ -10,7 +10,7 @@ import data
 from helpers import load_image, im_to_arr, pad_to
 
 
-def track(sess, inputs, model, sequence):
+def track(sess, inputs, model, sequence, use_gt):
     '''Run an instantiated tracker on a sequence.
 
     model.outputs      -- Dictionary of tensors
@@ -57,7 +57,7 @@ def track(sess, inputs, model, sequence):
             inputs['x0_raw']: first_image,
             inputs['y0']:     first_label,
             inputs['y']:      y_gt,
-            #inputs['use_gt']: True,
+            inputs['use_gt']: use_gt,
         }
         if start > 1:
             # This is not the first chunk.
@@ -81,7 +81,7 @@ def _single_to_batch(x, batch_size):
     return pad_to(x, batch_size)
 
 
-def evaluate(sess, inputs, model, sequences, visualize=None):
+def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False):
     '''
     Args:
         nbatches_: the number of batches to evaluate
@@ -103,7 +103,7 @@ def evaluate(sess, inputs, model, sequences, visualize=None):
             continue
         #print 'sequence {} of {}'.format(i+1, len(sequences))
         pbar.update(i+1)
-        pred = track(sess, inputs, model, sequence)
+        pred = track(sess, inputs, model, sequence, use_gt)
         if visualize:
             visualize('sequence_{:06d}'.format(i), sequence, pred)
         gt = np.array(sequence['labels'])

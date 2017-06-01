@@ -113,6 +113,12 @@ def parse_arguments():
     parser.add_argument(
             '--model_file', help='pretrained model file to be used for curriculum_learning',
             type=str, default=None)
+    parser.add_argument(
+            '--use_gt_train', help='use ground-truth during training',
+            action='store_true')
+    parser.add_argument(
+            '--use_gt_eval', help='use ground-truth during evaluation', # Should be set False in most cases.
+            action='store_true')
 
     parser.add_argument(
             '--data_augmentation', help='JSON string specifying data augmentation',
