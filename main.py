@@ -139,6 +139,9 @@ def parse_arguments():
     parser.add_argument(
             '--eval_samplers', nargs='+', help='',
             type=str, default=['train'])
+    parser.add_argument(
+            '--max_eval_videos', help='max number of videos to evaluate; not applied to OTB',
+            type=int, default=100)
 
     parser.add_argument(
             '--path_data_home', help='location of datasets',
