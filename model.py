@@ -637,7 +637,6 @@ class RNN_dual_mix(object):
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
         hmap_pred = tf.stack(hmap_pred, axis=1)
 
-        pdb.set_trace()
         outputs = {'y': y_pred, 'hmap': hmap_pred}
         state = {}
         state.update({'h1_{}'.format(i+1): (h1_init[i], h1_curr[i]) for i in range(self.lstm1_nlayers)})
