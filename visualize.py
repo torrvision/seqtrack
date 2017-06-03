@@ -5,6 +5,7 @@ from PIL import Image, ImageDraw, ImageColor
 import shutil
 import subprocess
 import tempfile
+import matplotlib.cm as cm
 
 
 class VideoFileWriter:
@@ -12,7 +13,7 @@ class VideoFileWriter:
         self.root    = root
         self.pattern = pattern
 
-    def visualize(self, sequence_name, sequence, rects_pred):
+    def visualize(self, sequence_name, sequence, rects_pred, hmaps_pred):
         sequence_dir = tempfile.mkdtemp()
         # if not os.path.isdir(sequence_dir):
         #     os.makedirs(sequence_dir)
@@ -32,6 +33,10 @@ class VideoFileWriter:
             if t > 0:
                 rect_pred = _rect_to_int_list(_unnormalize_rect(rects_pred[t-1], im.size))
                 draw.rectangle(rect_pred, outline=color_pred)
+                # draw heatmap
+                hmap_pred = Image.fromarray(np.uint8(255*cm.hot(hmaps_pred[t-1,:,:,0])))
+                im = Image.blend(im.convert('RGBA'), hmap_pred.convert('RGBA'), 0.5)
+                #im.show()
             im.save(os.path.join(sequence_dir, self.pattern % t))
         args = ['ffmpeg', '-loglevel', 'error',
                           '-r', '1', # fps.

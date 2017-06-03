@@ -632,7 +632,7 @@ class RNN_dual_mix(object):
             h2_prev, c2_prev = h2_curr, c2_curr
 
             y_pred.append(y_curr_pred)
-            hmap_pred.append(hmap_curr_pred)
+            hmap_pred.append(tf.nn.softmax(hmap_curr_pred))
 
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
         hmap_pred = tf.stack(hmap_pred, axis=1)

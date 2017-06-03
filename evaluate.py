@@ -41,6 +41,7 @@ def track(sess, inputs, model, sequence, use_gt):
     # If the length of the sequence is greater than the instantiated RNN,
     # it will need to be run in chunks.
     y_pred_chunks = []
+    hmap_pred_chunks = []
     prev_state = {}
     for start in range(1, sequence_len, model.sequence_len):
         rem = sequence_len - start
@@ -64,15 +65,21 @@ def track(sess, inputs, model, sequence, use_gt):
             # Add the previous state to the feed dictionary.
             feed_dict.update({init_state[k]: prev_state[k] for k in init_state})
         # Get output and final state.
-        y_pred, prev_state = sess.run([model.outputs['y'], final_state],
+        #y_pred, prev_state = sess.run([model.outputs['y'], final_state],
+        #                              feed_dict=feed_dict)
+        y_pred, prev_state, hmap_pred = sess.run([model.outputs['y'], final_state,
+                                                  model.outputs['hmap']],
                                       feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
         y_pred = y_pred[0][:chunk_len]
         y_pred_chunks.append(y_pred)
+        hmap_pred = hmap_pred[0][:chunk_len]
+        hmap_pred_chunks.append(hmap_pred)
 
     # Concatenate the results for all chunks.
     y_pred = np.concatenate(y_pred_chunks)
-    return y_pred
+    hmap_pred = np.concatenate(hmap_pred_chunks)
+    return y_pred, hmap_pred
 
 def _single_to_batch(x, batch_size):
     x = np.expand_dims(x, 0)
@@ -103,9 +110,9 @@ def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False):
             continue
         #print 'sequence {} of {}'.format(i+1, len(sequences))
         pbar.update(i+1)
-        pred = track(sess, inputs, model, sequence, use_gt)
+        pred, hmap_pred = track(sess, inputs, model, sequence, use_gt)
         if visualize:
-            visualize('sequence_{:06d}'.format(i), sequence, pred)
+            visualize('sequence_{:06d}'.format(i), sequence, pred, hmap_pred)
         gt = np.array(sequence['labels'])
         # Convert to original image co-ordinates.
         pred = _unnormalize_rect(pred, sequence['original_image_size'])
