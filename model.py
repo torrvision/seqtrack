@@ -389,7 +389,6 @@ class RNN_dual_mix(object):
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
                  residual_lstm=False,
-                 only_fg_hmap=False,
                  dropout_rnn=False,
                  keep_prob=0.2, # following `Recurrent Neural Network Regularization, Zaremba et al.
                  ):
@@ -397,7 +396,6 @@ class RNN_dual_mix(object):
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
         self.residual_lstm = residual_lstm
-        self.only_fg_hmap  = only_fg_hmap
         self.dropout_rnn   = dropout_rnn
         self.keep_prob     = keep_prob
         # Ignore sumaries_collections - model does not generate any summaries.
@@ -558,10 +556,7 @@ class RNN_dual_mix(object):
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
-        if not self.only_fg_hmap:
-            hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='bg'))
-        else:
-            hmap_init = tf.expand_dims(tf.identity(get_masks_from_rectangles(y0, o))[:,:,:,0], 3)
+        hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='bg'))
 
         x_prev = x_init
         hmap_prev = hmap_init
@@ -629,14 +624,9 @@ class RNN_dual_mix(object):
 
             rand_prob = tf.random_uniform([], minval=0, maxval=1)
             gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
-            if not self.only_fg_hmap:
-                hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o, kind='bg'))
-                hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
-                                                  lambda: tf.nn.softmax(hmap_curr_pred))
-            else:
-                hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o))
-                hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
-                                                  lambda: tf.expand_dims(tf.nn.softmax(hmap_curr_pred)[:,:,:,0], 3))
+            hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o, kind='bg'))
+            hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
+                                              lambda: tf.nn.softmax(hmap_curr_pred))
 
             x_prev = x_curr
             h1_prev, c1_prev = h1_curr, c1_curr

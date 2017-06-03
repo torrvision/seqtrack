@@ -41,7 +41,7 @@ class VideoFileWriter:
                 #im.show()
             im.save(os.path.join(sequence_dir, self.pattern % t))
         args = ['ffmpeg', '-loglevel', 'error',
-                          '-r', '1', # fps.
+                          # '-r', '1', # fps.
                           '-y', # Overwrite without asking.
                           '-nostdin', # No interaction with user.
                           '-i', self.pattern,
