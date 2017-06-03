@@ -47,7 +47,8 @@ def convert_rec_to_heatmap(rec, o, min_size=None):
         #     masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
         # return tf.stack(masks, axis=1, name=scope)
         rec, unmerge = merge_dims(rec, 0, 2)
-        masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size)
+        #masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size)
+        masks = get_masks_from_rectangles(rec, o, min_size=min_size)
         return unmerge(masks, 0)
 
 def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, name='mask'):
@@ -490,7 +491,8 @@ class RNN_dual_mix(object):
             '''
             # TODO: increase size of hidden
             with slim.arg_scope([slim.conv2d],
-                    num_outputs=2,
+                    #num_outputs=2,
+                    num_outputs=1,
                     kernel_size=3,
                     activation_fn=None,
                     weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -518,7 +520,8 @@ class RNN_dual_mix(object):
             '''
             with slim.arg_scope([slim.conv2d],
                     #num_outputs=x.shape.as_list()[-1],
-                    num_outputs=2, # NOTE: hmap before lstm2 -> reduce the output channel to 2 here.
+                    #num_outputs=2, # NOTE: hmap before lstm2 -> reduce the output channel to 2 here.
+                    num_outputs=1, # NOTE: hmap before lstm2 -> reduce the output channel to 2 here.
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 x = slim.conv2d(tf.image.resize_images(x, [241, 241]), kernel_size=[3, 3], scope='deconv')
                 x = slim.conv2d(x, kernel_size=[1, 1], scope='conv1')
@@ -548,15 +551,18 @@ class RNN_dual_mix(object):
                     h1_init[i] = tf.stack([h1_init_single] * o.batchsz)
                     c1_init[i] = tf.stack([c1_init_single] * o.batchsz)
                 for i in range(self.lstm2_nlayers):
-                    h2_init_single = slim.model_variable('h2_{}'.format(i+1), shape=[81, 81, 2]) # TODO: adaptive
-                    c2_init_single = slim.model_variable('c2_{}'.format(i+1), shape=[81, 81, 2])
+                    #h2_init_single = slim.model_variable('h2_{}'.format(i+1), shape=[81, 81, 2]) # TODO: adaptive
+                    #c2_init_single = slim.model_variable('c2_{}'.format(i+1), shape=[81, 81, 2])
+                    h2_init_single = slim.model_variable('h2_{}'.format(i+1), shape=[81, 81, 1]) # TODO: adaptive
+                    c2_init_single = slim.model_variable('c2_{}'.format(i+1), shape=[81, 81, 1])
                     h2_init[i] = tf.stack([h2_init_single] * o.batchsz)
                     c2_init[i] = tf.stack([c2_init_single] * o.batchsz)
 
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
-        hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='bg'))
+        #hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='bg'))
+        hmap_init = tf.identity(get_masks_from_rectangles(y0, o))
 
         x_prev = x_init
         hmap_prev = hmap_init
@@ -624,7 +630,8 @@ class RNN_dual_mix(object):
 
             rand_prob = tf.random_uniform([], minval=0, maxval=1)
             gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
-            hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o, kind='bg'))
+            #hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o, kind='bg'))
+            hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o))
             hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
                                               lambda: tf.nn.softmax(hmap_curr_pred))
 
