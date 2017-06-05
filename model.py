@@ -930,6 +930,7 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         summaries_collections=None,
         # Model parameters:
         use_rnn=True,
+        use_first_frame=True,
         ):
 
     def feat_net(x):
@@ -1041,20 +1042,26 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
 
     with slim.arg_scope([slim.conv2d, slim.fully_connected],
                         weights_regularizer=slim.l2_regularizer(weight_decay)):
-        # Process initial image and label to get "template".
-        with tf.variable_scope('template'):
-            p0 = get_masks_from_rectangles(example['y0'], frmsz=frmsz)
-            first_image_with_mask = concat([example['x0'], p0], axis=3)
-            template = template_net(first_image_with_mask)
+        if use_first_frame:
+            # Process initial image and label to get "template".
+            with tf.variable_scope('template'):
+                p0 = get_masks_from_rectangles(example['y0'], frmsz=frmsz)
+                first_image_with_mask = concat([example['x0'], p0], axis=3)
+                template = template_net(first_image_with_mask)
         # Process all images from all sequences with feature net.
         with tf.variable_scope('features'):
             x, unmerge = merge_dims(example['x'], 0, 2)
             feat = feat_net(x)
             feat = unmerge(feat, 0)
-        # Search each image using result of template network.
-        with tf.variable_scope('search'):
-            similarity = search_all(feat, template)
+        if use_first_frame:
+            # Search each image using result of template network.
+            with tf.variable_scope('search'):
+                similarity = search_all(feat, template)
+        else:
+            similarity = feat
         if use_rnn:
+            # TODO: Decide what to do if use_first_frame is False.
+            assert use_first_frame
             # Update abstract "position" of object.
             with tf.variable_scope('track'):
                 init_state = initial_state_net(example['x0'], example['y0'])
