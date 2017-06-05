@@ -644,7 +644,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
             hmap_pred = outputs['hmap']
             hmap_valid = tf.boolean_mask(hmap, y_is_valid)
             hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
-            loss_mse = tf.nn.l2_loss(hmap_valid-hmap_pred_valid)
+            loss_mse = tf.reduce_mean(tf.divide((hmap_valid-hmap_pred_valid)**2, 2))
             losses['mse'] = loss_mse
 
         with tf.name_scope('summary'):
