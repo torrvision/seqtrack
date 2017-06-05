@@ -136,10 +136,14 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
-        boxes = tf.summary.image('box',
-            _draw_bounding_boxes(example, model),
-            max_outputs=o.ntimesteps+1, collections=[])
-        image_summaries = [boxes]
+        with tf.name_scope('box'):
+            box_first = tf.summary.image('0',
+                _draw_init_bounding_boxes(example, model),
+                max_outputs=1, collections=[])
+            box_rest = tf.summary.image('1_to_n',
+                _draw_bounding_boxes(example, model),
+                max_outputs=o.ntimesteps, collections=[])
+        image_summaries = [box_first, box_rest]
         # Produce an image summary of the heatmap.
         if 'hmap' in model.outputs:
             hmap = tf.summary.image('hmap', _draw_heatmap(model),
@@ -645,6 +649,19 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 
         return tf.reduce_sum(losses.values(), name=scope)
 
+
+def _draw_init_bounding_boxes(example, model, time_stride=1, name='draw_box'):
+    # Note: This will produce INT_MIN when casting NaN to int.
+    with tf.name_scope(name) as scope:
+        # example['x0_raw']   -- [b, h, w, 3]
+        # example['y0']       -- [b, 4]
+        # Just do the first example in the batch.
+        image = (1.0/255)*example['x0_raw'][0:1]
+        y_gt = example['y0'][0:1]
+        y = tf.stack([y_gt], axis=1)
+        coords = tf.unstack(y, axis=2)
+        boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
+        return tf.image.draw_bounding_boxes(image, boxes, name=scope)
 
 def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
     # Note: This will produce INT_MIN when casting NaN to int.
