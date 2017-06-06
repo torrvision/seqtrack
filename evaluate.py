@@ -68,7 +68,7 @@ def track(sess, inputs, model, sequence, use_gt):
         #y_pred, prev_state = sess.run([model.outputs['y'], final_state],
         #                              feed_dict=feed_dict)
         y_pred, prev_state, hmap_pred = sess.run([model.outputs['y'], final_state,
-                                                  model.outputs['hmap']],
+                                                  model.outputs['hmap_softmax']],
                                       feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
         y_pred = y_pred[0][:chunk_len]

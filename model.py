@@ -716,12 +716,12 @@ class RNN_dual_mix(object):
             h2_prev, c2_prev = h2_curr, c2_curr
 
             y_pred.append(y_curr_pred)
-            hmap_pred.append(tf.nn.softmax(hmap_curr_pred))
+            hmap_pred.append(hmap_curr_pred)
 
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
         hmap_pred = tf.stack(hmap_pred, axis=1)
 
-        outputs = {'y': y_pred, 'hmap': hmap_pred}
+        outputs = {'y': y_pred, 'hmap': hmap_pred, 'hmap_softmax': tf.nn.softmax(hmap_pred)}
         state = {}
         state.update({'h1_{}'.format(i+1): (h1_init[i], h1_curr[i]) for i in range(self.lstm1_nlayers)})
         state.update({'c1_{}'.format(i+1): (c1_init[i], c1_curr[i]) for i in range(self.lstm1_nlayers)})
