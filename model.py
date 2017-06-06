@@ -33,7 +33,7 @@ from upsample import upsample
 
 concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
 
-def convert_rec_to_heatmap(rec, o, kind='bg', min_size=None):
+def convert_rec_to_heatmap(rec, o, min_size=None):
     '''Create heatmap from rectangle
     Args:
         rec: [batchsz x ntimesteps x 4] ground-truth rectangle labels
@@ -47,7 +47,7 @@ def convert_rec_to_heatmap(rec, o, kind='bg', min_size=None):
         #     masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
         # return tf.stack(masks, axis=1, name=scope)
         rec, unmerge = merge_dims(rec, 0, 2)
-        masks = get_masks_from_rectangles(rec, o, kind=kind, min_size=min_size)
+        masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size)
         return unmerge(masks, 0)
 
 def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, name='mask'):
@@ -108,7 +108,6 @@ class RNN_dual_mix(object):
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
                  residual_lstm=False,
-                 use_only_fg=False,
                  dropout_rnn=False,
                  keep_prob=0.2, # following `Recurrent Neural Network Regularization, Zaremba et al.
                  ):
@@ -116,7 +115,6 @@ class RNN_dual_mix(object):
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
         self.residual_lstm = residual_lstm
-        self.use_only_fg   = use_only_fg
         self.dropout_rnn   = dropout_rnn
         self.keep_prob     = keep_prob
         # Ignore sumaries_collections - model does not generate any summaries.
@@ -205,18 +203,13 @@ class RNN_dual_mix(object):
                             scope='conv{}'.format(i+1)) # TODO: pass conv before addition
             return deconv
 
-        def pass_reduce_channel(x):
-            ''' Reduce channels of scoremap to match the output channel.
-            '''
-            return slim.conv2d(x, num_outputs=1 if self.use_only_fg else 2, kernel_size=1)
-
         def pass_lstm2(x, h_prev, c_prev):
             ''' ConvLSTM
             h and c have the same spatial dimension as x.
             '''
             # TODO: increase size of hidden
             with slim.arg_scope([slim.conv2d],
-                    num_outputs=1 if self.use_only_fg else 2,
+                    num_outputs=2,
                     kernel_size=3,
                     activation_fn=None,
                     weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -244,7 +237,7 @@ class RNN_dual_mix(object):
             '''
             with slim.arg_scope([slim.conv2d],
                     #num_outputs=x.shape.as_list()[-1],
-                    num_outputs=1 if self.use_only_fg else 2,
+                    num_outputs=2,
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 x = slim.conv2d(tf.image.resize_images(x, [241, 241]), kernel_size=[3, 3], scope='deconv')
                 x = slim.conv2d(x, kernel_size=[1, 1], scope='conv1')
@@ -274,15 +267,15 @@ class RNN_dual_mix(object):
                     h1_init[i] = tf.stack([h1_init_single] * o.batchsz)
                     c1_init[i] = tf.stack([c1_init_single] * o.batchsz)
                 for i in range(self.lstm2_nlayers):
-                    h2_init_single = slim.model_variable('h2_{}'.format(i+1), shape=[81, 81, 1 if self.use_only_fg else 2])
-                    c2_init_single = slim.model_variable('c2_{}'.format(i+1), shape=[81, 81, 1 if self.use_only_fg else 2])
+                    h2_init_single = slim.model_variable('h2_{}'.format(i+1), shape=[81, 81, 2])
+                    c2_init_single = slim.model_variable('c2_{}'.format(i+1), shape=[81, 81, 2])
                     h2_init[i] = tf.stack([h2_init_single] * o.batchsz)
                     c2_init[i] = tf.stack([c2_init_single] * o.batchsz)
 
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
-        hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='fg' if self.use_only_fg else 'bg'))
+        hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='bg'))
 
         x_prev = x_init
         hmap_prev = hmap_init
@@ -326,9 +319,6 @@ class RNN_dual_mix(object):
             with tf.variable_scope('multi_level_deconvolution', reuse=(t > 0)):
                 scoremap = pass_multi_level_deconvolution(scoremap)
 
-            with tf.variable_scope('channel_reduce', reuse=(t > 0)):
-                scoremap = pass_reduce_channel(scoremap)
-
             with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
                 hmap_curr_pred = pass_out_heatmap(scoremap)
 
@@ -353,19 +343,16 @@ class RNN_dual_mix(object):
 
             rand_prob = tf.random_uniform([], minval=0, maxval=1)
             gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
-            hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o, kind='fg' if self.use_only_fg else 'bg'))
-            #hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
-            #                                  lambda: tf.nn.softmax(hmap_curr_pred))
+            hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o, kind='bg'))
             hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
-                                              lambda: hmap_curr_pred if self.use_only_fg else tf.nn.softmax(hmap_curr_pred))
+                                              lambda: tf.nn.softmax(hmap_curr_pred))
 
             x_prev = x_curr
             h1_prev, c1_prev = h1_curr, c1_curr
             h2_prev, c2_prev = h2_curr, c2_curr
 
             y_pred.append(y_curr_pred)
-            #hmap_pred.append(tf.nn.softmax(hmap_curr_pred))
-            hmap_pred.append(hmap_curr_pred if self.use_only_fg else tf.nn.softmax(hmap_curr_pred))
+            hmap_pred.append(tf.nn.softmax(hmap_curr_pred))
 
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
         hmap_pred = tf.stack(hmap_pred, axis=1)

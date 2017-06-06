@@ -593,7 +593,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         y          = example['y']
         y_is_valid = example['y_is_valid']
         assert(y.get_shape().as_list()[1] == o.ntimesteps)
-        hmap = convert_rec_to_heatmap(y, o, kind='fg', min_size=1.0)
+        hmap = convert_rec_to_heatmap(y, o, min_size=1.0)
         if o.heatmap_stride != 1:
             hmap, unmerge = merge_dims(hmap, 0, 2)
             hmap = slim.avg_pool2d(hmap,
@@ -638,14 +638,6 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
                         labels=tf.reshape(hmap_valid, [-1, 2]),
                         logits=tf.reshape(hmap_pred_valid, [-1, 2])))
             losses['ce'] = loss_ce
-
-        # MSE loss for single-channel hmap output
-        if 'mse' in o.losses:
-            hmap_pred = outputs['hmap']
-            hmap_valid = tf.boolean_mask(hmap, y_is_valid)
-            hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
-            loss_mse = tf.reduce_mean(tf.divide((hmap_valid-hmap_pred_valid)**2, 2))
-            losses['mse'] = loss_mse
 
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
