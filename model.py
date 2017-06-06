@@ -639,7 +639,7 @@ class RNN_dual_mix(object):
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
-        hmap_init = tf.identity(get_masks_from_rectangles(y0, o, kind='bg'))
+        hmap_init = tf.identity(get_masks_from_rectangles(y0, o))
 
         x_prev = x_init
         hmap_prev = hmap_init
@@ -707,9 +707,9 @@ class RNN_dual_mix(object):
 
             rand_prob = tf.random_uniform([], minval=0, maxval=1)
             gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
-            hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o, kind='bg'))
+            hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o))
             hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
-                                              lambda: tf.nn.softmax(hmap_curr_pred))
+                                              lambda: tf.expand_dims(tf.nn.softmax(hmap_curr_pred)[:,:,:,0], 3))
 
             x_prev = x_curr
             h1_prev, c1_prev = h1_curr, c1_curr
