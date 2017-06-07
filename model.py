@@ -1085,8 +1085,9 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         if use_rnn:
             # TODO: Decide what to do if use_first_frame is False.
             assert use_first_frame
-            # Update abstract "position" of object.
-            init_state = initial_state_net(example['x0'], example['y0'])
+            with tf.variable_scope('init_rnn'):
+                # Update abstract "position" of object.
+                init_state = initial_state_net(example['x0'], example['y0'])
         else:
             init_state = {}
         with tf.variable_scope('track'):
