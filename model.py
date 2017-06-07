@@ -108,6 +108,7 @@ class RNN_dual_mix(object):
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
                  residual_lstm=False,
+                 feed_examplar=False,
                  dropout_rnn=False,
                  keep_prob=0.2, # following `Recurrent Neural Network Regularization, Zaremba et al.
                  ):
@@ -115,6 +116,7 @@ class RNN_dual_mix(object):
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
         self.residual_lstm = residual_lstm
+        self.feed_examplar = feed_examplar
         self.dropout_rnn   = dropout_rnn
         self.keep_prob     = keep_prob
         # Ignore sumaries_collections - model does not generate any summaries.
@@ -253,6 +255,9 @@ class RNN_dual_mix(object):
         gt_ratio    = inputs['gt_ratio']
         is_training = inputs['is_training']
 
+        if self.feed_examplar:
+            examplar = pass_cnn(concat([x0, get_masks_from_rectangles(y0, o)], axis=3), True)[-1]
+
         h1_init = [None] * self.lstm1_nlayers
         c1_init = [None] * self.lstm1_nlayers
         h2_init = [None] * self.lstm2_nlayers
@@ -311,6 +316,15 @@ class RNN_dual_mix(object):
                     if self.dropout_rnn:
                         xin = slim.dropout(xin, keep_prob=self.keep_prob,
                                            is_training=is_training, scope='dropout')
+
+            if self.feed_examplar:
+                with tf.variable_scope('combine_examplar', reuse=(t > 0)):
+                    nch_xin = xin.shape.as_list()[-1]
+                    nch_examplar = examplar.shape.as_list()[-1]
+                    if nch_xin != nch_examplar:
+                        xin = xin + slim.fully_connected(examplar, nch_xin, scope='proj')
+                    else:
+                        xin = xin + examplar
 
             with tf.variable_scope('multi_level_cross_correlation', reuse=(t > 0)):
                 #scoremap = pass_multi_level_cross_correlation(cnn1out, h1_curr[-1]) # multi-layer lstm1
