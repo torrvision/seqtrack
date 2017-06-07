@@ -106,7 +106,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     loss_var += r
     tf.summary.scalar('total', loss_var)
 
-    nepoch     = o.nepoch if not o.debugmode else 2
+    # nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
     nbatch_val = len(datasets['val'].videos)/o.batchsz if not o.debugmode else 30
 
@@ -231,7 +231,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
         while True: # Loop over epochs
             global_step = global_step_var.eval() # Number of steps taken.
-            if global_step >= nepoch * nbatch:
+            if global_step >= o.num_steps:
                 break
             ie = global_step / nbatch
             t_epoch = time.time()
@@ -329,11 +329,11 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     losstime = '|loss:{:.5f}/{:.5f} (time:{:.2f}/{:.2f}) - with val'.format(
                             loss, loss_val, dur, dur_val) if newval else \
                             '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
-                    print 'ep {}/{}, batch {}/{} (bsz:{}), global_step {} {}'.format(
-                            ie+1, nepoch, ib+1, nbatch, o.batchsz, global_step, losstime)
+                    print 'ep {}, batch {}/{} (bsz:{}), global_step {} {}'.format(
+                            ie+1, ib+1, nbatch, o.batchsz, global_step, losstime)
 
-            print '[Epoch finished] ep {:d}/{:d}, global_step {:d} |loss:{:.5f} (time:{:.2f})'.format(
-                    ie+1, nepoch, global_step_var.eval(), np.mean(loss_ep), time.time()-t_epoch)
+            print '[Epoch finished] ep {:d}, global_step {:d} |loss:{:.5f} (time:{:.2f})'.format(
+                    ie+1, global_step_var.eval(), np.mean(loss_ep), time.time()-t_epoch)
 
         # **training finished
         print '\ntraining finished! ------------------------------------------'

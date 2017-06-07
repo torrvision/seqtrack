@@ -76,8 +76,8 @@ def parse_arguments():
             type=json.loads, default={})
 
     parser.add_argument(
-            '--nepoch', help='number of epochs',
-            type=int, default=20)
+            '--num_steps', help='number of epochs',
+            type=int, default=100000)
     parser.add_argument(
             '--batchsz', help='batch size',
             type=int, default=1)

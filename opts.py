@@ -52,7 +52,7 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # training policies
-        self.nepoch             = 20
+        self.num_steps          = 100000
         self.batchsz            = 1
         self.optimizer          = 'adam' # sgd, adam, rmsprop
         self.lr_init            = 1e-4
