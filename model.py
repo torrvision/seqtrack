@@ -293,7 +293,7 @@ class RNN_dual_mix_reduce(object):
             h1_curr = [None] * self.lstm1_nlayers
             c1_curr = [None] * self.lstm1_nlayers
             with tf.variable_scope('lstm1', reuse=(t > 0)):
-                xin = tf.identity(cnn2out[-1])
+                xin = tf.identity(cnn2out)
                 for i in range(self.lstm1_nlayers):
                     with tf.variable_scope('layer_{}'.format(i+1), reuse=(t > 0)):
                         h1_curr[i], c1_curr[i] = pass_lstm1(xin, h1_prev[i], c1_prev[i])
