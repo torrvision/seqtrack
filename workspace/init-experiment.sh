@@ -12,6 +12,7 @@ name="$2"
 script_file="$( realpath "${BASH_SOURCE[0]}" )"
 script_dir="$( dirname "$script_file" )"
 src="$( dirname "$script_dir" )"
+src_project="$( dirname "$src" )"
 
 date=$(date +%Y-%m-%d)
 fullname="$date-$name"
@@ -45,16 +46,20 @@ if ! (cd $src && git config --get remote.local.url) >"$dir/remote.txt" ; then
     exit 1
 fi
 # Optional local virtual environment.
-if [ -d $src/env ] ; then
-    if ! (cd $src && env/bin/pip freeze) >"$dir/requirements.txt" ; then
+virtualenv="$src_project/env"
+if [ -d $virtualenv ] ; then
+    if ! echo "$virtualenv" >"$dir/virtualenv.txt" ; then
+        echo 'cannot write virtualenv to file'
+    fi
+    if ! ($virtualenv/bin/pip freeze) >"$dir/requirements.txt" ; then
         echo 'cannot get pip requirements'
         exit 1
     fi
-    touch "$src/env/pip.conf"
-    if ! cp "$src/env/pip.conf" "$dir/pip.conf" ; then
-        echo 'cannot copy pip configuration'
-        exit 1
-    fi
+    # touch "$src/env/pip.conf"
+    # if ! cp "$src/env/pip.conf" "$dir/pip.conf" ; then
+    #     echo 'cannot copy pip configuration'
+    #     exit 1
+    # fi
 fi
 
 ( cd $dir &&  ./create-experiment.sh )

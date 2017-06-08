@@ -13,26 +13,33 @@ if ! ( cd repo && git checkout "$commit" ) ; then
     exit 1
 fi
 
-if ! virtualenv env ; then
-    echo 'could not create virtual environment'
-    exit 1
+if [ -f virtualenv.txt ] ; then
+    if ! ln -s $(cat virtualenv.txt) env ; then
+        echo 'could not link to virtual environment'
+        exit 1
+    fi
 fi
 
-# Optional local virtual environment.
-if [ -f requirements.txt ] ; then
-    touch pip.conf
-    if ! cp pip.conf env/pip.conf ; then
-        echo 'could copy pip configuration'
-        exit 1
-    fi
-    if ! env/bin/pip install --upgrade pip ; then
-        echo 'could not upgrade pip'
-        exit 1
-    fi
-    if ! env/bin/pip install -r requirements.txt ; then
-        echo 'could not install pip requirements'
-        exit 1
-    fi
-fi
+# if ! virtualenv env ; then
+#     echo 'could not create virtual environment'
+#     exit 1
+# fi
+
+# # Optional local virtual environment.
+# if [ -f requirements.txt ] ; then
+#     touch pip.conf
+#     if ! cp pip.conf env/pip.conf ; then
+#         echo 'could copy pip configuration'
+#         exit 1
+#     fi
+#     if ! env/bin/pip install --upgrade pip ; then
+#         echo 'could not upgrade pip'
+#         exit 1
+#     fi
+#     if ! env/bin/pip install -r requirements.txt ; then
+#         echo 'could not install pip requirements'
+#         exit 1
+#     fi
+# fi
 
 echo 'create workspace successful'
