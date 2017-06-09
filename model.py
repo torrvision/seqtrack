@@ -930,10 +930,6 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         summaries_collections=None,
         # Model parameters:
         use_rnn=True,
-        rnn_type='lstm',
-        rnn_is_conv=True,
-        conv_rnn_dim=16,
-        rnn_dim=256,
         ):
 
     def feat_net(x):
@@ -997,34 +993,21 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
     def initial_state_net(x0, y0, state_dim=16):
         f = get_masks_from_rectangles(y0, frmsz=frmsz)
         f = feat_net(f)
-        if rnn_is_conv:
-            h = slim.conv2d(f, state_dim, 3, activation_fn=None)
-            c = slim.conv2d(f, state_dim, 3, activation_fn=None)
-        else:
-            f = slim.conv2d(f, 64, 3)
-            f = slim.max_pool2d(f, 2)
-            f = slim.conv2d(f, 256, 3)
-            f = slim.max_pool2d(f, 2)
-            print 'shape at fc layer:', f.shape.as_list()
-            # Fully-connected layer.
-            f = slim.flatten(f)
-            h = slim.fully_connected(f, rnn_dim)
-            c = slim.fully_connected(f, rnn_dim)
+        h = slim.conv2d(f, state_dim, 3, activation_fn=None)
+        c = slim.conv2d(f, state_dim, 3, activation_fn=None)
         return {'h': h, 'c': c}
-
-    # TODO: Clean this up.
-    if use_rnn and not rnn_is_conv:
-        lstm = tf.contrib.rnn.BasicLSTMCell(rnn_dim)
 
     def update(x, prev_state):
         '''Convert response maps to rectangle.'''
-        state = {}
-        if use_rnn and rnn_is_conv:
-            h = prev_state['h']
-            c = prev_state['c']
-            h, c = conv_lstm(x, h, c, state_dim=conv_rnn_dim)
-            x = h
-            state = {'h': h, 'c': c}
+        h = prev_state['h']
+        c = prev_state['c']
+        h, c = conv_lstm(x, h, c, state_dim=16)
+        x = h
+        state = {'h': h, 'c': c}
+        return x, state
+
+    def output_net(x):
+        # Map output of LSTM to a rectangle.
         x = slim.conv2d(x, 64, 3)
         x = slim.max_pool2d(x, 2)
         x = slim.conv2d(x, 256, 3)
@@ -1033,15 +1016,9 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         # Fully-connected layer.
         x = slim.flatten(x)
         x = slim.fully_connected(x, 512)
-        if use_rnn and not rnn_is_conv:
-            h = prev_state['h']
-            c = prev_state['c']
-            x = slim.fully_connected(x, rnn_dim)
-            x, (h, c) = lstm(x, (h, c))
-            state = {'h': h, 'c': c}
         x = slim.fully_connected(x, 512)
         x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None)
-        return x, state
+        return x
 
     def conv_lstm(x, h_prev, c_prev, state_dim, name='clstm'):
         with tf.name_scope(name) as scope:
@@ -1078,25 +1055,23 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         with tf.variable_scope('search'):
             similarity = search_all(feat, template)
         if use_rnn:
-            with tf.variable_scope('init_rnn'):
-                # Update abstract "position" of object.
+            # Update abstract "position" of object.
+            with tf.variable_scope('track'):
                 init_state = initial_state_net(example['x0'], example['y0'])
+                curr_state = init_state
+                similarity = tf.unstack(similarity, axis=1)
+                position = [None] * ntimesteps
+                for t in range(ntimesteps):
+                    with tf.variable_scope('update', reuse=(t > 0)):
+                        position[t], curr_state = update(similarity[t], curr_state)
+                position = tf.stack(position, axis=1)
         else:
-            init_state = {}
-        with tf.variable_scope('track'):
-            curr_state = init_state
-            similarity = tf.unstack(similarity, axis=1)
-            position = [None] * ntimesteps
-            for t in range(ntimesteps):
-                with tf.variable_scope('update', reuse=(t > 0)):
-                    position[t], curr_state = update(similarity[t], curr_state)
-            position = tf.stack(position, axis=1)
-        output = position
-        # # Transform abstract position into rectangle.
-        # with tf.variable_scope('output'):
-        #     position, unmerge = merge_dims(position, 0, 2)
-        #     output = output_net(position)
-        #     output = unmerge(output, 0)
+            position = similarity
+        # Transform abstract position into rectangle.
+        with tf.variable_scope('output'):
+            position, unmerge = merge_dims(position, 0, 2)
+            output = output_net(position)
+            output = unmerge(output, 0)
 
     if use_rnn:
         state = {k: (init_state[k], curr_state[k]) for k in curr_state}
