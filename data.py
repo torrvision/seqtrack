@@ -488,20 +488,33 @@ class Data_bouncing_mnist(object):
         self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
 
 
-class Data_ILSVRC(object):
-    def __init__(self, dstype, o):
+def Data_ILSVRC(dstype, o):
+    '''For backwards compatibility.'''
+    return ILSVRC(
+        dstype,
+        frmsz=o.frmsz,
+        path_data=os.path.join(o.path_data, 'ILSVRC'),
+        path_aux=o.path_aux,
+        path_stat=o.path_stat,
+        trainsplit=o.trainsplit,
+        useresizedimg=o.useresizedimg,
+    )
+
+class ILSVRC:
+    def __init__(self, dstype, frmsz, path_data, path_aux=None, path_stat=None, trainsplit=9, useresizedimg=True):
         self.dstype      = dstype
-        self.path_data   = o.path_data
-        self.trainsplit  = o.trainsplit # 0, 1, 2, 3, or 9 for all
-        self.datadirname = 'Data_frmsz{}'.format(o.frmsz) \
-                                if o.useresizedimg else 'Data'
+        self.path_data   = path_data
+        self.trainsplit  = trainsplit # 0, 1, 2, 3, or 9 for all
+        self.datadirname = 'Data_frmsz{}'.format(frmsz) \
+                                if useresizedimg else 'Data'
+        self.frmsz       = frmsz
 
         self.videos = None
         # Number of frames in each snippet.
         self.video_length = None
         self.tracks = None
         self.stat = None
-        self._load_data(o)
+        self._load_data(path_aux=path_aux, path_stat=path_stat)
 
     def _images_dir(self, video):
         parts = video.split('/')
@@ -514,15 +527,15 @@ class Data_ILSVRC(object):
     def image_file(self, video, frame):
         return os.path.join(self._images_dir(video), '{:06d}.JPEG'.format(frame))
 
-    def _load_data(self, o):
+    def _load_data(self, path_aux, path_stat):
         # TODO: need to process and load test data set as well..
         # TODO: not loading test data yet. ILSVRC doesn't have "Annotations" for
         # test set. I can still load "Data", but need to fix a couple of places
         # to load only "Data". Will fix it later.
         self._update_videos()
         self._update_video_length()
-        self._update_tracks(o)
-        self._update_stat(o)
+        self._update_tracks(path_aux=path_aux)
+        self._update_stat(path_stat=path_stat)
 
     def _parsexml(self, xmlfile):
         with open(xmlfile) as f:
@@ -571,7 +584,7 @@ class Data_ILSVRC(object):
         else:
             return self.dstype
 
-    def _update_tracks(self, o):
+    def _update_tracks(self, path_aux):
         def load_info():
             info = {}
             for i, video in enumerate(self.videos):
@@ -630,16 +643,16 @@ class Data_ILSVRC(object):
             return index, rect
 
         if self.tracks is None:
-            if not os.path.isdir(o.path_aux):
-                os.makedirs(o.path_aux)
-            cache_file = os.path.join(o.path_aux, 'info_{}.json'.format(self._identifier()))
+            if not os.path.isdir(path_aux):
+                os.makedirs(path_aux)
+            cache_file = os.path.join(path_aux, 'info_{}.json'.format(self._identifier()))
             info = helpers.cache_json(cache_file, lambda: load_info())
             # Convert (frame, rectangle) pairs to dictionary.
             self.tracks = {video: [dict(track) for track in track_list]
                            for video, track_list in info['tracks'].iteritems()}
             self.original_image_size = info['original_image_size']
 
-    def _update_stat(self, o):
+    def _update_stat(self, path_stat):
         def create_stat_pixelwise(): # NOTE: obsolete
             stat = dict.fromkeys({'mean', 'std'}, None)
             mean = []
@@ -652,7 +665,7 @@ class Data_ILSVRC(object):
                 for j in imglist:
                     # NOTE: perform resize image!
                     xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
-                        (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+                        (self.frmsz, self.frmsz), interpolation=cv2.INTER_AREA))
                 xs = np.asarray(xs)
                 mean.append(np.mean(xs, axis=0))
                 std.append(np.std(xs, axis=0))
@@ -674,7 +687,7 @@ class Data_ILSVRC(object):
                 # for j in imglist:
                 #     # NOTE: perform resize image!
                 #     xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
-                #         (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+                #         (self.frmsz, self.frmsz), interpolation=cv2.INTER_AREA))
                 # Lazy method: Read a single image, do not resize.
                 xs.append(cv2.imread(imglist[len(imglist)/2])[:,:,(2,1,0)])
                 means.append(np.mean(xs))
@@ -687,11 +700,11 @@ class Data_ILSVRC(object):
 
         if self.stat is None:
             if self.dstype == 'train':
-                filename = os.path.join(o.path_stat, 
-                    'meanstd_{}_frmsz_{}_train_{}.npy'.format(o.dataset, o.frmsz, self.trainsplit))
+                filename = os.path.join(path_stat, 
+                    'meanstd_{}_frmsz_{}_train_{}.npy'.format('ILSVRC', self.frmsz, self.trainsplit))
             else:
-                filename = os.path.join(o.path_stat,
-                    'meanstd_{}_frmsz_{}_{}.npy'.format(o.dataset, o.frmsz, self.dstype))
+                filename = os.path.join(path_stat,
+                    'meanstd_{}_frmsz_{}_{}.npy'.format('ILSVRC', self.frmsz, self.dstype))
             if os.path.exists(filename):
                 self.stat = np.load(filename).tolist()
             else:

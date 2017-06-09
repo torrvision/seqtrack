@@ -182,6 +182,10 @@ def main():
         'OTB-100':      data.Data_OTB('OTB-100', o),
     }
 
+    motion_sampler = sample.Motion()
+    motion_sampler.init(datasets['ILSVRC-val'])
+    motion_sampler.init(datasets['ILSVRC-train'])
+
     # These are the possible choices for evaluation sampler.
     # No need to specify `shuffle`, `max_videos`, `max_objects` here,
     # but `ntimesteps` should be set if applicable.
