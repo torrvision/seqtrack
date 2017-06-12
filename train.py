@@ -122,17 +122,23 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     optimizer = _get_optimizer(lr, o)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
-        if not o.grad_clip:
-            optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
-        else: # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
-            gradients, variables = zip(*optimizer.compute_gradients(loss_var))
-            gradients = [None if gradient is None else tf.clip_by_norm(gradient, o.max_grad_norm)
-                         for gradient in gradients]
-            optimize_op = optimizer.apply_gradients(zip(gradients, variables),
-                                                    global_step=global_step_var)
+        grad_var_pairs = optimizer.compute_gradients(loss_var)
+        if o.grad_clip:
+            # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
+            grad_var_pairs = [
+                (None, x) if dx is None else
+                (tf.clip_by_norm(dx, o.max_grad_norm), x)
+                for dx, x in grad_var_pairs
+            ]
+        # with tf.name_scope('gradient_summary'):
+        #     for dx, x in grad_var_pairs:
+        #         if dx is None:
+        #             continue
+        #         tf.summary.histogram(x.name, dx, collections=['gradients'])
+        optimize_op = optimizer.apply_gradients(grad_var_pairs, global_step=global_step_var)
 
     summary_vars = {}
-    summary_vars_with_preview = {}
+    extended_summary_vars = {}
     global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
@@ -162,7 +168,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 summaries = (global_summaries + tf.get_collection('summaries_' + mode))
                 summary_vars[mode] = tf.summary.merge(summaries)
                 summaries.extend(image_summaries)
-                summary_vars_with_preview[mode] = tf.summary.merge(summaries)
+                summaries.extend(tf.get_collection('gradients'))
+                extended_summary_vars[mode] = tf.summary.merge(summaries)
 
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver(max_to_keep=10)
@@ -286,7 +293,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                     dur_load = time.time() - start
                 if global_step % o.period_summary == 0:
-                    summary_var = (summary_vars_with_preview['train']
+                    summary_var = (extended_summary_vars['train']
                                    if global_step % o.period_preview == 0
                                    else summary_vars['train'])
                     _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
@@ -314,7 +321,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                             batch = _load_batch(batch_seqs, o)
                             feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                             dur_load = time.time() - start
-                        summary_var = (summary_vars_with_preview['val']
+                        summary_var = (extended_summary_vars['val']
                                        if global_step % o.period_preview == 0
                                        else summary_vars['val'])
                         loss_val, summary = sess.run([loss_var, summary_var],
