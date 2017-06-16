@@ -188,7 +188,18 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         in the current model, if the pre-trained model doesn't have those variables,
         it will fail to restore by the saver.
         '''
-        vars_to_restore = list(tf.trainable_variables())
+        if o.pretrained_collection:
+            vars_to_restore = tf.get_collection(o.pretrained_collection)
+            difference = set(tf.trainable_variables()).difference(set(vars_to_restore))
+            print 'will restore:'
+            for v in sorted(list(vars_to_restore), key=lambda x: x.name):
+                print v
+            print 'will not restore:'
+            for v in sorted(list(difference), key=lambda x: x.name):
+                print v
+        else:
+            # TODO: Load batch norm, etc?
+            vars_to_restore = list(tf.trainable_variables())
         saver_pretrained = tf.train.Saver(vars_to_restore)
 
     t_total = time.time()

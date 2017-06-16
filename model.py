@@ -1007,9 +1007,6 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         return x, state
 
     def output_net(x):
-        # Map output of LSTM to a rectangle.
-        x = slim.conv2d(x, 64, 3)
-        x = slim.max_pool2d(x, 2)
         x = slim.conv2d(x, 256, 3)
         x = slim.max_pool2d(x, 2)
         print 'shape at fc layer:', x.shape.as_list()
@@ -1041,19 +1038,21 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
 
     with slim.arg_scope([slim.conv2d, slim.fully_connected],
                         weights_regularizer=slim.l2_regularizer(weight_decay)):
-        # Process initial image and label to get "template".
-        with tf.variable_scope('template'):
-            p0 = get_masks_from_rectangles(example['y0'], frmsz=frmsz)
-            first_image_with_mask = concat([example['x0'], p0], axis=3)
-            template = template_net(first_image_with_mask)
-        # Process all images from all sequences with feature net.
-        with tf.variable_scope('features'):
-            x, unmerge = merge_dims(example['x'], 0, 2)
-            feat = feat_net(x)
-            feat = unmerge(feat, 0)
-        # Search each image using result of template network.
-        with tf.variable_scope('search'):
-            similarity = search_all(feat, template)
+        with slim.arg_scope([slim.conv2d, slim.fully_connected, slim.batch_norm],
+                            variables_collections=['cnn_variables']):
+            # Process initial image and label to get "template".
+            with tf.variable_scope('template'):
+                p0 = get_masks_from_rectangles(example['y0'], frmsz=frmsz)
+                first_image_with_mask = concat([example['x0'], p0], axis=3)
+                template = template_net(first_image_with_mask)
+            # Process all images from all sequences with feature net.
+            with tf.variable_scope('features'):
+                x, unmerge = merge_dims(example['x'], 0, 2)
+                feat = feat_net(x)
+                feat = unmerge(feat, 0)
+            # Search each image using result of template network.
+            with tf.variable_scope('search'):
+                similarity = search_all(feat, template)
         if use_rnn:
             # Update abstract "position" of object.
             with tf.variable_scope('track'):
@@ -1070,7 +1069,12 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         # Transform abstract position into rectangle.
         with tf.variable_scope('output'):
             position, unmerge = merge_dims(position, 0, 2)
-            output = output_net(position)
+            # Map output of LSTM to a rectangle.
+            phi = slim.conv2d(position, 64, 3)
+            phi = slim.max_pool2d(phi, 2)
+            with slim.arg_scope([slim.conv2d, slim.fully_connected, slim.batch_norm],
+                                variables_collections=['cnn_variables']):
+                output = output_net(phi)
             output = unmerge(output, 0)
 
     if use_rnn:

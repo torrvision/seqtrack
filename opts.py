@@ -65,6 +65,7 @@ class Opts(object):
         self.min_gt_ratio       = 0.75
         self.curriculum_learning= False
         self.model_file         = None
+        self.pretrained_collection = ''
 
         #----------------------------------------------------------------------
         # Data augmentation
