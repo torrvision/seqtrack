@@ -11,7 +11,120 @@ import numpy as np
 import os
 import progressbar
 
-def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=None,
+
+def epoch(dataset, rand, frame_sampler, max_objects=None, max_videos=None):
+    '''
+    Args:
+        dataset: Dataset object such as ILSVRC or OTB.
+        rand: Random number generator (can be module `random`).
+        max_videos: Maximum number of videos to use, or None.
+            There may still be multiple tracks per video.
+        max_objects: Maximum number of objects per video, or None.
+    '''
+    videos = list(dataset.videos)
+    rand.shuffle(videos)
+    num_videos = 0
+    for video in videos:
+        if max_videos is not None and num_videos >= max_videos:
+            break
+        objs = range(len(dataset.tracks[video]))
+        rand.shuffle(objs)
+        num_objs = 0
+        for obj in objs:
+            if max_objects is not None and num_objs >= max_objects:
+                break
+            frames = frame_sampler(video, obj)
+            if frames:
+                # yield (video, obj, frames)
+                trajectory = dataset.tracks[video][obj]
+                yield {
+                    'image_files':    [dataset.image_file(video, t)       for t in frames],
+                    'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
+                    'label_is_valid': [t in trajectory                    for t in frames],
+                    'original_image_size': dataset.original_image_size[video],
+                }
+                num_objs += 1
+        if num_objs > 0:
+            num_videos += 1
+
+
+def make_frame_sampler(kind, dataset, ntimesteps, **kwargs):
+    '''A frame sampler chooses frames within a trajectory.
+
+    A sampler maps (video, object, rand) to a list of frame indices.
+
+    It can return an empty list or None to reject a trajectory.
+    It may return less than ntimesteps+1 frames.
+
+    A frame sampler may store information locally to make sampling more efficient.
+    This is the reason that dataset and ntimesteps are provided to this function.
+    '''
+    if kind == 'motion':
+        sample = make_motion_sampler(dataset, **kwargs)
+        return functools.partial(sample, ntimesteps=ntimesteps)
+    else:
+        if kind == 'full':
+            f = full
+        elif kind == 'all_with_label':
+            f = all_with_label
+        elif kind == 'random_with_label':
+            f = random_with_label
+        elif kind == 'regular':
+            f = regular
+        elif kind == 'freq_range_fit':
+            f = freq_range_fit
+        else:
+            raise ValueError('unknown kind of frame sampler: {}'.format(kind))
+        return functools.partial(f, dataset=dataset, ntimesteps=ntimesteps, **kwargs)
+
+
+def full(video, obj, rand, dataset, ntimesteps):
+    '''ntimesteps is ignored'''
+    times = dataset.tracks[video][obj].keys()
+    t_first = min(times)
+    t_last = max(times)
+    return range(t_first, t_last+1)
+
+def all_with_label(video, obj, rand, dataset, ntimesteps):
+    '''ntimesteps is ignored'''
+    times = sorted(dataset.tracks[video][obj].keys())
+    return times
+
+def random_with_label(video, obj, rand, dataset, ntimesteps):
+    times = dataset.tracks[video][obj].keys()
+    return rand.sample(times, min(ntimesteps+1, len(times)))
+
+def regular(video, obj, rand, dataset, ntimesteps, freq):
+    times = dataset.tracks[video][obj].keys()
+    t0 = rand.choice(times)
+    subset = range(t0, dataset.video_length[video], freq)
+    return subset[:ntimesteps+1]
+
+def freq_range_fit(video, obj, rand, dataset, ntimesteps,
+        min_freq, max_freq):
+    times = sorted(dataset.tracks[video][obj].keys())
+    video_len = dataset.video_length[video]
+    # Choose frames:
+    #   a, round(a+freq), round(a+2*freq), round(a+3*freq), ...
+    # Therefore, for frames [0, ..., ntimesteps], we need:
+    #   a + ntimesteps*freq <= video_len - 1
+    # The smallest possible value of a is times[0]
+    #   times[0] + ntimesteps*freq <= video_len - 1
+    #   ntimesteps*freq <= video_len - 1 - times[0]
+    #   freq <= (video_len - 1 - times[0]) / ntimesteps
+    u = min_freq
+    v = min(max_freq, float((video_len - 1) - times[0]) / ntimesteps)
+    if not u <= v:
+        return None
+    f = math.exp(rand.uniform(math.log(u), math.log(v)))
+    # Let n = ntimesteps*f.
+    n = int(round(ntimesteps * f))
+    # Choose first frame such that all frames are present.
+    a = rand.choice([a for a in times if a + n <= video_len - 1])
+    return [int(round(a + f*t)) for t in range(0, ntimesteps+1)]
+
+
+def _sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
            kind=None, ntimesteps=None, freq=10, min_freq=10, max_freq=60):
     '''
     For training, set `shuffle=True`, `max_objects=1`, `ntimesteps` as required.
@@ -26,7 +139,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
 
     Args:
         dataset: Dataset object such as ILSVRC or OTB.
-        generator: Random number generator (can be module `random`).
+        rand: Random number generator (can be module `random`).
         shuffle: Whether to shuffle the videos.
             Note that if shuffled sequences are desired,
             then max_objects should be 1,
@@ -42,7 +155,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
     def _select_frames(is_valid, valid_frames):
         if kind == 'sampling':
             k = min(len(valid_frames), ntimesteps+1)
-            return sorted(generator.sample(valid_frames, k))
+            return sorted(rand.sample(valid_frames, k))
         elif kind == 'freq-range-fit':
             # TODO: The scope of this sampler should include
             # choosing objects within videos.
@@ -59,11 +172,11 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
             v = min(max_freq, float((video_len - 1) - valid_frames[0]) / ntimesteps)
             if not u <= v:
                 return None
-            f = math.exp(generator.uniform(math.log(u), math.log(v)))
+            f = math.exp(rand.uniform(math.log(u), math.log(v)))
             # Let n = ntimesteps*f.
             n = int(round(ntimesteps * f))
             # Choose first frame such that all frames are present.
-            a = generator.choice([a for a in valid_frames if a + n <= video_len - 1])
+            a = rand.choice([a for a in valid_frames if a + n <= video_len - 1])
             return [int(round(a + f*t)) for t in range(0, ntimesteps+1)]
         elif kind == 'regular':
             ''' Sample frames with `freq`, regardless of label
@@ -74,7 +187,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
             Curriculum Learning might be tried.
             '''
             num_frames = len(is_valid)
-            frames = range(generator.choice(valid_frames), num_frames, freq)
+            frames = range(rand.choice(valid_frames), num_frames, freq)
             return frames[:ntimesteps+1]
         elif kind == 'full':
             ''' The full sequence from first 1 to last 1, regardless of label.
@@ -86,15 +199,15 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
     assert((ntimesteps is None) == (kind == 'full'))
     videos = list(dataset.videos) # copy
     if max_videos is not None and len(videos) > max_videos:
-        videos = generator.sample(videos, max_videos)
+        videos = rand.sample(videos, max_videos)
     else:
         if shuffle:
-            generator.shuffle(videos)
+            rand.shuffle(videos)
 
     for video in videos:
         trajectories = dataset.tracks[video]
         if max_objects is not None and len(trajectories) > max_objects:
-            trajectories = generator.sample(trajectories, max_objects)
+            trajectories = rand.sample(trajectories, max_objects)
         # Do not shuffle objects within a sequence.
         # Assume that if the sampler is used for SGD, then max_objects = 1.
 
@@ -120,73 +233,85 @@ def _invalid_rect():
     return [float('nan')] * 4
 
 
+def make_motion_sampler(dataset, **kwargs):
+    sampler = Motion(dataset, **kwargs)
+    return sampler.sample
+
 class Motion:
+    # Could be implemented as a function with yield.
 
     def __init__(self,
                  dataset,
-                 ntimesteps,
-                 min_sample_path_length,
-                 max_sample_path_length,
-                 min_original_path_length=0.0):
+                 min_speed,
+                 max_speed):
+                 # min_original_speed=0.0):
         self.dataset = dataset
-        self.ntimesteps = ntimesteps
-        self.min_original_path_length = min_original_path_length
-        self.min_sample_path_length = min_sample_path_length
-        self.max_sample_path_length = max_sample_path_length
+        self.min_speed = min_speed
+        self.max_speed = max_speed
+        # self.min_original_speed = min_original_speed
 
-    def init(self):
         self.cdfs = {}
         for video in self.dataset.videos:
             self.cdfs[video] = [
                 motion_cdf(track, relative=True)
                 for track in self.dataset.tracks[video]
             ]
-        # Get pairs (video, obj_ind)
-        objects = [(video, obj_ind)
-            for video in self.dataset.videos
-            for obj_ind in range(len(self.dataset.tracks[video]))
-        ]
-        # Filter pairs for minimum length.
-        path_length = lambda video, obj_ind: self.cdfs[video][obj_ind][-1][1]
-        objects = [(video, obj_ind) for video, obj_ind in objects
-            if path_length(video, obj_ind) >= self.min_original_path_length
-        ]
-        # Index objects by video.
-        self.object_subset = {}
-        for video, obj_ind in objects:
-            self.object_subset.setdefault(video, []).append(obj_ind)
-        self.video_subset = [v for v in self.dataset.videos if v in self.object_subset]
-        print 'subset of videos:', len(self.video_subset), 'of', len(self.dataset.videos)
+        # # Get pairs (video, obj_ind)
+        # objects = [(video, obj_ind)
+        #     for video in self.dataset.videos
+        #     for obj_ind in range(len(self.dataset.tracks[video]))
+        # ]
+        # # Filter pairs for minimum length.
+        # path_length = lambda video, obj_ind: self.cdfs[video][obj_ind][-1][1]
+        # objects = [(video, obj_ind) for video, obj_ind in objects
+        #     if path_length(video, obj_ind) >= self.min_original_path_length
+        # ]
+        # # Index objects by video.
+        # self.object_subset = {}
+        # for video, obj_ind in objects:
+        #     self.object_subset.setdefault(video, []).append(obj_ind)
+        # self.video_subset = [v for v in self.dataset.videos if v in self.object_subset]
+        # print 'subset of videos:', len(self.video_subset), 'of', len(self.dataset.videos)
 
-    def sample(self, generator):
-        video = generator.choice(self.video_subset)
-        obj_ind = generator.choice(self.object_subset[video])
+    def sample(self, video, obj_ind, rand, ntimesteps):
+        # video = rand.choice(self.video_subset)
+        # obj_ind = rand.choice(self.object_subset[video])
         cdf = self.cdfs[video][obj_ind]
         _, full_path_length = cdf[-1]
-        assert full_path_length >= self.min_original_path_length
+        # min_original_path_length = self.min_original_speed * ntimesteps
+        # assert full_path_length >= min_original_path_length
         # Limit example path length to maximum possible.
         # (Do this before choosing length to avoid always using same path.)
-        lower_limit = self.min_sample_path_length
-        upper_limit = min(self.max_sample_path_length, full_path_length)
-        sample_path_length = generator.uniform(lower_limit, upper_limit)
-        d0 = generator.uniform(0, full_path_length - sample_path_length)
+        min_sample_path_length = float(self.min_speed) * ntimesteps
+        if self.max_speed is None:
+            max_sample_path_length = float('inf')
+        else:
+            max_sample_path_length = float(self.max_speed) * ntimesteps
+        if full_path_length < min_sample_path_length:
+            return None
+        sample_path_length = rand.uniform(
+            min_sample_path_length,
+            min(max_sample_path_length, full_path_length),
+        )
+        d0 = rand.uniform(0, full_path_length - sample_path_length)
         d1 = d0 + sample_path_length
-        sample_dists = np.linspace(d0, d1, self.ntimesteps+1)
+        sample_dists = np.linspace(d0, d1, ntimesteps+1)
         cdf_dists = [dist for t, dist in cdf]
         inds = np.round(np.interp(sample_dists, cdf_dists, range(len(cdf_dists)))).astype(int)
         times = [t for t, dist in [cdf[ind] for ind in inds]]
-        rects = [self.dataset.tracks[video][obj_ind][t] for t in times]
-        print 'desired path length:', sample_path_length
-        sample_track = dict(zip(times, rects))
-        sample_cdf = motion_cdf(sample_track)
-        # print 'sample cdf:', sample_cdf
-        print 'sample path length:', sample_cdf[-1][1]
-        return {
-            'image_files':    [self.dataset.image_file(video, t) for t in times],
-            'labels':         [self.dataset.tracks[video][obj_ind][t] for t in times],
-            'label_is_valid': [True] * (self.ntimesteps+1),
-            'original_image_size': self.dataset.original_image_size[video],
-        }
+        return times
+        # rects = [self.dataset.tracks[video][obj_ind][t] for t in times]
+        # print 'desired path length:', sample_path_length
+        # sample_track = dict(zip(times, rects))
+        # sample_cdf = motion_cdf(sample_track)
+        # # print 'sample cdf:', sample_cdf
+        # print 'sample path length:', sample_cdf[-1][1]
+        # return {
+        #     'image_files':    [self.dataset.image_file(video, t) for t in times],
+        #     'labels':         [self.dataset.tracks[video][obj_ind][t] for t in times],
+        #     'label_is_valid': [True] * (ntimesteps+1),
+        #     'original_image_size': self.dataset.original_image_size[video],
+        # }
 
 
 def motion_cdf(track, relative=True, epsilon=1e-2):
@@ -194,7 +319,7 @@ def motion_cdf(track, relative=True, epsilon=1e-2):
     track = sorted(track.items())
     times = [t for t, rect in track]
     rects = np.array([rect for t, rect in track])
-    abs_dist = np.sum(np.abs(np.diff(rects, axis=0)), axis=1)
+    abs_dist = 0.5 * np.sum(np.abs(np.diff(rects, axis=0)), axis=1)
     if relative:
         rect_min = rects[:, 0:2]
         rect_max = rects[:, 2:4]

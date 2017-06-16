@@ -131,7 +131,7 @@ def parse_arguments():
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker',
             type=str, default=['ILSVRC-train'])
     parser.add_argument(
-            '--eval_samplers', nargs='+', help='',
+            '--eval_samplers', nargs='*', help='',
             type=str, default=['train'])
 
     parser.add_argument(
@@ -182,22 +182,18 @@ def main():
         'OTB-100':      data.Data_OTB('OTB-100', o),
     }
 
-    motion_sampler = sample.Motion()
-    motion_sampler.init(datasets['ILSVRC-val'])
-    motion_sampler.init(datasets['ILSVRC-train'])
-
     # These are the possible choices for evaluation sampler.
     # No need to specify `shuffle`, `max_videos`, `max_objects` here,
     # but `ntimesteps` should be set if applicable.
     sampler_presets = {
-        'full':   functools.partial(sample.sample, kind='full'),
-        # The 'train' sampler is the same as used during training.
-        # This may be useful for detecting over-fitting.
-        'train':  functools.partial(sample.sample, ntimesteps=o.ntimesteps, **o.sampler_params),
-        # The 'custom' sampler can be modified for a quick and dirty test.
-        'custom': functools.partial(sample.sample, kind='regular',
-                                    freq=o.sampler_params.get('freq', 10),
-                                    ntimesteps=o.ntimesteps),
+        # 'full':   functools.partial(sample.sample, kind='full'),
+        # # The 'train' sampler is the same as used during training.
+        # # This may be useful for detecting over-fitting.
+        # 'train':  functools.partial(sample.sample, ntimesteps=o.ntimesteps, **o.sampler_params),
+        # # The 'custom' sampler can be modified for a quick and dirty test.
+        # 'custom': functools.partial(sample.sample, kind='regular',
+        #                             freq=o.sampler_params.get('freq', 10),
+        #                             ntimesteps=o.ntimesteps),
     }
     # Take all dataset-sampler combinations.
     # Different policies are used for choosing trajectories in OTB and ILSVRC:

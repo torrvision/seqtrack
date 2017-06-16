@@ -1,6 +1,7 @@
 import pdb
 import sys
 import csv
+import functools
 import itertools
 import json
 import numpy as np
@@ -169,7 +170,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
     # Use a separate random number generator for each sampler.
     sequences = {mode: iter_examples(datasets[mode], o,
-                                     generator=random.Random(o.seed_global),
+                                     rand=random.Random(o.seed_global),
                                      num_epochs=None)
                  for mode in modes}
 
@@ -578,18 +579,25 @@ def _whiten_image(x, mean, std, name='whiten_image'):
         return tf.divide(x - mean, std, name=scope)
 
 
-def iter_examples(dataset, o, generator=None, num_epochs=None):
+def iter_examples(dataset, o, rand=None, num_epochs=None):
     '''Generator that produces multiple epochs of examples for SGD.'''
     if num_epochs:
         epochs = xrange(num_epochs)
     else:
         epochs = itertools.count()
+
+    frame_sampler = sample.make_frame_sampler(dataset=dataset, ntimesteps=o.ntimesteps, **o.sampler_params)
+    frame_sampler = functools.partial(frame_sampler, rand=rand)
     for i in epochs:
-        sequences = sample.sample(dataset, generator=generator,
-                                  shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
-                                  **o.sampler_params)
+        n = 0
+        sequences = sample.epoch(dataset, rand, frame_sampler, max_objects=1)
+        # sequences = sample.sample(dataset, generator=generator,
+        #                           shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
+        #                           **o.sampler_params)
         for sequence in sequences:
             yield sequence
+            n += 1
+        print 'epoch {}: num sequences {}'.format(i+1, n)
 
 
 def get_loss(example, outputs, o, summaries_collections=None, name='loss'):

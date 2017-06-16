@@ -493,7 +493,7 @@ def Data_ILSVRC(dstype, o):
     return ILSVRC(
         dstype,
         frmsz=o.frmsz,
-        path_data=os.path.join(o.path_data, 'ILSVRC'),
+        path_data=o.path_data,
         path_aux=o.path_aux,
         path_stat=o.path_stat,
         trainsplit=o.trainsplit,
