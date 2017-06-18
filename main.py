@@ -182,34 +182,33 @@ def main():
         'OTB-100':      data.Data_OTB('OTB-100', o),
     }
 
-    # These are the possible choices for evaluation sampler.
-    # No need to specify `shuffle`, `max_videos`, `max_objects` here,
-    # but `ntimesteps` should be set if applicable.
+    # Presets are calls to sample.make_frame_sampler with all params given except dataset.
+    # Note that these are independent of the arguments to sample.epoch()
     sampler_presets = {
-        # 'full':   functools.partial(sample.sample, kind='full'),
-        # # The 'train' sampler is the same as used during training.
-        # # This may be useful for detecting over-fitting.
-        # 'train':  functools.partial(sample.sample, ntimesteps=o.ntimesteps, **o.sampler_params),
-        # # The 'custom' sampler can be modified for a quick and dirty test.
-        # 'custom': functools.partial(sample.sample, kind='regular',
-        #                             freq=o.sampler_params.get('freq', 10),
-        #                             ntimesteps=o.ntimesteps),
+        'full': functools.partial(sample.make_frame_sampler,
+            kind='full', ntimesteps=None),
+        # The 'train' sampler is the same as used during training.
+        # This may be useful for detecting over-fitting.
+        'train': functools.partial(sample.make_frame_sampler,
+            ntimesteps=o.ntimesteps, **o.sampler_params),
     }
     # Take all dataset-sampler combinations.
     # Different policies are used for choosing trajectories in OTB and ILSVRC:
     # ILSVRC is large and therefore a random subset of videos are used,
     # with 1 object per video.
     # OTB is small and therefore all tracks in all videos are used.
-    eval_sets = {
-        # Give each evaluation set its own random seed.
-        d+'-'+s: functools.partial(sampler_presets[s], datasets[d],
-            generator=random.Random(o.seed_global),
-            max_videos=None if d.startswith('OTB-') else o.max_eval_videos,
-            shuffle=False if d.startswith('OTB-') else True,
-            max_objects=None if d.startswith('OTB-') else 1)
-        for d in o.eval_datasets
-        for s in o.eval_samplers
-    }
+    eval_sets = {}
+    for s in o.eval_samplers:
+        for d in o.eval_datasets:
+            rand = random.Random(o.seed_global)
+            eval_sets[d+'-'+s] = functools.partial(sample.epoch,
+                dataset=datasets[d],
+                rand=rand,
+                frame_sampler=functools.partial(
+                    sampler_presets[s](dataset=datasets[d]),
+                    rand=rand),
+                max_videos=None if d.startswith('OTB-') else o.max_eval_videos,
+                max_objects=None if d.startswith('OTB-') else 1)
 
     if o.report:
         train.generate_report(sorted(o.eval_samplers), sorted(o.eval_datasets), o)
