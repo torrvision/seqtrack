@@ -930,6 +930,7 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         summaries_collections=None,
         # Model parameters:
         use_rnn=True,
+        use_heatmap=False,
         ):
 
     def feat_net(x):
@@ -1006,6 +1007,11 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         state = {'h': h, 'c': c}
         return x, state
 
+    def foreground_net(x):
+        # Map output of LSTM to a heatmap.
+        x = slim.conv2d(x, 2, kernel_size=1, activation_fn=None, normalizer_fn=None)
+        return x
+
     def output_net(x):
         # Map output of LSTM to a rectangle.
         x = slim.conv2d(x, 64, 3)
@@ -1055,23 +1061,26 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         with tf.variable_scope('search'):
             similarity = search_all(feat, template)
         if use_rnn:
-            # Update abstract "position" of object.
+            # Update abstract position likelihood of object.
             with tf.variable_scope('track'):
                 init_state = initial_state_net(example['x0'], example['y0'])
                 curr_state = init_state
                 similarity = tf.unstack(similarity, axis=1)
-                position = [None] * ntimesteps
+                position_map = [None] * ntimesteps
                 for t in range(ntimesteps):
                     with tf.variable_scope('update', reuse=(t > 0)):
-                        position[t], curr_state = update(similarity[t], curr_state)
-                position = tf.stack(position, axis=1)
+                        position_map[t], curr_state = update(similarity[t], curr_state)
+                position_map = tf.stack(position_map, axis=1)
         else:
-            position = similarity
-        # Transform abstract position into rectangle.
+            position_map = similarity
+        if use_heatmap:
+            with tf.variable_scope('foreground'):
+                foreground_map = foreground_net(position_map)
+        # Transform abstract position position_map into rectangle.
         with tf.variable_scope('output'):
-            position, unmerge = merge_dims(position, 0, 2)
-            output = output_net(position)
-            output = unmerge(output, 0)
+            position_map, unmerge = merge_dims(position_map, 0, 2)
+            position = output_net(position_map)
+            position = unmerge(position, 0)
 
     if use_rnn:
         state = {k: (init_state[k], curr_state[k]) for k in curr_state}
@@ -1081,7 +1090,9 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
     class Model:
         pass
     model = Model()
-    model.outputs = {'y': output}
+    model.outputs = {'y': position}
+    if use_heatmap:
+        model.outputs.update({'hmap': foreground_map})
     model.state   = state
     # Properties of instantiated model:
     model.image_size   = (frmsz, frmsz)
