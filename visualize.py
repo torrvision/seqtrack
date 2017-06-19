@@ -41,8 +41,8 @@ class VideoFileWriter:
                 # draw heatmap
                 if hmaps_pred is not None:
                     hmap_pred = Image.fromarray(np.uint8(255*cm.hot(hmaps_pred[t-1,:,:,0])))
-                    # if hmap_pred.size != im.size: # i.e., OTB
-                    #     hmap_pred = hmap_pred.resize(im.size)
+                    if hmap_pred.size != im.size: # i.e., OTB
+                        hmap_pred = hmap_pred.resize(im.size)
                     im = Image.blend(im.convert('RGBA'), hmap_pred.convert('RGBA'), 0.5)
                 #im.show()
             im.save(os.path.join(sequence_dir, self.pattern % t))
