@@ -10,7 +10,7 @@ import data
 from helpers import load_image, im_to_arr, pad_to
 
 
-def track(sess, inputs, model, sequence):
+def track(sess, inputs, model, sequence, use_gt, output_vars=None):
     '''Run an instantiated tracker on a sequence.
 
     model.outputs      -- Dictionary of tensors
@@ -27,6 +27,9 @@ def track(sess, inputs, model, sequence):
     # TODO: Variable batch size.
     # TODO: Run on a batch of sequences for speed.
 
+    if output_vars is None:
+        output_vars = model.outputs.keys()
+
     first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
     first_label = sequence['labels'][0]
     first_image = _single_to_batch(im_to_arr(first_image), model.batch_size)
@@ -40,7 +43,9 @@ def track(sess, inputs, model, sequence):
 
     # If the length of the sequence is greater than the instantiated RNN,
     # it will need to be run in chunks.
-    y_pred_chunks = []
+    out_pred_chunks = {k: [] for k in output_vars}
+    # y_pred_chunks = []
+    # hmap_pred_chunks = []
     prev_state = {}
     for start in range(1, sequence_len, model.sequence_len):
         rem = sequence_len - start
@@ -53,26 +58,39 @@ def track(sess, inputs, model, sequence):
         y_gt = np.array(sequence['labels'][start:start+chunk_len])
         y_gt = _single_to_batch(pad_to(y_gt, model.sequence_len), model.batch_size)
         feed_dict = {
+            inputs['x_raw']:  images,
             inputs['x0_raw']: first_image,
             inputs['y0']:     first_label,
-            inputs['x_raw']:  images,
             inputs['y']:      y_gt,
-            #inputs['use_gt']: True,
+            inputs['use_gt']: use_gt,
         }
         if start > 1:
             # This is not the first chunk.
             # Add the previous state to the feed dictionary.
             feed_dict.update({init_state[k]: prev_state[k] for k in init_state})
         # Get output and final state.
-        y_pred, prev_state = sess.run([model.outputs['y'], final_state],
-                                      feed_dict=feed_dict)
+        out_pred, prev_state = sess.run(
+            [{k: model.outputs[k] for k in output_vars}, final_state],
+            feed_dict=feed_dict)
+        # y_pred, prev_state = sess.run([model.outputs['y'], final_state],
+        #                               feed_dict=feed_dict)
+        # y_pred, prev_state, hmap_pred = sess.run([model.outputs['y'], final_state,
+        #                                           model.outputs['hmap_softmax']],
+        #                               feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
-        y_pred = y_pred[0][:chunk_len]
-        y_pred_chunks.append(y_pred)
+        for k in output_vars:
+            out_pred_chunks[k].append(out_pred[k][0, :chunk_len])
+        # y_pred = y_pred[0][:chunk_len]
+        # y_pred_chunks.append(y_pred)
+        # hmap_pred = hmap_pred[0][:chunk_len]
+        # hmap_pred_chunks.append(hmap_pred)
 
     # Concatenate the results for all chunks.
-    y_pred = np.concatenate(y_pred_chunks)
-    return y_pred
+    for k in output_vars:
+        out_pred[k] = np.concatenate(out_pred_chunks[k])
+    # y_pred = np.concatenate(y_pred_chunks)
+    # hmap_pred = np.concatenate(hmap_pred_chunks)
+    return out_pred
 
 def _single_to_batch(x, batch_size):
     x = np.expand_dims(x, 0)
@@ -81,7 +99,7 @@ def _single_to_batch(x, batch_size):
     return pad_to(x, batch_size)
 
 
-def evaluate(sess, inputs, model, sequences, visualize=None):
+def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False):
     '''
     Args:
         nbatches_: the number of batches to evaluate
@@ -103,14 +121,17 @@ def evaluate(sess, inputs, model, sequences, visualize=None):
             continue
         #print 'sequence {} of {}'.format(i+1, len(sequences))
         pbar.update(i+1)
-        pred = track(sess, inputs, model, sequence)
+        output_vars = set(['y', 'hmap_softmax']).intersection(set(model.outputs.keys()))
+        pred = track(sess, inputs, model, sequence, use_gt, output_vars)
+        rect_pred = pred['y']
+        hmap_pred = pred.get('hmap_softmax', None)
         if visualize:
-            visualize('sequence_{:06d}'.format(i), sequence, pred)
-        gt = np.array(sequence['labels'])
+            visualize('sequence_{:06d}'.format(i), sequence, rect_pred, hmap_pred)
+        rect_gt = np.array(sequence['labels'])
         # Convert to original image co-ordinates.
-        pred = _unnormalize_rect(pred, sequence['original_image_size'])
-        gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
-        sequence_results.append(evaluate_track(pred, gt, is_valid))
+        rect_pred = _unnormalize_rect(rect_pred, sequence['original_image_size'])
+        rect_gt   = _unnormalize_rect(rect_gt,   sequence['original_image_size'])
+        sequence_results.append(evaluate_track(rect_pred, rect_gt, is_valid))
     pbar.finish()
 
     results = {}

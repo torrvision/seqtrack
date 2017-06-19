@@ -5,17 +5,23 @@ from PIL import Image, ImageDraw, ImageColor
 import shutil
 import subprocess
 import tempfile
+import matplotlib.cm as cm
 
 
 class VideoFileWriter:
-    def __init__(self, root, pattern='%06d.jpeg'):
+    def __init__(self, root, pattern='%06d.jpeg', make_video=True):
         self.root    = root
         self.pattern = pattern
+        self.make_video = make_video
 
-    def visualize(self, sequence_name, sequence, rects_pred):
-        sequence_dir = tempfile.mkdtemp()
-        # if not os.path.isdir(sequence_dir):
-        #     os.makedirs(sequence_dir)
+    def visualize(self, sequence_name, sequence, rects_pred, hmaps_pred=None):
+        if self.make_video:
+            # Use temporary dir for frames.
+            sequence_dir = tempfile.mkdtemp()
+        else:
+            sequence_dir = os.path.join(os.path.abspath(self.root), sequence_name)
+            if not os.path.isdir(sequence_dir):
+                os.makedirs(sequence_dir)
         sequence_len = len(sequence['image_files'])
         rects_gt = sequence['labels']
         is_valid_gt = sequence['label_is_valid']
@@ -32,21 +38,30 @@ class VideoFileWriter:
             if t > 0:
                 rect_pred = _rect_to_int_list(_unnormalize_rect(rects_pred[t-1], im.size))
                 draw.rectangle(rect_pred, outline=color_pred)
+                # draw heatmap
+                if hmaps_pred is not None:
+                    hmap_pred = Image.fromarray(np.uint8(255*cm.hot(hmaps_pred[t-1,:,:,0])))
+                    # if hmap_pred.size != im.size: # i.e., OTB
+                    #     hmap_pred = hmap_pred.resize(im.size)
+                    im = Image.blend(im.convert('RGBA'), hmap_pred.convert('RGBA'), 0.5)
+                #im.show()
             im.save(os.path.join(sequence_dir, self.pattern % t))
-        args = ['ffmpeg', '-loglevel', 'error',
-                          # '-r', '1', # fps.
-                          '-y', # Overwrite without asking.
-                          '-nostdin', # No interaction with user.
-                          '-i', self.pattern,
-                          '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-                          os.path.join(os.path.abspath(self.root), sequence_name+'.mp4')]
-        try:
-            p = subprocess.Popen(args, cwd=sequence_dir)
-            p.wait()
-        except Exception as inst:
-            print 'error:', inst
-        finally:
-            shutil.rmtree(sequence_dir)
+
+        if self.make_video:
+            args = ['ffmpeg', '-loglevel', 'error',
+                              # '-r', '1', # fps.
+                              '-y', # Overwrite without asking.
+                              '-nostdin', # No interaction with user.
+                              '-i', self.pattern,
+                              '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+                              os.path.join(os.path.abspath(self.root), sequence_name+'.mp4')]
+            try:
+                p = subprocess.Popen(args, cwd=sequence_dir)
+                p.wait()
+            except Exception as inst:
+                print 'error:', inst
+            finally:
+                shutil.rmtree(sequence_dir)
 
 
 def _unnormalize_rect(r, size):

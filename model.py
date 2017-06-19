@@ -1075,7 +1075,7 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
             position_map = similarity
         if use_heatmap:
             with tf.variable_scope('foreground'):
-                foreground_map = foreground_net(position_map)
+                hmap = foreground_net(position_map)
         # Transform abstract position position_map into rectangle.
         with tf.variable_scope('output'):
             position_map, unmerge = merge_dims(position_map, 0, 2)
@@ -1092,8 +1092,14 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
     model = Model()
     model.outputs = {'y': position}
     if use_heatmap:
-        model.outputs.update({'hmap': foreground_map})
-    model.state   = state
+        model.outputs['hmap'] = hmap
+        hmap, unmerge = merge_dims(hmap, 0, 2)
+        hmap_full = tf.image.resize_images(hmap, size=[frmsz, frmsz],
+            method=tf.image.ResizeMethod.NEAREST_NEIGHBOR, align_corners=True)
+        hmap_full = unmerge(hmap_full, 0)
+        model.outputs['hmap_full'] = hmap_full
+        model.outputs['hmap_softmax'] = tf.nn.softmax(hmap_full)
+    model.state = state
     # Properties of instantiated model:
     model.image_size   = (frmsz, frmsz)
     model.sequence_len = ntimesteps # Static length of unrolled RNN.
