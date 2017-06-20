@@ -107,6 +107,7 @@ class RNN_dual_mix(object):
                  summaries_collections=None,
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
+                 layer_norm=False,
                  residual_lstm=False,
                  feed_examplar=False,
                  dropout_rnn=False,
@@ -115,6 +116,7 @@ class RNN_dual_mix(object):
         # model parameters
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
+        self.layer_norm    = layer_norm
         self.residual_lstm = residual_lstm
         self.feed_examplar = feed_examplar
         self.dropout_rnn   = dropout_rnn
@@ -149,20 +151,55 @@ class RNN_dual_mix(object):
                     x = slim.fully_connected(x, 1024, scope='fc2'); out.append(x)
             return out
 
+        #def pass_lstm1(x, h_prev, c_prev):
+        #    with slim.arg_scope([slim.fully_connected],
+        #            num_outputs=o.nunits,
+        #            activation_fn=None,
+        #            weights_regularizer=slim.l2_regularizer(o.wd)):
+        #        # NOTE: `An Empirical Exploration of Recurrent Neural Network Architecture`.
+        #        # Initialize forget bias to be 1.
+        #        # They also use `tanh` instead of `sigmoid` for input gate. (yet not employed here)
+        #        ft = slim.fully_connected(concat((h_prev, x), 1), biases_initializer=tf.ones_initializer(), scope='hf')
+        #        it = slim.fully_connected(concat((h_prev, x), 1), scope='hi')
+        #        ct_tilda = slim.fully_connected(concat((h_prev, x), 1), scope='hc')
+        #        ot = slim.fully_connected(concat((h_prev, x), 1), scope='ho')
+        #        ct = (tf.nn.sigmoid(ft) * c_prev) + (tf.nn.sigmoid(it) * tf.nn.tanh(ct_tilda))
+        #        ht = tf.nn.sigmoid(ot) * tf.nn.tanh(ct)
+        #    return ht, ct
+
         def pass_lstm1(x, h_prev, c_prev):
+            '''
+            Previously forget bias was initialized to be 1 as in
+            `An Empirical Exploration of Recurrent Neural Network Architecture`.
+            As moving to layer normalization, I compute linear functions of
+            input and hidden separately and all at once for all 4 gates
+            (as before). Now I don't initialize forget bias to be 1.
+            '''
+            def ln(inputs, epsilon = 1e-5, scope = None):
+                mean, var = tf.nn.moments(inputs, [1], keep_dims=True)
+                with tf.variable_scope(scope + 'LN'):
+                    scale = tf.get_variable('alpha', shape=[inputs.get_shape()[1]],
+                                            initializer=tf.constant_initializer(1))
+                    shift = tf.get_variable('beta', shape=[inputs.get_shape()[1]],
+                                            initializer=tf.constant_initializer(0))
+                LN = scale * (inputs - mean) / tf.sqrt(var + epsilon) + shift
+                return LN
+
             with slim.arg_scope([slim.fully_connected],
-                    num_outputs=o.nunits,
-                    activation_fn=None,
-                    weights_regularizer=slim.l2_regularizer(o.wd)):
-                # NOTE: `An Empirical Exploration of Recurrent Neural Network Architecture`.
-                # Initialize forget bias to be 1.
-                # They also use `tanh` instead of `sigmoid` for input gate. (yet not employed here)
-                ft = slim.fully_connected(concat((h_prev, x), 1), biases_initializer=tf.ones_initializer(), scope='hf')
-                it = slim.fully_connected(concat((h_prev, x), 1), scope='hi')
-                ct_tilda = slim.fully_connected(concat((h_prev, x), 1), scope='hc')
-                ot = slim.fully_connected(concat((h_prev, x), 1), scope='ho')
-                ct = (tf.nn.sigmoid(ft) * c_prev) + (tf.nn.sigmoid(it) * tf.nn.tanh(ct_tilda))
-                ht = tf.nn.sigmoid(ot) * tf.nn.tanh(ct)
+                                activation_fn=None,
+                                weights_regularizer=slim.l2_regularizer(o.wd)):
+                x_linear = slim.fully_connected(x, num_outputs=4*o.nunits, scope='x_linear')
+                h_linear = slim.fully_connected(h_prev, num_outputs=4*o.nunits, scope='h_linear')
+                if self.layer_norm:
+                    x_linear = ln(x_linear, scope='x/')
+                    h_linear = ln(h_linear, scope='h/')
+                ft, it, ot, ct_tilda = tf.split(x_linear + h_linear, 4, axis=1)
+                ft       = tf.nn.sigmoid(ft)
+                it       = tf.nn.sigmoid(it)
+                ot       = tf.nn.sigmoid(ot)
+                ct_tilda = tf.nn.tanh(ct_tilda)
+                ct = (ft * c_prev) + (it * ct_tilda)
+                ht = ot * tf.nn.tanh(ct)
             return ht, ct
 
         def pass_multi_level_cross_correlation(search, filt):
