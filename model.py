@@ -188,18 +188,19 @@ class RNN_dual_mix(object):
             with slim.arg_scope([slim.fully_connected],
                                 activation_fn=None,
                                 weights_regularizer=slim.l2_regularizer(o.wd)):
-                x_linear = slim.fully_connected(x, num_outputs=4*o.nunits, scope='x_linear')
-                h_linear = slim.fully_connected(h_prev, num_outputs=4*o.nunits, scope='h_linear')
                 if self.layer_norm:
+                    x_linear = slim.fully_connected(x, 4*o.nunits,
+                                                    biases_initializer=None, scope='x_linear')
+                    h_linear = slim.fully_connected(h_prev, 4*o.nunits,
+                                                    biases_initializer=None, scope='h_linear')
                     x_linear = ln(x_linear, scope='x/')
                     h_linear = ln(h_linear, scope='h/')
-                ft, it, ot, ct_tilda = tf.split(x_linear + h_linear, 4, axis=1)
-                ft       = tf.nn.sigmoid(ft)
-                it       = tf.nn.sigmoid(it)
-                ot       = tf.nn.sigmoid(ot)
-                ct_tilda = tf.nn.tanh(ct_tilda)
-                ct = (ft * c_prev) + (it * ct_tilda)
-                ht = ot * tf.nn.tanh(ct)
+                else:
+                    x_linear = slim.fully_connected(x, 4*o.nunits, scope='x_linear')
+                    h_linear = slim.fully_connected(h_prev, 4*o.nunits, scope='h_linear')
+            ft, it, ot, ct_tilda = tf.split(x_linear + h_linear, 4, axis=1)
+            ct = (tf.nn.sigmoid(ft) * c_prev) + (tf.nn.sigmoid(it) * tf.nn.tanh(ct_tilda))
+            ht = tf.nn.sigmoid(ot) * tf.nn.tanh(ct)
             return ht, ct
 
         def pass_multi_level_cross_correlation(search, filt):
