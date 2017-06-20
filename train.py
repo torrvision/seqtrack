@@ -461,7 +461,7 @@ def _data_augmentation_scale_shift(xs, ys, o):
             ''' Case: ratio < 1.
             Frames get resized (smaller) and padded to original size.
             '''
-            ratio = tf.maximum(0.2, ratio) # minimum scale
+            ratio = tf.maximum(0.5, ratio) # minimum scale
             x_resize = tf.image.resize_images(x, [tf.to_int32(ratio*o.frmsz)]*2,
                                               method=tf.image.ResizeMethod.BICUBIC)
             offset_h = tf.to_int32(tf.random_uniform([], maxval=o.frmsz*(1-ratio)))

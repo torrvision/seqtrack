@@ -931,12 +931,13 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         # Model parameters:
         use_rnn=True,
         use_heatmap=False,
+        use_batch_norm=False, # Caution when use_rnn is True.
         ):
 
     def feat_net(x):
         with slim.arg_scope([slim.max_pool2d], kernel_size=3, padding='SAME'):
             # conv1
-            x = slim.conv2d(x, 64, 11, stride=4)
+            x = slim.conv2d(x, 64, 11, stride=2)
             x = slim.max_pool2d(x)
             # conv2
             x = slim.conv2d(x, 128, 5)
@@ -960,36 +961,19 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
         # x.shape is [b, t, hx, wx, c]
         # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
         # relu(linear(concat(a, b)) = relu(linear(a) + linear(b))
-        f = slim.conv2d(f, dim, 3, activation_fn=None)
+        f = slim.conv2d(f, dim, 1, activation_fn=None)
         f = tf.expand_dims(f, 1)
         x, unmerge = merge_dims(x, 0, 2)
-        x = slim.conv2d(x, dim, 3, activation_fn=None)
+        x = slim.conv2d(x, dim, 1, activation_fn=None)
         x = unmerge(x, 0)
         # Search for f in x.
         x = tf.nn.relu(tf.add(x, f))
         # Post-process appearance "similarity".
         x, unmerge = merge_dims(x, 0, 2)
-        x = slim.conv2d(x, dim, 3)
-        x = slim.conv2d(x, dim, 3)
+        x = slim.conv2d(x, dim, 1)
+        x = slim.conv2d(x, dim, 1)
         x = unmerge(x, 0)
         return x
-
-    # def search_one(x, f):
-    #     dim = 256
-    #     # x.shape is [b, t, hx, wx, c]
-    #     # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
-    #     # relu(linear(concat(a, b)) = relu(linear(a) + linear(b))
-    #     f = slim.conv2d(f, dim, 3, activation_fn=None)
-    #     # f = tf.expand_dims(f, 1)
-    #     # x, unmerge = merge_dims(x, 0, 2)
-    #     x = slim.conv2d(x, dim, 3, activation_fn=None)
-    #     # x = unmerge(x, 0)
-    #     # Search for f in x.
-    #     x = tf.nn.relu(tf.add(x, f))
-    #     # Post-process appearance "similarity".
-    #     x = slim.conv2d(x, dim, 3)
-    #     x = slim.conv2d(x, dim, 3)
-    #     return x
 
     def initial_state_net(x0, y0, state_dim=16):
         f = get_masks_from_rectangles(y0, frmsz=frmsz)
@@ -1032,7 +1016,8 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
                                 num_outputs=state_dim,
                                 kernel_size=3,
                                 padding='SAME',
-                                activation_fn=None):
+                                activation_fn=None,
+                                normalizer_fn=None):
                 i = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
                                   slim.conv2d(h_prev, scope='hi', biases_initializer=None))
                 f = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
@@ -1045,8 +1030,17 @@ def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
                 h = y * tf.nn.tanh(c)
         return h, c
 
+    batch_norm_opts = {} if not use_batch_norm else {
+        'normalizer_fn': slim.batch_norm,
+        'normalizer_params': {
+            'is_training': example['is_training'],
+            'fused': True,
+        },
+    }
+
     with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                        weights_regularizer=slim.l2_regularizer(weight_decay)):
+                        weights_regularizer=slim.l2_regularizer(weight_decay),
+                        **batch_norm_opts):
         # Process initial image and label to get "template".
         with tf.variable_scope('template'):
             p0 = get_masks_from_rectangles(example['y0'], frmsz=frmsz)
