@@ -199,10 +199,10 @@ class RNN_dual_mix(object):
             ft, it, ot, ct_tilda = tf.split(x_linear + h_linear, 4, axis=1)
 
             with tf.variable_scope('bias'):
-                bf = tf.get_variable('bf', shape=[4*o.nunits], initializer=tf.ones_initializer())
-                bi = tf.get_variable('bi', shape=[4*o.nunits], initializer=tf.zeros_initializer())
-                bo = tf.get_variable('bo', shape=[4*o.nunits], initializer=tf.zeros_initializer())
-                bc = tf.get_variable('bc', shape=[4*o.nunits], initializer=tf.zeros_initializer())
+                bf = tf.get_variable('bf', shape=[o.nunits], initializer=tf.ones_initializer())
+                bi = tf.get_variable('bi', shape=[o.nunits], initializer=tf.zeros_initializer())
+                bo = tf.get_variable('bo', shape=[o.nunits], initializer=tf.zeros_initializer())
+                bc = tf.get_variable('bc', shape=[o.nunits], initializer=tf.zeros_initializer())
 
             ft = ft + bf
             it = it + bi
