@@ -169,11 +169,11 @@ class RNN_dual_mix(object):
 
         def pass_lstm1(x, h_prev, c_prev):
             '''
-            Previously forget bias was initialized to be 1 as in
+            Previously `forget` bias was initialized to be 1 as in
             `An Empirical Exploration of Recurrent Neural Network Architecture`.
             As moving to layer normalization, I compute linear functions of
-            input and hidden separately and all at once for all 4 gates
-            (as before). Now I don't initialize forget bias to be 1.
+            input and hidden separately (all at once for 4 gates as before).
+            Thus now I don't initialize forget bias to be 1.
             '''
             def ln(inputs, epsilon = 1e-5, scope = None):
                 mean, var = tf.nn.moments(inputs, [1], keep_dims=True)
@@ -187,18 +187,20 @@ class RNN_dual_mix(object):
 
             with slim.arg_scope([slim.fully_connected],
                                 activation_fn=None,
+                                biases_initializer=None,
                                 weights_regularizer=slim.l2_regularizer(o.wd)):
-                if self.layer_norm:
-                    x_linear = slim.fully_connected(x, 4*o.nunits,
-                                                    biases_initializer=None, scope='x_linear')
-                    h_linear = slim.fully_connected(h_prev, 4*o.nunits,
-                                                    biases_initializer=None, scope='h_linear')
-                    x_linear = ln(x_linear, scope='x/')
-                    h_linear = ln(h_linear, scope='h/')
-                else:
-                    x_linear = slim.fully_connected(x, 4*o.nunits, scope='x_linear')
-                    h_linear = slim.fully_connected(h_prev, 4*o.nunits, scope='h_linear')
-            ft, it, ot, ct_tilda = tf.split(x_linear + h_linear, 4, axis=1)
+                x_linear = slim.fully_connected(x, 4*o.nunits, scope='x_linear')
+                h_linear = slim.fully_connected(h_prev, 4*o.nunits, scope='h_linear')
+
+            if self.layer_norm:
+                x_linear = ln(x_linear, scope='x/')
+                h_linear = ln(h_linear, scope='h/')
+
+            with tf.variable_scope('bias'):
+                bias = tf.get_variable('bias', shape=[4*o.nunits], initializer=tf.zeros_initializer())
+                lstm_matrix = x_linear + h_linear + bias
+
+            ft, it, ot, ct_tilda = tf.split(lstm_matrix, 4, axis=1)
             ct = (tf.nn.sigmoid(ft) * c_prev) + (tf.nn.sigmoid(it) * tf.nn.tanh(ct_tilda))
             ht = tf.nn.sigmoid(ot) * tf.nn.tanh(ct)
             return ht, ct
