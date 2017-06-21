@@ -122,7 +122,7 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
         coord.request_stop()
 
 
-def load_images(example, capacity=32, num_threads=1, image_size=[None, None, None],
+def load_images(example, image_size, resize=False, capacity=32, num_threads=1,
         name='load_images'):
     '''Creates a queue of sequences with images loaded.
     See the package example.
@@ -150,16 +150,25 @@ def load_images(example, capacity=32, num_threads=1, image_size=[None, None, Non
     '''
     # Follow structure of tf.train.batch().
     with tf.name_scope(name) as scope:
+        assert len(image_size) == 2
         # Create queue to write images to.
         queue = tf.FIFOQueue(capacity=capacity,
-                             dtypes=[tf.uint8, tf.float32, tf.bool],
+                             dtypes=[tf.float32, tf.float32, tf.bool],
                              names=['images', 'labels', 'label_is_valid'],
                              name='image_queue')
         example = dict(example)
         # Read files from disk.
         file_contents = tf.map_fn(tf.read_file, example['image_files'], dtype=tf.string)
         # Decode images.
-        images = tf.map_fn(tf.image.decode_jpeg, file_contents, dtype=tf.uint8)
+        images = tf.map_fn(functools.partial(tf.image.decode_jpeg, channels=3),
+                           file_contents,
+                           dtype=tf.uint8)
+        images = tf.image.convert_image_dtype(images, tf.float32)
+        if resize:
+            images = tf.image.resize_images(images, image_size, method=tf.image.ResizeMethod.BILINEAR)
+        check_size = tf.assert_equal(tf.shape(images)[1:3], image_size)
+        with tf.control_dependencies([check_size]):
+            images = tf.identity(images)
         # Replace files with images.
         del example['image_files']
         example['images'] = images
@@ -172,7 +181,7 @@ def load_images(example, capacity=32, num_threads=1, image_size=[None, None, Non
         # Restore rank information of Tensors for tf.train.batch.
         # TODO: It does not seem possible to preserve this through the FIFOQueue?
         # Let at least the sequence length remain dynamic.
-        dequeue['images'].set_shape([None] + image_size)
+        dequeue['images'].set_shape([None] + image_size + [3])
         dequeue['labels'].set_shape(example['labels'].shape)
         dequeue['label_is_valid'].set_shape(example['label_is_valid'].shape)
         return dequeue

@@ -217,8 +217,12 @@ def main():
     # TODO: Set model_opts from command-line or JSON file?
     m = model.load_model(o, model_params=o.model_params)
 
-    train.train(m, {'train': datasets['ILSVRC-train'], 'val': datasets['ILSVRC-val']},
-                eval_sets, o, use_queues=o.use_queues)
+    train_datasets = {
+        'train': datasets['ILSVRC-train'],
+        'val': datasets['ILSVRC-val'],
+        'OTB-50': datasets['OTB-50']
+    }
+    train.train(m, train_datasets, eval_sets, o, use_queues=o.use_queues)
 
 
 def trace(frame, event, arg):

@@ -1,4 +1,3 @@
-import pdb
 import sys
 import csv
 import functools
@@ -77,17 +76,24 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     # since there are separate summary ops for training and validation (with different names).
     # Option 2 is to use FIFOQueue.from_list()
 
-    modes = ['train', 'val']
+    assert 'train' in datasets
+    val_datasets = {dataset for dataset in datasets if dataset != 'train'}
+    if 'val' in val_datasets:
+        val_order = ['val'] + sorted(dataset for dataset in val_datasets if dataset != 'val')
+    else:
+        val_order = sorted(val_datasets)
+    dataset_order = ['train'] + val_order
+    dataset_index = {name: i for i, name in enumerate(dataset_order)}
 
     feed_loop = {} # Each value is a function to call in a thread.
     with tf.name_scope('input'):
         from_queue = None
         if use_queues:
             queues = []
-            for mode in modes:
+            for dataset in dataset_order:
                 # Create a queue each for training and validation data.
-                queue, feed_loop[mode] = _make_input_pipeline(o,
-                    num_load_threads=1, num_batch_threads=1, name='pipeline_'+mode)
+                queue, feed_loop[dataset] = _make_input_pipeline(o,
+                    num_load_threads=1, num_batch_threads=1, name='pipeline_'+dataset)
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues,
                 capacity=4, num_threads=1)
@@ -109,7 +115,6 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
     # nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
-    nbatch_val = len(datasets['val'].videos)/o.batchsz if not o.debugmode else 30
 
     global_step_var = tf.Variable(0, name='global_step', trainable=False)
     # lr = init * decay^(step)
@@ -157,22 +162,22 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     image_summaries.append(
                         tf.summary.image(mtype, _draw_memory_state(model, mtype),
                         max_outputs=o.ntimesteps+1, collections=[]))
-        for mode in modes:
-            with tf.name_scope(mode):
+        for dataset in datasets:
+            with tf.name_scope(dataset):
                 # Merge summaries with any that are specific to the mode.
-                summaries = (global_summaries + tf.get_collection('summaries_' + mode))
-                summary_vars[mode] = tf.summary.merge(summaries)
+                summaries = (global_summaries + tf.get_collection('summaries_' + dataset))
+                summary_vars[dataset] = tf.summary.merge(summaries)
                 summaries.extend(image_summaries)
-                summary_vars_with_preview[mode] = tf.summary.merge(summaries)
+                summary_vars_with_preview[dataset] = tf.summary.merge(summaries)
 
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver(max_to_keep=10)
 
     # Use a separate random number generator for each sampler.
-    sequences = {mode: iter_examples(datasets[mode], o,
-                                     rand=random.Random(o.seed_global),
-                                     num_epochs=None)
-                 for mode in modes}
+    sequences = {dataset: iter_examples(datasets[dataset], o,
+                                        rand=random.Random(o.seed_global),
+                                        num_epochs=None)
+                 for dataset in datasets}
 
     if o.curriculum_learning:
         ''' Curriculum learning.
@@ -212,9 +217,9 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
             coord = tf.train.Coordinator()
             tf.train.start_queue_runners(sess, coord)
             # Run the feed loops in another thread.
-            threads = [threading.Thread(target=feed_loop[mode],
-                                        args=(sess, coord, sequences[mode]))
-                       for mode in modes]
+            threads = [threading.Thread(target=feed_loop[dataset],
+                                        args=(sess, coord, sequences[dataset]))
+                       for dataset in datasets]
             for t in threads:
                 t.start()
 
@@ -222,13 +227,13 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
             sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
         writer = {}
-        for mode in modes:
-            path_summary = os.path.join(o.path_summary, mode)
+        for dataset in dataset_order:
+            path_summary = os.path.join(o.path_summary, dataset)
             # Only include graph in one summary.
-            if mode == 'train':
-                writer[mode] = tf.summary.FileWriter(path_summary, sess.graph)
+            if dataset == 'train':
+                writer[dataset] = tf.summary.FileWriter(path_summary, sess.graph)
             else:
-                writer[mode] = tf.summary.FileWriter(path_summary)
+                writer[dataset] = tf.summary.FileWriter(path_summary)
 
         while True: # Loop over epochs
             global_step = global_step_var.eval() # Number of steps taken.
@@ -237,7 +242,6 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
             ie = global_step / nbatch
             t_epoch = time.time()
 
-            ib_val = 0
             loss_ep = []
             for ib in range(nbatch): # Loop over batches in epoch.
                 global_step = global_step_var.eval() # Number of steps taken.
@@ -275,12 +279,14 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                             result['iou_mean'], result['auc'], result['cle_mean'])
 
                 # Take a training step.
+                loss = {}
+                dur = {}
                 start = time.time()
                 feed_dict = {example['use_gt']:      True,
                              example['is_training']: True,
                              example['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)}
                 if use_queues:
-                    feed_dict.update({queue_index: 0}) # Choose validation queue.
+                    feed_dict.update({queue_index: 0}) # Select data source.
                 else:
                     batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
                     batch = _load_batch(batch_seqs, o)
@@ -290,48 +296,47 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     summary_var = (summary_vars_with_preview['train']
                                    if global_step % o.period_preview == 0
                                    else summary_vars['train'])
-                    _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
+                    _, loss['train'], summary = sess.run([optimize_op, loss_var, summary_var],
                                                 feed_dict=feed_dict)
-                    dur = time.time() - start
+                    dur['train'] = time.time() - start
                     writer['train'].add_summary(summary, global_step=global_step)
                 else:
-                    _, loss = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
-                    dur = time.time() - start
-                loss_ep.append(loss)
+                    _, loss['train'] = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
+                    dur['train'] = time.time() - start
+                loss_ep.append(loss['train'])
 
-                newval = False
                 # Evaluate validation error.
                 if global_step % o.period_summary == 0:
-                    # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
-                    if ib * nbatch_val >= ib_val * nbatch:
+                    for dataset in val_datasets:
                         start = time.time()
                         feed_dict = {example['use_gt']:      True,  # Match training.
                                      example['is_training']: False, # Do not update bnorm stats.
                                      example['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
                         if use_queues:
-                            feed_dict.update({queue_index: 1}) # Choose validation queue.
+                            feed_dict.update({queue_index: dataset_index[dataset]}) # Select data source.
                         else:
-                            batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
+                            batch_seqs = [next(sequences[dataset]) for i in range(o.batchsz)]
                             batch = _load_batch(batch_seqs, o)
                             feed_dict.update({example[k]: v for k, v in batch.iteritems()})
-                            dur_load = time.time() - start
-                        summary_var = (summary_vars_with_preview['val']
+                            # dur_load = time.time() - start
+                        summary_var = (summary_vars_with_preview[dataset]
                                        if global_step % o.period_preview == 0
-                                       else summary_vars['val'])
-                        loss_val, summary = sess.run([loss_var, summary_var],
-                                                     feed_dict=feed_dict)
-                        dur_val = time.time() - start
-                        writer['val'].add_summary(summary, global_step=global_step)
-                        ib_val += 1
-                        newval = True
+                                       else summary_vars[dataset])
+                        loss[dataset], summary = sess.run([loss_var, summary_var],
+                                                          feed_dict=feed_dict)
+                        dur[dataset] = time.time() - start
+                        writer[dataset].add_summary(summary, global_step=global_step)
 
                 # Print result of one batch update
                 if o.verbose_train:
-                    losstime = '|loss:{:.5f}/{:.5f} (time:{:.2f}/{:.2f}) - with val'.format(
-                            loss, loss_val, dur, dur_val) if newval else \
-                            '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
-                    print 'ep {}, batch {}/{} (bsz:{}), global_step {} {}'.format(
-                            ie+1, ib+1, nbatch, o.batchsz, global_step, losstime)
+                    preamble = 'ep {}, batch {}/{} (bsz:{}), global_step {}'.format(
+                        ie+1, ib+1, nbatch, o.batchsz, global_step)
+                    active = [dataset for dataset in dataset_order if dataset in loss]
+                    detail = 'loss:{} time:{} ({})'.format(
+                        '/'.join(['{:.5f}'.format(loss[dataset]) for dataset in active]),
+                        '/'.join(['{:.2f}'.format(dur[dataset]) for dataset in active]),
+                        '/'.join(active))
+                    print preamble + ' ' + detail
 
             print '[Epoch finished] ep {:d}, global_step {:d} |loss:{:.5f} (time:{:.2f})'.format(
                     ie+1, global_step_var.eval(), np.mean(loss_ep), time.time()-t_epoch)
@@ -355,14 +360,15 @@ def _get_optimizer(lr, o):
     return optimizer
 
 
-def _make_input_pipeline(o, dtype=tf.float32,
+def _make_input_pipeline(o,
         example_capacity=4, load_capacity=4, batch_capacity=4,
         num_load_threads=1, num_batch_threads=1,
         name='pipeline'):
     with tf.name_scope(name) as scope:
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
-        images = pipeline.load_images(files, capacity=load_capacity,
-                num_threads=num_load_threads, image_size=[o.frmsz, o.frmsz, 3])
+        images = pipeline.load_images(files,
+            image_size=[o.frmsz, o.frmsz], resize=True,
+            capacity=load_capacity, num_threads=num_load_threads)
         images_batch = pipeline.batch(images,
             batch_size=o.batchsz, sequence_length=o.ntimesteps+1,
             capacity=batch_capacity, num_threads=num_batch_threads)
@@ -372,7 +378,6 @@ def _make_input_pipeline(o, dtype=tf.float32,
         images_batch['images'].set_shape([None, o.ntimesteps+1, None, None, None])
         images_batch['labels'].set_shape([None, o.ntimesteps+1, None])
         # Cast type of images.
-        images_batch['images'] = tf.image.convert_image_dtype(images_batch['images'], o.dtype)
         # Put in format expected by model.
         # is_valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
         example_batch = {
@@ -746,7 +751,7 @@ def _load_sequence(seq, o):
     assert(len(seq['labels']) == seq_len)
     assert(len(seq['label_is_valid']) == seq_len)
     assert(seq['label_is_valid'][0] == True)
-    f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
+    f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=True),
                             dtype=o.dtype.as_numpy_dtype)
     images = map(f, seq['image_files'])
     return {
