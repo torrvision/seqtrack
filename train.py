@@ -136,7 +136,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
         boxes = tf.summary.image('box',
-            _draw_bounding_boxes(example, model, o),
+            _draw_bounding_boxes(example, model, regress=o.regress),
             max_outputs=o.ntimesteps+1, collections=[])
         image_summaries = [boxes]
         # Produce an image summary of the heatmap.
@@ -249,7 +249,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
                 # intermediate evaluation of model
                 period_assess = o.period_assess if not o.debugmode else 20
-                if global_step > 0 and global_step % period_assess == 0:
+                #if global_step > 0 and global_step % period_assess == 0:
+                if global_step % period_assess == 0:
                     iter_id = 'iteration{}'.format(global_step)
                     for eval_id, sampler in eval_sets.iteritems():
                         vis_dir = os.path.join(o.path_output, iter_id, eval_id)
@@ -264,10 +265,11 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model,
                                 eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None,
-                                use_gt=o.use_gt_eval, regress_mode=o.regress),
+                                use_gt=o.use_gt_eval, regress=o.regress),
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])
+                pdb.set_trace()
 
                 # Take a training step.
                 start = time.time()
@@ -657,7 +659,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         return tf.reduce_sum(losses.values(), name=scope)
 
 
-def _draw_bounding_boxes(example, model, o, time_stride=1, name='draw_box'):
+def _draw_bounding_boxes(example, model, regress='abs', time_stride=1, name='draw_box'):
     # Note: This will produce INT_MIN when casting NaN to int.
     with tf.name_scope(name) as scope:
         # example['x_raw']   -- [b, t, h, w, 3]
@@ -667,7 +669,7 @@ def _draw_bounding_boxes(example, model, o, time_stride=1, name='draw_box'):
         image = (1.0/255)*example['x_raw'][0][::time_stride]
         y_gt = example['y'][0][::time_stride]
         y_pred = model.outputs['y'][0][::time_stride]
-        if o.regress == 'delta':
+        if regress == 'delta':
             y_pred = example['y0'][0] + tf.cumsum(y_pred)
         y = tf.stack([y_gt, y_pred], axis=1)
         coords = tf.unstack(y, axis=2)
