@@ -592,6 +592,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
     with tf.name_scope(name) as scope:
         y          = example['y']
         y_is_valid = example['y_is_valid']
+        y0         = example['y0'] # need to compute delta loss
         assert(y.get_shape().as_list()[1] == o.ntimesteps)
         hmap = convert_rec_to_heatmap(y, o, min_size=1.0)
         if o.heatmap_stride != 1:
@@ -638,6 +639,15 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
                         labels=tf.reshape(hmap_valid, [-1, 2]),
                         logits=tf.reshape(hmap_pred_valid, [-1, 2])))
             losses['ce'] = loss_ce
+
+        # l1 distance of displacement loss
+        if 'l1_delta' in o.losses:
+            y_delta = y - tf.concat((tf.expand_dims(y0, 1), y[:,:o.ntimesteps-1,:]), 1)
+            y_valid = tf.boolean_mask(y_delta, y_is_valid)
+            y_pred = outputs['y']
+            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            loss_l1_delta = tf.reduce_mean(tf.abs(y_valid - y_pred_valid))
+            losses['l1_delta'] = loss_l1_delta
 
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
