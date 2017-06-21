@@ -616,7 +616,7 @@ def iter_examples(dataset, o, rand=None, num_epochs=None):
         # sequences = sample.sample(dataset, generator=generator,
         #                           shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
         #                           **o.sampler_params)
-        for sequence in sequences:
+        for name, sequence in sequences:
             yield sequence
             n += 1
         print 'epoch {}: num sequences {}'.format(i+1, n)

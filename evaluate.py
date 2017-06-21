@@ -108,10 +108,11 @@ def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False):
     '''
     sequences = list(sequences)
     sequence_results = []
-    pbar = ProgressBar(maxval=len(sequences),
-            widgets=['sequence ', Counter(), '/{} ('.format(len(sequences)),
-                Percentage(), ') ', Bar(), ' ', ETA()]).start()
-    for i, sequence in enumerate(sequences):
+    pbar = ProgressBar(
+        maxval=len(sequences),
+        widgets=['sequence ', Counter(), '/{} ('.format(len(sequences)),
+                 Percentage(), ') ', Bar(), ' ', ETA()])
+    for name, sequence in pbar(sequences):
         if len(sequence['image_files']) < 2:
             continue
         is_valid = sequence['label_is_valid']
@@ -120,19 +121,17 @@ def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False):
         if num_valid < 1:
             continue
         #print 'sequence {} of {}'.format(i+1, len(sequences))
-        pbar.update(i+1)
         output_vars = set(['y', 'hmap_softmax']).intersection(set(model.outputs.keys()))
         pred = track(sess, inputs, model, sequence, use_gt, output_vars)
         rect_pred = pred['y']
         hmap_pred = pred.get('hmap_softmax', None)
         if visualize:
-            visualize('sequence_{:06d}'.format(i), sequence, rect_pred, hmap_pred)
+            visualize(name, sequence, rect_pred, hmap_pred)
         rect_gt = np.array(sequence['labels'])
         # Convert to original image co-ordinates.
         rect_pred = _unnormalize_rect(rect_pred, sequence['original_image_size'])
         rect_gt   = _unnormalize_rect(rect_gt,   sequence['original_image_size'])
         sequence_results.append(evaluate_track(rect_pred, rect_gt, is_valid))
-    pbar.finish()
 
     results = {}
     assert(len(sequence_results) > 0)

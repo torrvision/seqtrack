@@ -10,6 +10,7 @@ import math
 import numpy as np
 import os
 import progressbar
+import re
 
 
 def epoch(dataset, rand, frame_sampler, max_objects=None, max_videos=None):
@@ -37,15 +38,20 @@ def epoch(dataset, rand, frame_sampler, max_objects=None, max_videos=None):
             if frames:
                 # yield (video, obj, frames)
                 trajectory = dataset.tracks[video][obj]
-                yield {
+                name = '{}-{}'.format(_escape(video), obj)
+                yield (name, {
                     'image_files':    [dataset.image_file(video, t)       for t in frames],
                     'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
                     'label_is_valid': [t in trajectory                    for t in frames],
                     'original_image_size': dataset.original_image_size[video],
-                }
+                })
                 num_objs += 1
         if num_objs > 0:
             num_videos += 1
+
+def _escape(s):
+    s = re.sub('/', '-', s)
+    return s
 
 
 def make_frame_sampler(kind, dataset, ntimesteps, **kwargs):
