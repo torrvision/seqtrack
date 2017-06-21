@@ -642,10 +642,13 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 
         # l1 distance of displacement loss
         if 'l1_delta' in o.losses:
-            y_delta = y - tf.concat((tf.expand_dims(y0, 1), y[:,:o.ntimesteps-1,:]), 1)
-            y_valid = tf.boolean_mask(y_delta, y_is_valid)
+            y_is_valid_pad = tf.expand_dims(tf.ones(shape=tf.shape(y_is_valid[:,0]), dtype=tf.bool), 1)
+            y_is_valid_shift = tf.concat((y_is_valid_pad, y_is_valid[:,:-1]), 1)
+            y_is_valid_delta = tf.logical_and(y_is_valid, y_is_valid_shift)
+            y_delta = y - tf.concat((tf.expand_dims(y0, 1), y[:,:-1,:]), 1)
+            y_valid = tf.boolean_mask(y_delta, y_is_valid_delta)
             y_pred = outputs['y']
-            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid_delta)
             loss_l1_delta = tf.reduce_mean(tf.abs(y_valid - y_pred_valid))
             losses['l1_delta'] = loss_l1_delta
 
