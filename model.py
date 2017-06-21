@@ -926,7 +926,7 @@ def multi_res_vgg(x, prev, init, use_heatmap, heatmap_stride,
         return outputs, curr
 
 
-def simple_search(example, ntimesteps, frmsz, weight_decay=0.0,
+def simple_search(example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
         summaries_collections=None,
         # Model parameters:
         use_rnn=True,
@@ -1144,7 +1144,10 @@ def load_model(o, model_params=None):
         model = functools.partial(rnn_multi_res, o=o, **model_params)
     elif o.model == 'simple_search':
         model = functools.partial(simple_search,
-            ntimesteps=o.ntimesteps, frmsz=o.frmsz, weight_decay=o.wd,
+            ntimesteps=o.ntimesteps,
+            frmsz=o.frmsz,
+            batchsz=o.batchsz,
+            weight_decay=o.wd,
             **model_params)
     else:
         raise ValueError ('model not available')

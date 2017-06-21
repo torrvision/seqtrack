@@ -48,7 +48,7 @@ def load_image(fname, size=None, resize=False):
     return im
 
 def im_to_arr(x, dtype=np.float32):
-    return np.array(x, dtype=dtype)
+    return (1.0/255) * np.array(x, dtype=dtype)
 
 def pad_to(x, n, axis=0, mode='constant'):
     width = [(0, 0) for s in x.shape]
