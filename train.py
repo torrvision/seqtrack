@@ -136,7 +136,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
         boxes = tf.summary.image('box',
-            _draw_bounding_boxes(example, model),
+            _draw_bounding_boxes(example, model, o),
             max_outputs=o.ntimesteps+1, collections=[])
         image_summaries = [boxes]
         # Produce an image summary of the heatmap.
@@ -249,7 +249,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
                 # intermediate evaluation of model
                 period_assess = o.period_assess if not o.debugmode else 20
-                if global_step > 0 and global_step % period_assess == 0:
+                #if global_step > 0 and global_step % period_assess == 0:
+                if global_step % period_assess == 0:
                     iter_id = 'iteration{}'.format(global_step)
                     for eval_id, sampler in eval_sets.iteritems():
                         vis_dir = os.path.join(o.path_output, iter_id, eval_id)
@@ -264,10 +265,11 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model,
                                 eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None,
-                                use_gt=o.use_gt_eval),
+                                use_gt=o.use_gt_eval, regress_mode=o.regress),
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])
+                pdb.set_trace()
 
                 # Take a training step.
                 start = time.time()
@@ -608,8 +610,18 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         # l1 distances for left-top and right-bottom
         if 'l1' in o.losses:
             y_pred = outputs['y']
-            y_valid = tf.boolean_mask(y, y_is_valid)
-            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            if o.regress == 'abs':
+                y_valid = tf.boolean_mask(y, y_is_valid)
+                y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            elif o.regress == 'delta':
+                y_is_valid_pad = tf.expand_dims(tf.ones(shape=tf.shape(y_is_valid[:,0]), dtype=tf.bool), 1)
+                y_is_valid_shift = tf.concat((y_is_valid_pad, y_is_valid[:,:-1]), 1)
+                y_is_valid_delta = tf.logical_and(y_is_valid, y_is_valid_shift)
+                y_delta = y - tf.concat((tf.expand_dims(y0, 1), y[:,:-1,:]), 1)
+                y_valid = tf.boolean_mask(y_delta, y_is_valid_delta)
+                y_pred_valid = tf.boolean_mask(y_pred, y_is_valid_delta)
+            else:
+                raise ValueError('Regression type should be either `abs` or `delta`.')
             loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid))
             losses['l1'] = loss_l1
 
@@ -640,18 +652,6 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
                         logits=tf.reshape(hmap_pred_valid, [-1, 2])))
             losses['ce'] = loss_ce
 
-        # l1 distance of displacement loss
-        if 'l1_delta' in o.losses:
-            y_is_valid_pad = tf.expand_dims(tf.ones(shape=tf.shape(y_is_valid[:,0]), dtype=tf.bool), 1)
-            y_is_valid_shift = tf.concat((y_is_valid_pad, y_is_valid[:,:-1]), 1)
-            y_is_valid_delta = tf.logical_and(y_is_valid, y_is_valid_shift)
-            y_delta = y - tf.concat((tf.expand_dims(y0, 1), y[:,:-1,:]), 1)
-            y_valid = tf.boolean_mask(y_delta, y_is_valid_delta)
-            y_pred = outputs['y']
-            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid_delta)
-            loss_l1_delta = tf.reduce_mean(tf.abs(y_valid - y_pred_valid))
-            losses['l1_delta'] = loss_l1_delta
-
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
                 tf.summary.scalar(name, loss, collections=summaries_collections)
@@ -659,7 +659,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         return tf.reduce_sum(losses.values(), name=scope)
 
 
-def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
+def _draw_bounding_boxes(example, model, o, time_stride=1, name='draw_box'):
     # Note: This will produce INT_MIN when casting NaN to int.
     with tf.name_scope(name) as scope:
         # example['x_raw']   -- [b, t, h, w, 3]
@@ -669,6 +669,8 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         image = (1.0/255)*example['x_raw'][0][::time_stride]
         y_gt = example['y'][0][::time_stride]
         y_pred = model.outputs['y'][0][::time_stride]
+        if o.regress == 'delta':
+            y_pred = example['y0'][0] + tf.cumsum(y_pred)
         y = tf.stack([y_gt, y_pred], axis=1)
         coords = tf.unstack(y, axis=2)
         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)

@@ -38,6 +38,7 @@ class Opts(object):
         # model - general
         self.model              = '' # {rnn_basic, rnn_attention_s, rnn_attention_t}
         self.losses             = None
+        self.regress            = 'abs' # {abs, delta}
 
         #----------------------------------------------------------------------
         # model parameters - rnn

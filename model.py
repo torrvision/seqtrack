@@ -328,6 +328,7 @@ class RNN_dual_mix(object):
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
+        y_init = tf.identity(y0) # for `delta` regression type output.
         hmap_init = tf.identity(get_masks_from_rectangles(y0, o))
 
         x_prev = x_init
@@ -418,6 +419,7 @@ class RNN_dual_mix(object):
 
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
         hmap_pred = tf.stack(hmap_pred, axis=1)
+        y_prev = y_pred[:,-1,:] # for `delta` regression type output.
 
         outputs = {'y': y_pred, 'hmap': hmap_pred, 'hmap_softmax': tf.nn.softmax(hmap_pred)}
         state = {}
@@ -427,6 +429,7 @@ class RNN_dual_mix(object):
         state.update({'c2_{}'.format(i+1): (c2_init[i], c2_curr[i]) for i in range(self.lstm2_nlayers)})
         state.update({'x': (x_init, x_prev)})
         state.update({'hmap': (hmap_init, hmap_prev)})
+        state.update({'y': (y_init, y_prev)})
 
         #dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
         dbg = {}
