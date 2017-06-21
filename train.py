@@ -249,8 +249,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
                 # intermediate evaluation of model
                 period_assess = o.period_assess if not o.debugmode else 20
-                #if global_step > 0 and global_step % period_assess == 0:
-                if global_step % period_assess == 0:
+                if global_step > 0 and global_step % period_assess == 0:
                     iter_id = 'iteration{}'.format(global_step)
                     for eval_id, sampler in eval_sets.iteritems():
                         vis_dir = os.path.join(o.path_output, iter_id, eval_id)
@@ -269,7 +268,6 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])
-                pdb.set_trace()
 
                 # Take a training step.
                 start = time.time()
