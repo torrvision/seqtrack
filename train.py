@@ -740,8 +740,8 @@ def _load_sequence(seq, o):
     assert(len(seq['labels']) == seq_len)
     assert(len(seq['label_is_valid']) == seq_len)
     assert(seq['label_is_valid'][0] == True)
-    # TODO: Use o.dtype here? Numpy complains.
-    f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False), dtype=o.dtype)
+    f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
+                            dtype=o.dtype.as_numpy_dtype)
     images = map(f, seq['image_files'])
     return {
         'x0_raw':     np.array(images[0]),

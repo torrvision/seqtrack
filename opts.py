@@ -101,7 +101,7 @@ class Opts(object):
         self.period_ckpt        = 10000 # this is based only on global_step; batchsz not considered
         self.period_assess      = 20000
         self.period_summary     = 100
-        self.period_preview     = 1000 # Ensure that period_preview % period_summary == 0.
+        self.period_preview     = 100 # Ensure that period_preview % period_summary == 0.
         self.visualize_eval     = False
 
         #----------------------------------------------------------------------
