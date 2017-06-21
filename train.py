@@ -451,38 +451,44 @@ def _perform_data_augmentation(example_raw, o, pad_value=None, name='data_augmen
 
 
 def _data_augmentation_scale_shift(xs, ys, o, pad_value=None):
-    def _augment_pad(x, y, ratio):
-        ''' Case: ratio < 1.
-        Frames get resized (smaller) and padded to original size.
-        '''
-        ratio = tf.maximum(0.5, ratio) # minimum scale
-        assert x.dtype.is_floating
-        # mu = tf.reduce_mean(x, axis=[1, 2], keep_dims=True)
-        if pad_value:
-            x -= pad_value
-        x_resize = tf.image.resize_images(x, [tf.to_int32(ratio*o.frmsz)]*2,
-                                          method=tf.image.ResizeMethod.BICUBIC)
-        offset_h = tf.to_int32(tf.random_uniform([], maxval=o.frmsz*(1-ratio)))
-        offset_w = tf.to_int32(tf.random_uniform([], maxval=o.frmsz*(1-ratio)))
-        # NOTE: `tf.pad` doesn't take pad value and only pad with zeros.
-        x_aug = tf.image.pad_to_bounding_box(x_resize, offset_h, offset_w, o.frmsz, o.frmsz)
-        if pad_value:
-            x_aug += pad_value
-        y_aug = y*ratio + tf.cast(tf.divide(tf.stack([offset_w, offset_h]*2), o.frmsz), o.dtype)
+    def _augment(x, y, ratio):
+        x_min = tf.random_uniform([], maxval=(1-ratio))
+        y_min = tf.random_uniform([], maxval=(1-ratio))
+        x_max = x_min + ratio
+        y_max = y_min + ratio
+        # Now invert these boxes.
+        # (a, b) in (0, 1) is like (0, 1) in (c, d)
+        # This gives:
+        #   (b - a) / (1 - 0) = (1 - 0) / (d - c)
+        #   ratio = 1 / (d - c)
+        # Therefore:
+        #   (a - 0) / (1 - 0) = (0 - c) / (d - c)
+        #   c = -a / ratio
+        u_min = -x_min / ratio
+        v_min = -y_min / ratio
+        u_max = u_min + 1/ratio
+        v_max = v_min + 1/ratio
+        boxes = tf.stack([v_min, u_min, v_max, u_max])
+        boxes = tf.expand_dims(boxes, 0)
+        # Same box in every image.
+        n = tf.shape(x)[0]
+        boxes = tf.tile(boxes, [n, 1])
+        x_aug = tf.image.crop_and_resize(x, boxes, box_ind=tf.range(n),
+            crop_size=(o.frmsz, o.frmsz),
+            method='bilinear',
+            extrapolation_value=pad_value)
+        y_aug = y*ratio + tf.stack([x_min, y_min, x_min, y_min])
         return x_aug, y_aug
 
-    def _augment_crop(x, y, ratio):
-        return tf.identity(x), tf.identity(y) # TODO: implement.
-
     max_side_before = tf.reduce_max(tf.maximum(ys[:,:,2]-ys[:,:,0], ys[:,:,3]-ys[:,:,1]), 1)
-    max_side_after = tf.random_uniform(tf.shape(max_side_before), minval=0.05, maxval=1.0)
+    max_side_after = tf.random_uniform(tf.shape(max_side_before), minval=0.05, maxval=0.5)
     ratios = tf.divide(max_side_after, max_side_before)
+    ratios = tf.maximum(0.5, ratios) # minimum scale
+    ratios = tf.minimum(1.0, ratios)
     xs_aug, ys_aug = tf.map_fn(
-        lambda (x, y, ratio): tf.cond(tf.less(ratio, 1.0),
-            lambda: _augment_pad(x, y, ratio),
-            lambda: _augment_crop(x, y, ratio)),
-        [xs, ys, ratios],
-        dtype=[o.dtype, o.dtype])
+        lambda (x, y, ratio): _augment(x, y, ratio),
+        (xs, ys, ratios),
+        dtype=(o.dtype, o.dtype))
     return xs_aug, ys_aug
     # xs_aug = []
     # ys_aug = []
