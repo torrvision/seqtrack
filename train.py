@@ -667,6 +667,9 @@ def _draw_bounding_boxes(example, model, regress='abs', time_stride=1, name='dra
         image = (1.0/255)*example['x_raw'][0][::time_stride]
         y_gt = example['y'][0][::time_stride]
         y_pred = model.outputs['y'][0][::time_stride]
+        image  = tf.concat((tf.expand_dims(model.state['x'][0][0], 0),  image), 0) # add init frame
+        y_gt   = tf.concat((tf.expand_dims(model.state['y'][0][0], 0),   y_gt), 0) # add init y_gt
+        y_pred = tf.concat((tf.expand_dims(model.state['y'][0][0], 0), y_pred), 0) # add init y_gt for pred too
         if regress == 'delta':
             y_pred = example['y0'][0] + tf.cumsum(y_pred)
         y = tf.stack([y_gt, y_pred], axis=1)
@@ -680,7 +683,9 @@ def _draw_heatmap(model, time_stride=1, name='draw_heatmap'):
         # return tf.nn.softmax(model.outputs['hmap'][0,::time_stride,:,:,0:1])
         p = tf.nn.softmax(model.outputs['hmap'][0,::time_stride])
         # Take first channel and convert to int.
-        return tf.cast(tf.round(255*p[:,:,:,0:1]), tf.uint8)
+        hmaps = tf.concat((tf.expand_dims(model.state['hmap'][0][0], 0), p[:,:,:,0:1]), 0) # add init hmap
+        return tf.cast(tf.round(255*hmaps), tf.uint8)
+        #return tf.cast(tf.round(255*p[:,:,:,0:1]), tf.uint8)
 
 def _draw_memory_state(model, mtype, time_stride=1, name='draw_memory_states'):
     with tf.name_scope(name) as scope:
