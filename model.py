@@ -1088,8 +1088,11 @@ def simple_search(example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
     if use_heatmap:
         model.outputs['hmap'] = hmap
         hmap, unmerge = merge_dims(hmap, 0, 2)
+        # TODO: Would prefer to use NEAREST_NEIGHBOR here.
+        # However, it produces incorrect alignment:
+        # https://github.com/tensorflow/tensorflow/issues/10989
         hmap_full = tf.image.resize_images(hmap, size=[frmsz, frmsz],
-            method=tf.image.ResizeMethod.NEAREST_NEIGHBOR, align_corners=True)
+            method=tf.image.ResizeMethod.BILINEAR, align_corners=True)
         hmap_full = unmerge(hmap_full, 0)
         model.outputs['hmap_full'] = hmap_full
         model.outputs['hmap_softmax'] = tf.nn.softmax(hmap_full)
