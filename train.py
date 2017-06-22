@@ -632,6 +632,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         y          = example['y']
         y_is_valid = example['y_is_valid']
         assert(y.get_shape().as_list()[1] == o.ntimesteps)
+        # TODO: Should we enforce a larger minimum rectangle size here?
         hmap = convert_rec_to_heatmap(y, o.frmsz, min_size=1.0)
         if o.heatmap_stride != 1:
             hmap, unmerge = merge_dims(hmap, 0, 2)
@@ -690,9 +691,10 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
             hmap_valid = tf.boolean_mask(hmap, y_is_valid)
             hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
             # hmap is [valid_images, height, width, 2]
-            count = tf.reduce_sum(hmap_valid, axis=(1, 2), keep_dims=True)
-            class_weight = 0.5 / tf.cast(count+1, tf.float32)
-            weight = tf.reduce_sum(hmap_valid * class_weight, axis=-1)
+            mass = tf.reduce_sum(hmap_valid, axis=(1, 2), keep_dims=True)
+            class_mass = 0.5 / tf.cast(mass+1, tf.float32)
+            # TODO: Does this work when labels are not [1, 0] or [0, 1]?
+            coeff = tf.reduce_sum(hmap_valid * class_mass, axis=-1)
             # Flatten to feed into softmax_cross_entropy_with_logits.
             hmap_valid, unmerge = merge_dims(hmap_valid, 0, 3)
             hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
@@ -704,7 +706,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
                 losses['ce'] = tf.reduce_mean(loss_ce)
             if 'ce_balanced' in o.losses:
                 losses['ce_balanced'] = tf.reduce_mean(
-                    tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
+                    tf.reduce_sum(coeff * loss_ce, axis=(1, 2)))
 
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
