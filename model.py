@@ -98,6 +98,41 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
         y1, y2 = yc-ys/2, yc+ys/2
         return x1, y1, x2, y2
 
+def crop_by_hmap(x, hmap, o):
+    '''
+    input hmap ranges [0,1] due to softmax beforehand.
+
+    hyperparameters.
+        filt, strides, rates: dilation filter kernel.
+        threshold: the value [0,1) to binarize hmap.
+        crop_size: the output size of crop after resizing (default o.frmsz/2 = 120).
+    '''
+    # image dilation
+    filt = tf.ones(shape=[3, 3, 1]) # conservative for now to reduce the effect.
+    strides = [1, 1, 1, 1]
+    rates = [1, 1, 1, 1]
+    hmap = tf.nn.dilation2d(hmap, filt, strides, rates, padding='SAME')
+
+    # normalize to have max of 1 (so that I can apply fixed threshold).
+    hmap = hmap / tf.reduce_max(hmap, axis=(1,2), keep_dims=True)
+
+    # find indices, crop and resize.
+    threshold = 0.7
+    x_out = []
+    for b in range(o.batchsz):
+        indices = tf.where(hmap[b] > threshold)
+        x1 = tf.reduce_min(indices[:,1])
+        y1 = tf.reduce_min(indices[:,0])
+        x2 = tf.reduce_max(indices[:,1])
+        y2 = tf.reduce_max(indices[:,0])
+        box = tf.expand_dims(tf.cast(tf.stack((y1, x1, y2, x2), 0), o.dtype), 0)
+        crop = tf.image.crop_and_resize(tf.expand_dims(x[b],0),
+                                        boxes=box/o.frmsz,
+                                        box_ind=[0],
+                                        crop_size=[o.frmsz/2, o.frmsz/2])
+        x_out.append(crop)
+    return tf.concat(x_out, 0)
+
 
 class RNN_dual_mix(object):
     '''
@@ -105,6 +140,7 @@ class RNN_dual_mix(object):
     '''
     def __init__(self, inputs, o,
                  summaries_collections=None,
+                 crop_target=False,
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
                  layer_norm=False,
@@ -114,6 +150,7 @@ class RNN_dual_mix(object):
                  keep_prob=0.2, # following `Recurrent Neural Network Regularization, Zaremba et al.
                  ):
         # model parameters
+        self.crop_target   = crop_target
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
         self.layer_norm    = layer_norm
@@ -348,7 +385,10 @@ class RNN_dual_mix(object):
 
             with tf.variable_scope('cnn2', reuse=(t > 0)):
                 #xy = tf.stop_gradient(concat([x_prev, hmap_prev], axis=3))
-                xy = concat([x_prev, hmap_prev], axis=3)
+                if not self.crop_target:
+                    xy = concat([x_prev, hmap_prev], axis=3)
+                else:
+                    xy = crop_by_hmap(x_prev, hmap_prev, o)
                 cnn2out = pass_cnn(xy, True)
 
             h1_curr = [None] * self.lstm1_nlayers
