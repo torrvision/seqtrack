@@ -683,17 +683,28 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
                 losses['cle_relative'] = tf.reduce_mean(loss_cle_relative)
 
         # Cross-entropy between probabilty maps (need to change label)
-        if 'ce' in o.losses:
+        if 'ce' in o.losses or 'ce_balanced' in o.losses:
             hmap_pred = outputs['hmap']
             print 'hmap_pred.shape:', hmap_pred.shape.as_list()
             print 'hmap.shape:', hmap.shape.as_list()
             hmap_valid = tf.boolean_mask(hmap, y_is_valid)
             hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
-            loss_ce = tf.reduce_mean(
-                    tf.nn.softmax_cross_entropy_with_logits(
-                        labels=tf.reshape(hmap_valid, [-1, 2]),
-                        logits=tf.reshape(hmap_pred_valid, [-1, 2])))
-            losses['ce'] = loss_ce
+            # hmap is [valid_images, height, width, 2]
+            count = tf.reduce_sum(hmap_valid, axis=(1, 2), keep_dims=True)
+            class_weight = 0.5 / tf.cast(count+1, tf.float32)
+            weight = tf.reduce_sum(hmap_valid * class_weight, axis=-1)
+            # Flatten to feed into softmax_cross_entropy_with_logits.
+            hmap_valid, unmerge = merge_dims(hmap_valid, 0, 3)
+            hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
+            loss_ce = tf.nn.softmax_cross_entropy_with_logits(
+                labels=hmap_valid,
+                logits=hmap_pred_valid)
+            loss_ce = unmerge(loss_ce, 0)
+            if 'ce' in o.losses:
+                losses['ce'] = tf.reduce_mean(loss_ce)
+            if 'ce_balanced' in o.losses:
+                losses['ce_balanced'] = tf.reduce_mean(
+                    tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
 
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
