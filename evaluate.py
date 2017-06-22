@@ -91,7 +91,7 @@ def _single_to_batch(x, batch_size):
     return pad_to(x, batch_size)
 
 
-def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False, regress='abs'):
+def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False, regress='abs', save_frames=False):
     '''
     Args:
         nbatches_: the number of batches to evaluate
@@ -115,7 +115,7 @@ def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False, regre
         pbar.update(i+1)
         pred, hmap_pred = track(sess, inputs, model, sequence, use_gt, regress)
         if visualize:
-            visualize('sequence_{:06d}'.format(i), sequence, pred, hmap_pred)
+            visualize('sequence_{:06d}'.format(i), sequence, pred, hmap_pred, save_frames)
         gt = np.array(sequence['labels'])
         # Convert to original image co-ordinates.
         pred = _unnormalize_rect(pred, sequence['original_image_size'])

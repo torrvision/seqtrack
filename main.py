@@ -162,7 +162,10 @@ def parse_arguments():
             '--period_assess', help='period to run evaluation',
             type=int, default=10000)
     parser.add_argument(
-            '--visualize_eval', help='create video during evaluation',
+            '--save_videos', help='create video during evaluation',
+            action='store_true')
+    parser.add_argument(
+            '--save_frames', help='save frames of video during evaluation',
             action='store_true')
 
     parser.add_argument(

@@ -264,7 +264,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model,
                                 eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None,
-                                use_gt=o.use_gt_eval, regress=o.regress),
+                                use_gt=o.use_gt_eval, regress=o.regress,
+                                save_frames=o.save_frames),
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])

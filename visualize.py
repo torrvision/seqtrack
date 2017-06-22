@@ -13,8 +13,12 @@ class VideoFileWriter:
         self.root    = root
         self.pattern = pattern
 
-    def visualize(self, sequence_name, sequence, rects_pred, hmaps_pred):
-        sequence_dir = tempfile.mkdtemp()
+    def visualize(self, sequence_name, sequence, rects_pred, hmaps_pred, save_frames):
+        if not save_frames:
+            sequence_dir = tempfile.mkdtemp()
+        else:
+            sequence_dir = os.path.join(self.root, 'frames/{}'.format(sequence_name))
+            os.makedirs(sequence_dir)
         # if not os.path.isdir(sequence_dir):
         #     os.makedirs(sequence_dir)
         sequence_len = len(sequence['image_files'])
@@ -53,7 +57,9 @@ class VideoFileWriter:
         except Exception as inst:
             print 'error:', inst
         finally:
-            shutil.rmtree(sequence_dir)
+            if not save_frames:
+                shutil.rmtree(sequence_dir)
+
 
 
 def _unnormalize_rect(r, size):
