@@ -937,7 +937,7 @@ def simple_search(example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
     def feat_net(x):
         with slim.arg_scope([slim.max_pool2d], kernel_size=3, padding='SAME'):
             # conv1
-            x = slim.conv2d(x, 64, 11, stride=2)
+            x = slim.conv2d(x, 64, 11, stride=4)
             x = slim.max_pool2d(x)
             # conv2
             x = slim.conv2d(x, 128, 5)
@@ -947,27 +947,43 @@ def simple_search(example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
             # conv4
             x = slim.conv2d(x, 192, 3)
             # conv5
-            # TODO: Remove RELU here?
-            x = slim.conv2d(x, 128, 3)
+            x = slim.conv2d(x, 128, 3, activation_fn=None)
         return x
 
     def template_net(x):
-        x = feat_net(x)
-        x = tf.reduce_mean(x, axis=[1, 2], keep_dims=True)
+        with slim.arg_scope([slim.max_pool2d], kernel_size=3, padding='SAME'):
+            x = feat_net(x)
+            x = tf.nn.relu(x) # No activation_fn at output of feat_net.
+            # x = tf.reduce_mean(x, axis=[1, 2], keep_dims=True)
+            x = slim.conv2d(x, 128, 3)
+            x = slim.max_pool2d(x)
+            x = slim.conv2d(x, 128, 3)
+            x = slim.max_pool2d(x)
+            print 'template: shape at fc layer:', x.shape.as_list()
+            x = slim.conv2d(x, 128, 4, padding='VALID', activation_fn=None)
+            assert x.shape.as_list()[1:3] == [1, 1]
         return x
 
     def search_all(x, f):
         dim = 256
+        # # x.shape is [b, t, hx, wx, c]
+        # # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
+        # # relu(linear(concat(a, b)) = relu(linear(a) + linear(b))
+        # f = slim.conv2d(f, dim, 1, activation_fn=None)
+        # f = tf.expand_dims(f, 1)
+        # x, unmerge = merge_dims(x, 0, 2)
+        # x = slim.conv2d(x, dim, 1, activation_fn=None)
+        # x = unmerge(x, 0)
+        # # Search for f in x.
+
+        # x = tf.nn.relu(tf.add(x, f))
         # x.shape is [b, t, hx, wx, c]
         # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
         # relu(linear(concat(a, b)) = relu(linear(a) + linear(b))
-        f = slim.conv2d(f, dim, 1, activation_fn=None)
         f = tf.expand_dims(f, 1)
-        x, unmerge = merge_dims(x, 0, 2)
-        x = slim.conv2d(x, dim, 1, activation_fn=None)
-        x = unmerge(x, 0)
         # Search for f in x.
-        x = tf.nn.relu(tf.add(x, f))
+        x = tf.nn.relu(x + f)
+
         # Post-process appearance "similarity".
         x, unmerge = merge_dims(x, 0, 2)
         x = slim.conv2d(x, dim, 1)
@@ -997,17 +1013,17 @@ def simple_search(example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
         return x
 
     def output_net(x):
-        # Map output of LSTM to a rectangle.
-        x = slim.conv2d(x, 64, 3)
-        x = slim.max_pool2d(x, 2)
-        x = slim.conv2d(x, 256, 3)
-        x = slim.max_pool2d(x, 2)
-        print 'shape at fc layer:', x.shape.as_list()
-        # Fully-connected layer.
-        x = slim.flatten(x)
-        x = slim.fully_connected(x, 512)
-        x = slim.fully_connected(x, 512)
-        x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None)
+        with slim.arg_scope([slim.max_pool2d], kernel_size=3, padding='SAME'):
+            # Map output of LSTM to a rectangle.
+            x = slim.conv2d(x, 64, 3)
+            x = slim.max_pool2d(x)
+            x = slim.conv2d(x, 128, 3)
+            x = slim.max_pool2d(x)
+            print 'output: shape at fc layer:', x.shape.as_list()
+            x = slim.flatten(x)
+            x = slim.fully_connected(x, 512)
+            x = slim.fully_connected(x, 512)
+            x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None)
         return x
 
     def conv_lstm(x, h_prev, c_prev, state_dim, name='clstm'):
