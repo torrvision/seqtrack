@@ -652,7 +652,11 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
             if 'l1' in o.losses:
                 losses['l1'] = tf.reduce_mean(loss_l1)
             if 'l1_relative' in o.losses:
-                loss_l1_relative = loss_l1 / (tf.reduce_mean(tf.abs(y_valid), axis=-1) + 0.05)
+                # TODO: Reduce code duplication?
+                x_size = tf.abs(y_valid[:,2] - y_valid[:,0])
+                y_size = tf.abs(y_valid[:,3] - y_valid[:,1])
+                size = tf.stack([x_size, y_size], axis=-1)
+                loss_l1_relative = loss_l1 / (tf.reduce_mean(size, axis=-1) + 0.05)
                 losses['l1_relative'] = tf.reduce_mean(loss_l1_relative)
 
         # CLE (center location error). Measured in l2 distance.
@@ -670,6 +674,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
             if 'cle' in o.losses:
                 losses['cle'] = tf.reduce_mean(loss_cle)
             if 'cle_relative' in o.losses:
+                # TODO: Reduce code duplication?
                 x_size = tf.abs(y_valid[:,2] - y_valid[:,0])
                 y_size = tf.abs(y_valid[:,3] - y_valid[:,1])
                 size = tf.stack([x_size, y_size], axis=-1)
