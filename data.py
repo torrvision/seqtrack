@@ -21,7 +21,6 @@ A dataset object has the following properties:
         The rectangle coordinates are normalized to [0, 1].
 '''
 
-import pdb
 import numpy as np
 import cPickle as pickle
 import gzip
@@ -608,7 +607,9 @@ class ILSVRC:
             # Convert from list of frame annotations to list of tracks.
             tracks = {}
             for t, frame_objects in enumerate(frames):
-                for obj_id, rect in frame_objects.iteritems():
+                for obj_id, rect, occluded in frame_objects:
+                    if occluded:
+                        continue
                     # List of (frame, rectangle) pairs instead of dictionary
                     # because JSON does not support integer keys.
                     tracks.setdefault(obj_id, []).append((t, rect))
@@ -627,8 +628,8 @@ class ILSVRC:
             width  = int(doc['annotation']['size']['width'])
             height = int(doc['annotation']['size']['height'])
             obj_annots = doc['annotation'].get('object', [])
-            objs = dict(map(lambda obj: extract_id_rect_pair(obj, width, height),
-                            obj_annots))
+            objs = map(lambda obj: extract_id_rect_pair(obj, width, height),
+                       obj_annots)
             return objs, (width, height)
 
         def extract_id_rect_pair(obj, width, height):
@@ -640,7 +641,8 @@ class ILSVRC:
                 int(obj['bndbox']['xmax']) / float(width),
                 int(obj['bndbox']['ymax']) / float(height),
             ]
-            return index, rect
+            occluded = int(obj.get('occluded', '0'))
+            return index, rect, occluded
 
         if self.tracks is None:
             if not os.path.isdir(path_aux):
@@ -651,6 +653,8 @@ class ILSVRC:
             self.tracks = {video: [dict(track) for track in track_list]
                            for video, track_list in info['tracks'].iteritems()}
             self.original_image_size = info['original_image_size']
+        print 'ILSVRC "{}" contains {} tracks in {} videos'.format(
+            self.dstype, sum(map(len, self.tracks.values())), len(self.tracks))
 
     def _update_stat(self, path_stat):
         def create_stat_pixelwise(): # NOTE: obsolete
@@ -966,5 +970,5 @@ if __name__ == '__main__':
         #o.useresizedimg = False # NOTE: set it False to create resized imgs
         #loader.create_resized_images(o)
 
-    pdb.set_trace()
+    import pdb ; pdb.set_trace()
 
