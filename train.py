@@ -263,7 +263,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                             iter_id+'.json')
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model,
-                                eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None,
+                                eval_sequences, visualize=visualizer.visualize if o.save_videos else None,
                                 use_gt=o.use_gt_eval, regress=o.regress,
                                 save_frames=o.save_frames),
                             makedir=True)
@@ -607,49 +607,67 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         losses = dict()
 
         # l1 distances for left-top and right-bottom
-        if 'l1' in o.losses:
+        if 'l1' in o.losses or 'l1_relative' in o.losses:
             y_pred = outputs['y']
-            if o.regress == 'abs':
-                y_valid = tf.boolean_mask(y, y_is_valid)
-                y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
-            elif o.regress == 'delta':
-                y_is_valid_pad = tf.expand_dims(tf.ones(shape=tf.shape(y_is_valid[:,0]), dtype=tf.bool), 1)
-                y_is_valid_shift = tf.concat((y_is_valid_pad, y_is_valid[:,:-1]), 1)
-                y_is_valid_delta = tf.logical_and(y_is_valid, y_is_valid_shift)
-                y_delta = y - tf.concat((tf.expand_dims(y0, 1), y[:,:-1,:]), 1)
-                y_valid = tf.boolean_mask(y_delta, y_is_valid_delta)
-                y_pred_valid = tf.boolean_mask(y_pred, y_is_valid_delta)
-            else:
-                raise ValueError('Regression type should be either `abs` or `delta`.')
-            loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid))
-            losses['l1'] = loss_l1
+            y_valid = tf.boolean_mask(y, y_is_valid)
+            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid), axis=-1)
+            if 'l1' in o.losses:
+                losses['l1'] = tf.reduce_mean(loss_l1)
+            if 'l1_relative' in o.losses:
+                # TODO: Reduce code duplication?
+                x_size = tf.abs(y_valid[:,2] - y_valid[:,0])
+                y_size = tf.abs(y_valid[:,3] - y_valid[:,1])
+                size = tf.stack([x_size, y_size], axis=-1)
+                loss_l1_relative = loss_l1 / (tf.reduce_mean(size, axis=-1) + 0.05)
+                losses['l1_relative'] = tf.reduce_mean(loss_l1_relative)
 
         # CLE (center location error). Measured in l2 distance.
-        if 'cle' in o.losses:
+        if 'cle' in o.losses or 'cle_relative' in o.losses:
             y_pred = outputs['y']
             y_valid = tf.boolean_mask(y, y_is_valid)
             y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
             x_center = (y_valid[:,2] + y_valid[:,0]) * 0.5
             y_center = (y_valid[:,3] + y_valid[:,1]) * 0.5
+            center = tf.stack([x_center, y_center], axis=-1)
             x_pred_center = (y_pred_valid[:,2] + y_pred_valid[:,0]) * 0.5
             y_pred_center = (y_pred_valid[:,3] + y_pred_valid[:,1]) * 0.5
-            loss_cle = tf.reduce_mean(
-                    tf.norm(tf.stack([x_center - x_pred_center, y_center - y_pred_center], axis=1),
-                    axis=1))
-            losses['cle'] = loss_cle
+            pred_center = tf.stack([x_pred_center, y_pred_center], axis=-1)
+            loss_cle = tf.norm(center - pred_center, axis=-1)
+            if 'cle' in o.losses:
+                losses['cle'] = tf.reduce_mean(loss_cle)
+            if 'cle_relative' in o.losses:
+                # TODO: Reduce code duplication?
+                x_size = tf.abs(y_valid[:,2] - y_valid[:,0])
+                y_size = tf.abs(y_valid[:,3] - y_valid[:,1])
+                size = tf.stack([x_size, y_size], axis=-1)
+                radius = tf.exp(tf.reduce_mean(tf.log(size), axis=-1))
+                loss_cle_relative = loss_cle / (radius + 0.05)
+                losses['cle_relative'] = tf.reduce_mean(loss_cle_relative)
 
         # Cross-entropy between probabilty maps (need to change label)
-        if 'ce' in o.losses:
+        if 'ce' in o.losses or 'ce_balanced' in o.losses:
             hmap_pred = outputs['hmap']
             print 'hmap_pred.shape:', hmap_pred.shape.as_list()
             print 'hmap.shape:', hmap.shape.as_list()
             hmap_valid = tf.boolean_mask(hmap, y_is_valid)
             hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
-            loss_ce = tf.reduce_mean(
-                    tf.nn.softmax_cross_entropy_with_logits(
-                        labels=tf.reshape(hmap_valid, [-1, 2]),
-                        logits=tf.reshape(hmap_pred_valid, [-1, 2])))
-            losses['ce'] = loss_ce
+            # hmap is [valid_images, height, width, 2]
+            count = tf.reduce_sum(hmap_valid, axis=(1, 2), keep_dims=True)
+            class_weight = 0.5 / tf.cast(count+1, tf.float32)
+            weight = tf.reduce_sum(hmap_valid * class_weight, axis=-1)
+            # Flatten to feed into softmax_cross_entropy_with_logits.
+            hmap_valid, unmerge = merge_dims(hmap_valid, 0, 3)
+            hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
+            loss_ce = tf.nn.softmax_cross_entropy_with_logits(
+                    labels=hmap_valid,
+                    logits=hmap_pred_valid)
+            loss_ce = unmerge(loss_ce, 0)
+            if 'ce' in o.losses:
+                losses['ce'] = tf.reduce_mean(loss_ce)
+            if 'ce_balanced' in o.losses:
+                losses['ce_balanced'] = tf.reduce_mean(
+                        tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
 
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
