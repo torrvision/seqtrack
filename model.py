@@ -1254,7 +1254,8 @@ def crop_inverse(rect):
     inv_min = -rect_min / rect_size
     # u_min = -x_min / x_size
     # v_min = -y_min / y_size
-    inv_max = rect_min + 1 / rect_size
+    inv_max = (1 - rect_min) / rect_size
+    # inv_max = inv_min + 1 / rect_size
     # u_max = u_min + 1 / x_size
     # v_max = v_min + 1 / y_size
     return make_rect(inv_min, inv_max)
@@ -1301,50 +1302,6 @@ def mlp(example, ntimesteps, frmsz,
     model.sequence_len = ntimesteps # Static length of unrolled RNN.
     model.batch_size   = None # Model accepts variable batch size.
     return model
-
-
-# def _draw_init_bounding_boxes(im, rect, model, time_stride=1, name='draw_box'):
-#     '''
-#     Args:
-#         im -- [h, w, c]
-#         rect -- [4]
-#     '''
-#     # Note: This will produce INT_MIN when casting NaN to int.
-#     with tf.name_scope(name) as scope:
-#         # example['x0_raw']   -- [b, h, w, 3]
-#         # example['y0']       -- [b, 4]
-#         # Just do the first example in the batch.
-#         # image = (1.0/255)*example['x0_raw'][0:1]
-#         image = example['x0_raw'][0:1]
-#         y_gt = example['y0'][0:1]
-#         y = tf.stack([y_gt], axis=1)
-#         coords = tf.unstack(y, axis=2)
-#         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
-#         image = tf.image.draw_bounding_boxes(image, boxes, name=scope)
-#         # Preserve absolute colors in summary.
-#         image = tf.image.convert_image_dtype(image, tf.uint8, saturate=True)
-#         return image
-
-def _draw_bounding_boxes(example, model, name='draw_box'):
-    '''
-    Args:
-        im   -- [h, w, c] or [t, h, w, c]
-        rect -- [4]       or [t, 4]
-    '''
-    # Note: This will produce INT_MIN when casting NaN to int.
-    if len(im.shape) == 3:
-        im = tf.expand_dims(im, 0)
-        rect = tf.expand_dims(rect, 0)
-    with tf.name_scope(name) as scope:
-        y_gt = example['y'][0][::time_stride]
-        y_pred = model.outputs['y'][0][::time_stride]
-        y = tf.stack([y_gt, y_pred], axis=1)
-        coords = tf.unstack(y, axis=2)
-        boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
-        image = tf.image.draw_bounding_boxes(image, boxes, name=scope)
-        # Preserve absolute colors in summary.
-        image = tf.image.convert_image_dtype(image, tf.uint8, saturate=True)
-        return image
 
 
 def load_model(o, model_params=None):
