@@ -106,7 +106,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     # data augmentation
     example = _perform_data_augmentation(example, o, pad_value=stat['mean'])
     # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(_whiten(_guard_labels(example), dtype=o.dtype, stat=stat))
+    model = create_model(_whiten(_guard_labels(example), dtype=o.dtype, stat=stat),
+                         image_summaries_collections=['summaries_images'])
     loss_var = get_loss(example, model.outputs, o)
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
@@ -138,37 +139,34 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                                                     global_step=global_step_var)
 
     summary_vars = {}
-    summary_vars_with_preview = {}
+    extended_summary_vars = {}
     global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
         with tf.name_scope('box'):
-            box_first = tf.summary.image('0',
-                _draw_init_bounding_boxes(example, model),
-                max_outputs=1, collections=[])
-            box_rest = tf.summary.image('1_to_n',
+            tf.summary.image('0',
+                _draw_init_bounding_boxes(example),
+                max_outputs=1, collections=['summaries_images'])
+            tf.summary.image('1_to_n',
                 _draw_bounding_boxes(example, model),
-                max_outputs=o.ntimesteps, collections=[])
-        image_summaries = [box_first, box_rest]
+                max_outputs=o.ntimesteps, collections=['summaries_images'])
         # Produce an image summary of the heatmap.
         if 'hmap' in model.outputs:
-            hmap = tf.summary.image('hmap', _draw_heatmap(model),
-                max_outputs=o.ntimesteps+1, collections=[])
-            image_summaries.append(hmap)
+            tf.summary.image('hmap', _draw_heatmap(model),
+                max_outputs=o.ntimesteps+1, collections=['summaries_images'])
         # Produce an image summary of the LSTM memory states (h or c).
         if hasattr(model, 'memory'):
             for mtype in model.memory.keys():
                 if model.memory[mtype][0] is not None:
-                    image_summaries.append(
-                        tf.summary.image(mtype, _draw_memory_state(model, mtype),
-                        max_outputs=o.ntimesteps+1, collections=[]))
+                    tf.summary.image(mtype, _draw_memory_state(model, mtype),
+                        max_outputs=o.ntimesteps+1, collections=['summaries_images'])
         for dataset in datasets:
             with tf.name_scope(dataset):
                 # Merge summaries with any that are specific to the mode.
                 summaries = (global_summaries + tf.get_collection('summaries_' + dataset))
                 summary_vars[dataset] = tf.summary.merge(summaries)
-                summaries.extend(image_summaries)
-                summary_vars_with_preview[dataset] = tf.summary.merge(summaries)
+                summaries.extend(tf.get_collection('summaries_images'))
+                extended_summary_vars[dataset] = tf.summary.merge(summaries)
 
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver(max_to_keep=10)
@@ -293,7 +291,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                     dur_load = time.time() - start
                 if global_step % o.period_summary == 0:
-                    summary_var = (summary_vars_with_preview['train']
+                    summary_var = (extended_summary_vars['train']
                                    if global_step % o.period_preview == 0
                                    else summary_vars['train'])
                     _, loss['train'], summary = sess.run([optimize_op, loss_var, summary_var],
@@ -319,7 +317,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                             batch = _load_batch(batch_seqs, o)
                             feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                             # dur_load = time.time() - start
-                        summary_var = (summary_vars_with_preview[dataset]
+                        summary_var = (extended_summary_vars[dataset]
                                        if global_step % o.period_preview == 0
                                        else summary_vars[dataset])
                         loss[dataset], summary = sess.run([loss_var, summary_var],
@@ -715,7 +713,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         return tf.reduce_sum(losses.values(), name=scope)
 
 
-def _draw_init_bounding_boxes(example, model, time_stride=1, name='draw_box'):
+def _draw_init_bounding_boxes(example, time_stride=1, name='draw_box'):
     # Note: This will produce INT_MIN when casting NaN to int.
     with tf.name_scope(name) as scope:
         # example['x0_raw']   -- [b, h, w, 3]

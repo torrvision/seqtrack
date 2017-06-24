@@ -926,12 +926,15 @@ def multi_res_vgg(x, prev, init, use_heatmap, heatmap_stride,
         return outputs, curr
 
 
-def simple_search(example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
+def simple_search(original_example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
         summaries_collections=None,
+        image_summaries_collections=None,
         # Model parameters:
         use_rnn=True,
         use_heatmap=False,
         use_batch_norm=False, # Caution when use_rnn is True.
+        normalize_size=False,
+        normalize_first_only=False,
         ):
 
     def feat_net(x):
@@ -1049,10 +1052,23 @@ def simple_search(example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
     batch_norm_opts = {} if not use_batch_norm else {
         'normalizer_fn': slim.batch_norm,
         'normalizer_params': {
-            'is_training': example['is_training'],
+            'is_training': original_example['is_training'],
             'fused': True,
         },
     }
+
+    if normalize_size:
+        window_rect = object_centric_window(original_example['y0'])
+        example = crop_example(original_example, window_rect, normalize_first_only)
+    else:
+        example = dict(original_example)
+    with tf.name_scope('model_summary') as summary_scope:
+        # Visualize rectangle on normalized image.
+        tf.summary.image('frame_0',
+            tf.image.draw_bounding_boxes(
+                normalize_image_range(example['x0'][0:1]),
+                rect_to_tf_box(tf.expand_dims(example['y0'][0:1], 1))), # Just one box per image.
+            collections=image_summaries_collections)
 
     with slim.arg_scope([slim.conv2d, slim.fully_connected],
                         weights_regularizer=slim.l2_regularizer(weight_decay),
@@ -1092,6 +1108,17 @@ def simple_search(example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
             position = output_net(position_map)
             position = unmerge(position, 0)
 
+    with tf.name_scope(summary_scope):
+        # Visualize rectangle on normalized image.
+        tf.summary.image('frame_1_to_n',
+            tf.image.draw_bounding_boxes(
+                normalize_image_range(example['x'][0]),
+                rect_to_tf_box(tf.expand_dims(position[0], 1))), # Just one box per image.
+            collections=image_summaries_collections)
+    if normalize_size and not normalize_first_only:
+        inv_window_rect = crop_inverse(window_rect)
+        position = crop_rect_sequence(position, inv_window_rect)
+
     if use_rnn:
         state = {k: (init_state[k], curr_state[k]) for k in curr_state}
     else:
@@ -1118,6 +1145,134 @@ def simple_search(example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
     model.sequence_len = ntimesteps # Static length of unrolled RNN.
     model.batch_size   = None # Model accepts variable batch size.
     return model
+
+def normalize_image_range(x):
+    return 0.5 * (1 + x / tf.reduce_max(tf.abs(x)))
+
+def crop_example(example, window_rect, first_only=False):
+    '''
+    Args:
+        example -- Dictionary.
+            example['x0'] -- [n, h, w, c]
+            example['y0'] -- [n, 4]
+            example['x'] -- [n, t, h, w, c]
+        window_rect -- [n, 4]
+    '''
+    xs = tf.expand_dims(example['x0'], 1)
+    if first_only:
+        xs = tf.concat([xs, example['x']], axis=1)
+    im_size = xs.shape.as_list()[2:4] # Require static for now.
+    xs = crop_image_sequence(xs, window_rect, crop_size=im_size)
+    out = dict(example)
+    out['x0'] = xs[:, 0]
+    out['y0'] = crop_rects(example['y0'], window_rect)
+    if not first_only:
+        out['x'] = xs[:, 1:]
+    return out
+
+def object_centric_window(obj_rect, relative_size=4.0):
+    eps = 0.01
+    obj_min, obj_max = rect_min_max(obj_rect)
+    obj_size = tf.maximum(0.0, obj_max - obj_min)
+    center = 0.5 * (obj_min + obj_max)
+    obj_diam = tf.exp(tf.reduce_mean(tf.log(obj_size + eps), axis=-1))
+    context_diam = relative_size * obj_diam
+    window_min = center - 0.5*tf.expand_dims(context_diam, -1)
+    window_max = center + 0.5*tf.expand_dims(context_diam, -1)
+    return make_rect(window_min, window_max)
+
+def crop_rects(rects, window_rect):
+    '''Returns each rectangle relative to a window.
+    
+    Args:
+        rects -- [..., 4]
+        window_rect -- [..., 4]
+    '''
+    eps = 0.01
+    window_min, window_max = rect_min_max(window_rect)
+    window_size = window_max - window_min
+    window_size = tf.sign(window_size) * (tf.abs(window_size) + eps)
+    rects_min, rects_max = rect_min_max(rects)
+    out_min = (rects_min - window_min) / window_size
+    out_max = (rects_max - window_min) / window_size
+    return make_rect(out_min, out_max)
+
+def crop_rect_sequence(rects, window_rect):
+    '''Returns each rectangle relative to a window.
+    
+    Args:
+        rects -- [n, t, 4]
+        window_rect -- [n, 4]
+    '''
+    # Same rectangle in every image.
+    sequence_len = tf.shape(rects)[1]
+    window_rect = tf.expand_dims(window_rect, 1)
+    window_rect = tf.tile(window_rect, [1, sequence_len, 1])
+    # Now dimensions match.
+    return crop_rects(rects, window_rect)
+
+def crop_image_sequence(ims, window_rect, crop_size, pad_value=None):
+    '''
+    Extracts 
+
+    Args:
+        ims -- [n, t, h, w, c]
+        window_rect -- [n, 4]
+    '''
+    # Same rectangle in every image.
+    sequence_len = tf.shape(ims)[1]
+    window_rect = tf.expand_dims(window_rect, 1)
+    window_rect = tf.tile(window_rect, [1, sequence_len, 1])
+    # Flatten.
+    ims, unmerge = merge_dims(ims, 0, 2)
+    window_rect, _ = merge_dims(window_rect, 0, 2)
+    boxes = rect_to_tf_box(window_rect)
+    num_images = tf.shape(ims)[0]
+    crop_ims = tf.image.crop_and_resize(ims, boxes, box_ind=tf.range(num_images),
+        crop_size=crop_size,
+        method='bilinear',
+        extrapolation_value=pad_value)
+    # Un-flatten.
+    crop_ims = unmerge(crop_ims, 0)
+    return crop_ims
+
+def crop_inverse(rect):
+    '''Returns the rectangle that reverses the crop.
+
+    If q = crop_inverse(r), then crop(crop(im, r), q) restores the image.
+    That is, cropping is a group operation with an inverse.
+
+    CAUTION: Epsilon means that inverse is not exact?
+    '''
+    eps = 0.01
+    # x_min, y_min, x_max, y_max = tf.unstack(rect, axis=-1)
+    rect_min, rect_max = rect_min_max(rect)
+    # TODO: Support reversed rectangle.
+    rect_size = tf.abs(rect_max - rect_min) + eps
+    # x_size = tf.abs(x_max - x_min) + eps
+    # y_size = tf.abs(y_max - y_min) + eps
+    inv_min = -rect_min / rect_size
+    # u_min = -x_min / x_size
+    # v_min = -y_min / y_size
+    inv_max = rect_min + 1 / rect_size
+    # u_max = u_min + 1 / x_size
+    # v_max = v_min + 1 / y_size
+    return make_rect(inv_min, inv_max)
+
+def rect_min_max(rect):
+    x_min, y_min, x_max, y_max = tf.unstack(rect, axis=-1)
+    min_pt = tf.stack([x_min, y_min], axis=-1)
+    max_pt = tf.stack([x_max, y_max], axis=-1)
+    return min_pt, max_pt
+
+def make_rect(min_pt, max_pt):
+    x_min, y_min = tf.unstack(min_pt, axis=-1)
+    x_max, y_max = tf.unstack(max_pt, axis=-1)
+    return tf.stack([x_min, y_min, x_max, y_max], axis=-1)
+
+def rect_to_tf_box(rect):
+    x_min, y_min, x_max, y_max = tf.unstack(rect, axis=-1)
+    return tf.stack([y_min, x_min, y_max, x_max], axis=-1)
 
 
 def mlp(example, ntimesteps, frmsz,
@@ -1146,6 +1301,50 @@ def mlp(example, ntimesteps, frmsz,
     model.sequence_len = ntimesteps # Static length of unrolled RNN.
     model.batch_size   = None # Model accepts variable batch size.
     return model
+
+
+# def _draw_init_bounding_boxes(im, rect, model, time_stride=1, name='draw_box'):
+#     '''
+#     Args:
+#         im -- [h, w, c]
+#         rect -- [4]
+#     '''
+#     # Note: This will produce INT_MIN when casting NaN to int.
+#     with tf.name_scope(name) as scope:
+#         # example['x0_raw']   -- [b, h, w, 3]
+#         # example['y0']       -- [b, 4]
+#         # Just do the first example in the batch.
+#         # image = (1.0/255)*example['x0_raw'][0:1]
+#         image = example['x0_raw'][0:1]
+#         y_gt = example['y0'][0:1]
+#         y = tf.stack([y_gt], axis=1)
+#         coords = tf.unstack(y, axis=2)
+#         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
+#         image = tf.image.draw_bounding_boxes(image, boxes, name=scope)
+#         # Preserve absolute colors in summary.
+#         image = tf.image.convert_image_dtype(image, tf.uint8, saturate=True)
+#         return image
+
+def _draw_bounding_boxes(example, model, name='draw_box'):
+    '''
+    Args:
+        im   -- [h, w, c] or [t, h, w, c]
+        rect -- [4]       or [t, 4]
+    '''
+    # Note: This will produce INT_MIN when casting NaN to int.
+    if len(im.shape) == 3:
+        im = tf.expand_dims(im, 0)
+        rect = tf.expand_dims(rect, 0)
+    with tf.name_scope(name) as scope:
+        y_gt = example['y'][0][::time_stride]
+        y_pred = model.outputs['y'][0][::time_stride]
+        y = tf.stack([y_gt, y_pred], axis=1)
+        coords = tf.unstack(y, axis=2)
+        boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
+        image = tf.image.draw_bounding_boxes(image, boxes, name=scope)
+        # Preserve absolute colors in summary.
+        image = tf.image.convert_image_dtype(image, tf.uint8, saturate=True)
+        return image
 
 
 def load_model(o, model_params=None):
