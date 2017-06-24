@@ -1159,7 +1159,7 @@ def crop_example(example, window_rect, first_only=False):
         window_rect -- [n, 4]
     '''
     xs = tf.expand_dims(example['x0'], 1)
-    if first_only:
+    if not first_only:
         xs = tf.concat([xs, example['x']], axis=1)
     im_size = xs.shape.as_list()[2:4] # Require static for now.
     xs = crop_image_sequence(xs, window_rect, crop_size=im_size)
