@@ -10,10 +10,9 @@ import data
 from helpers import load_image, im_to_arr, pad_to
 
 
-def track(sess, inputs, model, sequence, use_gt, output_vars=None):
+def track(sess, model, inputs, outputs, sequence, use_gt, output_vars=None):
     '''Run an instantiated tracker on a sequence.
 
-    model.outputs      -- Dictionary of tensors
     model.state        -- Dictionary of 2-tuples of tensors
     model.sequence_len -- Integer
     model.batch_size   -- Integer or None
@@ -28,7 +27,7 @@ def track(sess, inputs, model, sequence, use_gt, output_vars=None):
     # TODO: Run on a batch of sequences for speed.
 
     if output_vars is None:
-        output_vars = model.outputs.keys()
+        output_vars = outputs.keys()
 
     first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
     first_label = sequence['labels'][0]
@@ -70,12 +69,12 @@ def track(sess, inputs, model, sequence, use_gt, output_vars=None):
             feed_dict.update({init_state[k]: prev_state[k] for k in init_state})
         # Get output and final state.
         out_pred, prev_state = sess.run(
-            [{k: model.outputs[k] for k in output_vars}, final_state],
+            [{k: outputs[k] for k in output_vars}, final_state],
             feed_dict=feed_dict)
-        # y_pred, prev_state = sess.run([model.outputs['y'], final_state],
+        # y_pred, prev_state = sess.run([outputs['y'], final_state],
         #                               feed_dict=feed_dict)
-        # y_pred, prev_state, hmap_pred = sess.run([model.outputs['y'], final_state,
-        #                                           model.outputs['hmap_softmax']],
+        # y_pred, prev_state, hmap_pred = sess.run([outputs['y'], final_state,
+        #                                           outputs['hmap_softmax']],
         #                               feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
         for k in output_vars:
@@ -121,7 +120,7 @@ def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False):
         if num_valid < 1:
             continue
         #print 'sequence {} of {}'.format(i+1, len(sequences))
-        output_vars = set(['y', 'hmap_softmax']).intersection(set(model.outputs.keys()))
+        output_vars = set(['y', 'hmap_softmax']).intersection(set(outputs.keys()))
         pred = track(sess, inputs, model, sequence, use_gt, output_vars)
         rect_pred = pred['y']
         hmap_pred = pred.get('hmap_softmax', None)
