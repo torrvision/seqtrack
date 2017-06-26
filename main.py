@@ -113,6 +113,7 @@ def parse_arguments():
     parser.add_argument(
             '--model_file', help='pretrained model file to be used for curriculum_learning',
             type=str, default=None)
+    parser.add_argument('--object_centric', action='store_true')
 
     parser.add_argument(
             '--data_augmentation', help='JSON string specifying data augmentation',

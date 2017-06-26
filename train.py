@@ -25,7 +25,7 @@ import visualize
 from model import convert_rec_to_heatmap
 from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
 
-EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
+EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid']
 
 
 def train(create_model, datasets, eval_sets, o, use_queues=False):
@@ -100,7 +100,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 capacity=4, num_threads=1)
         example = _make_example_placeholders(default=from_queue,
             ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype)
-        options = _make_option_placeholders()
+        run_opts = _make_option_placeholders()
 
     # Always use same statistics for whitening (not set dependent).
     # stat = datasets['train'].stat
@@ -111,12 +111,13 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     # (This is where to feed a video to use the tracker.)
     example_whole = dict(example)
     if o.object_centric:
-        window_rect = object_centric_window(example['y0'])
-        example = crop_example(example, window_rect, first_only=False)
+        window_rect = geom.object_centric_window(example['y0'])
+        example = geom.crop_example(example, window_rect,
+            crop_size=[o.frmsz, o.frmsz], first_only=False)
     example_window = dict(example)
     # TODO: Desirable to have some augmentation after cropping the object?
     # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(_whiten(_guard_labels(example, options), dtype=o.dtype, stat=stat),
+    model = create_model(_whiten(_guard_labels(example, run_opts), dtype=o.dtype, stat=stat),
                          image_summaries_collections=['summaries_images'])
     pred = dict(model.outputs)
     loss_var = get_loss(example, pred, o)
@@ -127,7 +128,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
     if o.object_centric:
         inv_window_rect = geom.crop_inverse(window_rect)
-        pred_whole = geom.crop_prediction(pred, inv_window_rect)
+        pred_whole = geom.crop_pred(pred, inv_window_rect, crop_size=[o.frmsz, o.frmsz])
 
     # nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
@@ -167,7 +168,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 max_outputs=o.ntimesteps, collections=['summaries_images'])
         # Produce an image summary of the heatmap.
         if 'hmap' in pred:
-            tf.summary.image('hmap', _draw_heatmap(model),
+            tf.summary.image('hmap', _draw_heatmap(pred),
                 max_outputs=o.ntimesteps+1, collections=['summaries_images'])
         # Produce an image summary of the LSTM memory states (h or c).
         if hasattr(model, 'memory'):
@@ -295,9 +296,9 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 loss = {}
                 dur = {}
                 start = time.time()
-                feed_dict = {options['use_gt']:      True,
-                             options['is_training']: True,
-                             options['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)}
+                feed_dict = {run_opts['use_gt']:      True,
+                             run_opts['is_training']: True,
+                             run_opts['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)}
                 if use_queues:
                     feed_dict.update({queue_index: 0}) # Select data source.
                 else:
@@ -322,9 +323,9 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 if global_step % o.period_summary == 0:
                     for dataset in val_datasets:
                         start = time.time()
-                        feed_dict = {options['use_gt']:      True,  # Match training.
-                                     options['is_training']: False, # Do not update bnorm stats.
-                                     options['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
+                        feed_dict = {run_opts['use_gt']:      True,  # Match training.
+                                     run_opts['is_training']: False, # Do not update bnorm stats.
+                                     run_opts['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
                         if use_queues:
                             feed_dict.update({queue_index: dataset_index[dataset]}) # Select data source.
                         else:
@@ -394,9 +395,9 @@ def _make_input_pipeline(o,
         # Put in format expected by model.
         # is_valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
         example_batch = {
-            'x0_raw':     images_batch['images'][:, 0],
+            'x0':         images_batch['images'][:, 0],
             'y0':         images_batch['labels'][:, 0],
-            'x_raw':      images_batch['images'][:, 1:],
+            'x':          images_batch['images'][:, 1:],
             'y':          images_batch['labels'][:, 1:],
             'y_is_valid': images_batch['label_is_valid'][:, 1:],
         }
@@ -405,9 +406,9 @@ def _make_input_pipeline(o,
 
 def _make_example_placeholders(ntimesteps, frmsz, dtype, default=None):
     shapes = {
-        'x0_raw':     [None, frmsz, frmsz, 3],
+        'x0':         [None, frmsz, frmsz, 3],
         'y0':         [None, 4],
-        'x_raw':      [None, ntimesteps, frmsz, frmsz, 3],
+        'x':          [None, ntimesteps, frmsz, frmsz, 3],
         'y':          [None, ntimesteps, 4],
         'y_is_valid': [None, ntimesteps],
     }
@@ -422,7 +423,7 @@ def _make_example_placeholders(ntimesteps, frmsz, dtype, default=None):
         example = {
             k: tf.placeholder(key_dtype(k), shapes[k], name='placeholder_'+k)
             for k in EXAMPLE_KEYS}
-    return example, run_opts
+    return example
 
 def _make_option_placeholders():
     run_opts = {}
@@ -439,7 +440,7 @@ def _perform_data_augmentation(example_raw, o, pad_value=None, name='data_augmen
 
     example = dict(example_raw)
 
-    xs_aug = tf.concat([tf.expand_dims(example['x0_raw'], 1), example['x_raw']], 1)
+    xs_aug = tf.concat([tf.expand_dims(example['x0'], 1), example['x']], 1)
     ys_aug = tf.concat([tf.expand_dims(example['y0'], 1), example['y']], 1)
 
     if o.data_augmentation.get('hue', False):
@@ -465,8 +466,8 @@ def _perform_data_augmentation(example_raw, o, pad_value=None, name='data_augmen
 
     # TODO: May try other augmentations at expense - tf.image.{rot90, etc.}
 
-    example['x0_raw'] = xs_aug[:,0]
-    example['x_raw']  = xs_aug[:,1:]
+    example['x0'] = xs_aug[:,0]
+    example['x']  = xs_aug[:,1:]
     example['y0']     = ys_aug[:,0]
     example['y']      = ys_aug[:,1:]
     return example
@@ -586,16 +587,16 @@ def _data_augmentation_saturation(xs, o, lower=0.9, upper=1.1):
     return tf.reshape(tf.stack(xs_aug), [-1, o.ntimesteps+1, o.frmsz, o.frmsz, 3])
 
 
-def _guard_labels(example, options):
+def _guard_labels(example, run_opts):
     '''Hides the 'y' labels if 'use_gt' is False.
 
     This prevents the model from accidentally using 'y'.
     '''
-    # example['x_raw'] -- [b, t, h, w, 3]
+    # example['x'] -- [b, t, h, w, 3]
     # example['y']     -- [b, t, 4]
-    images = example['x_raw']
+    images = example['x']
     safe = dict(example)
-    safe['y'] = tf.cond(options['use_gt'],
+    safe['y'] = tf.cond(run_opts['use_gt'],
         lambda: example['y'],
         lambda: tf.fill(tf.concat([tf.shape(images)[0:2], [4]], axis=0), float('nan')),
         name='labels_safe')
@@ -611,10 +612,8 @@ def _whiten(example_raw, dtype, stat=None, name='whiten'):
         std = tf.constant(stat['std'] if stat else 1.0, dtype, name='std')
         example = dict(example_raw) # Copy dictionary before modifying.
         # Replace raw x (images) with whitened x (images).
-        example['x'] = _whiten_image(example['x_raw'], mean, std, name='x')
-        del example['x_raw']
-        example['x0'] = _whiten_image(example['x0_raw'], mean, std, name='x0')
-        del example['x0_raw']
+        example['x'] = _whiten_image(example['x'], mean, std, name='x')
+        example['x0'] = _whiten_image(example['x0'], mean, std, name='x0')
         return example
 
 
@@ -735,11 +734,11 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 def _draw_init_bounding_boxes(example, time_stride=1, name='draw_box'):
     # Note: This will produce INT_MIN when casting NaN to int.
     with tf.name_scope(name) as scope:
-        # example['x0_raw']   -- [b, h, w, 3]
+        # example['x0']   -- [b, h, w, 3]
         # example['y0']       -- [b, 4]
         # Just do the first example in the batch.
-        # image = (1.0/255)*example['x0_raw'][0:1]
-        image = example['x0_raw'][0:1]
+        # image = (1.0/255)*example['x0'][0:1]
+        image = example['x0'][0:1]
         y_gt = example['y0'][0:1]
         y = tf.stack([y_gt], axis=1)
         coords = tf.unstack(y, axis=2)
@@ -752,12 +751,12 @@ def _draw_init_bounding_boxes(example, time_stride=1, name='draw_box'):
 def _draw_bounding_boxes(example, pred, time_stride=1, name='draw_box'):
     # Note: This will produce INT_MIN when casting NaN to int.
     with tf.name_scope(name) as scope:
-        # example['x_raw']   -- [b, t, h, w, 3]
+        # example['x']   -- [b, t, h, w, 3]
         # example['y']       -- [b, t, 4]
         # pred['y'] -- [b, t, 4]
         # Just do the first example in the batch.
-        # image = (1.0/255)*example['x_raw'][0][::time_stride]
-        image = example['x_raw'][0][::time_stride]
+        # image = (1.0/255)*example['x'][0][::time_stride]
+        image = example['x'][0][::time_stride]
         y_gt = example['y'][0][::time_stride]
         y_pred = pred['y'][0][::time_stride]
         y = tf.stack([y_gt, y_pred], axis=1)
@@ -788,9 +787,9 @@ def _load_sequence(seq, o):
         'labels'         # Tensor with shape [n, 4] containing rectangles.
         'label_is_valid' # Tensor with shape [n] containing booleans.
     Example has keys:
-        'x0_raw'     # First image in sequence, shape [h, w, 3]
+        'x0'         # First image in sequence, shape [h, w, 3]
         'y0'         # Position of target in first image, shape [4]
-        'x_raw'      # Input images, shape [n-1, h, w, 3]
+        'x'          # Input images, shape [n-1, h, w, 3]
         'y'          # Position of target in following frames, shape [n-1, 4]
         'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
     '''
@@ -802,15 +801,15 @@ def _load_sequence(seq, o):
                             dtype=o.dtype.as_numpy_dtype)
     images = map(f, seq['image_files'])
     return {
-        'x0_raw':     np.array(images[0]),
+        'x0':         np.array(images[0]),
         'y0':         np.array(seq['labels'][0]),
-        'x_raw':      np.array(images[1:]),
+        'x':          np.array(images[1:]),
         'y':          np.array(seq['labels'][1:]),
         'y_is_valid': np.array(seq['label_is_valid'][1:]),
     }
 
 def _load_batch(seqs, o):
-    sequence_keys = set(['x_raw', 'y', 'y_is_valid'])
+    sequence_keys = set(['x', 'y', 'y_is_valid'])
     examples = map(lambda x: _load_sequence(x, o), seqs)
     # Pad all sequences to o.ntimesteps.
     # NOTE: Assumes that none of the arrays to be padded are empty.

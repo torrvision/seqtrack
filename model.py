@@ -1067,7 +1067,7 @@ def simple_search(original_example, ntimesteps, frmsz, batchsz, weight_decay=0.0
         # Visualize rectangle on normalized image.
         tf.summary.image('frame_0',
             tf.image.draw_bounding_boxes(
-                normalize_image_range(example['x0'][0:1]),
+                _normalize_image_range(example['x0'][0:1]),
                 geom.rect_to_tf_box(tf.expand_dims(example['y0'][0:1], 1))), # Just one box per image.
             collections=image_summaries_collections)
 
@@ -1113,7 +1113,7 @@ def simple_search(original_example, ntimesteps, frmsz, batchsz, weight_decay=0.0
         # Visualize rectangle on normalized image.
         tf.summary.image('frame_1_to_n',
             tf.image.draw_bounding_boxes(
-                normalize_image_range(example['x'][0]),
+                _normalize_image_range(example['x'][0]),
                 geom.rect_to_tf_box(tf.expand_dims(position[0], 1))), # Just one box per image.
             collections=image_summaries_collections)
     if normalize_size and not normalize_first_only:

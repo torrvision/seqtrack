@@ -1,6 +1,8 @@
 import tensorflow as tf
 
-def crop_example(example, window_rect, first_only=False):
+from helpers import merge_dims
+
+def crop_example(example, window_rect, crop_size, first_only=False):
     '''
     Args:
         example -- Dictionary.
@@ -17,8 +19,7 @@ def crop_example(example, window_rect, first_only=False):
     if not first_only:
         # Re-combine into a single sequence.
         xs = tf.concat([xs, example['x']], axis=1)
-    im_size = xs.shape.as_list()[2:4] # Require static for now.
-    xs = crop_image_sequence(xs, window_rect, crop_size=im_size)
+    xs = crop_image_sequence(xs, window_rect, crop_size=crop_size)
     out['x0'] = xs[:, 0]
     if not first_only:
         out['x'] = xs[:, 1:]
@@ -26,7 +27,7 @@ def crop_example(example, window_rect, first_only=False):
     ys = tf.expand_dims(example['y0'], 1)
     if not first_only and 'y' in example:
         # Re-combine into a single sequence.
-        ys = tf.concat([ys, example['y'], axis=1)
+        ys = tf.concat([ys, example['y']], axis=1)
     ys = crop_rect_sequence(ys, window_rect)
     out['y0'] = ys[:, 0]
     if not first_only and 'y' in example:
@@ -36,19 +37,20 @@ def crop_example(example, window_rect, first_only=False):
     return out
 
 
-def crop_pred(pred, window_rect):
+def crop_pred(pred, window_rect, crop_size):
     '''
     Args:
         pred -- Dictionary.
             pred['y'] -- [n, t, 4]
-            pred['hmap'] -- [n, t, h, w, 2]
+            pred['hmap_softmax'] -- [n, t, h, w, 2]
             All other fields are kept intact.
         window_rect -- [n, 4]
     '''
     out = dict(pred)
     out['y'] = crop_rect_sequence(pred['y'], window_rect)
-    if 'hmap' in pred:
-        out['hmap'] = crop_image_sequence(pred['hmap'], window_rect)
+    if 'hmap_softmax' in pred:
+        out['hmap_softmax'] = crop_image_sequence(pred['hmap_softmax'], window_rect, crop_size=crop_size)
+    return out
 
 
 def object_centric_window(obj_rect, relative_size=4.0):
