@@ -286,8 +286,9 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                         # Cache the results.
                         result_file = os.path.join(o.path_output, 'assess', eval_id,
                             iter_id+'.json')
+                        inputs = dict(list(example_whole.items()) + list(run_opts.items()))
                         result = cache_json(result_file,
-                            lambda: evaluate.evaluate(sess, model, example_whole, pred_whole,
+                            lambda: evaluate.evaluate(sess, model, inputs, pred_whole,
                                 eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None),
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(

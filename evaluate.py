@@ -57,8 +57,8 @@ def track(sess, model, inputs, outputs, sequence, use_gt, output_vars=None):
         y_gt = np.array(sequence['labels'][start:start+chunk_len])
         y_gt = _single_to_batch(pad_to(y_gt, model.sequence_len), model.batch_size)
         feed_dict = {
-            inputs['x_raw']:  images,
-            inputs['x0_raw']: first_image,
+            inputs['x']:      images,
+            inputs['x0']:     first_image,
             inputs['y0']:     first_label,
             inputs['y']:      y_gt,
             inputs['use_gt']: use_gt,
@@ -98,7 +98,7 @@ def _single_to_batch(x, batch_size):
     return pad_to(x, batch_size)
 
 
-def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False):
+def evaluate(sess, model, inputs, outputs, sequences, visualize=None, use_gt=False):
     '''
     Args:
         nbatches_: the number of batches to evaluate
@@ -121,7 +121,7 @@ def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False):
             continue
         #print 'sequence {} of {}'.format(i+1, len(sequences))
         output_vars = set(['y', 'hmap_softmax']).intersection(set(outputs.keys()))
-        pred = track(sess, inputs, model, sequence, use_gt, output_vars)
+        pred = track(sess, model, inputs, outputs, sequence, use_gt, output_vars)
         rect_pred = pred['y']
         hmap_pred = pred.get('hmap_softmax', None)
         if visualize:
