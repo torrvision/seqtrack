@@ -2,7 +2,7 @@ import tensorflow as tf
 
 from helpers import merge_dims
 
-def crop_example(example, window_rect, crop_size, first_only=False):
+def crop_example(example, window_rect, crop_size, first_only=False, pad_value=None):
     '''
     Args:
         example -- Dictionary.
@@ -19,7 +19,7 @@ def crop_example(example, window_rect, crop_size, first_only=False):
     if not first_only:
         # Re-combine into a single sequence.
         xs = tf.concat([xs, example['x']], axis=1)
-    xs = crop_image_sequence(xs, window_rect, crop_size=crop_size)
+    xs = crop_image_sequence(xs, window_rect, crop_size=crop_size, pad_value=pad_value)
     out['x0'] = xs[:, 0]
     if not first_only:
         out['x'] = xs[:, 1:]
@@ -49,7 +49,8 @@ def crop_pred(pred, window_rect, crop_size):
     out = dict(pred)
     out['y'] = crop_rect_sequence(pred['y'], window_rect)
     if 'hmap_softmax' in pred:
-        out['hmap_softmax'] = crop_image_sequence(pred['hmap_softmax'], window_rect, crop_size=crop_size)
+        out['hmap_softmax'] = crop_image_sequence(pred['hmap_softmax'], window_rect,
+            crop_size=crop_size)
     return out
 
 

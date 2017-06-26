@@ -112,15 +112,16 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     example_whole = dict(example)
     if o.object_centric:
         window_rect = geom.object_centric_window(example['y0'])
-        example = geom.crop_example(example, window_rect,
-            crop_size=[o.frmsz, o.frmsz], first_only=False)
+        example = geom.crop_example(example, window_rect, first_only=False,
+            crop_size=[o.frmsz, o.frmsz], pad_value=stat['mean'])
     example_window = dict(example)
     # TODO: Desirable to have some augmentation after cropping the object?
     # TODO: Mask y with use_gt to prevent accidental use.
     model = create_model(_whiten(_guard_labels(example, run_opts), dtype=o.dtype, stat=stat),
                          image_summaries_collections=['summaries_images'])
     pred = dict(model.outputs)
-    loss_var = get_loss(example, pred, o)
+    loss_var = get_loss(example, pred, o,
+                        image_summaries_collections=['summaries_images'])
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
     loss_var += r
@@ -168,7 +169,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 max_outputs=o.ntimesteps, collections=['summaries_images'])
         # Produce an image summary of the heatmap.
         if 'hmap' in pred:
-            tf.summary.image('hmap', _draw_heatmap(pred),
+            tf.summary.image('hmap', _draw_heatmap(tf.nn.softmax(pred['hmap'])[0]),
                 max_outputs=o.ntimesteps+1, collections=['summaries_images'])
         # Produce an image summary of the LSTM memory states (h or c).
         if hasattr(model, 'memory'):
@@ -643,7 +644,7 @@ def iter_examples(dataset, o, rand=None, num_epochs=None):
         print 'epoch {}: num sequences {}'.format(i+1, n)
 
 
-def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
+def get_loss(example, pred, o, summaries_collections=None, image_summaries_collections=None, name='loss'):
     with tf.name_scope(name) as scope:
         y          = example['y']
         y_is_valid = example['y_is_valid']
@@ -662,7 +663,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 
         # l1 distances for left-top and right-bottom
         if 'l1' in o.losses or 'l1_relative' in o.losses:
-            y_pred = outputs['y']
+            y_pred = pred['y']
             y_valid = tf.boolean_mask(y, y_is_valid)
             y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
             loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid), axis=-1)
@@ -678,7 +679,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 
         # CLE (center location error). Measured in l2 distance.
         if 'cle' in o.losses or 'cle_relative' in o.losses:
-            y_pred = outputs['y']
+            y_pred = pred['y']
             y_valid = tf.boolean_mask(y, y_is_valid)
             y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
             x_center = (y_valid[:,2] + y_valid[:,0]) * 0.5
@@ -701,7 +702,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 
         # Cross-entropy between probabilty maps (need to change label)
         if 'ce' in o.losses or 'ce_balanced' in o.losses:
-            hmap_pred = outputs['hmap']
+            hmap_pred = pred['hmap']
             print 'hmap_pred.shape:', hmap_pred.shape.as_list()
             print 'hmap.shape:', hmap.shape.as_list()
             hmap_valid = tf.boolean_mask(hmap, y_is_valid)
@@ -727,6 +728,13 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
                 tf.summary.scalar(name, loss, collections=summaries_collections)
+
+            if 'hmap' in pred:
+                with tf.name_scope('hmap'):
+                    tf.summary.image('gt', _draw_heatmap(hmap[0]),
+                        collections=image_summaries_collections)
+                    tf.summary.image('pred', _draw_heatmap(tf.nn.softmax(pred['hmap'])[0]),
+                        max_outputs=o.ntimesteps+1, collections=image_summaries_collections)
 
         return tf.reduce_sum(losses.values(), name=scope)
 
@@ -767,13 +775,12 @@ def _draw_bounding_boxes(example, pred, time_stride=1, name='draw_box'):
         image = tf.image.convert_image_dtype(image, tf.uint8, saturate=True)
         return image
 
-def _draw_heatmap(pred, time_stride=1, name='draw_heatmap'):
+def _draw_heatmap(prob, time_stride=1, name='draw_heatmap'):
+    assert len(prob.shape) == 4
     with tf.name_scope(name) as scope:
-        # pred['hmap'] -- [b, t, frmsz, frmsz, 2]
-        # return tf.nn.softmax(pred['hmap'][0,::time_stride,:,:,0:1])
-        p = tf.nn.softmax(pred['hmap'][0,::time_stride])
+        # prob -- [b, t, frmsz, frmsz, 2]
         # Take first channel and convert to int.
-        return tf.cast(tf.round(255*p[:,:,:,0:1]), tf.uint8)
+        return tf.cast(tf.round(255*prob[:,:,:,0:1]), tf.uint8)
 
 def _draw_memory_state(model, mtype, time_stride=1, name='draw_memory_states'):
     with tf.name_scope(name) as scope:
