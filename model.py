@@ -123,32 +123,35 @@ def process_image_with_hmap(x, hmap, o, mode):
     # find indices. Then either crop (crop-and-resize) or mask.
     threshold = 0.7
     x_out = []
+    area = [] # visualize the area being affected. For debugging purpose.
     for b in range(o.batchsz):
         indices = tf.where(hmap[b] > threshold)
-        x1 = tf.reduce_min(indices[:,1])
-        y1 = tf.reduce_min(indices[:,0])
-        x2 = tf.reduce_max(indices[:,1])
-        y2 = tf.reduce_max(indices[:,0])
+        x1 = tf.cast(tf.reduce_min(indices[:,1]), o.dtype) / o.frmsz
+        y1 = tf.cast(tf.reduce_min(indices[:,0]), o.dtype) / o.frmsz
+        x2 = tf.cast(tf.reduce_max(indices[:,1]), o.dtype) / o.frmsz
+        y2 = tf.cast(tf.reduce_max(indices[:,0]), o.dtype) / o.frmsz
         if mode == 'crop':
             box = tf.expand_dims(tf.cast(tf.stack((y1, x1, y2, x2), 0), o.dtype), 0)
             crop = tf.image.crop_and_resize(tf.expand_dims(x[b],0),
-                                        boxes=box/o.frmsz,
+                                        boxes=box,
                                         box_ind=[0],
                                         crop_size=[o.frmsz/2, o.frmsz/2])
             x_out.append(crop)
+            area.append(get_masks_from_rectangles(box, o))
         elif mode == 'mask':
-            w = tf.cast(x2 - x1, o.dtype) / 2.0
-            h = tf.cast(y2 - y1, o.dtype) / 2.0
-            x1 = tf.maximum(tf.cast(x1, o.dtype) - w * 0.5, 0)
-            y1 = tf.maximum(tf.cast(y1, o.dtype) - h * 0.5, 0)
-            x2 = tf.minimum(tf.cast(x2, o.dtype) + w * 0.5, 1)
-            y2 = tf.minimum(tf.cast(y2, o.dtype) + h * 0.5, 1)
+            w_margin = (x2 - x1) / 2.0 # will make the search area twice bigger than hmap
+            h_margin = (y2 - y1) / 2.0 # will make the search area twice bigger than hmap
+            x1 = tf.maximum(x1 - w_margin, 0.0)
+            y1 = tf.maximum(y1 - h_margin, 0.0)
+            x2 = tf.minimum(x2 + w_margin, 1.0)
+            y2 = tf.minimum(y2 + h_margin, 1.0)
             box = tf.expand_dims(tf.cast(tf.stack((y1, x1, y2, x2), 0), o.dtype), 0)
             mask = get_masks_from_rectangles(box, o)
             search = mask[0] * x[b]
             x_out.append(tf.expand_dims(search, 0))
+            area.append(mask)
 
-    return tf.concat(x_out, 0)
+    return tf.concat(x_out, 0), tf.concat(area, 0)
 
 
 class RNN_dual_mix(object):
@@ -395,22 +398,29 @@ class RNN_dual_mix(object):
         y_pred = []
         hmap_pred = []
 
+        cnn1in, cnn1area = [], []
+        cnn2in, cnn2area = [], []
+
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr = y[:, t]
 
             with tf.variable_scope('cnn1', reuse=(t > 0)):
                 if self.mask_search:
-                    x_curr = process_image_with_hmap(x_curr, hmap_prev, o, mode='mask')
+                    x_curr, area = process_image_with_hmap(x_curr, hmap_prev, o, mode='mask')
                 cnn1out = pass_cnn(x_curr, False)
+                cnn1in.append(x_curr)
+                cnn1area.append(area)
 
             with tf.variable_scope('cnn2', reuse=(t > 0)):
                 #xy = tf.stop_gradient(concat([x_prev, hmap_prev], axis=3))
                 if not self.crop_target:
                     xy = concat([x_prev, hmap_prev], axis=3)
                 else:
-                    xy = process_image_with_hmap(x_prev, hmap_prev, o, mode='crop')
+                    xy, area = process_image_with_hmap(x_prev, hmap_prev, o, mode='crop')
                 cnn2out = pass_cnn(xy, True)
+                cnn2in.append(xy)
+                cnn2area.append(area)
 
             h1_curr = [None] * self.lstm1_nlayers
             c1_curr = [None] * self.lstm1_nlayers
@@ -493,7 +503,11 @@ class RNN_dual_mix(object):
         state.update({'y': (y_init, y_prev)})
 
         #dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
-        dbg = {}
+        #dbg = {}
+        dbg = {'cnn1in': tf.stack(cnn1in, axis=1),
+               'cnn2in': tf.stack(cnn2in, axis=1),
+               'cnn1area': tf.stack(cnn1area, axis=1),
+               'cnn2area': tf.stack(cnn2area, axis=1)}
         return outputs, state, dbg
 
 
