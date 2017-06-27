@@ -98,8 +98,12 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
         y1, y2 = yc-ys/2, yc+ys/2
         return x1, y1, x2, y2
 
-def crop_by_hmap(x, hmap, o):
+def process_image_with_hmap(x, hmap, o, mode):
     '''
+    Process input image x with hmap depending on given mode {crop, mask}.
+        'crop': Crop image based on hmap. Used for target appearance.
+        'mask': Mask image based on hmap. Used for search space.
+
     input hmap ranges [0,1] due to softmax beforehand.
 
     hyperparameters.
@@ -116,7 +120,7 @@ def crop_by_hmap(x, hmap, o):
     # normalize to have max of 1 (so that I can apply fixed threshold).
     hmap = hmap / tf.reduce_max(hmap, axis=(1,2), keep_dims=True)
 
-    # find indices, crop and resize.
+    # find indices. Then either crop (crop-and-resize) or mask.
     threshold = 0.7
     x_out = []
     for b in range(o.batchsz):
@@ -125,12 +129,25 @@ def crop_by_hmap(x, hmap, o):
         y1 = tf.reduce_min(indices[:,0])
         x2 = tf.reduce_max(indices[:,1])
         y2 = tf.reduce_max(indices[:,0])
-        box = tf.expand_dims(tf.cast(tf.stack((y1, x1, y2, x2), 0), o.dtype), 0)
-        crop = tf.image.crop_and_resize(tf.expand_dims(x[b],0),
+        if mode == 'crop':
+            box = tf.expand_dims(tf.cast(tf.stack((y1, x1, y2, x2), 0), o.dtype), 0)
+            crop = tf.image.crop_and_resize(tf.expand_dims(x[b],0),
                                         boxes=box/o.frmsz,
                                         box_ind=[0],
                                         crop_size=[o.frmsz/2, o.frmsz/2])
-        x_out.append(crop)
+            x_out.append(crop)
+        elif mode == 'mask':
+            w = tf.cast(x2 - x1, o.dtype) / 2.0
+            h = tf.cast(y2 - y1, o.dtype) / 2.0
+            x1 = tf.maximum(tf.cast(x1, o.dtype) - w * 0.5, 0)
+            y1 = tf.maximum(tf.cast(y1, o.dtype) - h * 0.5, 0)
+            x2 = tf.minimum(tf.cast(x2, o.dtype) + w * 0.5, 1)
+            y2 = tf.minimum(tf.cast(y2, o.dtype) + h * 0.5, 1)
+            box = tf.expand_dims(tf.cast(tf.stack((y1, x1, y2, x2), 0), o.dtype), 0)
+            mask = get_masks_from_rectangles(box, o)
+            search = mask[0] * x[b]
+            x_out.append(tf.expand_dims(search, 0))
+
     return tf.concat(x_out, 0)
 
 
@@ -141,6 +158,7 @@ class RNN_dual_mix(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  crop_target=False,
+                 mask_search=False,
                  lstm1_nlayers=1,
                  lstm2_nlayers=1,
                  layer_norm=False,
@@ -151,6 +169,7 @@ class RNN_dual_mix(object):
                  ):
         # model parameters
         self.crop_target   = crop_target
+        self.mask_search   = mask_search
         self.lstm1_nlayers = lstm1_nlayers
         self.lstm2_nlayers = lstm2_nlayers
         self.layer_norm    = layer_norm
@@ -381,6 +400,8 @@ class RNN_dual_mix(object):
             y_curr = y[:, t]
 
             with tf.variable_scope('cnn1', reuse=(t > 0)):
+                if self.mask_search:
+                    x_curr = process_image_with_hmap(x_curr, hmap_prev, o, mode='mask')
                 cnn1out = pass_cnn(x_curr, False)
 
             with tf.variable_scope('cnn2', reuse=(t > 0)):
@@ -388,7 +409,7 @@ class RNN_dual_mix(object):
                 if not self.crop_target:
                     xy = concat([x_prev, hmap_prev], axis=3)
                 else:
-                    xy = crop_by_hmap(x_prev, hmap_prev, o)
+                    xy = process_image_with_hmap(x_prev, hmap_prev, o, mode='crop')
                 cnn2out = pass_cnn(xy, True)
 
             h1_curr = [None] * self.lstm1_nlayers
