@@ -112,16 +112,16 @@ def process_image_with_hmap(x, hmap, o, mode):
         crop_size: the output size of crop after resizing (default o.frmsz/2 = 120).
     '''
     # image dilation
-    filt = tf.ones(shape=[3, 3, 1]) # conservative for now to reduce the effect.
-    strides = [1, 1, 1, 1]
-    rates = [1, 1, 1, 1]
-    hmap = tf.nn.dilation2d(hmap, filt, strides, rates, padding='SAME')
+    #filt = tf.ones(shape=[3, 3, 1]) # conservative for now to reduce the effect.
+    #strides = [1, 1, 1, 1]
+    #rates = [1, 1, 1, 1]
+    #hmap = tf.nn.dilation2d(hmap, filt, strides, rates, padding='SAME')
 
     # normalize to have max of 1 (so that I can apply fixed threshold).
     hmap = hmap / tf.reduce_max(hmap, axis=(1,2), keep_dims=True)
 
     # find indices. Then either crop (crop-and-resize) or mask.
-    threshold = 0.7
+    threshold = 0.9 # TODO: try different threshold.
     x_out = []
     area = [] # visualize the area being affected. For debugging purpose.
     for b in range(o.batchsz):
