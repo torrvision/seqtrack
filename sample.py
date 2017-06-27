@@ -127,7 +127,14 @@ def freq_range_fit(video, obj, rand, dataset, ntimesteps,
     n = int(round(ntimesteps * f))
     # Choose first frame such that all frames are present.
     a = rand.choice([a for a in times if a + n <= video_len - 1])
-    return [int(round(a + f*t)) for t in range(0, ntimesteps+1)]
+    ideal_times = a + f * np.arange(0, ntimesteps+1)
+    # Snap to nearest time with a label.
+    return _snap(ideal_times, times)
+
+
+def _snap(ideal, possible):
+    inds = np.round(np.interp(ideal, possible, range(len(possible)))).astype(int)
+    return (np.array(possible)[inds]).tolist()
 
 
 def _sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
