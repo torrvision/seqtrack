@@ -557,9 +557,9 @@ class RNN_dual_mix(object):
 
             with tf.variable_scope('cnn1', reuse=(t > 0)):
                 if self.mask_search:
-                    x_curr, area = process_image_with_hmap(x_curr, hmap_prev, o, mode='mask')
-                cnn1out = pass_cnn(x_curr, False)
-                cnn1in.append(x_curr)
+                    x_search, area = process_image_with_hmap(x_curr, hmap_prev, o, mode='mask')
+                cnn1out = pass_cnn(x_search, False)
+                cnn1in.append(x_search)
                 cnn1area.append(area)
 
             with tf.variable_scope('cnn2', reuse=(t > 0)):
@@ -631,7 +631,6 @@ class RNN_dual_mix(object):
             hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
                                               lambda: tf.expand_dims(tf.nn.softmax(hmap_curr_pred)[:,:,:,0], 3))
 
-            assert(False, 'x_curr is corrupted!!!')
             x_prev = x_curr
             h1_prev, c1_prev = h1_curr, c1_curr
             h2_prev, c2_prev = h2_curr, c2_curr
