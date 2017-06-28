@@ -98,7 +98,7 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
         y1, y2 = yc-ys/2, yc+ys/2
         return x1, y1, x2, y2
 
-def process_image_with_hmap(x, hmap, o, mode):
+def process_image_with_hmap(x, hmap, o, mode, margin_ratio=3.0):
     '''
     Process input image x with hmap depending on given mode {crop, mask}.
         'crop': Crop image based on hmap. Used for target appearance.
@@ -110,6 +110,8 @@ def process_image_with_hmap(x, hmap, o, mode):
         filt, strides, rates: dilation filter kernel.
         threshold: the value [0,1) to binarize hmap.
         crop_size: the output size of crop after resizing (default o.frmsz/2 = 120).
+        margin_ratio: Sets the search space size with respect to object's size
+            (e.g., if set 2.0 the search area will be twice bigger than object).
     '''
     # image dilation
     #filt = tf.ones(shape=[3, 3, 1]) # conservative for now to reduce the effect.
@@ -121,7 +123,7 @@ def process_image_with_hmap(x, hmap, o, mode):
     hmap = hmap / tf.reduce_max(hmap, axis=(1,2), keep_dims=True)
 
     # find indices. Then either crop (crop-and-resize) or mask.
-    threshold = 0.9 # TODO: try different threshold.
+    threshold = 0.9 # TODO: try different threshold. Should be better with some bound after thresholding.
     x_out = []
     area = [] # visualize the area being affected. For debugging purpose.
     for b in range(o.batchsz):
@@ -139,8 +141,8 @@ def process_image_with_hmap(x, hmap, o, mode):
             x_out.append(crop)
             area.append(get_masks_from_rectangles(box, o))
         elif mode == 'mask':
-            w_margin = (x2 - x1) / 2.0 # will make the search area twice bigger than hmap
-            h_margin = (y2 - y1) / 2.0 # will make the search area twice bigger than hmap
+            w_margin = (x2 - x1) * 0.5 * (margin_ratio - 1.0)
+            h_margin = (y2 - y1) * 0.5 * (margin_ratio - 1.0)
             x1 = tf.maximum(x1 - w_margin, 0.0)
             y1 = tf.maximum(y1 - h_margin, 0.0)
             x2 = tf.minimum(x2 + w_margin, 1.0)
@@ -152,6 +154,154 @@ def process_image_with_hmap(x, hmap, o, mode):
             area.append(mask)
 
     return tf.concat(x_out, 0), tf.concat(area, 0)
+
+
+class Nornn(object):
+    '''
+    This model has two RNNs (ConvLSTM for Dynamics and LSTM for Appearances).
+    '''
+    def __init__(self, inputs, o,
+                 summaries_collections=None,
+                 ):
+        # model parameters
+        # Ignore sumaries_collections - model does not generate any summaries.
+        self.outputs, self.state, self.dbg = self._load_model(inputs, o)
+        self.image_size   = (o.frmsz, o.frmsz)
+        self.sequence_len = o.ntimesteps
+        self.batch_size   = o.batchsz
+
+    def _load_model(self, inputs, o):
+
+        def pass_cnn(x):
+            ''' Fully convolutional cnn.
+            '''
+            with slim.arg_scope([slim.conv2d],
+                    padding='VALID',
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.conv2d(x, 96, 11, stride=2, scope='conv1')
+                x = slim.max_pool2d(x, 3, scope='pool1')
+                x = slim.conv2d(x, 256, 5, stride=1, scope='conv2')
+                x = slim.max_pool2d(x, 3, scope='pool2')
+                x = slim.conv2d(x, 384, 3, stride=1, scope='conv3')
+                x = slim.conv2d(x, 384, 3, stride=1, scope='conv4')
+                x = slim.conv2d(x, 256, 3, stride=1, scope='conv5')
+            return x
+
+        def pass_cross_correlation(search, filt, o):
+            # TODO: ICCV paper performed normal conv rather than depthwise_conv2d.
+            scoremap = []
+            for i in range(o.batchsz):
+                scoremap.append(
+                        tf.nn.depthwise_conv2d(tf.expand_dims(search[i],0),
+                                               tf.expand_dims(filt[i], 3),
+                                               strides=[1,1,1,1],
+                                               padding='SAME'))
+            return tf.concat(scoremap, 0)
+
+        def pass_deconvolution(x):
+            shape_to = [53, 116] # magic number picked from CNN.
+            numout_to = [256, 96]
+            with slim.arg_scope([slim.conv2d],
+                    kernel_size=[3,3],
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                for i in range(len(shape_to)):
+                    x = slim.conv2d(tf.image.resize_images(x, [shape_to[i]]*2),
+                                    num_outputs=numout_to[i],
+                                    scope='deconv{}'.format(i+1))
+            return x
+
+        def pass_out_rectangle(x):
+            ''' Regress output rectangle.
+            '''
+            with slim.arg_scope([slim.fully_connected],
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.max_pool2d(x, 3, 3, scope='pool1') # NEW; To redue the spatial size before flattening.
+                x = slim.flatten(x)
+                x = slim.fully_connected(x, 1024, scope='fc1')
+                x = slim.fully_connected(x, 1024, scope='fc2')
+                x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
+            return x
+
+        def pass_out_heatmap(x):
+            ''' Upsample and generate spatial heatmap.
+            '''
+            with slim.arg_scope([slim.conv2d],
+                    #num_outputs=x.shape.as_list()[-1],
+                    num_outputs=2,
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.conv2d(tf.image.resize_images(x, [241, 241]), kernel_size=[3, 3], scope='deconv')
+                x = slim.conv2d(x, kernel_size=[1, 1], scope='conv1')
+                x = slim.conv2d(x, kernel_size=[1, 1], activation_fn=None, scope='conv2')
+            return x
+
+
+        x           = inputs['x']  # shape [b, ntimesteps, h, w, 3]
+        x0          = inputs['x0'] # shape [b, h, w, 3]
+        y0          = inputs['y0'] # shape [b, 4]
+        y           = inputs['y']  # shape [b, ntimesteps, 4]
+        use_gt      = inputs['use_gt']
+        gt_ratio    = inputs['gt_ratio']
+        is_training = inputs['is_training']
+
+        # Add identity op to ensure that we can feed state here.
+        x_init = tf.identity(x0)
+        y_init = tf.identity(y0) # for `delta` regression type output.
+        hmap_init = tf.identity(get_masks_from_rectangles(y0, o))
+
+        x_prev = x_init
+        hmap_prev = hmap_init
+
+        y_pred = []
+        hmap_pred = []
+
+        for t in range(o.ntimesteps):
+            x_curr = x[:, t]
+            y_curr = y[:, t]
+
+            with tf.variable_scope('cnn1', reuse=(t > 0)):
+                search, _ = process_image_with_hmap(x_curr, hmap_prev, o, mode='mask')
+                feat_search = pass_cnn(search)
+
+            with tf.variable_scope('cnn2', reuse=(t > 0)):
+                target, _ = process_image_with_hmap(x_prev, hmap_prev, o, mode='crop')
+                feat_target = pass_cnn(target)
+
+            with tf.variable_scope('cross_correlation', reuse=(t > 0)):
+                scoremap = pass_cross_correlation(feat_search, feat_target, o)
+
+            with tf.variable_scope('deconvolution', reuse=(t > 0)):
+                scoremap = pass_deconvolution(scoremap)
+
+            with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
+                hmap_curr_pred = pass_out_heatmap(scoremap)
+
+            with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
+                y_curr_pred = pass_out_rectangle(hmap_curr_pred)
+
+            rand_prob = tf.random_uniform([], minval=0, maxval=1)
+            gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
+            hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o))
+            hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
+                                              lambda: tf.expand_dims(tf.nn.softmax(hmap_curr_pred)[:,:,:,0], 3))
+
+            x_prev = x_curr
+
+            y_pred.append(y_curr_pred)
+            hmap_pred.append(hmap_curr_pred)
+
+        y_pred = tf.stack(y_pred, axis=1) # list to tensor
+        hmap_pred = tf.stack(hmap_pred, axis=1)
+        y_prev = y_pred[:,-1,:] # for `delta` regression type output.
+
+        outputs = {'y': y_pred, 'hmap': hmap_pred, 'hmap_softmax': tf.nn.softmax(hmap_pred)}
+        state = {}
+        state.update({'x': (x_init, x_prev)})
+        state.update({'hmap': (hmap_init, hmap_prev)})
+        state.update({'y': (y_init, y_prev)})
+
+        #dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
+        dbg = {}
+        return outputs, state, dbg
 
 
 class RNN_dual_mix(object):
@@ -481,6 +631,7 @@ class RNN_dual_mix(object):
             hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
                                               lambda: tf.expand_dims(tf.nn.softmax(hmap_curr_pred)[:,:,:,0], 3))
 
+            assert(False, 'x_curr is corrupted!!!')
             x_prev = x_curr
             h1_prev, c1_prev = h1_curr, c1_curr
             h2_prev, c2_prev = h2_curr, c2_curr
@@ -933,8 +1084,8 @@ def load_model(o, model_params=None):
     assert('summaries_collections' not in model_params)
     if o.model == 'RNN_dual_mix':
         model = functools.partial(RNN_dual_mix, o=o, **model_params)
-    elif o.model == 'RNN_dual_mix_reduce':
-        model = functools.partial(RNN_dual_mix_reduce, o=o, **model_params)
+    elif o.model == 'Nornn':
+        model = functools.partial(Nornn, o=o, **model_params)
     elif o.model == 'RNN_conv_asymm':
         model = functools.partial(rnn_conv_asymm, o=o, **model_params)
     elif o.model == 'RNN_multi_res':
