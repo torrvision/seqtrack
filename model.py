@@ -1,22 +1,26 @@
 '''This file describes several different models.
 
-A model is a class with the properties::
+A Model has the following interface::
 
-    model.outputs      # Dictionary of tensors
-    model.state        # Dictionary of 2-tuples of tensors
-    model.batch_size   # Batch size of instance.
-    model.sequence_len # Size of instantiated RNN.
+    state_init = model.init(example_init, run_opts)
+        example_init['x0']
+        example_init['y0']
+        run_opts['use_gt']
 
-The model constructor should take a dictionary of tensors::
+    prediction_t, state_t = model.step(example_t)
+        example_t['x']
+        example_t['y'] (optional)
+        prediction_t['y']
+        prediction_t['hmap'] (optional)
+        prediction_t['hmap_softmax'] (optional)
 
-    'x'  # Tensor of images [b, t, h, w, c]
-    'x0' # Tensor of initial images [b, h, w, c]
-    'y0' # Tensor of initial rectangles [b, 4]
+It is then possible to process a long sequence by dividing it into chunks
+of length k and feeding state_{k-1} to state_init.
 
-It may also have 'target' if required.
-Images input to the model are already normalized (e.g. have dataset mean subtracted).
+A Model also has the following properties::
 
-The `outputs` dictionary should have a key 'y' and may have other keys such as 'hmap'.
+    model.batch_size    # Batch size of model instance, either None or an integer.
+    model.image_size    # Tuple of image size.
 '''
 
 import pdb
@@ -927,18 +931,139 @@ def multi_res_vgg(x, prev, init, use_heatmap, heatmap_stride,
         return outputs, curr
 
 
-def simple_search(original_example, ntimesteps, frmsz, batchsz, weight_decay=0.0,
-        summaries_collections=None,
-        image_summaries_collections=None,
-        # Model parameters:
-        use_rnn=True,
-        use_heatmap=False,
-        use_batch_norm=False, # Caution when use_rnn is True.
-        normalize_size=False,
-        normalize_first_only=False,
-        ):
+class SimpleSearch:
 
-    def feat_net(x):
+    def __init__(self, ntimesteps, frmsz, batchsz, weight_decay=0.0,
+            summaries_collections=None,
+            image_summaries_collections=None,
+            # Model parameters:
+            use_rnn=True,
+            use_heatmap=False,
+            use_batch_norm=False, # Caution when use_rnn is True.
+            normalize_size=False,
+            normalize_first_only=False
+            ):
+        # TODO: Possible to automate this? Yuck!
+        self.ntimesteps                  = ntimesteps
+        self.frmsz                       = frmsz
+        self.batchsz                     = batchsz
+        self.weight_decay                = weight_decay
+        self.summaries_collections       = summaries_collections
+        self.image_summaries_collections = image_summaries_collections
+        # Model parameters:
+        self.use_rnn              = use_rnn
+        self.use_heatmap          = use_heatmap
+        self.use_batch_norm       = use_batch_norm
+        self.normalize_size       = normalize_size
+        self.normalize_first_only = normalize_first_only
+
+        # Public model properties:
+        # self.image_size   = (self.frmsz, self.frmsz)
+        # self.sequence_len = self.ntimesteps # Static length of unrolled RNN.
+        self.batch_size   = None # Model accepts variable batch size.
+
+        # Model state.
+        self._template = None
+        self._run_opts = None
+
+    def init(self, example, run_opts):
+        self._run_opts = run_opts
+        with slim.arg_scope(self._arg_scope(is_training=self._run_opts['is_training'])):
+            # Process initial image and label to get "template".
+            with tf.variable_scope('template'):
+                # TODO: Simply use 'x' and 'y' here!
+                p0 = get_masks_from_rectangles(example['y0'], frmsz=self.frmsz)
+                first_image_with_mask = concat([example['x0'], p0], axis=3)
+                self._template = self._template_net(first_image_with_mask)
+        state = {}
+        return state
+
+    def step(self, original_example):
+        # if self.normalize_size:
+        #     window_rect = geom.object_centric_window(original_example['y0'])
+        #     example = geom.crop_example(original_example, window_rect, self.normalize_first_only)
+        # else:
+        #     example = dict(original_example)
+        # with tf.name_scope('model_summary') as summary_scope:
+        #     # Visualize rectangle on normalized image.
+        #     tf.summary.image('frame_0',
+        #         tf.image.draw_bounding_boxes(
+        #             _normalize_image_range(example['x0'][0:1]),
+        #             geom.rect_to_tf_box(tf.expand_dims(example['y0'][0:1], 1))), # Just one box per image.
+        #         collections=image_summaries_collections)
+
+        x = original_example['x']
+        with slim.arg_scope(self._arg_scope(is_training=self._run_opts['is_training'])):
+            # Process all images from all sequences with feature net.
+            with tf.variable_scope('features'):
+                feat = self._feat_net(x)
+            # Search each image using result of template network.
+            with tf.variable_scope('search'):
+                # similarity = _search_all_net(feat, self._template)
+                similarity = self._search_net(feat, self._template)
+            # if self.use_rnn:
+            #     # Update abstract position likelihood of object.
+            #     with tf.variable_scope('track'):
+            #         init_state = self._initial_state_net(example['x0'], example['y0'])
+            #         curr_state = init_state
+            #         similarity = tf.unstack(similarity, axis=1)
+            #         position_map = [None] * self.ntimesteps
+            #         for t in range(self.ntimesteps):
+            #             with tf.variable_scope('update', reuse=(t > 0)):
+            #                 position_map[t], curr_state = self._update_net(similarity[t], curr_state)
+            #         position_map = tf.stack(position_map, axis=1)
+            # else:
+            #     position_map = similarity
+            position_map = similarity
+            # Transform abstract position position_map into rectangle.
+            with tf.variable_scope('output'):
+                position = self._output_net(position_map)
+
+            prediction = {'y': position}
+            if self.use_heatmap:
+                with tf.variable_scope('foreground'):
+                    # Map abstract position_map to probability of foreground.
+                    prediction['hmap'] = self._foreground_net(position_map)
+                    prediction['hmap_full'] = tf.image.resize_images(prediction['hmap'],
+                        size=[self.frmsz, self.frmsz],
+                        method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
+                        align_corners=True)
+                    prediction['hmap_softmax'] = tf.nn.softmax(prediction['hmap_full'])
+
+        # with tf.name_scope(summary_scope):
+        #     # Visualize rectangle on normalized image.
+        #     tf.summary.image('frame_1_to_n',
+        #         tf.image.draw_bounding_boxes(
+        #             _normalize_image_range(example['x'][0]),
+        #             geom.rect_to_tf_box(tf.expand_dims(position[0], 1))), # Just one box per image.
+        #         collections=image_summaries_collections)
+        # if self.normalize_size and not self.normalize_first_only:
+        #     inv_window_rect = geom.crop_inverse(window_rect)
+        #     position = geom.crop_rect_sequence(position, inv_window_rect)
+
+        # if self.use_rnn:
+        #     state = {k: (init_state[k], curr_state[k]) for k in curr_state}
+        # else:
+        #     state = {}
+
+        state = {}
+        return prediction, state
+
+    def _arg_scope(self, is_training):
+        batch_norm_opts = {} if not self.use_batch_norm else {
+            'normalizer_fn': slim.batch_norm,
+            'normalizer_params': {
+                'is_training': is_training,
+                'fused': True,
+            },
+        }
+        with slim.arg_scope([slim.conv2d, slim.fully_connected],
+                            weights_regularizer=slim.l2_regularizer(self.weight_decay),
+                            **batch_norm_opts) as arg_sc:
+            return arg_sc
+
+    def _feat_net(self, x):
+        assert len(x.shape) == 4
         with slim.arg_scope([slim.max_pool2d], kernel_size=3, padding='SAME'):
             # conv1
             x = slim.conv2d(x, 64, 11, stride=4)
@@ -954,10 +1079,11 @@ def simple_search(original_example, ntimesteps, frmsz, batchsz, weight_decay=0.0
             x = slim.conv2d(x, 128, 3, activation_fn=None)
         return x
 
-    def template_net(x):
+    def _template_net(self, x):
+        assert len(x.shape) == 4
         with slim.arg_scope([slim.max_pool2d], kernel_size=3, padding='SAME'):
-            x = feat_net(x)
-            x = tf.nn.relu(x) # No activation_fn at output of feat_net.
+            x = self._feat_net(x)
+            x = tf.nn.relu(x) # No activation_fn at output of _feat_net.
             # x = tf.reduce_mean(x, axis=[1, 2], keep_dims=True)
             x = slim.conv2d(x, 128, 3)
             x = slim.max_pool2d(x)
@@ -968,55 +1094,65 @@ def simple_search(original_example, ntimesteps, frmsz, batchsz, weight_decay=0.0
             assert x.shape.as_list()[1:3] == [1, 1]
         return x
 
-    def search_all(x, f):
+    def _search_net(self, x, f):
+        assert len(x.shape) == 4
+        assert len(f.shape) == 4
         dim = 256
-        # # x.shape is [b, t, hx, wx, c]
-        # # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
-        # # relu(linear(concat(a, b)) = relu(linear(a) + linear(b))
-        # f = slim.conv2d(f, dim, 1, activation_fn=None)
-        # f = tf.expand_dims(f, 1)
-        # x, unmerge = merge_dims(x, 0, 2)
-        # x = slim.conv2d(x, dim, 1, activation_fn=None)
-        # x = unmerge(x, 0)
-        # # Search for f in x.
-
-        # x = tf.nn.relu(tf.add(x, f))
-        # x.shape is [b, t, hx, wx, c]
+        # x.shape is [b, hx, wx, c]
         # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
-        # relu(linear(concat(a, b)) = relu(linear(a) + linear(b))
-        f = tf.expand_dims(f, 1)
         # Search for f in x.
         x = tf.nn.relu(x + f)
-
-        # Post-process appearance "similarity".
-        x, unmerge = merge_dims(x, 0, 2)
         x = slim.conv2d(x, dim, 1)
         x = slim.conv2d(x, dim, 1)
-        x = unmerge(x, 0)
         return x
 
-    def initial_state_net(x0, y0, state_dim=16):
-        f = get_masks_from_rectangles(y0, frmsz=frmsz)
-        f = feat_net(f)
-        h = slim.conv2d(f, state_dim, 3, activation_fn=None)
-        c = slim.conv2d(f, state_dim, 3, activation_fn=None)
-        return {'h': h, 'c': c}
+    # def _initial_state_net(self, x0, y0, state_dim=16):
+    #     assert len(x0.shape) == 4
+    #     f = get_masks_from_rectangles(y0, frmsz=self.frmsz)
+    #     f = _feat_net(f)
+    #     h = slim.conv2d(f, state_dim, 3, activation_fn=None)
+    #     c = slim.conv2d(f, state_dim, 3, activation_fn=None)
+    #     return {'h': h, 'c': c}
 
-    def update(x, prev_state):
-        '''Convert response maps to rectangle.'''
-        h = prev_state['h']
-        c = prev_state['c']
-        h, c = conv_lstm(x, h, c, state_dim=16)
-        x = h
-        state = {'h': h, 'c': c}
-        return x, state
+    # def _update_net(self, x, prev_state):
+    #     assert len(x.shape) == 4
+    #     '''Convert response maps to rectangle.'''
+    #     h = prev_state['h']
+    #     c = prev_state['c']
+    #     h, c = self._conv_lstm(x, h, c, state_dim=16)
+    #     x = h
+    #     state = {'h': h, 'c': c}
+    #     return x, state
 
-    def foreground_net(x):
+    # def _conv_lstm(self, x, h_prev, c_prev, state_dim, name='clstm'):
+    #     assert len(x.shape) == 4
+    #     with tf.name_scope(name) as scope:
+    #         with slim.arg_scope([slim.conv2d],
+    #                             num_outputs=state_dim,
+    #                             kernel_size=3,
+    #                             padding='SAME',
+    #                             activation_fn=None,
+    #                             normalizer_fn=None):
+    #             i = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
+    #                               slim.conv2d(h_prev, scope='hi', biases_initializer=None))
+    #             f = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
+    #                               slim.conv2d(h_prev, scope='hf', biases_initializer=None))
+    #             y = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
+    #                               slim.conv2d(h_prev, scope='ho', biases_initializer=None))
+    #             c_tilde = tf.nn.tanh(slim.conv2d(x, scope='xc') +
+    #                                  slim.conv2d(h_prev, scope='hc', biases_initializer=None))
+    #             c = (f * c_prev) + (i * c_tilde)
+    #             h = y * tf.nn.tanh(c)
+    #     return h, c
+
+    def _foreground_net(self, x):
+        assert len(x.shape) == 4
         # Map output of LSTM to a heatmap.
         x = slim.conv2d(x, 2, kernel_size=1, activation_fn=None, normalizer_fn=None)
         return x
 
-    def output_net(x):
+    def _output_net(self, x):
+        assert len(x.shape) == 4
         with slim.arg_scope([slim.max_pool2d], kernel_size=3, padding='SAME'):
             # Map output of LSTM to a rectangle.
             x = slim.conv2d(x, 64, 3)
@@ -1030,122 +1166,6 @@ def simple_search(original_example, ntimesteps, frmsz, batchsz, weight_decay=0.0
             x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None)
         return x
 
-    def conv_lstm(x, h_prev, c_prev, state_dim, name='clstm'):
-        with tf.name_scope(name) as scope:
-            with slim.arg_scope([slim.conv2d],
-                                num_outputs=state_dim,
-                                kernel_size=3,
-                                padding='SAME',
-                                activation_fn=None,
-                                normalizer_fn=None):
-                i = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
-                                  slim.conv2d(h_prev, scope='hi', biases_initializer=None))
-                f = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
-                                  slim.conv2d(h_prev, scope='hf', biases_initializer=None))
-                y = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
-                                  slim.conv2d(h_prev, scope='ho', biases_initializer=None))
-                c_tilde = tf.nn.tanh(slim.conv2d(x, scope='xc') +
-                                     slim.conv2d(h_prev, scope='hc', biases_initializer=None))
-                c = (f * c_prev) + (i * c_tilde)
-                h = y * tf.nn.tanh(c)
-        return h, c
-
-    batch_norm_opts = {} if not use_batch_norm else {
-        'normalizer_fn': slim.batch_norm,
-        'normalizer_params': {
-            'is_training': original_example['is_training'],
-            'fused': True,
-        },
-    }
-
-    if normalize_size:
-        window_rect = geom.object_centric_window(original_example['y0'])
-        example = geom.crop_example(original_example, window_rect, normalize_first_only)
-    else:
-        example = dict(original_example)
-    with tf.name_scope('model_summary') as summary_scope:
-        # Visualize rectangle on normalized image.
-        tf.summary.image('frame_0',
-            tf.image.draw_bounding_boxes(
-                _normalize_image_range(example['x0'][0:1]),
-                geom.rect_to_tf_box(tf.expand_dims(example['y0'][0:1], 1))), # Just one box per image.
-            collections=image_summaries_collections)
-
-    with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                        weights_regularizer=slim.l2_regularizer(weight_decay),
-                        **batch_norm_opts):
-        # Process initial image and label to get "template".
-        with tf.variable_scope('template'):
-            p0 = get_masks_from_rectangles(example['y0'], frmsz=frmsz)
-            first_image_with_mask = concat([example['x0'], p0], axis=3)
-            template = template_net(first_image_with_mask)
-        # Process all images from all sequences with feature net.
-        with tf.variable_scope('features'):
-            x, unmerge = merge_dims(example['x'], 0, 2)
-            feat = feat_net(x)
-            feat = unmerge(feat, 0)
-        # Search each image using result of template network.
-        with tf.variable_scope('search'):
-            similarity = search_all(feat, template)
-        if use_rnn:
-            # Update abstract position likelihood of object.
-            with tf.variable_scope('track'):
-                init_state = initial_state_net(example['x0'], example['y0'])
-                curr_state = init_state
-                similarity = tf.unstack(similarity, axis=1)
-                position_map = [None] * ntimesteps
-                for t in range(ntimesteps):
-                    with tf.variable_scope('update', reuse=(t > 0)):
-                        position_map[t], curr_state = update(similarity[t], curr_state)
-                position_map = tf.stack(position_map, axis=1)
-        else:
-            position_map = similarity
-        if use_heatmap:
-            with tf.variable_scope('foreground'):
-                hmap = foreground_net(position_map)
-        # Transform abstract position position_map into rectangle.
-        with tf.variable_scope('output'):
-            position_map, unmerge = merge_dims(position_map, 0, 2)
-            position = output_net(position_map)
-            position = unmerge(position, 0)
-
-    with tf.name_scope(summary_scope):
-        # Visualize rectangle on normalized image.
-        tf.summary.image('frame_1_to_n',
-            tf.image.draw_bounding_boxes(
-                _normalize_image_range(example['x'][0]),
-                geom.rect_to_tf_box(tf.expand_dims(position[0], 1))), # Just one box per image.
-            collections=image_summaries_collections)
-    if normalize_size and not normalize_first_only:
-        inv_window_rect = geom.crop_inverse(window_rect)
-        position = geom.crop_rect_sequence(position, inv_window_rect)
-
-    if use_rnn:
-        state = {k: (init_state[k], curr_state[k]) for k in curr_state}
-    else:
-        state = {}
-
-    class Model:
-        pass
-    model = Model()
-    model.outputs = {'y': position}
-    if use_heatmap:
-        model.outputs['hmap'] = hmap
-        hmap, unmerge = merge_dims(hmap, 0, 2)
-        # TODO: Would prefer to use NEAREST_NEIGHBOR here.
-        # However, it produces incorrect alignment:
-        # https://github.com/tensorflow/tensorflow/issues/10989
-        hmap_full = tf.image.resize_images(hmap, size=[frmsz, frmsz],
-            method=tf.image.ResizeMethod.BILINEAR, align_corners=True)
-        hmap_full = unmerge(hmap_full, 0)
-        model.outputs['hmap_full'] = hmap_full
-        model.outputs['hmap_softmax'] = tf.nn.softmax(hmap_full)
-    model.state = state
-    # Properties of instantiated model:
-    model.image_size   = (frmsz, frmsz)
-    model.sequence_len = ntimesteps # Static length of unrolled RNN.
-    model.batch_size   = None # Model accepts variable batch size.
-    return model
 
 def _normalize_image_range(x):
     return 0.5 * (1 + x / tf.reduce_max(tf.abs(x)))
@@ -1193,12 +1213,11 @@ def load_model(o, model_params=None):
     elif o.model == 'RNN_multi_res':
         model = functools.partial(rnn_multi_res, o=o, **model_params)
     elif o.model == 'simple_search':
-        model = functools.partial(simple_search,
-            ntimesteps=o.ntimesteps,
-            frmsz=o.frmsz,
-            batchsz=o.batchsz,
-            weight_decay=o.wd,
-            **model_params)
+        model = SimpleSearch(ntimesteps=o.ntimesteps,
+                             frmsz=o.frmsz,
+                             batchsz=o.batchsz,
+                             weight_decay=o.wd,
+                             **model_params)
     else:
         raise ValueError ('model not available')
     return model

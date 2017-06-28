@@ -2,42 +2,67 @@ import tensorflow as tf
 
 from helpers import merge_dims
 
-def crop_example(example, window_rect, crop_size, first_only=False, pad_value=None):
+
+# def crop_example(example, window_init, windows, crop_size, first_only=False, pad_value=None):
+#     '''
+#     Args:
+#         example -- Dictionary.
+#             example['x0'] -- [n, h, w, c]
+#             example['y0'] -- [n, 4]
+#             example['x'] -- [n, t, h, w, c]
+#             example['y'] -- [n, t, 4] (optional)
+#             All other fields are kept intact.
+#         window_rect -- [n, t+1, 4] or [n, 4]
+#     '''
+#     out = dict(example)
+# 
+#     out['x0'] = crop_image(example['x0'], window_init)
+#     out['y0'] = crop_rect(example['y0'], window_init)
+# 
+#     out['x'] = crop_image_sequence(example['x'], windows)
+#     if 'y' in example:
+#         out['y'] = crop_rect(example['y'], windows)
+# 
+#     # TODO: Modify y_valid if object is out of window?
+#     return out
+
+
+def crop_example_frame(example, window_rect, crop_size, pad_value=None):
     '''
     Args:
         example -- Dictionary.
-            example['x0'] -- [n, h, w, c]
-            example['y0'] -- [n, 4]
-            example['x'] -- [n, t, h, w, c]
-            example['y'] -- [n, t, 4] (optional)
+            example['x'] -- [n, h, w, c]
+            example['y'] -- [n, 4] (optional)
             All other fields are kept intact.
         window_rect -- [n, 4]
     '''
     out = dict(example)
 
-    xs = tf.expand_dims(example['x0'], 1)
-    if not first_only:
-        # Re-combine into a single sequence.
-        xs = tf.concat([xs, example['x']], axis=1)
-    xs = crop_image_sequence(xs, window_rect, crop_size=crop_size, pad_value=pad_value)
-    out['x0'] = xs[:, 0]
-    if not first_only:
-        out['x'] = xs[:, 1:]
-
-    ys = tf.expand_dims(example['y0'], 1)
-    if not first_only and 'y' in example:
-        # Re-combine into a single sequence.
-        ys = tf.concat([ys, example['y']], axis=1)
-    ys = crop_rect_sequence(ys, window_rect)
-    out['y0'] = ys[:, 0]
-    if not first_only and 'y' in example:
-        out['y'] = ys[:, 1:]
-    
+    out['x'] = crop_image(example['x'], window_rect, crop_size=crop_size, pad_value=pad_value)
+    if 'y' in example:
+        out['y'] = crop_rect(example['y'], window_rect)
     # TODO: Modify y_valid if object is out of window?
     return out
 
 
-def crop_pred(pred, window_rect, crop_size):
+def crop_prediction_frame(pred, window_rect, crop_size):
+    '''
+    Args:
+        pred -- Dictionary.
+            pred['y'] -- [n, 4]
+            pred['hmap_softmax'] -- [n, h, w, 2]
+            All other fields are kept intact.
+        window_rect -- [n, 4]
+    '''
+    out = dict(pred)
+    out['y'] = crop_rect(pred['y'], window_rect)
+    if 'hmap_softmax' in pred:
+        out['hmap_softmax'] = crop_image(pred['hmap_softmax'], window_rect,
+            crop_size=crop_size)
+    return out
+
+
+def crop_prediction(pred, window_rect, crop_size):
     '''
     Args:
         pred -- Dictionary.
@@ -50,7 +75,8 @@ def crop_pred(pred, window_rect, crop_size):
     out['y'] = crop_rect_sequence(pred['y'], window_rect)
     if 'hmap_softmax' in pred:
         out['hmap_softmax'] = crop_image_sequence(pred['hmap_softmax'], window_rect,
-            crop_size=crop_size)
+            crop_size=crop_size,
+        )
     return out
 
 
@@ -60,12 +86,13 @@ def object_centric_window(obj_rect, relative_size=4.0):
     obj_size = tf.maximum(0.0, obj_max - obj_min)
     center = 0.5 * (obj_min + obj_max)
     obj_diam = tf.exp(tf.reduce_mean(tf.log(obj_size + eps), axis=-1))
-    context_diam = relative_size * obj_diam
-    window_min = center - 0.5*tf.expand_dims(context_diam, -1)
-    window_max = center + 0.5*tf.expand_dims(context_diam, -1)
+    window_diam = relative_size * obj_diam
+    window_min = center - 0.5*tf.expand_dims(window_diam, -1)
+    window_max = center + 0.5*tf.expand_dims(window_diam, -1)
     return make_rect(window_min, window_max)
 
-def crop_rects(rects, window_rect):
+
+def crop_rect(rects, window_rect):
     '''Returns each rectangle relative to a window.
     
     Args:
@@ -81,20 +108,42 @@ def crop_rects(rects, window_rect):
     out_max = (rects_max - window_min) / window_size
     return make_rect(out_min, out_max)
 
+
 def crop_rect_sequence(rects, window_rect):
     '''Returns each rectangle relative to a window.
     
     Args:
         rects -- [n, t, 4]
+        window_rect -- [n, t, 4] or [n, 4]
+    '''
+    assert len(rects.shape) == 3
+    if len(window_rect.shape) == 2:
+        # Same rectangle in every image.
+        sequence_len = tf.shape(rects)[1]
+        window_rect = tf.expand_dims(window_rect, 1)
+        window_rect = tf.tile(window_rect, [1, sequence_len, 1])
+    assert len(window_rect.shape) == 3
+    # Now dimensions match.
+    return crop_rect(rects, window_rect)
+
+
+def crop_image(ims, window_rect, crop_size, pad_value=None):
+    '''
+    Crops a window from each image in a batch.
+
+    Args:
+        ims -- [n, h, w, c]
         window_rect -- [n, 4]
     '''
-    # TODO: Support window_rect of size [n, t, 4] as well.
-    # Same rectangle in every image.
-    sequence_len = tf.shape(rects)[1]
-    window_rect = tf.expand_dims(window_rect, 1)
-    window_rect = tf.tile(window_rect, [1, sequence_len, 1])
-    # Now dimensions match.
-    return crop_rects(rects, window_rect)
+    assert len(ims.shape) == 4
+    assert len(window_rect.shape) == 2
+    boxes = rect_to_tf_box(window_rect)
+    n = tf.shape(ims)[0]
+    return tf.image.crop_and_resize(ims, boxes, box_ind=tf.range(n),
+        crop_size=crop_size,
+        method='bilinear',
+        extrapolation_value=pad_value)
+
 
 def crop_image_sequence(ims, window_rect, crop_size, pad_value=None):
     '''
@@ -102,12 +151,15 @@ def crop_image_sequence(ims, window_rect, crop_size, pad_value=None):
 
     Args:
         ims -- [n, t, h, w, c]
-        window_rect -- [n, 4]
+        window_rect -- [n, t, 4] or [n, 4]
     '''
-    # Same rectangle in every image.
-    sequence_len = tf.shape(ims)[1]
-    window_rect = tf.expand_dims(window_rect, 1)
-    window_rect = tf.tile(window_rect, [1, sequence_len, 1])
+    assert len(ims.shape) == 5
+    if len(window_rect.shape) == 2:
+        # Same rectangle in every image.
+        sequence_len = tf.shape(ims)[1]
+        window_rect = tf.expand_dims(window_rect, 1)
+        window_rect = tf.tile(window_rect, [1, sequence_len, 1])
+    assert len(window_rect.shape) == 3
     # Flatten.
     ims, unmerge = merge_dims(ims, 0, 2)
     window_rect, _ = merge_dims(window_rect, 0, 2)
@@ -120,6 +172,7 @@ def crop_image_sequence(ims, window_rect, crop_size, pad_value=None):
     # Un-flatten.
     crop_ims = unmerge(crop_ims, 0)
     return crop_ims
+
 
 def crop_inverse(rect):
     '''Returns the rectangle that reverses the crop.
@@ -145,16 +198,19 @@ def crop_inverse(rect):
     # v_max = v_min + 1 / y_size
     return make_rect(inv_min, inv_max)
 
+
 def rect_min_max(rect):
     x_min, y_min, x_max, y_max = tf.unstack(rect, axis=-1)
     min_pt = tf.stack([x_min, y_min], axis=-1)
     max_pt = tf.stack([x_max, y_max], axis=-1)
     return min_pt, max_pt
 
+
 def make_rect(min_pt, max_pt):
     x_min, y_min = tf.unstack(min_pt, axis=-1)
     x_max, y_max = tf.unstack(max_pt, axis=-1)
     return tf.stack([x_min, y_min, x_max, y_max], axis=-1)
+
 
 def rect_to_tf_box(rect):
     x_min, y_min, x_max, y_max = tf.unstack(rect, axis=-1)

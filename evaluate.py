@@ -1,4 +1,3 @@
-import pdb
 import numpy as np
 import sys
 import os
@@ -10,12 +9,17 @@ import data
 from helpers import load_image, im_to_arr, pad_to
 
 
-def track(sess, model, inputs, outputs, sequence, use_gt, output_vars=None):
+def track(sess, model, sequence, use_gt, prediction_vars=None):
     '''Run an instantiated tracker on a sequence.
 
-    model.state        -- Dictionary of 2-tuples of tensors
     model.sequence_len -- Integer
     model.batch_size   -- Integer or None
+    model.example['x0']
+    model.example['y0']
+    model.example['x']
+    model.example['y']
+    model.run_opts['use_gt']
+    model.prediction[k] for k in prediction_vars
 
     sequence['image_files']    -- List of strings of length n.
     sequence['labels']         -- Numpy array of shape [n, 4]
@@ -26,23 +30,20 @@ def track(sess, model, inputs, outputs, sequence, use_gt, output_vars=None):
     # TODO: Variable batch size.
     # TODO: Run on a batch of sequences for speed.
 
-    if output_vars is None:
-        output_vars = outputs.keys()
+    if prediction_vars is None:
+        prediction_vars = model.prediction.keys()
 
     first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
     first_label = sequence['labels'][0]
     first_image = _single_to_batch(im_to_arr(first_image), model.batch_size)
     first_label = _single_to_batch(first_label, model.batch_size)
 
-    init_state  = {k: v[0] for k, v in model.state.iteritems()}
-    final_state = {k: v[1] for k, v in model.state.iteritems()}
-
     sequence_len = len(sequence['image_files'])
     assert(sequence_len >= 2)
 
     # If the length of the sequence is greater than the instantiated RNN,
     # it will need to be run in chunks.
-    out_pred_chunks = {k: [] for k in output_vars}
+    out_pred_chunks = {k: [] for k in prediction_vars}
     # y_pred_chunks = []
     # hmap_pred_chunks = []
     prev_state = {}
@@ -57,35 +58,26 @@ def track(sess, model, inputs, outputs, sequence, use_gt, output_vars=None):
         y_gt = np.array(sequence['labels'][start:start+chunk_len])
         y_gt = _single_to_batch(pad_to(y_gt, model.sequence_len), model.batch_size)
         feed_dict = {
-            inputs['x']:      images,
-            inputs['x0']:     first_image,
-            inputs['y0']:     first_label,
-            inputs['y']:      y_gt,
-            inputs['use_gt']: use_gt,
+            model.example['x0']:      first_image,
+            model.example['y0']:      first_label,
+            model.example['x']:       images,
+            model.example['y']:       y_gt,
+            model.run_opts['use_gt']: use_gt,
         }
         if start > 1:
             # This is not the first chunk.
             # Add the previous state to the feed dictionary.
-            feed_dict.update({init_state[k]: prev_state[k] for k in init_state})
+            feed_dict.update({model.init_state[k]: prev_state[k] for k in model.init_state})
         # Get output and final state.
         out_pred, prev_state = sess.run(
-            [{k: outputs[k] for k in output_vars}, final_state],
+            [{k: model.prediction[k] for k in prediction_vars}, model.final_state],
             feed_dict=feed_dict)
-        # y_pred, prev_state = sess.run([outputs['y'], final_state],
-        #                               feed_dict=feed_dict)
-        # y_pred, prev_state, hmap_pred = sess.run([outputs['y'], final_state,
-        #                                           outputs['hmap_softmax']],
-        #                               feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
-        for k in output_vars:
+        for k in prediction_vars:
             out_pred_chunks[k].append(out_pred[k][0, :chunk_len])
-        # y_pred = y_pred[0][:chunk_len]
-        # y_pred_chunks.append(y_pred)
-        # hmap_pred = hmap_pred[0][:chunk_len]
-        # hmap_pred_chunks.append(hmap_pred)
 
     # Concatenate the results for all chunks.
-    for k in output_vars:
+    for k in prediction_vars:
         out_pred[k] = np.concatenate(out_pred_chunks[k])
     # y_pred = np.concatenate(y_pred_chunks)
     # hmap_pred = np.concatenate(hmap_pred_chunks)
@@ -98,7 +90,7 @@ def _single_to_batch(x, batch_size):
     return pad_to(x, batch_size)
 
 
-def evaluate(sess, model, inputs, outputs, sequences, visualize=None, use_gt=False):
+def evaluate(sess, model, sequences, visualize=None, use_gt=False):
     '''
     Args:
         nbatches_: the number of batches to evaluate
@@ -120,8 +112,8 @@ def evaluate(sess, model, inputs, outputs, sequences, visualize=None, use_gt=Fal
         if num_valid < 1:
             continue
         #print 'sequence {} of {}'.format(i+1, len(sequences))
-        output_vars = set(['y', 'hmap_softmax']).intersection(set(outputs.keys()))
-        pred = track(sess, model, inputs, outputs, sequence, use_gt, output_vars)
+        prediction_vars = set(['y', 'hmap_softmax']).intersection(set(model.prediction.keys()))
+        pred = track(sess, model, sequence, use_gt, prediction_vars)
         rect_pred = pred['y']
         hmap_pred = pred.get('hmap_softmax', None)
         if visualize:

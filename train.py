@@ -1,4 +1,5 @@
 import sys
+import collections
 import csv
 import functools
 import itertools
@@ -28,11 +29,11 @@ from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
 EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid']
 
 
-def train(create_model, datasets, eval_sets, o, use_queues=False):
+def train(model_design, datasets, eval_sets, o, use_queues=False):
     '''Trains a network.
 
     Args:
-        create_model: Function that takes as input a dictionary of tensors and
+        model: Function that takes as input a dictionary of tensors and
             returns a model object.
         datasets: Dictionary of datasets with keys 'train' and 'val'.
         eval_sets: A dictionary of sampling functions which return collections
@@ -102,34 +103,88 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
             ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype)
         run_opts = _make_option_placeholders()
 
+    # TODO: How to use a different window in each frame?
+    # This will change the interface in the model because features must be
+    # extracted sequentially.
+
+    # window_rect = tf.placeholder_with_default(
+    #     np.array([0.0, 0.0, 1.0, 1.0], dtype=np.float32), [4], name='window_rect')
+
     # Always use same statistics for whitening (not set dependent).
     # stat = datasets['train'].stat
     stat = {'mean': 0.5, 'std': 1.0}
-    example_raw = dict(example)
+
+    example_pre_aug = dict(example)
+    # Sample a training sequence from the augmentation distribution.
     example = _perform_data_augmentation(example, o, pad_value=stat['mean'])
-    # Keep a reference to the example before cropping the window.
-    # (This is where to feed a video to use the tracker.)
-    example_whole = dict(example)
-    if o.object_centric:
-        window_rect = geom.object_centric_window(example['y0'])
-        example = geom.crop_example(example, window_rect, first_only=False,
-            crop_size=[o.frmsz, o.frmsz], pad_value=stat['mean'])
-    example_window = dict(example)
-    # TODO: Desirable to have some augmentation after cropping the object?
-    # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(_whiten(_guard_labels(example, run_opts), dtype=o.dtype, stat=stat),
-                         image_summaries_collections=['summaries_images'])
-    pred = dict(model.outputs)
-    loss_var = get_loss(example, pred, o,
+    example_post_aug = dict(example)
+    # # Keep a reference to the example before cropping the window.
+    # # (This is where to feed a video to use the tracker.)
+    # example_whole = dict(example)
+    # if o.object_centric:
+    #     window_rect = geom.object_centric_window(example['y0'])
+    #     example = geom.crop_example(example, window_rect, first_only=False,
+    #         crop_size=[o.frmsz, o.frmsz], pad_value=stat['mean'])
+    # example_window = dict(example)
+    # # TODO: Desirable to have some augmentation after cropping the object?
+
+    # TODO: Stats
+    # TODO: Guard
+
+    # window_state = InitialWindow()
+    window_state = MovingAverageWindow(0.5)
+
+    prediction, window, example_crop, prediction_crop, init_state, final_state = process_sequence(
+        example, run_opts, model_design, window_state, stat,
+        batchsz=o.batchsz, ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype,
+    )
+
+    EvalModel = collections.namedtuple('EvalModel', [
+        'batch_size',
+        'image_size',
+        'sequence_len',
+        'example', # Place to feed input.
+        'run_opts',
+        'window',
+        'example_crop',
+        'prediction_crop',
+        'prediction', # Place to get output.
+        'init_state',
+        'final_state',
+    ])
+    eval_model = EvalModel(
+        batch_size=o.batchsz,
+        image_size=(o.frmsz, o.frmsz),
+        sequence_len=o.ntimesteps,
+        example=example_post_aug,
+        run_opts=run_opts,
+        window=window,
+        example_crop=example_crop,
+        prediction_crop=prediction_crop,
+        prediction=prediction,
+        init_state=init_state,
+        final_state=final_state,
+    )
+
+    # model = create_model(_whiten(_guard_labels(example, run_opts), dtype=o.dtype, stat=stat),
+    #                      image_summaries_collections=['summaries_images'])
+
+    # Crop ground truth label for loss.
+    example_labels_crop = {
+        'y':          geom.crop_rect(example['y'], window),
+        'y_is_valid': example['y_is_valid'],
+    }
+
+    loss_var = get_loss(example_labels_crop, prediction_crop, o,
                         image_summaries_collections=['summaries_images'])
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
     loss_var += r
     tf.summary.scalar('total', loss_var)
 
-    if o.object_centric:
-        inv_window_rect = geom.crop_inverse(window_rect)
-        pred_whole = geom.crop_pred(pred, inv_window_rect, crop_size=[o.frmsz, o.frmsz])
+    # if o.object_centric:
+    #     inv_window_rect = geom.crop_inverse(window_rect)
+    #     pred_whole = geom.crop_prediction(prediction, inv_window_rect, crop_size=[o.frmsz, o.frmsz])
 
     # nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
@@ -160,23 +215,31 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
+        with tf.name_scope('crop'):
+            # tf.summary.image('0',
+            #     _draw_init_bounding_boxes(example_crop),
+            #     max_outputs=1, collections=['summaries_images'])
+            # TODO: Careful with this if use_gt is False.
+            tf.summary.image('1_to_n',
+                _draw_bounding_boxes(example_crop, prediction_crop),
+                max_outputs=o.ntimesteps, collections=['summaries_images'])
         with tf.name_scope('box'):
             tf.summary.image('0',
                 _draw_init_bounding_boxes(example),
                 max_outputs=1, collections=['summaries_images'])
             tf.summary.image('1_to_n',
-                _draw_bounding_boxes(example, pred),
+                _draw_bounding_boxes(example, prediction),
                 max_outputs=o.ntimesteps, collections=['summaries_images'])
         # Produce an image summary of the heatmap.
-        if 'hmap' in pred:
-            tf.summary.image('hmap', _draw_heatmap(tf.nn.softmax(pred['hmap'])[0]),
+        if 'hmap' in prediction:
+            tf.summary.image('hmap', _draw_heatmap(tf.nn.softmax(prediction['hmap'])[0]),
                 max_outputs=o.ntimesteps+1, collections=['summaries_images'])
-        # Produce an image summary of the LSTM memory states (h or c).
-        if hasattr(model, 'memory'):
-            for mtype in model.memory.keys():
-                if model.memory[mtype][0] is not None:
-                    tf.summary.image(mtype, _draw_memory_state(model, mtype),
-                        max_outputs=o.ntimesteps+1, collections=['summaries_images'])
+        # # Produce an image summary of the LSTM memory states (h or c).
+        # if hasattr(model, 'memory'):
+        #     for mtype in model.memory.keys():
+        #         if model.memory[mtype][0] is not None:
+        #             tf.summary.image(mtype, _draw_memory_state(model, mtype),
+        #                 max_outputs=o.ntimesteps+1, collections=['summaries_images'])
         for dataset in datasets:
             with tf.name_scope(dataset):
                 # Merge summaries with any that are specific to the mode.
@@ -286,10 +349,9 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                         # Cache the results.
                         result_file = os.path.join(o.path_output, 'assess', eval_id,
                             iter_id+'.json')
-                        inputs = dict(list(example_whole.items()) + list(run_opts.items()))
                         result = cache_json(result_file,
-                            lambda: evaluate.evaluate(sess, model, inputs, pred_whole,
-                                eval_sequences, visualize=visualizer.visualize if o.visualize_eval else None),
+                            lambda: evaluate.evaluate(sess, eval_model, eval_sequences,
+                                visualize=visualizer.visualize if o.visualize_eval else None),
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
                             result['iou_mean'], result['auc'], result['cle_mean'])
@@ -306,7 +368,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 else:
                     batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
                     batch = _load_batch(batch_seqs, o)
-                    feed_dict.update({example_raw[k]: v for k, v in batch.iteritems()})
+                    feed_dict.update({example_pre_aug[k]: v for k, v in batch.iteritems()})
                     dur_load = time.time() - start
                 if global_step % o.period_summary == 0:
                     summary_var = (extended_summary_vars['train']
@@ -333,7 +395,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                         else:
                             batch_seqs = [next(sequences[dataset]) for i in range(o.batchsz)]
                             batch = _load_batch(batch_seqs, o)
-                            feed_dict.update({example_raw[k]: v for k, v in batch.iteritems()})
+                            feed_dict.update({example_pre_aug[k]: v for k, v in batch.iteritems()})
                             # dur_load = time.time() - start
                         summary_var = (extended_summary_vars[dataset]
                                        if global_step % o.period_preview == 0
@@ -361,6 +423,63 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         print '\ntraining finished! ------------------------------------------'
         print 'total time elapsed: {0:.2f}'.format(time.time()-t_total)
 
+
+def process_sequence(example, run_opts, model_design, window_state, stat,
+        batchsz, ntimesteps, frmsz, dtype):
+    example_input = dict(example)
+    example = _guard_labels(example, run_opts)
+    example_init = {k: example[k] for k in ['x0', 'y0']}
+    example_frames = _unstack_dict(example, ['x', 'y', 'y_is_valid'], axis=1)
+    # _unstack_example_frames(example)
+    state = [None for __ in range(ntimesteps)]
+    window = [None for __ in range(ntimesteps)]
+    example_crop = [None for __ in range(ntimesteps)]
+    prediction_crop = [None for __ in range(ntimesteps)]
+    prediction = [None for __ in range(ntimesteps)]
+
+    with tf.variable_scope('model_init'):
+        init_state = model_design.init(_whiten(example_init, dtype=dtype, stat=stat), run_opts)
+    for t in range(ntimesteps):
+        # Get window for this frame.
+        # TODO: Possibly add some augmentation here during training?
+        # TODO: Add prev_prediction to state.
+        if t == 0:
+            window[t] = window_state.init(example) # , is_training)
+        else:
+            # Window can depend on previous position.
+            window[t] = window_state.step(prediction[t-1])
+        example_crop[t] = geom.crop_example_frame(example_frames[t], window[t],
+            crop_size=[frmsz, frmsz],
+            pad_value=0.0)
+        # TODO: Handle model with state!
+        with tf.variable_scope('model', reuse=(t > 0)):
+            prediction_crop[t], state[t] = model_design.step(_whiten(example_crop[t], dtype=dtype, stat=stat))
+        inv_window_rect = geom.crop_inverse(window[t])
+        prediction[t] = geom.crop_prediction_frame(prediction_crop[t], inv_window_rect,
+            crop_size=[frmsz, frmsz])
+
+    # TODO: This may include window state!
+    final_state = state[ntimesteps - 1]
+    window = tf.stack(window, axis=1)
+    example_crop = _stack_dict(example_crop, ['x', 'y', 'y_is_valid'], axis=1)
+    prediction_crop = _stack_dict(prediction_crop, ['y', 'hmap', 'hmap_softmax'], axis=1)
+    prediction = _stack_dict(prediction, ['y', 'hmap', 'hmap_softmax'], axis=1)
+
+    return prediction, window, example_crop, prediction_crop, init_state, final_state
+
+def _unstack_dict(d, keys, axis):
+    # Gather lists of all elements at same index.
+    # {'x': [x0, x1], 'y': [y0, y1]} => [[x0, y0], [x1, y1]]
+    value_lists = zip(*[tf.unstack(d[k], axis=axis) for k in keys])
+    # Create a dictionary from each.
+    # [[x0, y0], [x1, y1]] => [{'x': x0, 'y': y0}, {'x': x1, 'y': y1}]
+    return [dict(zip(keys, vals)) for vals in value_lists]
+
+def _stack_dict(frames, keys, axis):
+    return {
+        k: tf.stack([frame[k] for frame in frames], axis=axis)
+        for k in keys
+    }
 
 def _get_optimizer(lr, o):
     if o.optimizer == 'sgd':
@@ -469,9 +588,9 @@ def _perform_data_augmentation(example_raw, o, pad_value=None, name='data_augmen
     # TODO: May try other augmentations at expense - tf.image.{rot90, etc.}
 
     example['x0'] = xs_aug[:,0]
+    example['y0'] = ys_aug[:,0]
     example['x']  = xs_aug[:,1:]
-    example['y0']     = ys_aug[:,0]
-    example['y']      = ys_aug[:,1:]
+    example['y']  = ys_aug[:,1:]
     return example
 
 
@@ -496,7 +615,8 @@ def _data_augmentation_scale_shift(xs, ys, o, pad_value=None):
         boxes = tf.stack([v_min, u_min, v_max, u_max])
         boxes = tf.expand_dims(boxes, 0)
         # Same box in every image.
-        n = tf.shape(x)[0]
+        n = x.shape.as_list()[0] # tf.shape(x)[0]
+        assert n is not None
         boxes = tf.tile(boxes, [n, 1])
         x_aug = tf.image.crop_and_resize(x, boxes, box_ind=tf.range(n),
             crop_size=(o.frmsz, o.frmsz),
@@ -598,24 +718,31 @@ def _guard_labels(example, run_opts):
     # example['y']     -- [b, t, 4]
     images = example['x']
     safe = dict(example)
+    images_shape = _most_specific_shape(images)
     safe['y'] = tf.cond(run_opts['use_gt'],
         lambda: example['y'],
-        lambda: tf.fill(tf.concat([tf.shape(images)[0:2], [4]], axis=0), float('nan')),
+        lambda: tf.fill(images_shape[0:2] + [4], float('nan')),
         name='labels_safe')
     return safe
 
+def _most_specific_shape(x):
+    static = x.shape.as_list()
+    dynamic = tf.shape(x)
+    return [static[i] or dynamic[i] for i in range(len(static))]
 
-def _whiten(example_raw, dtype, stat=None, name='whiten'):
+
+def _whiten(example_raw, dtype, stat, name='whiten'):
+    stat = stat or {}
     with tf.name_scope(name) as scope:
         # Normalize mean and variance.
-        assert(stat is not None)
-        # TODO: Check that this does not create two variables:
-        mean = tf.constant(stat['mean'] if stat else 0.0, dtype, name='mean')
-        std = tf.constant(stat['std'] if stat else 1.0, dtype, name='std')
+        mean = stat.get('mean', 0.0)
+        std = stat.get('std', 1.0)
         example = dict(example_raw) # Copy dictionary before modifying.
         # Replace raw x (images) with whitened x (images).
-        example['x'] = _whiten_image(example['x'], mean, std, name='x')
-        example['x0'] = _whiten_image(example['x0'], mean, std, name='x0')
+        if 'x' in example:
+            example['x'] = _whiten_image(example['x'], mean, std, name='x')
+        if 'x0' in example:
+            example['x0'] = _whiten_image(example['x0'], mean, std, name='x0')
         return example
 
 
@@ -912,6 +1039,73 @@ def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean
         return os.path.join(plot_dir, filename+'.png')
 
     return helper()
+
+
+class WholeImageWindow:
+    def __init__(self, batchsz):
+        self.batchsz = batchsz
+
+    def init(self, example):
+        rect = [0.0, 0.0, 1.0, 1.0]
+        # Use same window for every image in batch.
+        window = tf.tile(tf.expand_dims(rect, 0), [self.batchsz, 1])
+        self.window = window
+        return window
+
+    def step(self, prediction):
+        return self.window
+
+class InitialWindow:
+    def __init__(self, relative_size=4.0):
+        self.relative_size = relative_size
+        # Model state:
+        self.window = None
+
+    def init(self, example):
+        self.window = geom.object_centric_window(example['y0'],
+            relative_size=self.relative_size)
+        return self.window
+
+    def step(self, prediction):
+        return self.window
+
+
+class MovingAverageWindow:
+    def __init__(self, decay, relative_size=4.0):
+        self.decay = decay
+        self.relative_size = relative_size
+        self.eps = 0.01
+        # Model state:
+        self.center = None
+        self.log_diameter = None
+
+    def init(self, example):
+        center, log_diameter = self._center_log_diameter(example['y0'])
+        self.center = center
+        self.log_diameter = log_diameter
+        return self._window(self.center, self.log_diameter)
+
+    def step(self, prediction):
+        center, log_diameter = self._center_log_diameter(prediction['y'])
+        # Moving average.
+        self.center = self.decay * self.center + (1 - self.decay) * center
+        self.log_diameter = self.decay * self.log_diameter + (1 - self.decay) * log_diameter
+        return self._window(self.center, self.log_diameter)
+
+    def _center_log_diameter(self, rect):
+        min_pt, max_pt = geom.rect_min_max(rect)
+        center = 0.5 * (min_pt + max_pt)
+        size = tf.maximum(0.0, max_pt - min_pt)
+        log_diameter = tf.reduce_mean(tf.log(size + self.eps), axis=-1)
+        return center, log_diameter
+
+    def _window(self, center, log_diameter):
+        window_diameter = self.relative_size * tf.exp(log_diameter)
+        window_size = tf.expand_dims(window_diameter, -1)
+        window_min = center - 0.5*window_size
+        window_max = center + 0.5*window_size
+        return geom.make_rect(window_min, window_max)
+
 
 def gnuplot_str(x):
     if x is None:
