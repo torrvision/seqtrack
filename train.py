@@ -591,7 +591,10 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
 
 def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
     with tf.name_scope(name) as scope:
-        y          = example['y']
+        if 'y_new_gt' in outputs:
+            y = outputs['y_new_gt']
+        else:
+            y = example['y']
         y_is_valid = example['y_is_valid']
         y0         = example['y0'] # need to compute delta loss
         assert(y.get_shape().as_list()[1] == o.ntimesteps)

@@ -98,62 +98,103 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
         y1, y2 = yc-ys/2, yc+ys/2
         return x1, y1, x2, y2
 
-def process_image_with_hmap(x, hmap, o, mode, margin_ratio=3.0):
-    '''
-    Process input image x with hmap depending on given mode {crop, mask}.
-        'crop': Crop image based on hmap. Used for target appearance.
-        'mask': Mask image based on hmap. Used for search space.
-
+def process_target_with_hmap(x, hmap, o, threshold=0.9):
+    ''' Crop target image x with hmap.
     input hmap ranges [0,1] due to softmax beforehand.
-
-    hyperparameters.
-        filt, strides, rates: dilation filter kernel.
-        threshold: the value [0,1) to binarize hmap.
-        crop_size: the output size of crop after resizing (default o.frmsz/2 = 120).
-        margin_ratio: Sets the search space size with respect to object's size
-            (e.g., if set 2.0 the search area will be twice bigger than object).
     '''
-    # image dilation
-    #filt = tf.ones(shape=[3, 3, 1]) # conservative for now to reduce the effect.
-    #strides = [1, 1, 1, 1]
-    #rates = [1, 1, 1, 1]
-    #hmap = tf.nn.dilation2d(hmap, filt, strides, rates, padding='SAME')
-
-    # normalize to have max of 1 (so that I can apply fixed threshold).
+    # normalize so that max becomes 1 (so that I can apply fixed threshold).
     hmap = hmap / tf.reduce_max(hmap, axis=(1,2), keep_dims=True)
 
-    # find indices. Then either crop (crop-and-resize) or mask.
-    threshold = 0.9 # TODO: try different threshold. Should be better with some bound after thresholding.
+    # find indices. Then crop (crop-and-resize).
     x_out = []
-    area = [] # visualize the area being affected. For debugging purpose.
+    #area = [] # visualize the area being affected. For debugging purpose.
     for b in range(o.batchsz):
         indices = tf.where(hmap[b] > threshold)
         x1 = tf.cast(tf.reduce_min(indices[:,1]), o.dtype) / o.frmsz
         y1 = tf.cast(tf.reduce_min(indices[:,0]), o.dtype) / o.frmsz
         x2 = tf.cast(tf.reduce_max(indices[:,1]), o.dtype) / o.frmsz
         y2 = tf.cast(tf.reduce_max(indices[:,0]), o.dtype) / o.frmsz
-        if mode == 'crop':
-            box = tf.expand_dims(tf.cast(tf.stack((y1, x1, y2, x2), 0), o.dtype), 0)
-            crop = tf.image.crop_and_resize(tf.expand_dims(x[b],0),
-                                        boxes=box,
-                                        box_ind=[0],
-                                        crop_size=[o.frmsz/2, o.frmsz/2])
-            x_out.append(crop)
-            area.append(get_masks_from_rectangles(box, o))
-        elif mode == 'mask':
-            w_margin = (x2 - x1) * 0.5 * (margin_ratio - 1.0)
-            h_margin = (y2 - y1) * 0.5 * (margin_ratio - 1.0)
-            x1 = tf.maximum(x1 - w_margin, 0.0)
-            y1 = tf.maximum(y1 - h_margin, 0.0)
-            x2 = tf.minimum(x2 + w_margin, 1.0)
-            y2 = tf.minimum(y2 + h_margin, 1.0)
-            box = tf.expand_dims(tf.cast(tf.stack((y1, x1, y2, x2), 0), o.dtype), 0)
-            mask = get_masks_from_rectangles(box, o)
-            search = mask[0] * x[b]
-            x_out.append(tf.expand_dims(search, 0))
-            area.append(mask)
+        cropbox = tf.expand_dims(tf.cast(tf.stack((y1, x1, y2, x2), 0), o.dtype), 0)
+        crop = tf.image.crop_and_resize(
+                tf.expand_dims(x[b],0),
+                boxes=cropbox,
+                box_ind=[0],
+                crop_size=[o.frmsz/2, o.frmsz/2])
+        x_out.append(crop)
+        #box = tf.expand_dims(tf.cast(tf.stack((x1, y1, x2, y2), 0), o.dtype), 0) # notice box coordinate.
+        #area.append(get_masks_from_rectangles(box, o))
 
-    return tf.concat(x_out, 0), tf.concat(area, 0)
+    return tf.concat(x_out, 0)
+
+def process_search_with_hmap(x, hmap, o, rec_curr, threshold=0.9):
+    ''' Crop search image x with hmap.
+    input hmap ranges [0,1] due to softmax beforehand.
+
+    hyperparameters.
+        threshold: the value [0,1) to binarize hmap.
+        crop_size: the output size of crop after resizing (default o.frmsz/2 = 120).
+        margin_ratio: Sets the search space size with respect to object's size
+            (e.g., if set 2.0 the search area will be twice bigger than object).
+    '''
+    # normalize to have max of 1 (so that I can apply fixed threshold).
+    hmap = hmap / tf.reduce_max(hmap, axis=(1,2), keep_dims=True)
+
+    # find indices. Then either crop (crop-and-resize) or mask.
+    x_out = []
+    rec_out = []
+    area = [] # visualize the area being affected. For debugging purpose.
+    for b in range(o.batchsz):
+        # current hmap into box area
+        indices = tf.where(hmap[b] > threshold)
+        x1 = tf.cast(tf.reduce_min(indices[:,1]), o.dtype) / o.frmsz
+        y1 = tf.cast(tf.reduce_min(indices[:,0]), o.dtype) / o.frmsz
+        x2 = tf.cast(tf.reduce_max(indices[:,1]), o.dtype) / o.frmsz
+        y2 = tf.cast(tf.reduce_max(indices[:,0]), o.dtype) / o.frmsz
+        # search space (raw)
+        w_margin = (x2 - x1) * 0.5
+        h_margin = (y2 - y1) * 0.5
+        x1_s_raw = x1 - w_margin # can be outside of [0,1]
+        y1_s_raw = y1 - h_margin
+        x2_s_raw = x2 + w_margin
+        y2_s_raw = y2 + h_margin
+        x1_s_val = tf.maximum(x1 - w_margin, 0.0)
+        y1_s_val = tf.maximum(y1 - h_margin, 0.0)
+        x2_s_val = tf.minimum(x2 + w_margin, 1.0)
+        y2_s_val = tf.minimum(y2 + h_margin, 1.0)
+        # crop (only within valid region)
+        crop_val = tf.image.crop_to_bounding_box(
+                image=tf.expand_dims(x[b],0),
+                offset_height=tf.cast(y1_s_val*o.frmsz, tf.int32),
+                offset_width =tf.cast(x1_s_val*o.frmsz, tf.int32),
+                target_height=tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32),
+                target_width =tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32))
+        # pad crop so that it preserves aspect ratio.
+        crop_pad = tf.image.pad_to_bounding_box(
+                image=crop_val,
+                offset_height=tf.cast((y1_s_val-y1_s_raw)*o.frmsz, tf.int32),
+                offset_width =tf.cast((x1_s_val-x1_s_raw)*o.frmsz, tf.int32),
+                target_height=tf.cast((y2_s_raw-y1_s_raw)*o.frmsz, tf.int32),
+                target_width =tf.cast((x2_s_raw-x1_s_raw)*o.frmsz, tf.int32))
+        # resize to 241 x 241
+        crop = tf.image.resize_images(crop_pad, [o.frmsz, o.frmsz])
+        x_out.append(crop)
+
+        # update GT label.
+        x1_rec_val = tf.maximum(rec_curr[b, 0], x1_s_val)
+        y1_rec_val = tf.maximum(rec_curr[b, 1], y1_s_val)
+        x2_rec_val = tf.maximum(rec_curr[b, 2], x2_s_val)
+        y2_rec_val = tf.maximum(rec_curr[b, 3], y2_s_val)
+        # new rec.
+        w_new = x2_s_raw - x1_s_raw
+        h_new = y2_s_raw - y1_s_raw
+        x1_rec_new = (x1_rec_val - x1_s_raw) / w_new
+        y1_rec_new = (y1_rec_val - y1_s_raw) / h_new
+        x2_rec_new = (x2_rec_val - x1_s_raw) / w_new
+        y2_rec_new = (y2_rec_val - y1_s_raw) / h_new
+        rec_new = tf.stack([x1_rec_new, y1_rec_new, x2_rec_new, y2_rec_new])
+        rec_out.append(tf.expand_dims(rec_new, 0))
+
+    return tf.concat(x_out, 0), tf.concat(rec_out, 0)
 
 
 class Nornn(object):
@@ -255,21 +296,23 @@ class Nornn(object):
 
         y_pred = []
         hmap_pred = []
+        y_new_gt = []
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr = y[:, t]
 
             with tf.variable_scope('cnn1', reuse=(t > 0)):
-                search, _ = process_image_with_hmap(x_curr, hmap_prev, o, mode='mask')
-                feat_search = pass_cnn(search)
+                search_image, rec_new = process_search_with_hmap(x_curr, hmap_prev, o, y_curr)
+                search_feat = pass_cnn(search_image)
+                y_new_gt.append(rec_new)
 
             with tf.variable_scope('cnn2', reuse=(t > 0)):
-                target, _ = process_image_with_hmap(x_prev, hmap_prev, o, mode='crop')
-                feat_target = pass_cnn(target)
+                target_image = process_target_with_hmap(x_prev, hmap_prev, o)
+                target_feat = pass_cnn(target_image)
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
-                scoremap = pass_cross_correlation(feat_search, feat_target, o)
+                scoremap = pass_cross_correlation(search_feat, target_feat, o)
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 scoremap = pass_deconvolution(scoremap)
@@ -293,9 +336,13 @@ class Nornn(object):
 
         y_pred = tf.stack(y_pred, axis=1) # list to tensor
         hmap_pred = tf.stack(hmap_pred, axis=1)
+        y_new_gt = tf.stack(y_new_gt, axis=1)
         y_prev = y_pred[:,-1,:] # for `delta` regression type output.
 
-        outputs = {'y': y_pred, 'hmap': hmap_pred, 'hmap_softmax': tf.nn.softmax(hmap_pred)}
+        outputs = {'y': y_pred,
+                   'hmap': hmap_pred,
+                   'hmap_softmax': tf.nn.softmax(hmap_pred),
+                   'y_new_gt': y_new_gt}
         state = {}
         state.update({'x': (x_init, x_prev)})
         state.update({'hmap': (hmap_init, hmap_prev)})
