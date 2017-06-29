@@ -3,16 +3,22 @@
 A Model has the following interface::
 
     state_init = model.init(example_init, run_opts)
+
         example_init['x0']
         example_init['y0']
         run_opts['use_gt']
 
-    prediction_t, state_t = model.step(example_t)
+    prediction_t, window_t, state_t = model.step(example_t, state_{t-1})
+
         example_t['x']
         example_t['y'] (optional)
         prediction_t['y']
         prediction_t['hmap'] (optional)
         prediction_t['hmap_softmax'] (optional)
+
+The function step() returns the prediction in the reference frame of the window!
+This enables the loss to be computed in that reference frame if desired.
+(Particularly important for the heatmap loss.)
 
 It is then possible to process a long sequence by dividing it into chunks
 of length k and feeding state_{k-1} to state_init.
@@ -933,29 +939,33 @@ def multi_res_vgg(x, prev, init, use_heatmap, heatmap_stride,
 
 class SimpleSearch:
 
-    def __init__(self, ntimesteps, frmsz, batchsz, weight_decay=0.0,
+    # TODO: Make stat part of the model (i.e. a variable?)
+    def __init__(self, ntimesteps, frmsz, batchsz, stat, weight_decay=0.0,
             summaries_collections=None,
             image_summaries_collections=None,
             # Model parameters:
-            use_rnn=True,
+            # use_rnn=True,
             use_heatmap=False,
             use_batch_norm=False, # Caution when use_rnn is True.
-            normalize_size=False,
-            normalize_first_only=False
+            object_centric=False,
+            # normalize_size=False,
+            # normalize_first_only=False
             ):
         # TODO: Possible to automate this? Yuck!
         self.ntimesteps                  = ntimesteps
         self.frmsz                       = frmsz
         self.batchsz                     = batchsz
+        self.stat                        = stat
         self.weight_decay                = weight_decay
         self.summaries_collections       = summaries_collections
         self.image_summaries_collections = image_summaries_collections
         # Model parameters:
-        self.use_rnn              = use_rnn
+        # self.use_rnn              = use_rnn
         self.use_heatmap          = use_heatmap
         self.use_batch_norm       = use_batch_norm
-        self.normalize_size       = normalize_size
-        self.normalize_first_only = normalize_first_only
+        self.object_centric       = object_centric
+        # self.normalize_size       = normalize_size
+        # self.normalize_first_only = normalize_first_only
 
         # Public model properties:
         # self.image_size   = (self.frmsz, self.frmsz)
@@ -966,40 +976,81 @@ class SimpleSearch:
         self._template = None
         self._run_opts = None
 
+        if self.object_centric:
+            # self._window_model = MovingAverageWindow(0.5)
+            self._window_model = InitialWindow()
+        else:
+            # TODO: May be more efficient to avoid cropping if using whole window?
+            self._window_model = WholeImageWindow(batchsz=batchsz)
+        self._window_state_keys = None
+
     def init(self, example, run_opts):
+        state = {}
         self._run_opts = run_opts
+
+        with tf.name_scope('extract_window'):
+            # Get window for next frame.
+            window_state = self._window_model.init(example)
+            self._window_state_keys = window_state.keys()
+            # For this model, use window of the next frame in the initial frame.
+            window = self._window_model.window(window_state)
+            # Crop the object in the first frame.
+            example = {
+                'x0': geom.crop_image(example['x0'],
+                                      window,
+                                      crop_size=[self.frmsz, self.frmsz],
+                                      pad_value=self.stat['mean']),
+                'y0': geom.crop_rect(example['y0'], window),
+            }
+            example = {k: tf.stop_gradient(v) for k, v in example.items()}
+
+        example['x0'] = _whiten_image(example['x0'], self.stat['mean'], self.stat['std'])
+
+        # Visualize supervision rectangle in window.
+        tf.summary.image('frame_0',
+            tf.image.draw_bounding_boxes(
+                _normalize_image_range(example['x0'][0:1]),
+                geom.rect_to_tf_box(tf.expand_dims(example['y0'][0:1], 1))),
+            collections=self.image_summaries_collections)
+
         with slim.arg_scope(self._arg_scope(is_training=self._run_opts['is_training'])):
             # Process initial image and label to get "template".
             with tf.variable_scope('template'):
-                # TODO: Simply use 'x' and 'y' here!
                 p0 = get_masks_from_rectangles(example['y0'], frmsz=self.frmsz)
                 first_image_with_mask = concat([example['x0'], p0], axis=3)
                 self._template = self._template_net(first_image_with_mask)
-        state = {}
+
+        # Ensure that there is no key collision.
+        assert len(set(state.keys()).intersection(set(window_state.keys()))) == 0
+        state.update(window_state)
         return state
 
-    def step(self, original_example):
-        # if self.normalize_size:
-        #     window_rect = geom.object_centric_window(original_example['y0'])
-        #     example = geom.crop_example(original_example, window_rect, self.normalize_first_only)
-        # else:
-        #     example = dict(original_example)
-        # with tf.name_scope('model_summary') as summary_scope:
-        #     # Visualize rectangle on normalized image.
-        #     tf.summary.image('frame_0',
-        #         tf.image.draw_bounding_boxes(
-        #             _normalize_image_range(example['x0'][0:1]),
-        #             geom.rect_to_tf_box(tf.expand_dims(example['y0'][0:1], 1))), # Just one box per image.
-        #         collections=image_summaries_collections)
+    def step(self, example, prev_state):
+        state = {}
 
-        x = original_example['x']
+        with tf.name_scope('extract_window'):
+            # Extract the window state by taking a subset of the state dictionary.
+            prev_window_state = {k: prev_state[k] for k in self._window_state_keys}
+            window = self._window_model.window(prev_window_state)
+            # Use the window chosen by the previous frame.
+            example = {
+                'x': geom.crop_image(example['x'],
+                                     window,
+                                     crop_size=[self.frmsz, self.frmsz],
+                                     pad_value=None),
+                'y': geom.crop_rect(example['y'], window),
+            }
+            example = {k: tf.stop_gradient(v) for k, v in example.items()}
+
+        example['x'] = _whiten_image(example['x'], self.stat['mean'], self.stat['std'])
+
+        x = example['x']
         with slim.arg_scope(self._arg_scope(is_training=self._run_opts['is_training'])):
             # Process all images from all sequences with feature net.
             with tf.variable_scope('features'):
                 feat = self._feat_net(x)
             # Search each image using result of template network.
             with tf.variable_scope('search'):
-                # similarity = _search_all_net(feat, self._template)
                 similarity = self._search_net(feat, self._template)
             # if self.use_rnn:
             #     # Update abstract position likelihood of object.
@@ -1030,24 +1081,29 @@ class SimpleSearch:
                         align_corners=True)
                     prediction['hmap_softmax'] = tf.nn.softmax(prediction['hmap_full'])
 
-        # with tf.name_scope(summary_scope):
-        #     # Visualize rectangle on normalized image.
-        #     tf.summary.image('frame_1_to_n',
-        #         tf.image.draw_bounding_boxes(
-        #             _normalize_image_range(example['x'][0]),
-        #             geom.rect_to_tf_box(tf.expand_dims(position[0], 1))), # Just one box per image.
-        #         collections=image_summaries_collections)
-        # if self.normalize_size and not self.normalize_first_only:
-        #     inv_window_rect = geom.crop_inverse(window_rect)
-        #     position = geom.crop_rect_sequence(position, inv_window_rect)
+        # Visualize rectangle in window.
+        tf.summary.image('frame_1_to_n',
+            tf.image.draw_bounding_boxes(
+                _normalize_image_range(example['x'][0:1]),
+                geom.rect_to_tf_box(tf.expand_dims(prediction['y'][0:1], 1))),
+            collections=self.image_summaries_collections)
+
+        # Update window state for next frame.
+        window_state = {}
+        with tf.name_scope('update_window'):
+            # Obtain rectangle in image co-ordinates.
+            prediction_uncrop = {
+                'y': geom.crop_rect(prediction['y'], geom.crop_inverse(window)),
+            }
+            window_state = self._window_model.update(prediction_uncrop, prev_window_state)
 
         # if self.use_rnn:
         #     state = {k: (init_state[k], curr_state[k]) for k in curr_state}
         # else:
         #     state = {}
 
-        state = {}
-        return prediction, state
+        state.update(window_state)
+        return prediction, window, state
 
     def _arg_scope(self, is_training):
         batch_norm_opts = {} if not self.use_batch_norm else {
@@ -1171,6 +1227,11 @@ def _normalize_image_range(x):
     return 0.5 * (1 + x / tf.reduce_max(tf.abs(x)))
 
 
+def _whiten_image(x, mean, std, name='whiten_image'):
+    with tf.name_scope(name) as scope:
+        return tf.divide(x - mean, std, name=scope)
+
+
 def mlp(example, ntimesteps, frmsz,
         summaries_collections=None,
         hidden_dim=1024):
@@ -1199,25 +1260,115 @@ def mlp(example, ntimesteps, frmsz,
     return model
 
 
-def load_model(o, model_params=None):
+'''
+    state = model.init(example)
+
+    window = model.window(state)
+
+    state = model.update(prediction, prev_state)
+        In the future, prediction may include presence/absence of object.
+
+The final state will be fed to the initial state to process long sequences.
+'''
+
+
+class WholeImageWindow:
+    def __init__(self, batchsz):
+        self.batchsz = batchsz
+
+    def init(self, example):
+        state = {}
+        return state
+
+    def update(self, prediction, prev_state):
+        state = {}
+        return state
+
+    def _window(self, state):
+        return self._window(**state)
+
+    def window(self, state):
+        rect = [0.0, 0.0, 1.0, 1.0]
+        # Use same window for every image in batch.
+        return tf.tile(tf.expand_dims(rect, 0), [self.batchsz, 1])
+
+
+class InitialWindow:
+    def __init__(self, relative_size=4.0):
+        self.relative_size = relative_size
+
+    def init(self, example):
+        init_obj_rect = example['y0']
+        state = {'init_obj_rect': init_obj_rect}
+        return state
+
+    def update(self, prediction, prev_state):
+        state = dict(prev_state)
+        return state
+
+    def window(self, state):
+        return self._window(**state)
+
+    def _window(self, init_obj_rect):
+        return geom.object_centric_window(init_obj_rect,
+            relative_size=self.relative_size)
+
+
+class MovingAverageWindow:
+    def __init__(self, decay, relative_size=4.0):
+        self.decay = decay
+        self.relative_size = relative_size
+        self.eps = 0.01
+
+    def init(self, example):
+        center, log_diameter = self._center_log_diameter(example['y0'])
+        state = {'center': center, 'log_diameter': log_diameter}
+        return state
+
+    def update(self, prediction, prev_state):
+        center, log_diameter = self._center_log_diameter(prediction['y'])
+        # Moving average.
+        center = self.decay * prev_state['center'] + (1 - self.decay) * center
+        log_diameter = self.decay * prev_state['log_diameter'] + (1 - self.decay) * log_diameter
+        state = {'center': center, 'log_diameter': log_diameter}
+        return state
+
+    def window(self, state):
+        return self._window(**state)
+
+    def _window(self, center, log_diameter):
+        window_diameter = self.relative_size * tf.exp(log_diameter)
+        window_size = tf.expand_dims(window_diameter, -1)
+        window_min = center - 0.5*window_size
+        window_max = center + 0.5*window_size
+        return geom.make_rect(window_min, window_max)
+
+    def _center_log_diameter(self, rect):
+        min_pt, max_pt = geom.rect_min_max(rect)
+        center = 0.5 * (min_pt + max_pt)
+        size = tf.maximum(0.0, max_pt - min_pt)
+        log_diameter = tf.reduce_mean(tf.log(size + self.eps), axis=-1)
+        return center, log_diameter
+
+
+def load_model(o):
     '''
     example is a dictionary that maps strings to Tensors.
     Its keys should include 'inputs', 'labels', 'x0', 'y0'.
     '''
-    model_params = model_params or {}
-    assert('summaries_collections' not in model_params)
-    if o.model == 'RNN_dual':
-        model = functools.partial(RNN_dual, o=o, **model_params)
-    elif o.model == 'RNN_conv_asymm':
-        model = functools.partial(rnn_conv_asymm, o=o, **model_params)
-    elif o.model == 'RNN_multi_res':
-        model = functools.partial(rnn_multi_res, o=o, **model_params)
-    elif o.model == 'simple_search':
-        model = SimpleSearch(ntimesteps=o.ntimesteps,
-                             frmsz=o.frmsz,
-                             batchsz=o.batchsz,
-                             weight_decay=o.wd,
-                             **model_params)
+    # if o.model == 'RNN_dual':
+    #     model = functools.partial(RNN_dual, o=o, **model_params)
+    # elif o.model == 'RNN_conv_asymm':
+    #     model = functools.partial(rnn_conv_asymm, o=o, **model_params)
+    # elif o.model == 'RNN_multi_res':
+    #     model = functools.partial(rnn_multi_res, o=o, **model_params)
+    if o.model == 'simple_search':
+        model = functools.partial(SimpleSearch,
+                                  ntimesteps=o.ntimesteps,
+                                  frmsz=o.frmsz,
+                                  batchsz=o.batchsz,
+                                  weight_decay=o.wd,
+                                  **o.model_params)
     else:
         raise ValueError ('model not available')
     return model

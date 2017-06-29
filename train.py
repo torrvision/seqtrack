@@ -27,9 +27,10 @@ from model import convert_rec_to_heatmap
 from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
 
 EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid']
+SUMMARIES_IMAGES = 'summaries_images'
 
 
-def train(model_design, datasets, eval_sets, o, use_queues=False):
+def train(create_model, datasets, eval_sets, o, use_queues=False):
     '''Trains a network.
 
     Args:
@@ -103,13 +104,6 @@ def train(model_design, datasets, eval_sets, o, use_queues=False):
             ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype)
         run_opts = _make_option_placeholders()
 
-    # TODO: How to use a different window in each frame?
-    # This will change the interface in the model because features must be
-    # extracted sequentially.
-
-    # window_rect = tf.placeholder_with_default(
-    #     np.array([0.0, 0.0, 1.0, 1.0], dtype=np.float32), [4], name='window_rect')
-
     # Always use same statistics for whitening (not set dependent).
     # stat = datasets['train'].stat
     stat = {'mean': 0.5, 'std': 1.0}
@@ -118,25 +112,18 @@ def train(model_design, datasets, eval_sets, o, use_queues=False):
     # Sample a training sequence from the augmentation distribution.
     example = _perform_data_augmentation(example, o, pad_value=stat['mean'])
     example_post_aug = dict(example)
-    # # Keep a reference to the example before cropping the window.
-    # # (This is where to feed a video to use the tracker.)
-    # example_whole = dict(example)
-    # if o.object_centric:
-    #     window_rect = geom.object_centric_window(example['y0'])
-    #     example = geom.crop_example(example, window_rect, first_only=False,
-    #         crop_size=[o.frmsz, o.frmsz], pad_value=stat['mean'])
-    # example_window = dict(example)
-    # # TODO: Desirable to have some augmentation after cropping the object?
 
-    # TODO: Stats
-    # TODO: Guard
+    model = create_model(stat=stat,
+                         image_summaries_collections=[SUMMARIES_IMAGES])
 
-    # window_state = InitialWindow()
-    window_state = MovingAverageWindow(0.5)
-
-    prediction, window, example_crop, prediction_crop, init_state, final_state = process_sequence(
-        example, run_opts, model_design, window_state, stat,
+    prediction_crop, window, prediction, init_state, final_state = process_sequence(
+        example, run_opts, model, stat,
         batchsz=o.batchsz, ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype,
+    )
+    # Crop ground truth label for loss.
+    example_crop = geom.crop_example(example, window,
+        crop_size=[o.frmsz, o.frmsz],
+        pad_value=stat['mean'],
     )
 
     EvalModel = collections.namedtuple('EvalModel', [
@@ -146,7 +133,6 @@ def train(model_design, datasets, eval_sets, o, use_queues=False):
         'example', # Place to feed input.
         'run_opts',
         'window',
-        'example_crop',
         'prediction_crop',
         'prediction', # Place to get output.
         'init_state',
@@ -159,7 +145,6 @@ def train(model_design, datasets, eval_sets, o, use_queues=False):
         example=example_post_aug,
         run_opts=run_opts,
         window=window,
-        example_crop=example_crop,
         prediction_crop=prediction_crop,
         prediction=prediction,
         init_state=init_state,
@@ -167,16 +152,10 @@ def train(model_design, datasets, eval_sets, o, use_queues=False):
     )
 
     # model = create_model(_whiten(_guard_labels(example, run_opts), dtype=o.dtype, stat=stat),
-    #                      image_summaries_collections=['summaries_images'])
+    #                      image_summaries_collections=[SUMMARIES_IMAGES])
 
-    # Crop ground truth label for loss.
-    example_labels_crop = {
-        'y':          geom.crop_rect(example['y'], window),
-        'y_is_valid': example['y_is_valid'],
-    }
-
-    loss_var = get_loss(example_labels_crop, prediction_crop, o,
-                        image_summaries_collections=['summaries_images'])
+    loss_var = get_loss(example_crop, prediction_crop, o,
+                        image_summaries_collections=[SUMMARIES_IMAGES])
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
     loss_var += r
@@ -216,36 +195,32 @@ def train(model_design, datasets, eval_sets, o, use_queues=False):
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
         with tf.name_scope('crop'):
-            # tf.summary.image('0',
-            #     _draw_init_bounding_boxes(example_crop),
-            #     max_outputs=1, collections=['summaries_images'])
-            # TODO: Careful with this if use_gt is False.
             tf.summary.image('1_to_n',
                 _draw_bounding_boxes(example_crop, prediction_crop),
-                max_outputs=o.ntimesteps, collections=['summaries_images'])
+                max_outputs=o.ntimesteps, collections=[SUMMARIES_IMAGES])
         with tf.name_scope('box'):
             tf.summary.image('0',
                 _draw_init_bounding_boxes(example),
-                max_outputs=1, collections=['summaries_images'])
+                max_outputs=1, collections=[SUMMARIES_IMAGES])
             tf.summary.image('1_to_n',
                 _draw_bounding_boxes(example, prediction),
-                max_outputs=o.ntimesteps, collections=['summaries_images'])
+                max_outputs=o.ntimesteps, collections=[SUMMARIES_IMAGES])
         # Produce an image summary of the heatmap.
         if 'hmap' in prediction:
             tf.summary.image('hmap', _draw_heatmap(tf.nn.softmax(prediction['hmap'])[0]),
-                max_outputs=o.ntimesteps+1, collections=['summaries_images'])
+                max_outputs=o.ntimesteps+1, collections=[SUMMARIES_IMAGES])
         # # Produce an image summary of the LSTM memory states (h or c).
         # if hasattr(model, 'memory'):
         #     for mtype in model.memory.keys():
         #         if model.memory[mtype][0] is not None:
         #             tf.summary.image(mtype, _draw_memory_state(model, mtype),
-        #                 max_outputs=o.ntimesteps+1, collections=['summaries_images'])
+        #                 max_outputs=o.ntimesteps+1, collections=[SUMMARIES_IMAGES])
         for dataset in datasets:
             with tf.name_scope(dataset):
                 # Merge summaries with any that are specific to the mode.
                 summaries = (global_summaries + tf.get_collection('summaries_' + dataset))
                 summary_vars[dataset] = tf.summary.merge(summaries)
-                summaries.extend(tf.get_collection('summaries_images'))
+                summaries.extend(tf.get_collection(SUMMARIES_IMAGES))
                 extended_summary_vars[dataset] = tf.summary.merge(summaries)
 
     init_op = tf.global_variables_initializer()
@@ -424,48 +399,46 @@ def train(model_design, datasets, eval_sets, o, use_queues=False):
         print 'total time elapsed: {0:.2f}'.format(time.time()-t_total)
 
 
-def process_sequence(example, run_opts, model_design, window_state, stat,
-        batchsz, ntimesteps, frmsz, dtype):
+def process_sequence(example, run_opts, model, stat, batchsz, ntimesteps, frmsz, dtype):
+    '''Takes a Model and calls init() and step() on the example.
+
+    Returns prediction in the image reference frame,
+    and prediction_crop in the window reference frame.
+    The prediction in the window reference frame can be used to apply the loss.
+    '''
     example_input = dict(example)
     example = _guard_labels(example, run_opts)
     example_init = {k: example[k] for k in ['x0', 'y0']}
-    example_frames = _unstack_dict(example, ['x', 'y', 'y_is_valid'], axis=1)
+    example_seq = _unstack_dict(example, ['x', 'y', 'y_is_valid'], axis=1)
     # _unstack_example_frames(example)
     state = [None for __ in range(ntimesteps)]
     window = [None for __ in range(ntimesteps)]
-    example_crop = [None for __ in range(ntimesteps)]
     prediction_crop = [None for __ in range(ntimesteps)]
     prediction = [None for __ in range(ntimesteps)]
 
-    with tf.variable_scope('model_init'):
-        init_state = model_design.init(_whiten(example_init, dtype=dtype, stat=stat), run_opts)
-    for t in range(ntimesteps):
-        # Get window for this frame.
-        # TODO: Possibly add some augmentation here during training?
-        # TODO: Add prev_prediction to state.
-        if t == 0:
-            window[t] = window_state.init(example) # , is_training)
-        else:
-            # Window can depend on previous position.
-            window[t] = window_state.step(prediction[t-1])
-        example_crop[t] = geom.crop_example_frame(example_frames[t], window[t],
-            crop_size=[frmsz, frmsz],
-            pad_value=0.0)
-        # TODO: Handle model with state!
-        with tf.variable_scope('model', reuse=(t > 0)):
-            prediction_crop[t], state[t] = model_design.step(_whiten(example_crop[t], dtype=dtype, stat=stat))
-        inv_window_rect = geom.crop_inverse(window[t])
-        prediction[t] = geom.crop_prediction_frame(prediction_crop[t], inv_window_rect,
-            crop_size=[frmsz, frmsz])
+    with tf.variable_scope('model'):
+        with tf.name_scope('frame_0'):
+            with tf.variable_scope('init'):
+                init_state = model.init(example_init, run_opts)
+        for t in range(ntimesteps):
+            with tf.name_scope('frame_{}'.format(t+1)):
+                with tf.variable_scope('frame', reuse=(t > 0)):
+                    # TODO: Whiten after crop i.e. in model.
+                    prediction_crop[t], window[t], state[t] = model.step(
+                        example_seq[t],
+                        state[t-1] if t > 0 else init_state)
+                # Obtain prediction in image frame.
+                inv_window_rect = geom.crop_inverse(window[t])
+                prediction[t] = geom.crop_prediction_frame(prediction_crop[t], inv_window_rect,
+                    crop_size=[frmsz, frmsz])
 
     # TODO: This may include window state!
-    final_state = state[ntimesteps - 1]
+    final_state = state[-1]
     window = tf.stack(window, axis=1)
-    example_crop = _stack_dict(example_crop, ['x', 'y', 'y_is_valid'], axis=1)
     prediction_crop = _stack_dict(prediction_crop, ['y', 'hmap', 'hmap_softmax'], axis=1)
     prediction = _stack_dict(prediction, ['y', 'hmap', 'hmap_softmax'], axis=1)
 
-    return prediction, window, example_crop, prediction_crop, init_state, final_state
+    return prediction_crop, window, prediction, init_state, final_state
 
 def _unstack_dict(d, keys, axis):
     # Gather lists of all elements at same index.
@@ -731,24 +704,24 @@ def _most_specific_shape(x):
     return [static[i] or dynamic[i] for i in range(len(static))]
 
 
-def _whiten(example_raw, dtype, stat, name='whiten'):
-    stat = stat or {}
-    with tf.name_scope(name) as scope:
-        # Normalize mean and variance.
-        mean = stat.get('mean', 0.0)
-        std = stat.get('std', 1.0)
-        example = dict(example_raw) # Copy dictionary before modifying.
-        # Replace raw x (images) with whitened x (images).
-        if 'x' in example:
-            example['x'] = _whiten_image(example['x'], mean, std, name='x')
-        if 'x0' in example:
-            example['x0'] = _whiten_image(example['x0'], mean, std, name='x0')
-        return example
-
-
-def _whiten_image(x, mean, std, name='whiten_image'):
-    with tf.name_scope(name) as scope:
-        return tf.divide(x - mean, std, name=scope)
+# def _whiten(example_raw, dtype, stat, name='whiten'):
+#     stat = stat or {}
+#     with tf.name_scope(name) as scope:
+#         # Normalize mean and variance.
+#         mean = stat.get('mean', 0.0)
+#         std = stat.get('std', 1.0)
+#         example = dict(example_raw) # Copy dictionary before modifying.
+#         # Replace raw x (images) with whitened x (images).
+#         if 'x' in example:
+#             example['x'] = _whiten_image(example['x'], mean, std, name='x')
+#         if 'x0' in example:
+#             example['x0'] = _whiten_image(example['x0'], mean, std, name='x0')
+#         return example
+# 
+# 
+# def _whiten_image(x, mean, std, name='whiten_image'):
+#     with tf.name_scope(name) as scope:
+#         return tf.divide(x - mean, std, name=scope)
 
 
 def iter_examples(dataset, o, rand=None, num_epochs=None):
@@ -1039,72 +1012,6 @@ def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean
         return os.path.join(plot_dir, filename+'.png')
 
     return helper()
-
-
-class WholeImageWindow:
-    def __init__(self, batchsz):
-        self.batchsz = batchsz
-
-    def init(self, example):
-        rect = [0.0, 0.0, 1.0, 1.0]
-        # Use same window for every image in batch.
-        window = tf.tile(tf.expand_dims(rect, 0), [self.batchsz, 1])
-        self.window = window
-        return window
-
-    def step(self, prediction):
-        return self.window
-
-class InitialWindow:
-    def __init__(self, relative_size=4.0):
-        self.relative_size = relative_size
-        # Model state:
-        self.window = None
-
-    def init(self, example):
-        self.window = geom.object_centric_window(example['y0'],
-            relative_size=self.relative_size)
-        return self.window
-
-    def step(self, prediction):
-        return self.window
-
-
-class MovingAverageWindow:
-    def __init__(self, decay, relative_size=4.0):
-        self.decay = decay
-        self.relative_size = relative_size
-        self.eps = 0.01
-        # Model state:
-        self.center = None
-        self.log_diameter = None
-
-    def init(self, example):
-        center, log_diameter = self._center_log_diameter(example['y0'])
-        self.center = center
-        self.log_diameter = log_diameter
-        return self._window(self.center, self.log_diameter)
-
-    def step(self, prediction):
-        center, log_diameter = self._center_log_diameter(prediction['y'])
-        # Moving average.
-        self.center = self.decay * self.center + (1 - self.decay) * center
-        self.log_diameter = self.decay * self.log_diameter + (1 - self.decay) * log_diameter
-        return self._window(self.center, self.log_diameter)
-
-    def _center_log_diameter(self, rect):
-        min_pt, max_pt = geom.rect_min_max(rect)
-        center = 0.5 * (min_pt + max_pt)
-        size = tf.maximum(0.0, max_pt - min_pt)
-        log_diameter = tf.reduce_mean(tf.log(size + self.eps), axis=-1)
-        return center, log_diameter
-
-    def _window(self, center, log_diameter):
-        window_diameter = self.relative_size * tf.exp(log_diameter)
-        window_size = tf.expand_dims(window_diameter, -1)
-        window_min = center - 0.5*window_size
-        window_max = center + 0.5*window_size
-        return geom.make_rect(window_min, window_max)
 
 
 def gnuplot_str(x):

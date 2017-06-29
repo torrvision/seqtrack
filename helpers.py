@@ -89,9 +89,9 @@ def merge_dims(x, a, b, name='merge'):
     x_static = x.shape.as_list()
     n = len(x_static)
 
-    def restore(v, axis):
+    def restore(v, axis, name='restore'):
         '''Restores dimensions [axis] to dimensions [a, ..., b-1].'''
-        with tf.name_scope(name+'_restore'):
+        with tf.name_scope(name):
             v_dynamic = tf.shape(v)
             v_static = v.shape.as_list()
             m = len(v_static)

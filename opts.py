@@ -65,7 +65,6 @@ class Opts(object):
         self.min_gt_ratio       = 0.75
         self.curriculum_learning= False
         self.model_file         = None
-        self.object_centric     = False
 
         #----------------------------------------------------------------------
         # Data augmentation
@@ -101,8 +100,8 @@ class Opts(object):
         self.resume             = False
         self.period_ckpt        = 10000 # this is based only on global_step; batchsz not considered
         self.period_assess      = 20000
-        self.period_summary     = 10
-        self.period_preview     = 100 # Ensure that period_preview % period_summary == 0.
+        self.period_summary     = 100
+        self.period_preview     = 1000 # Ensure that period_preview % period_summary == 0.
         self.visualize_eval     = False
 
         #----------------------------------------------------------------------

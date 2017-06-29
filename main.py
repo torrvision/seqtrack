@@ -113,7 +113,6 @@ def parse_arguments():
     parser.add_argument(
             '--model_file', help='pretrained model file to be used for curriculum_learning',
             type=str, default=None)
-    parser.add_argument('--object_centric', action='store_true')
 
     parser.add_argument(
             '--data_augmentation', help='JSON string specifying data augmentation',
@@ -215,15 +214,14 @@ def main():
         train.generate_report(sorted(o.eval_samplers), sorted(o.eval_datasets), o)
         return
 
-    # TODO: Set model_opts from command-line or JSON file?
-    model = model_package.load_model(o, model_params=o.model_params)
+    create_model = model_package.load_model(o)
 
     train_datasets = {
         'train': datasets['ILSVRC-train'],
         'val': datasets['ILSVRC-val'],
         'OTB-50': datasets['OTB-50']
     }
-    train.train(model, train_datasets, eval_sets, o, use_queues=o.use_queues)
+    train.train(create_model, train_datasets, eval_sets, o, use_queues=o.use_queues)
 
 
 def trace(frame, event, arg):
