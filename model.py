@@ -215,7 +215,10 @@ class Nornn(object):
             '''
             with slim.arg_scope([slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = slim.max_pool2d(x, 3, 3, scope='pool1') # NEW; To redue the spatial size before flattening.
+                # add size reduction operations.
+                x = slim.conv2d(x, 16, 1, scope='conv1')
+                x = slim.conv2d(x, 2, 1, scope='conv2')
+                x = slim.max_pool2d(x, 2, scope='pool1')
                 x = slim.flatten(x)
                 x = slim.fully_connected(x, 1024, scope='fc1')
                 x = slim.fully_connected(x, 1024, scope='fc2')
@@ -276,7 +279,7 @@ class Nornn(object):
                 hmap_curr_pred = pass_out_heatmap(scoremap)
 
             with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
-                y_curr_pred = pass_out_rectangle(hmap_curr_pred)
+                y_curr_pred = pass_out_rectangle(scoremap)
 
             rand_prob = tf.random_uniform([], minval=0, maxval=1)
             gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
