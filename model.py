@@ -996,15 +996,12 @@ class SimpleSearch:
             window = self._window_model.window(window_state)
             # Crop the object in the first frame.
             example = {
-                'x0': geom.crop_image(example['x0'],
-                                      window,
-                                      crop_size=[self.frmsz, self.frmsz],
-                                      pad_value=self.stat['mean']),
+                'x0': self._extract_window(example['x0'], window),
                 'y0': geom.crop_rect(example['y0'], window),
             }
             example = {k: tf.stop_gradient(v) for k, v in example.items()}
 
-        example['x0'] = _whiten_image(example['x0'], self.stat['mean'], self.stat['std'])
+        example['x0'] = self._whiten(example['x0'])
 
         # Visualize supervision rectangle in window.
         tf.summary.image('frame_0',
@@ -1034,15 +1031,12 @@ class SimpleSearch:
             window = self._window_model.window(prev_window_state)
             # Use the window chosen by the previous frame.
             example = {
-                'x': geom.crop_image(example['x'],
-                                     window,
-                                     crop_size=[self.frmsz, self.frmsz],
-                                     pad_value=None),
+                'x': self._extract_window(example['x'], window),
                 'y': geom.crop_rect(example['y'], window),
             }
             example = {k: tf.stop_gradient(v) for k, v in example.items()}
 
-        example['x'] = _whiten_image(example['x'], self.stat['mean'], self.stat['std'])
+        example['x'] = self._whiten(example['x'])
 
         x = example['x']
         with slim.arg_scope(self._arg_scope(is_training=self._run_opts['is_training'])):
@@ -1117,6 +1111,14 @@ class SimpleSearch:
                             weights_regularizer=slim.l2_regularizer(self.weight_decay),
                             **batch_norm_opts) as arg_sc:
             return arg_sc
+
+    def _extract_window(self, x, window):
+        return geom.crop_image(x, window,
+                               crop_size=[self.frmsz, self.frmsz],
+                               pad_value=self.stat['mean'])
+
+    def _whiten(self, x):
+        return _whiten_image(x, self.stat['mean'], self.stat['std'])
 
     def _feat_net(self, x):
         assert len(x.shape) == 4
