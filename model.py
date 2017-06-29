@@ -178,12 +178,12 @@ class Nornn(object):
             with slim.arg_scope([slim.conv2d],
                     padding='VALID',
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = slim.conv2d(x, 96, 11, stride=2, scope='conv1')
+                x = slim.conv2d(x, 16, 11, stride=2, scope='conv1')
                 x = slim.max_pool2d(x, 3, scope='pool1')
-                x = slim.conv2d(x, 256, 5, stride=1, scope='conv2')
+                x = slim.conv2d(x, 32, 5, stride=1, scope='conv2')
                 x = slim.max_pool2d(x, 3, scope='pool2')
-                x = slim.conv2d(x, 384, 3, stride=1, scope='conv3')
-                x = slim.conv2d(x, 384, 3, stride=1, scope='conv4')
+                x = slim.conv2d(x, 64, 3, stride=1, scope='conv3')
+                x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
                 x = slim.conv2d(x, 256, 3, stride=1, scope='conv5')
             return x
 
@@ -200,7 +200,7 @@ class Nornn(object):
 
         def pass_deconvolution(x):
             shape_to = [53, 116] # magic number picked from CNN.
-            numout_to = [256, 96]
+            numout_to = [32, 16]
             with slim.arg_scope([slim.conv2d],
                     kernel_size=[3,3],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -216,8 +216,7 @@ class Nornn(object):
             with slim.arg_scope([slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 # add size reduction operations.
-                x = slim.conv2d(x, 16, 1, scope='conv1')
-                x = slim.conv2d(x, 2, 1, scope='conv2')
+                x = slim.conv2d(x, 2, 1, scope='conv1')
                 x = slim.max_pool2d(x, 2, scope='pool1')
                 x = slim.flatten(x)
                 x = slim.fully_connected(x, 1024, scope='fc1')
