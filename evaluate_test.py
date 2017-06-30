@@ -15,7 +15,7 @@ class TestTrack(unittest.TestCase):
     def test_different_ntimesteps(self):
         frmsz = 241
         batchsz = 1
-        ntimesteps = [5, 1, 20]
+        ntimesteps = [5, 20, 1]
         sequence_len = 58
         dtype = tf.float32
 
@@ -29,15 +29,27 @@ class TestTrack(unittest.TestCase):
             example = train._make_example_placeholders(ntimesteps=ntimesteps[i], frmsz=frmsz, dtype=dtype)
             run_opts = train._make_option_placeholders()
             # model = models.mlp(example, ntimesteps=ntimesteps[i], frmsz=frmsz)
-            model_design = models.SimpleSearch(ntimesteps=ntimesteps[i], frmsz=frmsz, batchsz=batchsz,
-                use_rnn=False, use_heatmap=True)
-            # window_state = train.WholeImageWindow(batchsz)
-            # window_state = train.InitialWindow()
-            window_state = train.MovingAverageWindow(0.5)
-            model = train.process_sequence(example, run_opts, model_design, window_state, stat=None,
-                batchsz=batchsz, ntimesteps=ntimesteps[i], frmsz=frmsz, dtype=dtype)
-            print model
-            # model = models.rnn_multi_res(example, ntimesteps=ntimesteps[i], frmsz=frmsz)
+            model = models.SimpleSearch(
+                ntimesteps=ntimesteps[i], frmsz=frmsz, batchsz=batchsz, stat={},
+                object_centric=True, use_heatmap=True)
+
+            prediction_crop, window, prediction, init_state, final_state = train.process_sequence(
+                example, run_opts, model,
+                batchsz=batchsz, ntimesteps=ntimesteps[i], frmsz=frmsz, dtype=dtype,
+            )
+            eval_model = evaluate.Model(
+                batch_size=batchsz,
+                image_size=(frmsz, frmsz),
+                sequence_len=ntimesteps[i],
+                example=example,
+                run_opts=run_opts,
+                window=window,
+                prediction_crop=prediction_crop,
+                prediction=prediction,
+                init_state=init_state,
+                final_state=final_state,
+            )
+
             saver = tf.train.Saver()
             init_op = tf.global_variables_initializer()
             with tf.Session() as sess:
@@ -46,7 +58,7 @@ class TestTrack(unittest.TestCase):
                     saver.save(sess, model_file)
                 else:
                     saver.restore(sess, model_file)
-                prediction = evaluate.track(sess, model, sequence, use_gt=False,
+                prediction = evaluate.track(sess, eval_model, sequence, use_gt=False,
                     prediction_vars=['y'])
                 traj = prediction['y']
                 trajectories.append(traj)

@@ -1,5 +1,4 @@
 import sys
-import collections
 import csv
 import functools
 import itertools
@@ -117,7 +116,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                          image_summaries_collections=[SUMMARIES_IMAGES])
 
     prediction_crop, window, prediction, init_state, final_state = process_sequence(
-        example, run_opts, model, stat,
+        example, run_opts, model,
         batchsz=o.batchsz, ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype,
     )
     # Crop ground truth label for loss.
@@ -126,19 +125,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         pad_value=stat['mean'],
     )
 
-    EvalModel = collections.namedtuple('EvalModel', [
-        'batch_size',
-        'image_size',
-        'sequence_len',
-        'example', # Place to feed input.
-        'run_opts',
-        'window',
-        'prediction_crop',
-        'prediction', # Place to get output.
-        'init_state',
-        'final_state',
-    ])
-    eval_model = EvalModel(
+    eval_model = evaluate.Model(
         batch_size=o.batchsz,
         image_size=(o.frmsz, o.frmsz),
         sequence_len=o.ntimesteps,
@@ -399,7 +386,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         print 'total time elapsed: {0:.2f}'.format(time.time()-t_total)
 
 
-def process_sequence(example, run_opts, model, stat, batchsz, ntimesteps, frmsz, dtype):
+def process_sequence(example, run_opts, model, batchsz, ntimesteps, frmsz, dtype):
     '''Takes a Model and calls init() and step() on the example.
 
     Returns prediction in the image reference frame,

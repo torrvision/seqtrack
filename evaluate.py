@@ -1,3 +1,4 @@
+import collections
 import numpy as np
 import sys
 import os
@@ -7,6 +8,20 @@ from progressbar import ProgressBar, Bar, Counter, ETA, Percentage # pip install
 import draw
 import data
 from helpers import load_image, im_to_arr, pad_to
+
+
+Model = collections.namedtuple('Model', [
+    'batch_size',
+    'image_size',
+    'sequence_len',
+    'example', # Place to feed input.
+    'run_opts',
+    'window',
+    'prediction_crop',
+    'prediction', # Place to get output.
+    'init_state',
+    'final_state',
+])
 
 
 def track(sess, model, sequence, use_gt, prediction_vars=None):

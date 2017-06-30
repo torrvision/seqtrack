@@ -970,8 +970,8 @@ class SimpleSearch:
         self.batch_size = None # Model accepts variable batch size.
 
         # Model state.
-        self._template = None
         self._run_opts = None
+        self._template = None
 
         if self.object_centric:
             self._window_model = ConditionalWindow(
@@ -980,7 +980,10 @@ class SimpleSearch:
             )
         else:
             # TODO: May be more efficient to avoid cropping if using whole window?
-            self._window_model = WholeImageWindow(batchsz=batchsz)
+            self._window_model = ConditionalWindow(
+                train_model=WholeImageWindow(batchsz=batchsz),
+                test_model=WholeImageWindow(batchsz=batchsz),
+            )
         self._window_state_keys = None
 
     def init(self, example, run_opts):
@@ -1019,6 +1022,8 @@ class SimpleSearch:
         # Ensure that there is no key collision.
         assert len(set(state.keys()).intersection(set(window_state.keys()))) == 0
         state.update(window_state)
+        # Do not over-write elements of state used in init().
+        state = {k: tf.identity(v) for k, v in state.items()}
         return state
 
     def step(self, example, prev_state):
@@ -1114,10 +1119,11 @@ class SimpleSearch:
     def _extract_window(self, x, window):
         return geom.crop_image(x, window,
                                crop_size=[self.frmsz, self.frmsz],
-                               pad_value=self.stat['mean'])
+                               pad_value=self.stat.get('mean', 0.0))
 
     def _whiten(self, x):
-        return _whiten_image(x, self.stat['mean'], self.stat['std'])
+        return _whiten_image(x, mean=self.stat.get('mean', 0.0),
+                                std=self.stat.get('std', 1.0))
 
     def _feat_net(self, x):
         assert len(x.shape) == 4
