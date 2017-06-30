@@ -971,7 +971,6 @@ class SimpleSearch:
 
         # Model state.
         self._run_opts = None
-        self._template = None
 
         if self.object_centric:
             self._window_model = ConditionalWindow(
@@ -1017,7 +1016,7 @@ class SimpleSearch:
             with tf.variable_scope('template'):
                 p0 = get_masks_from_rectangles(example['y0'], frmsz=self.frmsz)
                 first_image_with_mask = concat([example['x0'], p0], axis=3)
-                self._template = self._template_net(first_image_with_mask)
+                state['template'] = self._template_net(first_image_with_mask)
 
         # Ensure that there is no key collision.
         assert len(set(state.keys()).intersection(set(window_state.keys()))) == 0
@@ -1028,6 +1027,7 @@ class SimpleSearch:
 
     def step(self, example, prev_state):
         state = {}
+        state['template'] = prev_state['template']
 
         with tf.name_scope('extract_window'):
             # Extract the window state by taking a subset of the state dictionary.
@@ -1049,7 +1049,7 @@ class SimpleSearch:
                 feat = self._feat_net(x)
             # Search each image using result of template network.
             with tf.variable_scope('search'):
-                similarity = self._search_net(feat, self._template)
+                similarity = self._search_net(feat, prev_state['template'])
             # if self.use_rnn:
             #     # Update abstract position likelihood of object.
             #     with tf.variable_scope('track'):
