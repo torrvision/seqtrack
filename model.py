@@ -31,6 +31,7 @@ A Model also has the following properties::
 
 import pdb
 import functools
+import itertools
 import tensorflow as tf
 from tensorflow.contrib import slim
 import math
@@ -960,25 +961,23 @@ class SimpleSearch:
         self.summaries_collections       = summaries_collections
         self.image_summaries_collections = image_summaries_collections
         # Model parameters:
-        # self.use_rnn              = use_rnn
-        self.use_heatmap          = use_heatmap
-        self.use_batch_norm       = use_batch_norm
-        self.object_centric       = object_centric
-        # self.normalize_size       = normalize_size
-        # self.normalize_first_only = normalize_first_only
+        # self.use_rnn        = use_rnn
+        self.use_heatmap    = use_heatmap
+        self.use_batch_norm = use_batch_norm
+        self.object_centric = object_centric
 
         # Public model properties:
-        # self.image_size   = (self.frmsz, self.frmsz)
-        # self.sequence_len = self.ntimesteps # Static length of unrolled RNN.
-        self.batch_size   = None # Model accepts variable batch size.
+        self.batch_size = None # Model accepts variable batch size.
 
         # Model state.
         self._template = None
         self._run_opts = None
 
         if self.object_centric:
-            # self._window_model = MovingAverageWindow(0.5)
-            self._window_model = InitialWindow()
+            self._window_model = ConditionalWindow(
+                train_model=InitialWindow(),
+                test_model=MovingAverageWindow(0.5),
+            )
         else:
             # TODO: May be more efficient to avoid cropping if using whole window?
             self._window_model = WholeImageWindow(batchsz=batchsz)
@@ -990,7 +989,7 @@ class SimpleSearch:
 
         with tf.name_scope('extract_window'):
             # Get window for next frame.
-            window_state = self._window_model.init(example)
+            window_state = self._window_model.init(example, run_opts['is_training'])
             self._window_state_keys = window_state.keys()
             # For this model, use window of the next frame in the initial frame.
             window = self._window_model.window(window_state)
@@ -1225,13 +1224,48 @@ class SimpleSearch:
         return x
 
 
-def _normalize_image_range(x):
-    return 0.5 * (1 + x / tf.reduce_max(tf.abs(x)))
+class ConditionalWindow:
+    def __init__(self, train_model, test_model):
+        self._models = {'train': train_model, 'test': test_model}
+        self._keys = {k: None for k in self._models}
+        self._is_training = None
 
+    def init(self, example, is_training):
+        self._is_training = is_training
+        model_states = {k: model.init(example) for k, model in self._models.items()}
+        self._keys = {k: model_states[k].keys() for k in self._models}
+        state = self._merge(model_states)
+        return state
 
-def _whiten_image(x, mean, std, name='whiten_image'):
-    with tf.name_scope(name) as scope:
-        return tf.divide(x - mean, std, name=scope)
+    def update(self, prediction, prev_state):
+        prev_model_states = self._split(prev_state)
+        model_states = {
+            k: model.update(prediction, prev_model_states[k])
+            for k, model in self._models.items()
+        }
+        state = self._merge(model_states)
+        return state
+
+    def window(self, state):
+        model_states = self._split(state)
+        return tf.cond(self._is_training,
+                       lambda: self._models['train'].window(model_states['train']),
+                       lambda: self._models['test'].window(model_states['test']))
+
+    def _merge(self, states):
+        return dict(itertools.chain(*[
+            [(model_key+'/'+var_key, var) for var_key, var in model_state.items()]
+            for model_key, model_state in states.items()
+        ]))
+
+    def _split(self, states):
+        return {
+            model_key: {
+                var_key: states[model_key+'/'+var_key]
+                for var_key in self._keys[model_key]
+            }
+            for model_key in self._models
+        }
 
 
 def mlp(example, ntimesteps, frmsz,
@@ -1351,6 +1385,15 @@ class MovingAverageWindow:
         size = tf.maximum(0.0, max_pt - min_pt)
         log_diameter = tf.reduce_mean(tf.log(size + self.eps), axis=-1)
         return center, log_diameter
+
+
+def _normalize_image_range(x):
+    return 0.5 * (1 + x / tf.reduce_max(tf.abs(x)))
+
+
+def _whiten_image(x, mean, std, name='whiten_image'):
+    with tf.name_scope(name) as scope:
+        return tf.divide(x - mean, std, name=scope)
 
 
 def load_model(o):
