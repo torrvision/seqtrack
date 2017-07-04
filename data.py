@@ -19,6 +19,21 @@ A dataset object has the following properties:
         The subset of keys indicates in which frames the object is labelled.
         The rectangle is in the form [xmin, ymin, xmax, ymax].
         The rectangle coordinates are normalized to [0, 1].
+
+
+An image dataset has the following properties:
+
+    dataset.images -- List of strings.
+    dataset.image_file(image) -- Returns absolute path.
+    dataset.image_size[image] -- Dictionary that maps string -> (width, height).
+    dataset.original_image_size[image] -- Dictionary that maps string -> (width, height).
+        Used for computing IOU, distance, etc.
+    dataset.objects[image] -- Dictionary that maps string -> list of rectangles.
+        The rectangle is in the form [xmin, ymin, xmax, ymax].
+        The rectangle coordinates are normalized to [0, 1].
+
+There is an adaptor which creates a video dataset from an image dataset.
+The images are simply repeated n times.
 '''
 
 import numpy as np
@@ -31,6 +46,7 @@ import h5py
 import scipy.ndimage as spn
 import os
 
+import functools
 import glob
 import itertools
 import random
@@ -38,6 +54,7 @@ import xmltodict
 import cv2
 from PIL import Image
 
+import imagenet_det
 import draw
 import helpers
 
@@ -492,7 +509,7 @@ def Data_ILSVRC(dstype, o):
     return ILSVRC(
         dstype,
         frmsz=o.frmsz,
-        path_data=o.path_data,
+        path_data=os.path.join(o.path_data_home, 'ILSVRC'),
         path_aux=o.path_aux,
         path_stat=o.path_stat,
         trainsplit=o.trainsplit,
@@ -845,6 +862,104 @@ class Data_OTB(object):
             self.video_length        = info['video_length']
             self.original_image_size = info['original_image_size']
             self.tracks              = info['tracks']
+
+
+class ImageToVideo:
+
+    def __init__(self, image_data, video_length):
+        self._image_data   = image_data
+        self._video_length = video_length
+
+        self.videos              = None
+        self.tracks              = None
+        self.video_length        = None
+        self.image_size          = None
+        self.original_image_size = None
+
+        self.videos = image_data.images
+        self.tracks = {
+            im: _make_static_tracks(image_objects, video_length)
+            for im, image_objects in image_data.objects.items()
+        }
+        self.video_length = {
+            im: video_length for im in image_data.images
+        }
+        self.image_size          = image_data.image_size
+        self.original_image_size = image_data.original_image_size
+
+    def image_file(self, video, frame):
+        # Same image for all frames.
+        return self._image_data.image_file(video)
+
+
+def _make_static_tracks(image_objects, video_length):
+    '''Transforms a list of rectangles into a list of static tracks.'''
+    return map(functools.partial(_make_static_track, video_length=video_length),
+               image_objects)
+
+def _make_static_track(rect, video_length):
+    '''Transforms a rectangle into a static track.'''
+    return {t: rect for t in range(video_length)}
+
+
+
+def Data_ILSVRC_DET(dstype, o):
+    return ImageToVideo(
+        ILSVRC_DET(
+            dstype,
+            frmsz=o.frmsz,
+            path_data=os.path.join(o.path_data_home, 'ILSVRC-DET'),
+            path_aux=o.path_aux
+        ),
+        video_length=30*10,
+    )
+
+class ILSVRC_DET:
+    '''
+    dstype is in {train, val, test}
+    '''
+
+    def __init__(self, dstype, frmsz, path_data, path_aux): #, useresizedimg=True):
+        self._dstype      = dstype
+        # self._path_data   = path_data
+        # self._datadirname = 'Data_frmsz{}'.format(frmsz) \
+        #                         if useresizedimg else 'Data'
+        # self._frmsz       = frmsz
+
+        self._dataset = None
+
+        self.images              = None
+        self.objects             = None
+        self.image_size          = None
+        self.original_image_size = None
+
+        cache_file = os.path.join(path_aux, 'info_{}.json'.format(self._identifier()))
+        cache_func = lambda x: helpers.cache_json(cache_file, x)
+        self._dataset = imagenet_det.load(path_data, dstype, cache_func)
+
+        # Take subset of images with one or more objects.
+        self.images = [
+            im for im in self._dataset.images()
+            if len(self._dataset.image_objects(im)) > 0
+        ]
+        self.objects = {
+            im: map(_imagenet_det_object_to_rect, self._dataset.image_objects(im))
+            for im in self.images
+        }
+        self.original_image_size = {
+            im: self._dataset.image_size(im) for im in self.images
+        }
+        self.image_size = self.original_image_size
+
+    def image_file(self, image):
+        return self._dataset.image_file(image)
+
+    def _identifier(self):
+        return 'ILSVRC_DET_{}'.format(self._dstype)
+
+def _imagenet_det_object_to_rect(obj):
+    _, rect = obj
+    return [rect['xmin'], rect['ymin'], rect['xmax'], rect['ymax']]
 
 
 def get_masks_from_rectangles(rec, o):

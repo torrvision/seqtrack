@@ -176,10 +176,12 @@ def main():
 
     # datasets = data.load_data(o)
     datasets = {
-        'ILSVRC-train': data.Data_ILSVRC('train', o),
-        'ILSVRC-val':   data.Data_ILSVRC('val', o),
-        'OTB-50':       data.Data_OTB('OTB-50', o),
-        'OTB-100':      data.Data_OTB('OTB-100', o),
+        'ILSVRC-DET-train': data.Data_ILSVRC_DET('train', o),
+        'ILSVRC-DET-val':   data.Data_ILSVRC_DET('val', o),
+        'ILSVRC-train':     data.Data_ILSVRC('train', o),
+        'ILSVRC-val':       data.Data_ILSVRC('val', o),
+        'OTB-50':           data.Data_OTB('OTB-50', o),
+        'OTB-100':          data.Data_OTB('OTB-100', o),
     }
 
     # Presets are calls to sample.make_frame_sampler with all params given except dataset.
@@ -217,8 +219,8 @@ def main():
     create_model = model_package.load_model(o)
 
     train_datasets = {
-        'train': datasets['ILSVRC-train'],
-        'val': datasets['ILSVRC-val'],
+        'train':  datasets['ILSVRC-DET-train'],
+        'val':    datasets['ILSVRC-DET-val'],
         'OTB-50': datasets['OTB-50']
     }
     train.train(create_model, train_datasets, eval_sets, o, use_queues=o.use_queues)

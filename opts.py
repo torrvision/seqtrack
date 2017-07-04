@@ -136,13 +136,13 @@ class Opts(object):
         random.seed(self.seed_global)
         self._run_sanitycheck()
         self._set_gpu_config()
-        self._set_dataset_params()
+        # self._set_dataset_params()
         self.activ_histogram = self.histograms
         self.param_histogram = self.histograms
 
-    def _set_dataset_params(self):
-        assert(self.dataset in ['moving_mnist', 'bouncing_mnist', 'ILSVRC'])
-        self.path_data = os.path.join(self.path_data_home, self.dataset)
+    # def _set_dataset_params(self):
+    #     assert(self.dataset in ['moving_mnist', 'bouncing_mnist', 'ILSVRC'])
+    #     self.path_data = os.path.join(self.path_data_home, self.dataset)
 
     def _set_gpu_config(self):
         # set `CUDA_VISIBLE_DEVICES`
