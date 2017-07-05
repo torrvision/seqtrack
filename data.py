@@ -54,6 +54,7 @@ import xmltodict
 import cv2
 from PIL import Image
 
+import geom_np
 import imagenet_det
 import draw
 import helpers
@@ -864,6 +865,55 @@ class Data_OTB(object):
             self.tracks              = info['tracks']
 
 
+def filter_object_size(track, min_diameter, max_diameter):
+    '''track is a dictionary from frame number to rectangle'''
+    eps = 0.01
+    times, rects = zip(*track.items())
+    min_pt, max_pt = geom_np.rect_min_max(np.array(rects))
+    size = np.maximum(0, max_pt - min_pt)
+    diameter = np.exp(np.mean(np.log(size + eps), axis=-1))
+    return {
+        times[i]: rects[i] for i in range(len(times))
+        if diameter[i] >= min_diameter and diameter[i] <= max_diameter
+    }
+
+
+class Filter:
+
+    def __init__(self, dataset, filter_func):
+        self._dataset = dataset
+
+        self.videos              = None
+        self.tracks              = None
+        self.video_length        = None
+        self.image_size          = None
+        self.original_image_size = None
+
+        self.tracks = _filter_tracks(dataset.tracks, filter_func)
+        self.videos = self.tracks.keys()
+        self.video_length        = {vid: dataset.video_length[vid]        for vid in self.videos}
+        self.image_size          = {vid: dataset.image_size[vid]          for vid in self.videos}
+        self.original_image_size = {vid: dataset.original_image_size[vid] for vid in self.videos}
+
+    def image_file(self, video, frame):
+        # Same image for all frames.
+        return self._dataset.image_file(video, frame)
+
+def _filter_tracks(orig_tracks, filter_func):
+    tracks = {}
+    for vid in orig_tracks:
+        vid_tracks = []
+        for orig_track in orig_tracks[vid]:
+            track = filter_func(orig_track)
+            if len(track) < 2:
+                continue
+            vid_tracks.append(track)
+        if len(vid_tracks) < 1:
+            continue
+        tracks[vid] = vid_tracks
+    return tracks
+
+
 class ImageToVideo:
 
     def __init__(self, image_data, video_length):
@@ -904,14 +954,17 @@ def _make_static_track(rect, video_length):
 
 
 def Data_ILSVRC_DET(dstype, o):
-    return ImageToVideo(
-        ILSVRC_DET(
-            dstype,
-            frmsz=o.frmsz,
-            path_data=os.path.join(o.path_data_home, 'ILSVRC-DET'),
-            path_aux=o.path_aux
+    return Filter(
+        ImageToVideo(
+            ILSVRC_DET(
+                dstype,
+                frmsz=o.frmsz,
+                path_data=os.path.join(o.path_data_home, 'ILSVRC-DET'),
+                path_aux=o.path_aux
+            ),
+            video_length=30*10,
         ),
-        video_length=30*10,
+        functools.partial(filter_object_size, min_diameter=0.0, max_diameter=0.3)
     )
 
 class ILSVRC_DET:
