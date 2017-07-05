@@ -12,6 +12,8 @@ import os
 import progressbar
 import re
 
+import motion
+
 
 def epoch(dataset, rand, frame_sampler, max_objects=None, max_videos=None):
     '''
@@ -38,11 +40,17 @@ def epoch(dataset, rand, frame_sampler, max_objects=None, max_videos=None):
             if frames:
                 # yield (video, obj, frames)
                 trajectory = dataset.tracks[video][obj]
+                # viewports = np.array([[0.0, 0.0, 1.0, 1.0]] * len(frames))
+                viewports = motion.add_gaussian_random_walk(trajectory, len(frames),
+                    sigma_translate=0.5,
+                    sigma_scale=1.2,
+                )
                 name = '{}-{}'.format(_escape(video), obj)
                 yield (name, {
                     'image_files':    [dataset.image_file(video, t)       for t in frames],
                     'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
                     'label_is_valid': [t in trajectory                    for t in frames],
+                    'viewports':      viewports,
                     'original_image_size': dataset.original_image_size[video],
                 })
                 num_objs += 1

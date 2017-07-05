@@ -1,7 +1,7 @@
 import pdb
 import datetime
 import errno
-import json
+import simplejson as json
 import numpy as np
 import os
 from PIL import Image
