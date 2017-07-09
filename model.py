@@ -107,7 +107,6 @@ def process_target_with_hmap(x, hmap, o, threshold=0.9):
 
     # find indices. Then crop (crop-and-resize).
     x_out = []
-    #area = [] # visualize the area being affected. For debugging purpose.
     for b in range(o.batchsz):
         indices = tf.where(hmap[b] > threshold)
         x1 = tf.cast(tf.reduce_min(indices[:,1]), o.dtype) / o.frmsz
@@ -121,8 +120,6 @@ def process_target_with_hmap(x, hmap, o, threshold=0.9):
                 box_ind=[0],
                 crop_size=[o.frmsz/2, o.frmsz/2])
         x_out.append(crop)
-        #box = tf.expand_dims(tf.cast(tf.stack((x1, y1, x2, y2), 0), o.dtype), 0) # notice box coordinate.
-        #area.append(get_masks_from_rectangles(box, o))
 
     return tf.concat(x_out, 0)
 
@@ -139,35 +136,47 @@ def process_search_with_hmap(x, hmap, o, rec_curr, threshold=0.9):
     # normalize to have max of 1 (so that I can apply fixed threshold).
     hmap = hmap / tf.reduce_max(hmap, axis=(1,2), keep_dims=True)
 
-    # find indices. Then either crop (crop-and-resize) or mask.
-    x_out = []
+    # find indices. Then crop (crop-and-resize).
+    search = []
+    box_target = [] # Do I need this?
+    box_s_raw = []
+    box_s_val = []
     rec_out = []
-    area = [] # visualize the area being affected. For debugging purpose.
     for b in range(o.batchsz):
-        # current hmap into box area
+        # find indices of box from the given hmap.
         indices = tf.where(hmap[b] > threshold)
         x1 = tf.cast(tf.reduce_min(indices[:,1]), o.dtype) / o.frmsz
         y1 = tf.cast(tf.reduce_min(indices[:,0]), o.dtype) / o.frmsz
         x2 = tf.cast(tf.reduce_max(indices[:,1]), o.dtype) / o.frmsz
         y2 = tf.cast(tf.reduce_max(indices[:,0]), o.dtype) / o.frmsz
-        # search space (raw)
+        # NOTE: Force x2 and y2 to be at least 1, when they are 0 in order to
+        # enable cropping at later stage.
+        x2 = tf.cond(tf.logical_or(tf.equal(x1, x2), tf.equal(x2, 0.0)),
+                     lambda: x2+1, lambda: x2)
+        y2 = tf.cond(tf.logical_or(tf.equal(y1, y2), tf.equal(y2, 0.0)),
+                     lambda: y2+1, lambda: y2)
+        # search size: twice bigger than object.
         w_margin = (x2 - x1) * 0.5
         h_margin = (y2 - y1) * 0.5
+        # search box (raw)
         x1_s_raw = x1 - w_margin # can be outside of [0,1]
         y1_s_raw = y1 - h_margin
         x2_s_raw = x2 + w_margin
         y2_s_raw = y2 + h_margin
-        x1_s_val = tf.maximum(x1 - w_margin, 0.0)
-        y1_s_val = tf.maximum(y1 - h_margin, 0.0)
-        x2_s_val = tf.minimum(x2 + w_margin, 1.0)
-        y2_s_val = tf.minimum(y2 + h_margin, 1.0)
+        # search box (valid)
+        x1_s_val = tf.maximum(x1_s_raw, 0.0)
+        y1_s_val = tf.maximum(y1_s_raw, 0.0)
+        x2_s_val = tf.minimum(x2_s_raw, 1.0)
+        y2_s_val = tf.minimum(y2_s_raw, 1.0)
         # crop (only within valid region)
+        s_val_h = tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32)
+        s_val_w = tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32)
         crop_val = tf.image.crop_to_bounding_box(
                 image=tf.expand_dims(x[b],0),
                 offset_height=tf.cast(y1_s_val*o.frmsz, tf.int32),
                 offset_width =tf.cast(x1_s_val*o.frmsz, tf.int32),
-                target_height=tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32),
-                target_width =tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32))
+                target_height=s_val_h,
+                target_width =s_val_w)
         # pad crop so that it preserves aspect ratio.
         crop_pad = tf.image.pad_to_bounding_box(
                 image=crop_val,
@@ -176,14 +185,27 @@ def process_search_with_hmap(x, hmap, o, rec_curr, threshold=0.9):
                 target_height=tf.cast((y2_s_raw-y1_s_raw)*o.frmsz, tf.int32),
                 target_width =tf.cast((x2_s_raw-x1_s_raw)*o.frmsz, tf.int32))
         # resize to 241 x 241
-        crop = tf.image.resize_images(crop_pad, [o.frmsz, o.frmsz])
-        x_out.append(crop)
+        crop_res = tf.image.resize_images(crop_pad, [o.frmsz, o.frmsz])
+
+        # outputs we need.
+        search.append(crop_res)
+        box_target.append(tf.stack([x1, y1, x2, y2], 0))
+        box_s_raw.append(tf.stack([x1_s_raw, y1_s_raw, x2_s_raw, y2_s_raw], 0))
+        box_s_val.append(tf.stack([x1_s_val, y1_s_val, x2_s_val, y2_s_val], 0))
 
         # update GT label.
-        x1_rec_val = tf.maximum(rec_curr[b, 0], x1_s_val)
-        y1_rec_val = tf.maximum(rec_curr[b, 1], y1_s_val)
-        x2_rec_val = tf.maximum(rec_curr[b, 2], x2_s_val)
-        y2_rec_val = tf.maximum(rec_curr[b, 3], y2_s_val)
+        x1_rec_val = tf.case([(tf.less(rec_curr[b,0], x1_s_val), lambda: x1_s_val),
+                              (tf.greater(rec_curr[b,0], x2_s_val), lambda: x2_s_val)],
+                              default=lambda: rec_curr[b,0])
+        y1_rec_val = tf.case([(tf.less(rec_curr[b,1], y1_s_val), lambda: y1_s_val),
+                              (tf.greater(rec_curr[b,1], y2_s_val), lambda: y2_s_val)],
+                              default=lambda: rec_curr[b,1])
+        x2_rec_val = tf.case([(tf.less(rec_curr[b,2], x1_s_val), lambda: x1_s_val),
+                              (tf.greater(rec_curr[b,2], x2_s_val), lambda: x2_s_val)],
+                              default=lambda: rec_curr[b,2])
+        y2_rec_val = tf.case([(tf.less(rec_curr[b,3], y1_s_val), lambda: y1_s_val),
+                              (tf.greater(rec_curr[b,3], y2_s_val), lambda: y2_s_val)],
+                              default=lambda: rec_curr[b,3])
         # new rec.
         w_new = x2_s_raw - x1_s_raw
         h_new = y2_s_raw - y1_s_raw
@@ -194,7 +216,12 @@ def process_search_with_hmap(x, hmap, o, rec_curr, threshold=0.9):
         rec_new = tf.stack([x1_rec_new, y1_rec_new, x2_rec_new, y2_rec_new])
         rec_out.append(tf.expand_dims(rec_new, 0))
 
-    return tf.concat(x_out, 0), tf.concat(rec_out, 0)
+    search = tf.concat(search, 0)
+    box_target = tf.stack(box_target, 0)
+    box_s_raw = tf.stack(box_s_raw, 0)
+    box_s_val = tf.stack(box_s_val, 0)
+    rec_out = tf.concat(rec_out, 0)
+    return search, box_s_raw, box_s_val, rec_out
 
 
 class Nornn(object):
@@ -277,6 +304,53 @@ class Nornn(object):
                 x = slim.conv2d(x, kernel_size=[1, 1], activation_fn=None, scope='conv2')
             return x
 
+        def convert_hmap_image_centric(hmap_pred_oc, box_s_raw, box_s_val, o):
+            ''' Convert object-centric hmap to image-centric hmap.
+            '''
+            hmap_pred = []
+            for b in range(o.batchsz):
+                # resize to search (raw).
+                s_raw_h = tf.cast((box_s_raw[b][3] - box_s_raw[b][1]) * o.frmsz, tf.int32)
+                s_raw_w = tf.cast((box_s_raw[b][2] - box_s_raw[b][0]) * o.frmsz, tf.int32)
+                s_raw = tf.image.resize_images(hmap_pred_oc[b], [s_raw_h, s_raw_w])
+                # crop to extract only valid search area.
+                s_val = tf.image.crop_to_bounding_box(
+                        image=s_raw,
+                        offset_height=tf.cast((box_s_val[b][1]-box_s_raw[b][1])*o.frmsz, tf.int32),
+                        offset_width=tf.cast((box_s_val[b][0]-box_s_raw[b][0])*o.frmsz, tf.int32),
+                        target_height=tf.cast((box_s_val[b][3]-box_s_val[b][1])*o.frmsz, tf.int32),
+                        target_width=tf.cast((box_s_val[b][2]-box_s_val[b][0])*o.frmsz, tf.int32))
+                # pad to reconstruct the original image-centric scale.
+                hmap = tf.image.pad_to_bounding_box(
+                        image=s_val,
+                        offset_height=tf.cast(box_s_val[b][1]*o.frmsz, tf.int32),
+                        offset_width=tf.cast(box_s_val[b][0]*o.frmsz, tf.int32),
+                        target_height=o.frmsz,
+                        target_width=o.frmsz)
+                hmap_pred.append(hmap)
+            return tf.stack(hmap_pred, 0)
+
+        def convert_y_image_centric(y_pred_oc, box_s_raw, box_s_val, o):
+            ''' Convert object-centric box to image-centric box.
+            '''
+            y_pred = []
+            for b in range(o.batchsz):
+                # Note that there is no need of processing to compesate for resize effect.
+                # box in search_valid.
+                h_val = box_s_val[b][3] - box_s_val[b][1] # normalized scale.
+                w_val = box_s_val[b][2] - box_s_val[b][0] # normalized scale.
+                x1_s_val = y_pred_oc[b][0] * w_val + (box_s_val[b][0] - box_s_raw[b][0])
+                y1_s_val = y_pred_oc[b][1] * h_val + (box_s_val[b][1] - box_s_raw[b][1])
+                x2_s_val = y_pred_oc[b][2] * w_val + (box_s_val[b][0] - box_s_raw[b][0])
+                y2_s_val = y_pred_oc[b][3] * h_val + (box_s_val[b][1] - box_s_raw[b][1])
+                # box in image-centric original frame.
+                x1 = x1_s_val + box_s_val[b][0]
+                y1 = y1_s_val + box_s_val[b][1]
+                x2 = x2_s_val + box_s_val[b][0]
+                y2 = y2_s_val + box_s_val[b][1]
+                y_pred.append(tf.stack([x1, y1, x2, y2]))
+            return tf.stack(y_pred, 0)
+
 
         x           = inputs['x']  # shape [b, ntimesteps, h, w, 3]
         x0          = inputs['x0'] # shape [b, h, w, 3]
@@ -296,20 +370,27 @@ class Nornn(object):
 
         y_pred = []
         hmap_pred = []
-        y_new_gt = []
+
+        # Case of object-centric approach.
+        y_gt_oc = []
+        y_pred_oc = []
+        hmap_gt_oc = []
+        hmap_pred_oc = []
+        search = []
+        target = []
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
-            y_curr = y[:, t]
+            y_curr_gt = y[:, t]
 
             with tf.variable_scope('cnn1', reuse=(t > 0)):
-                search_image, rec_new = process_search_with_hmap(x_curr, hmap_prev, o, y_curr)
-                search_feat = pass_cnn(search_image)
-                y_new_gt.append(rec_new)
+                search_curr, box_s_raw, box_s_val, y_gt_oc_curr = \
+                    process_search_with_hmap(x_curr, hmap_prev, o, y_curr_gt)
+                search_feat = pass_cnn(search_curr)
 
             with tf.variable_scope('cnn2', reuse=(t > 0)):
-                target_image = process_target_with_hmap(x_prev, hmap_prev, o)
-                target_feat = pass_cnn(target_image)
+                target_curr = process_target_with_hmap(x_prev, hmap_prev, o)
+                target_feat = pass_cnn(target_curr)
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
@@ -318,31 +399,62 @@ class Nornn(object):
                 scoremap = pass_deconvolution(scoremap)
 
             with tf.variable_scope('cnn_out_hmap', reuse=(t > 0)):
-                hmap_curr_pred = pass_out_heatmap(scoremap)
+                hmap_curr_pred_oc = pass_out_heatmap(scoremap)
 
             with tf.variable_scope('cnn_out_rec', reuse=(t > 0)):
-                y_curr_pred = pass_out_rectangle(scoremap)
+                y_curr_pred_oc = pass_out_rectangle(scoremap)
 
+            # Convert object-centric outputs back to image-centric outputs.
+            # 1) hmap_curr_pred_oc -> hmap_curr_pred, 2) y_curr_pred_oc -> y_curr_pred.
+            hmap_curr_pred_softmax = convert_hmap_image_centric(
+                tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], 3),
+                box_s_raw, box_s_val, o)
+            y_curr_pred = convert_y_image_centric(y_curr_pred_oc, box_s_raw, box_s_val, o)
+
+            # scheduled sampling. use GT or prediction.
             rand_prob = tf.random_uniform([], minval=0, maxval=1)
             gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
-            hmap_curr_gt = tf.identity(get_masks_from_rectangles(y_curr, o))
-            hmap_prev = tf.cond(gt_condition, lambda: hmap_curr_gt,
-                                              lambda: tf.expand_dims(tf.nn.softmax(hmap_curr_pred)[:,:,:,0], 3))
+            hmap_prev = tf.cond(gt_condition,
+                                lambda: get_masks_from_rectangles(y_curr_gt, o), # GT
+                                lambda: hmap_curr_pred_softmax) # pred
 
             x_prev = x_curr
 
+            # Append `image-centric` prediction outputs at each time-step.
             y_pred.append(y_curr_pred)
-            hmap_pred.append(hmap_curr_pred)
+            hmap_pred.append(hmap_curr_pred_softmax) # NOTE: Should never be used as loss (due to softmax).
 
-        y_pred = tf.stack(y_pred, axis=1) # list to tensor
-        hmap_pred = tf.stack(hmap_pred, axis=1)
-        y_new_gt = tf.stack(y_new_gt, axis=1)
+            # Append `object-centric` prediction outputs at each time-step.
+            y_pred_oc.append(y_curr_pred_oc)
+            hmap_pred_oc.append(hmap_curr_pred_oc) # NOTE: due to `ce` loss, NO softmax applied here.
+
+            # Append other by-products of object-centric approach at each time-step.
+            y_gt_oc.append(y_gt_oc_curr)
+            search.append(search_curr)
+            target.append(target_curr)
+
+        y_pred       = tf.stack(y_pred, axis=1)
+        hmap_pred    = tf.stack(hmap_pred, axis=1)
+        y_pred_oc    = tf.stack(y_pred_oc, axis=1)
+        hmap_pred_oc = tf.stack(hmap_pred_oc, axis=1)
+        y_gt_oc      = tf.stack(y_gt_oc, axis=1)
+        search       = tf.stack(search, axis=1)
+        target       = tf.stack(target, axis=1)
+
         y_prev = y_pred[:,-1,:] # for `delta` regression type output.
 
-        outputs = {'y': y_pred,
-                   'hmap': hmap_pred,
-                   'hmap_softmax': tf.nn.softmax(hmap_pred),
-                   'y_new_gt': y_new_gt}
+        outputs = {# image-centric outputs
+                   'y_pred': y_pred,
+                   'hmap_pred': hmap_pred, # NOTE: softmax is applied here.
+                   #'hmap_pred_softmax': tf.nn.softmax(hmap_pred),
+                   # object-centric outputs
+                   'y_gt_oc':              y_gt_oc,
+                   'y_pred_oc':            y_pred_oc,
+                   'hmap_pred_oc':         hmap_pred_oc, # for ce loss, thus no softmax.
+                   'hmap_pred_softmax_oc': tf.nn.softmax(hmap_pred_oc), # visualization purpose.
+                   'search':               search,
+                   'target':               target,
+                   }
         state = {}
         state.update({'x': (x_init, x_prev)})
         state.update({'hmap': (hmap_init, hmap_prev)})

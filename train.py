@@ -136,11 +136,11 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
         boxes = tf.summary.image('box',
-            _draw_bounding_boxes(example, model, regress=o.regress),
+            _draw_bounding_boxes(example, model),
             max_outputs=o.ntimesteps+1, collections=[])
         image_summaries = [boxes]
         # Produce an image summary of the heatmap.
-        if 'hmap' in model.outputs:
+        if 'hmap_pred' in model.outputs:
             hmap = tf.summary.image('hmap', _draw_heatmap(model),
                 max_outputs=o.ntimesteps+1, collections=[])
             image_summaries.append(hmap)
@@ -264,7 +264,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model,
                                 eval_sequences, visualize=visualizer.visualize if o.save_videos else None,
-                                use_gt=o.use_gt_eval, regress=o.regress,
+                                use_gt=o.use_gt_eval,
                                 save_frames=o.save_frames),
                             makedir=True)
                         print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
@@ -591,47 +591,53 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
 
 def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
     with tf.name_scope(name) as scope:
-        if 'y_new_gt' in outputs:
-            y = outputs['y_new_gt']
+        if 'y_gt_oc' in outputs: # object-centric approach.
+            y_gt = outputs['y_gt_oc']
         else:
-            y = example['y']
+            y_gt = example['y']
         y_is_valid = example['y_is_valid']
         y0         = example['y0'] # need to compute delta loss
-        assert(y.get_shape().as_list()[1] == o.ntimesteps)
-        hmap = convert_rec_to_heatmap(y, o, min_size=1.0)
+        assert(y_gt.get_shape().as_list()[1] == o.ntimesteps)
+        hmap_gt = convert_rec_to_heatmap(y_gt, o, min_size=1.0)
         if o.heatmap_stride != 1:
-            hmap, unmerge = merge_dims(hmap, 0, 2)
-            hmap = slim.avg_pool2d(hmap,
+            hmap_gt, unmerge = merge_dims(hmap_gt, 0, 2)
+            hmap_gt = slim.avg_pool2d(hmap_gt,
                 kernel_size=o.heatmap_stride+1,
                 stride=o.heatmap_stride,
                 padding='SAME')
-            hmap = unmerge(hmap, 0)
+            hmap_gt = unmerge(hmap_gt, 0)
 
         losses = dict()
 
         # l1 distances for left-top and right-bottom
         if 'l1' in o.losses or 'l1_relative' in o.losses:
-            y_pred = outputs['y']
-            y_valid = tf.boolean_mask(y, y_is_valid)
+            if 'y_pred_oc' in outputs:
+                y_pred = outputs['y_pred_oc']
+            else:
+                y_pred = outputs['y_pred']
+            y_gt_valid = tf.boolean_mask(y_gt, y_is_valid)
             y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
-            loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid), axis=-1)
+            loss_l1 = tf.reduce_mean(tf.abs(y_gt_valid - y_pred_valid), axis=-1)
             if 'l1' in o.losses:
                 losses['l1'] = tf.reduce_mean(loss_l1)
             if 'l1_relative' in o.losses:
                 # TODO: Reduce code duplication?
-                x_size = tf.abs(y_valid[:,2] - y_valid[:,0])
-                y_size = tf.abs(y_valid[:,3] - y_valid[:,1])
+                x_size = tf.abs(y_gt_valid[:,2] - y_gt_valid[:,0])
+                y_size = tf.abs(y_gt_valid[:,3] - y_gt_valid[:,1])
                 size = tf.stack([x_size, y_size], axis=-1)
                 loss_l1_relative = loss_l1 / (tf.reduce_mean(size, axis=-1) + 0.05)
                 losses['l1_relative'] = tf.reduce_mean(loss_l1_relative)
 
         # CLE (center location error). Measured in l2 distance.
         if 'cle' in o.losses or 'cle_relative' in o.losses:
-            y_pred = outputs['y']
-            y_valid = tf.boolean_mask(y, y_is_valid)
+            if 'y_pred_oc' in outputs:
+                y_pred = outputs['y_pred_oc']
+            else:
+                y_pred = outputs['y_pred']
+            y_gt_valid = tf.boolean_mask(y_gt, y_is_valid)
             y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
-            x_center = (y_valid[:,2] + y_valid[:,0]) * 0.5
-            y_center = (y_valid[:,3] + y_valid[:,1]) * 0.5
+            x_center = (y_gt_valid[:,2] + y_gt_valid[:,0]) * 0.5
+            y_center = (y_gt_valid[:,3] + y_gt_valid[:,1]) * 0.5
             center = tf.stack([x_center, y_center], axis=-1)
             x_pred_center = (y_pred_valid[:,2] + y_pred_valid[:,0]) * 0.5
             y_pred_center = (y_pred_valid[:,3] + y_pred_valid[:,1]) * 0.5
@@ -641,8 +647,8 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
                 losses['cle'] = tf.reduce_mean(loss_cle)
             if 'cle_relative' in o.losses:
                 # TODO: Reduce code duplication?
-                x_size = tf.abs(y_valid[:,2] - y_valid[:,0])
-                y_size = tf.abs(y_valid[:,3] - y_valid[:,1])
+                x_size = tf.abs(y_gt_valid[:,2] - y_gt_valid[:,0])
+                y_size = tf.abs(y_gt_valid[:,3] - y_gt_valid[:,1])
                 size = tf.stack([x_size, y_size], axis=-1)
                 radius = tf.exp(tf.reduce_mean(tf.log(size), axis=-1))
                 loss_cle_relative = loss_cle / (radius + 0.05)
@@ -650,20 +656,23 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 
         # Cross-entropy between probabilty maps (need to change label)
         if 'ce' in o.losses or 'ce_balanced' in o.losses:
-            hmap_pred = outputs['hmap']
+            if 'hmap_pred_oc' in outputs:
+                hmap_pred = outputs['hmap_pred_oc']
+            else:
+                hmap_pred = outputs['hmap_pred']
             print 'hmap_pred.shape:', hmap_pred.shape.as_list()
-            print 'hmap.shape:', hmap.shape.as_list()
-            hmap_valid = tf.boolean_mask(hmap, y_is_valid)
+            print 'hmap_gt.shape:', hmap_gt.shape.as_list()
+            hmap_gt_valid = tf.boolean_mask(hmap_gt, y_is_valid)
             hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
             # hmap is [valid_images, height, width, 2]
-            count = tf.reduce_sum(hmap_valid, axis=(1, 2), keep_dims=True)
+            count = tf.reduce_sum(hmap_gt_valid, axis=(1, 2), keep_dims=True)
             class_weight = 0.5 / tf.cast(count+1, tf.float32)
-            weight = tf.reduce_sum(hmap_valid * class_weight, axis=-1)
+            weight = tf.reduce_sum(hmap_gt_valid * class_weight, axis=-1)
             # Flatten to feed into softmax_cross_entropy_with_logits.
-            hmap_valid, unmerge = merge_dims(hmap_valid, 0, 3)
+            hmap_gt_valid, unmerge = merge_dims(hmap_gt_valid, 0, 3)
             hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
             loss_ce = tf.nn.softmax_cross_entropy_with_logits(
-                    labels=hmap_valid,
+                    labels=hmap_gt_valid,
                     logits=hmap_pred_valid)
             loss_ce = unmerge(loss_ce, 0)
             if 'ce' in o.losses:
@@ -679,7 +688,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         return tf.reduce_sum(losses.values(), name=scope)
 
 
-def _draw_bounding_boxes(example, model, regress='abs', time_stride=1, name='draw_box'):
+def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
     # Note: This will produce INT_MIN when casting NaN to int.
     with tf.name_scope(name) as scope:
         # example['x_raw']   -- [b, t, h, w, 3]
@@ -687,13 +696,11 @@ def _draw_bounding_boxes(example, model, regress='abs', time_stride=1, name='dra
         # model.outputs['y'] -- [b, t, 4]
         # Just do the first example in the batch.
         image = (1.0/255)*example['x_raw'][0][::time_stride]
-        y_gt = example['y'][0][::time_stride]
-        y_pred = model.outputs['y'][0][::time_stride]
+        y_gt   = example['y'][0][::time_stride]
+        y_pred = model.outputs['y_pred'][0][::time_stride]
         image  = tf.concat((tf.expand_dims(model.state['x'][0][0], 0),  image), 0) # add init frame
         y_gt   = tf.concat((tf.expand_dims(model.state['y'][0][0], 0),   y_gt), 0) # add init y_gt
         y_pred = tf.concat((tf.expand_dims(model.state['y'][0][0], 0), y_pred), 0) # add init y_gt for pred too
-        if regress == 'delta':
-            y_pred = example['y0'][0] + tf.cumsum(y_pred)
         y = tf.stack([y_gt, y_pred], axis=1)
         coords = tf.unstack(y, axis=2)
         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
@@ -703,7 +710,9 @@ def _draw_heatmap(model, time_stride=1, name='draw_heatmap'):
     with tf.name_scope(name) as scope:
         # model.outputs['hmap'] -- [b, t, frmsz, frmsz, 2]
         # return tf.nn.softmax(model.outputs['hmap'][0,::time_stride,:,:,0:1])
-        p = tf.nn.softmax(model.outputs['hmap'][0,::time_stride])
+        #p = tf.nn.softmax(model.outputs['hmap_pred'][0,::time_stride])
+        #p = model.outputs['hmap_pred_softmax'][0,::time_stride]
+        p = model.outputs['hmap_pred'][0,::time_stride]
         # Take first channel and convert to int.
         hmaps = tf.concat((tf.expand_dims(model.state['hmap'][0][0], 0), p[:,:,:,0:1]), 0) # add init hmap
         return tf.cast(tf.round(255*hmaps), tf.uint8)
