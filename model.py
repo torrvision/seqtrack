@@ -337,12 +337,14 @@ class Nornn(object):
             for b in range(o.batchsz):
                 # Note that there is no need of processing to compesate for resize effect.
                 # box in search_valid.
-                h_val = box_s_val[b][3] - box_s_val[b][1] # normalized scale.
-                w_val = box_s_val[b][2] - box_s_val[b][0] # normalized scale.
-                x1_s_val = y_pred_oc[b][0] * w_val + (box_s_val[b][0] - box_s_raw[b][0])
-                y1_s_val = y_pred_oc[b][1] * h_val + (box_s_val[b][1] - box_s_raw[b][1])
-                x2_s_val = y_pred_oc[b][2] * w_val + (box_s_val[b][0] - box_s_raw[b][0])
-                y2_s_val = y_pred_oc[b][3] * h_val + (box_s_val[b][1] - box_s_raw[b][1])
+                #h_val = box_s_val[b][3] - box_s_val[b][1] # normalized scale.
+                #w_val = box_s_val[b][2] - box_s_val[b][0] # normalized scale.
+                h_raw = box_s_raw[b][3] - box_s_raw[b][1] # normalized scale.
+                w_raw = box_s_raw[b][2] - box_s_raw[b][0] # normalized scale.
+                x1_s_val = y_pred_oc[b][0] * w_raw + (box_s_val[b][0] - box_s_raw[b][0])
+                y1_s_val = y_pred_oc[b][1] * h_raw + (box_s_val[b][1] - box_s_raw[b][1])
+                x2_s_val = y_pred_oc[b][2] * w_raw + (box_s_val[b][0] - box_s_raw[b][0])
+                y2_s_val = y_pred_oc[b][3] * h_raw + (box_s_val[b][1] - box_s_raw[b][1])
                 # box in image-centric original frame.
                 x1 = x1_s_val + box_s_val[b][0]
                 y1 = y1_s_val + box_s_val[b][1]
