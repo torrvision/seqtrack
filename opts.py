@@ -27,7 +27,9 @@ class Opts(object):
         #----------------------------------------------------------------------
         # data set specific parameters 
         # TODO: only params that need to change; otherwise put it in data class
-        self.dataset            = '' # (bouncing_mnist, etc.)
+        # self.dataset            = '' # (bouncing_mnist, etc.)
+        self.train_datasets     = {}
+        self.datasets_val       = ['ILSVRC-val', 'OTB-50']
         self.trainsplit         = 9 # 0,1,2,3 or 9 for all train sets
         self.frmsz              = 241
         self.useresizedimg      = True

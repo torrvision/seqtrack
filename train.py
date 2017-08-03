@@ -29,12 +29,14 @@ EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid']
 SUMMARIES_IMAGES = 'summaries_images'
 
 
-def train(create_model, datasets, eval_sets, o, use_queues=False):
+def train(create_model, train_distribution, val_datasets, eval_sets, o, use_queues=False):
     '''Trains a network.
 
     Args:
         model: Function that takes as input a dictionary of tensors and
             returns a model object.
+        train_distribution: List that contains tuples of
+            (mixture weight, dataset sampler).
         datasets: Dictionary of datasets with keys 'train' and 'val'.
         eval_sets: A dictionary of sampling functions which return collections
             of sequences on which to evaluate the tracker.
@@ -181,13 +183,17 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
+        with tf.name_scope('batch'):
+            tf.summary.image('0',
+                _draw_init_bounding_boxes(example, num_sequences=None),
+                max_outputs=1, collections=[SUMMARIES_IMAGES])
         with tf.name_scope('crop'):
             tf.summary.image('1_to_n',
                 _draw_bounding_boxes(example_crop, prediction_crop),
                 max_outputs=o.ntimesteps, collections=[SUMMARIES_IMAGES])
-        with tf.name_scope('box'):
+        with tf.name_scope('image'):
             tf.summary.image('0',
-                _draw_init_bounding_boxes(example),
+                _draw_init_bounding_boxes(example, num_sequences=1),
                 max_outputs=1, collections=[SUMMARIES_IMAGES])
             tf.summary.image('1_to_n',
                 _draw_bounding_boxes(example, prediction),
@@ -214,10 +220,13 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     saver = tf.train.Saver(max_to_keep=10)
 
     # Use a separate random number generator for each sampler.
-    sequences = {dataset: iter_examples(datasets[dataset], o,
-                                        rand=random.Random(o.seed_global),
-                                        num_epochs=None)
-                 for dataset in datasets}
+    sequences = {
+        dataset: iter_examples(
+            train_distribution,
+            rand=np.random.RandomState(o.seed_global),
+        )
+        for dataset in datasets
+    }
 
     if o.curriculum_learning:
         ''' Curriculum learning.
@@ -711,25 +720,49 @@ def _most_specific_shape(x):
 #         return tf.divide(x - mean, std, name=scope)
 
 
-def iter_examples(dataset, o, rand=None, num_epochs=None):
-    '''Generator that produces multiple epochs of examples for SGD.'''
-    if num_epochs:
-        epochs = xrange(num_epochs)
-    else:
-        epochs = itertools.count()
 
-    frame_sampler = sample.make_frame_sampler(dataset=dataset, ntimesteps=o.ntimesteps, **o.sampler_params)
-    frame_sampler = functools.partial(frame_sampler, rand=rand)
-    for i in epochs:
-        n = 0
-        sequences = sample.epoch(dataset, rand, frame_sampler, max_objects=1)
-        # sequences = sample.sample(dataset, generator=generator,
-        #                           shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
-        #                           **o.sampler_params)
-        for name, sequence in sequences:
-            yield sequence
-            n += 1
-        print 'epoch {}: num sequences {}'.format(i+1, n)
+
+def iter_examples(train_distribution, rand=None): # , num_epochs=None):
+    '''Returns generator that produces multiple epochs of examples for SGD.
+
+    train_distribution -- List of tuples (name, p, source).
+    '''
+    names, p, dataset_samplers = zip(*train_distribution)
+    # dataset_names = train_distribution.keys()
+    # p = np.array([train_distribution[name]['weight'] for name in dataset_names])
+    p = np.array(p)
+    p = p / float(sum(p))
+
+    num_epochs = [0 for __ in train_distribution]
+    num_sequences = [0 for __ in train_distribution]
+    # Collection of sequences in current epoch of each dataset.
+    epochs = [iter(()) for __ in train_distribution]
+
+    while True:
+        # Choose a dataset from which to pull the next sequence.
+        dataset_ind = rand.choice(range(len(train_distribution)), p=p)
+        while True: # Re-try if next() fails.
+            try:
+                sequence_name, sequence = next(epochs[dataset_ind])
+                num_sequences[dataset_ind] += 1
+            except StopIteration:
+                print 'epoch {}: num sequences {}'.format(
+                    num_epochs[dataset_ind]+1,
+                    num_sequences[dataset_ind],
+                )
+                if num_sequences[dataset_ind] == 0:
+                    # Prevent infinite loop with no data.
+                    raise ValueError('epoch was empty')
+                epochs[dataset_ind] = sample.epoch(
+                    train_distribution[dataset_ind]['sequence_sampler'],
+                    rand,
+                    max_objects=1,
+                )
+                num_epochs[dataset_ind] += 1
+                num_sequences[dataset_ind] = 0
+                continue
+            break
+        yield sequence
 
 
 def get_loss(example, pred, o, summaries_collections=None, image_summaries_collections=None, name='loss'):
@@ -827,15 +860,15 @@ def get_loss(example, pred, o, summaries_collections=None, image_summaries_colle
         return tf.reduce_sum(losses.values(), name=scope)
 
 
-def _draw_init_bounding_boxes(example, time_stride=1, name='draw_box'):
+def _draw_init_bounding_boxes(example, num_sequences=1, name='draw_box'):
     # Note: This will produce INT_MIN when casting NaN to int.
     with tf.name_scope(name) as scope:
         # example['x0']   -- [b, h, w, 3]
         # example['y0']       -- [b, 4]
         # Just do the first example in the batch.
         # image = (1.0/255)*example['x0'][0:1]
-        image = example['x0'][0:1]
-        y_gt = example['y0'][0:1]
+        image = example['x0'][:num_sequences]
+        y_gt = example['y0'][:num_sequences]
         y = tf.stack([y_gt], axis=1)
         coords = tf.unstack(y, axis=2)
         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)

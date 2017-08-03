@@ -11,14 +11,14 @@ A dataset object has the following properties:
     dataset.videos -- List of strings.
     dataset.video_length[video] -- Dictionary that maps string -> integer.
     dataset.image_file(video, frame_number) -- Returns absolute path.
-    dataset.image_size[video] -- Dictionary that maps string -> (width, height).
-    dataset.original_image_size[video] -- Dictionary that maps string -> (width, height).
-        Used for computing IOU, distance, etc.
-    dataset.tracks[video] -- Dictionary that maps string -> list of tracks.
+    dataset.video_tracks(video) -- Dictionary that maps string -> list of tracks.
         A track is a dictionary that maps frame_number -> rectangle.
         The subset of keys indicates in which frames the object is labelled.
         The rectangle is in the form [xmin, ymin, xmax, ymax].
         The rectangle coordinates are normalized to [0, 1].
+    dataset.image_size[video] -- Dictionary that maps string -> (width, height).
+    dataset.original_image_size[video] -- Dictionary that maps string -> (width, height).
+        Used for computing IOU, distance, etc.
 
 
 An image dataset has the following properties:
@@ -529,7 +529,7 @@ class ILSVRC:
         self.videos = None
         # Number of frames in each snippet.
         self.video_length = None
-        self.tracks = None
+        self._tracks = None
         self.stat = None
         self._load_data(path_aux=path_aux, path_stat=path_stat)
 
@@ -543,6 +543,9 @@ class ILSVRC:
 
     def image_file(self, video, frame):
         return os.path.join(self._images_dir(video), '{:06d}.JPEG'.format(frame))
+
+    def video_tracks(self, video):
+        return self._tracks[video]
 
     def _load_data(self, path_aux, path_stat):
         # TODO: need to process and load test data set as well..
@@ -662,17 +665,17 @@ class ILSVRC:
             occluded = int(obj.get('occluded', '0'))
             return index, rect, occluded
 
-        if self.tracks is None:
+        if self._tracks is None:
             if not os.path.isdir(path_aux):
                 os.makedirs(path_aux)
             cache_file = os.path.join(path_aux, 'info_{}.json'.format(self._identifier()))
             info = helpers.cache_json(cache_file, lambda: load_info())
             # Convert (frame, rectangle) pairs to dictionary.
-            self.tracks = {video: [dict(track) for track in track_list]
-                           for video, track_list in info['tracks'].iteritems()}
+            self._tracks = {video: [dict(track) for track in track_list]
+                            for video, track_list in info['tracks'].iteritems()}
             self.original_image_size = info['original_image_size']
         print 'ILSVRC "{}" contains {} tracks in {} videos'.format(
-            self.dstype, sum(map(len, self.tracks.values())), len(self.tracks))
+            self.dstype, sum(map(len, self._tracks.values())), len(self._tracks))
 
     def _update_stat(self, path_stat):
         def create_stat_pixelwise(): # NOTE: obsolete
@@ -748,7 +751,7 @@ class Data_OTB(object):
 
         self.videos       = None
         self.video_length = None
-        self.tracks       = None
+        self._tracks      = None
         self._load_data(o)
 
     def image_file(self, video, t):
@@ -761,6 +764,9 @@ class Data_OTB(object):
         else:
             filename = '{:04d}.jpg'.format(t+1)
         return os.path.join(self.path_data, video, img_dir, filename)
+
+    def video_tracks(self, video):
+        return self._tracks[video]
 
     def _load_data(self, o):
         self._update_videos()
@@ -858,11 +864,11 @@ class Data_OTB(object):
             # Matlab draws an image of size n on the continuous range 0.5 to n+0.5.
             return rects - 0.5
 
-        if self.tracks is None:
+        if self._tracks is None:
             info = load_info()
             self.video_length        = info['video_length']
             self.original_image_size = info['original_image_size']
-            self.tracks              = info['tracks']
+            self._tracks             = info['tracks']
 
 
 def filter_object_size(track, min_diameter, max_diameter):
@@ -878,68 +884,67 @@ def filter_object_size(track, min_diameter, max_diameter):
     }
 
 
-class Filter:
-
-    def __init__(self, dataset, filter_func):
-        self._dataset = dataset
-
-        self.videos              = None
-        self.tracks              = None
-        self.video_length        = None
-        self.image_size          = None
-        self.original_image_size = None
-
-        self.tracks = _filter_tracks(dataset.tracks, filter_func)
-        self.videos = self.tracks.keys()
-        self.video_length        = {vid: dataset.video_length[vid]        for vid in self.videos}
-        self.image_size          = {vid: dataset.image_size[vid]          for vid in self.videos}
-        self.original_image_size = {vid: dataset.original_image_size[vid] for vid in self.videos}
-
-    def image_file(self, video, frame):
-        # Same image for all frames.
-        return self._dataset.image_file(video, frame)
-
-def _filter_tracks(orig_tracks, filter_func):
-    tracks = {}
-    for vid in orig_tracks:
-        vid_tracks = []
-        for orig_track in orig_tracks[vid]:
-            track = filter_func(orig_track)
-            if len(track) < 2:
-                continue
-            vid_tracks.append(track)
-        if len(vid_tracks) < 1:
-            continue
-        tracks[vid] = vid_tracks
-    return tracks
+# class Filter:
+# 
+#     def __init__(self, dataset, filter_func):
+#         self._dataset = dataset
+# 
+#         self.videos              = None
+#         self.tracks              = None
+#         self.video_length        = None
+#         self.image_size          = None
+#         self.original_image_size = None
+# 
+#         self.tracks = _filter_tracks(dataset.tracks, filter_func)
+#         self.videos = self.tracks.keys()
+#         self.video_length        = {vid: dataset.video_length[vid]        for vid in self.videos}
+#         self.image_size          = {vid: dataset.image_size[vid]          for vid in self.videos}
+#         self.original_image_size = {vid: dataset.original_image_size[vid] for vid in self.videos}
+# 
+#     def image_file(self, video, frame):
+#         # Same image for all frames.
+#         return self._dataset.image_file(video, frame)
+# 
+# def _filter_tracks(orig_tracks, filter_func):
+#     tracks = {}
+#     for vid in orig_tracks:
+#         vid_tracks = []
+#         for orig_track in orig_tracks[vid]:
+#             track = filter_func(orig_track)
+#             if len(track) < 2:
+#                 continue
+#             vid_tracks.append(track)
+#         if len(vid_tracks) < 1:
+#             continue
+#         tracks[vid] = vid_tracks
+#     return tracks
 
 
 class ImageToVideo:
 
-    def __init__(self, image_data, video_length):
-        self._image_data   = image_data
-        self._video_length = video_length
+    def __init__(self, image_dataset, video_length):
+        self._image_dataset = image_dataset
+        self._video_length  = video_length
 
         self.videos              = None
-        self.tracks              = None
         self.video_length        = None
         self.image_size          = None
         self.original_image_size = None
 
-        self.videos = image_data.images
-        self.tracks = {
-            im: _make_static_tracks(image_objects, video_length)
-            for im, image_objects in image_data.objects.items()
-        }
+        self.videos = image_dataset.images
         self.video_length = {
-            im: video_length for im in image_data.images
+            im: video_length for im in image_dataset.images
         }
-        self.image_size          = image_data.image_size
-        self.original_image_size = image_data.original_image_size
+        self.image_size          = image_dataset.image_size
+        self.original_image_size = image_dataset.original_image_size
 
     def image_file(self, video, frame):
         # Same image for all frames.
-        return self._image_data.image_file(video)
+        return self._image_dataset.image_file(video)
+
+    def video_tracks(self, video):
+        return _make_static_tracks(self._image_dataset.objects[video],
+                                   self._video_length)
 
 
 def _make_static_tracks(image_objects, video_length):
@@ -954,17 +959,26 @@ def _make_static_track(rect, video_length):
 
 
 def Data_ILSVRC_DET(dstype, o):
-    return Filter(
-        ImageToVideo(
-            ILSVRC_DET(
-                dstype,
-                frmsz=o.frmsz,
-                path_data=os.path.join(o.path_data_home, 'ILSVRC-DET'),
-                path_aux=o.path_aux
-            ),
-            video_length=30*10,
+    # return Filter(
+    #     ImageToVideo(
+    #         ILSVRC_DET(
+    #             dstype,
+    #             frmsz=o.frmsz,
+    #             path_data=os.path.join(o.path_data_home, 'ILSVRC-DET'),
+    #             path_aux=o.path_aux
+    #         ),
+    #         video_length=30*10,
+    #     ),
+    #     functools.partial(filter_object_size, min_diameter=0.0, max_diameter=0.3)
+    # )
+    return ImageToVideo(
+        ILSVRC_DET(
+            dstype,
+            frmsz=o.frmsz,
+            path_data=os.path.join(o.path_data_home, 'ILSVRC-DET'),
+            path_aux=o.path_aux
         ),
-        functools.partial(filter_object_size, min_diameter=0.0, max_diameter=0.3)
+        video_length=30*10,
     )
 
 class ILSVRC_DET:
