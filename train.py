@@ -80,14 +80,14 @@ def train(create_model, train_distribution, val_datasets, eval_sets, o, use_queu
     # since there are separate summary ops for training and validation (with different names).
     # Option 2 is to use FIFOQueue.from_list()
 
-    assert 'train' in datasets
-    val_datasets = {dataset for dataset in datasets if dataset != 'train'}
-    if 'val' in val_datasets:
-        val_order = ['val'] + sorted(dataset for dataset in val_datasets if dataset != 'val')
-    else:
-        val_order = sorted(val_datasets)
-    dataset_order = ['train'] + val_order
-    dataset_index = {name: i for i, name in enumerate(dataset_order)}
+    # val_datasets = {dataset for dataset in datasets if dataset != 'train'}
+    val_order = sorted(val_datasets)
+    # if 'val' in val_datasets:
+    #     val_order = ['val'] + sorted(dataset for dataset in val_datasets if dataset != 'val')
+    # else:
+    #     val_order = sorted(val_datasets)
+    # dataset_order = ['train'] + val_order
+    # dataset_index = {name: i for i, name in enumerate(dataset_order)}
 
     feed_loop = {} # Each value is a function to call in a thread.
     with tf.name_scope('input'):

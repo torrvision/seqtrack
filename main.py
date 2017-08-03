@@ -43,6 +43,11 @@ def parse_arguments():
     # parser.add_argument(
     #         '--trainsplit', help='specify the split of train dataset (ILSVRC)',
     #         type=int, default=9)
+
+    # Train on a mixture of distributions.
+    # Specify (dataset, frame sampler, motion augmentation) to define distribution.
+    # Also provide weight for mixture.
+    # The frame sampler and motion augmentation are specified using one of the presets.
     parser.add_argument(
             '--train_datasets', help='specify the name of dataset',
             type=json.loads,
@@ -57,13 +62,25 @@ def parse_arguments():
                 'motion': 'random',
                 'frames': 'image',
             }])
+
+    # Specify validation datasets.
+    # Which samplers should be used for the validation datasets?
+    # Should the validation set include data augmentation?
+    # Perhaps to assess difference between data mismatch and task mismatch?
+    # Validation error may also be used to compare different training distributions.
     parser.add_argument(
-            '--train_augment',
+            '--val_datasets', help='specify the name of dataset',
             type=json.loads,
-            default={
-                'ILSVRC-train': 'none', # 'constant',
-                'ILSVRC-DET-train': 'motion',
-            })
+            default=['ILSVRC-VID-val', 'OTB-100'])
+
+    # parser.add_argument(
+    #         '--train_augment',
+    #         type=json.loads,
+    #         default={
+    #             'ILSVRC-train': 'none', # 'constant',
+    #             'ILSVRC-DET-train': 'motion',
+    #         })
+
     parser.add_argument(
             '--seed_global', help='random seed',
             type=int, default=9)
@@ -248,21 +265,23 @@ def main():
         spec['weight'],
         sample.DatasetSampler(
             dataset=datasets[spec['dataset']],
-            frame_sampler=frame_sampler_presets[spec['frames']](datasets[spec['dataset']]),
-            augment_func=motion_aug_methods[spec['motion']],
+            sample_frames=frame_sampler_presets[spec['frames']](datasets[spec['dataset']]),
+            augment_motion=motion_aug_methods[spec['motion']],
         ),
     ) for spec in o.train_datasets]
+
+    val_datasets = ['ILSVRC-VID-val', 'OTB-50']
 
     # train_distribution = [
     #     (1.0, sample.DatasetSampler(
     #         dataset=datasets['ILSVRC-VID-train'],
-    #         frame_sampler=frame_sampler_presets['video'](datasets['ILSVRC-VID-train']),
-    #         augment_func=motion_aug_methods['static'],
+    #         sample_frames=frame_sampler_presets['video'](datasets['ILSVRC-VID-train']),
+    #         augment_motion=motion_aug_methods['static'],
     #     )),
     #     (1.0, sample.DatasetSampler(
     #         dataset=datasets['ILSVRC-DET-train'],
-    #         frame_sampler=frame_sampler_presets['image'](datasets['ILSVRC-DET-train'])
-    #         augment_func=motion_aug_methods['random'],
+    #         sample_frames=frame_sampler_presets['image'](datasets['ILSVRC-DET-train'])
+    #         augment_motion=motion_aug_methods['random'],
     #     )),
     # ]
 
@@ -307,7 +326,7 @@ def main():
     #     'OTB-50': datasets['OTB-50']
     # }
 
-    train.train(create_model, train_distribution, eval_sets, o, use_queues=o.use_queues)
+    train.train(create_model, train_distribution, [], eval_sets, o, use_queues=o.use_queues)
 
 
 def trace(frame, event, arg):
