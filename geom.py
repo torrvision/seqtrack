@@ -45,24 +45,6 @@ def crop_example_frame(example, window_rect, crop_size, pad_value=None,
     return out
 
 
-def crop_prediction_frame(pred, window_rect, crop_size, name='crop_prediction_frame'):
-    '''
-    Args:
-        pred -- Dictionary.
-            pred['y'] -- [n, 4]
-            pred['hmap_softmax'] -- [n, h, w, 2]
-            All other fields are kept intact.
-        window_rect -- [n, 4]
-    '''
-    with tf.name_scope(name):
-        out = dict(pred)
-        out['y'] = crop_rect(pred['y'], window_rect)
-        if 'hmap_softmax' in pred:
-            out['hmap_softmax'] = crop_image(pred['hmap_softmax'], window_rect,
-                crop_size=crop_size)
-    return out
-
-
 # def crop_prediction(pred, window_rect, crop_size):
 #     '''
 #     Args:

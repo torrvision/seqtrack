@@ -109,3 +109,7 @@ def merge_dims(x, a, b, name='merge'):
                      [x_static[i] or x_dynamic[i] for i in range(b, n)])
         y = tf.reshape(x, y_dynamic)
     return y, restore
+
+
+def most_static_shape(x):
+    return [s or d for s, d in zip(x.shape.as_list(), tf.shape(x))]

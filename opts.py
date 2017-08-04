@@ -37,6 +37,7 @@ class Opts(object):
         #----------------------------------------------------------------------
         # model - general
         self.model              = '' # {rnn_basic, rnn_attention_s, rnn_attention_t}
+        self.output_mode        = 'rectangle' # {rectangle, score_map, rectangle_map}
         self.losses             = None
 
         #----------------------------------------------------------------------

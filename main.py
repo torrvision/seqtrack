@@ -59,6 +59,9 @@ def parse_arguments():
             '--model', help='model!',
             type=str, default='')
     parser.add_argument(
+            '--output_mode', help='method of output: rectangle, score_map, rectangle_map',
+            type=str, default='rectangle')
+    parser.add_argument(
             '--losses', nargs='+', help='list of losses to be used',
             type=str) # example [l1, iou]
     parser.add_argument('--heatmap_stride', type=int, default=1,
@@ -176,8 +179,8 @@ def main():
 
     # datasets = data.load_data(o)
     datasets = {
-        'ILSVRC-DET-train': data.Data_ILSVRC_DET('train', o),
-        'ILSVRC-DET-val':   data.Data_ILSVRC_DET('val', o),
+        # 'ILSVRC-DET-train': data.Data_ILSVRC_DET('train', o),
+        # 'ILSVRC-DET-val':   data.Data_ILSVRC_DET('val', o),
         'ILSVRC-train':     data.Data_ILSVRC('train', o),
         'ILSVRC-val':       data.Data_ILSVRC('val', o),
         'OTB-50':           data.Data_OTB('OTB-50', o),
@@ -219,8 +222,10 @@ def main():
     create_model = model_package.load_model(o)
 
     train_datasets = {
-        'train':  datasets['ILSVRC-DET-train'],
-        'val':    datasets['ILSVRC-DET-val'],
+        'train':  datasets['ILSVRC-train'],
+        'val':    datasets['ILSVRC-val'],
+        # 'train':  datasets['ILSVRC-DET-train'],
+        # 'val':    datasets['ILSVRC-DET-val'],
         'OTB-50': datasets['OTB-50']
     }
     train.train(create_model, train_datasets, eval_sets, o, use_queues=o.use_queues)
