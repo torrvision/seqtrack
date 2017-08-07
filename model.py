@@ -134,6 +134,7 @@ def process_search_with_hmap(x, hmap, o, rec_curr, threshold=0.9):
             (e.g., if set 2.0 the search area will be twice bigger than object).
     '''
     # normalize to have max of 1 (so that I can apply fixed threshold).
+    # TODO: `hmap` is assumed positive! Put some assertion.
     hmap = hmap / tf.reduce_max(hmap, axis=(1,2), keep_dims=True)
 
     # find indices. Then crop (crop-and-resize).
@@ -151,10 +152,15 @@ def process_search_with_hmap(x, hmap, o, rec_curr, threshold=0.9):
         y2 = tf.cast(tf.reduce_max(indices[:,0]), o.dtype) / o.frmsz
         # NOTE: Force x2 and y2 to be at least 1, when they are 0 in order to
         # enable cropping at later stage.
+        #x2 = tf.cond(tf.logical_or(tf.equal(x1, x2), tf.equal(x2, 0.0)),
+        #             lambda: x2+1, lambda: x2)
+        #y2 = tf.cond(tf.logical_or(tf.equal(y1, y2), tf.equal(y2, 0.0)),
+        #             lambda: y2+1, lambda: y2)
+        # considering x2 and y2 are within [0,1], adding 1 is huge!
         x2 = tf.cond(tf.logical_or(tf.equal(x1, x2), tf.equal(x2, 0.0)),
-                     lambda: x2+1, lambda: x2)
+                     lambda: x2+(1.0/o.frmsz), lambda: x2)
         y2 = tf.cond(tf.logical_or(tf.equal(y1, y2), tf.equal(y2, 0.0)),
-                     lambda: y2+1, lambda: y2)
+                     lambda: y2+(1.0/o.frmsz), lambda: y2)
         # search size: twice bigger than object.
         w_margin = (x2 - x1) * 0.5
         h_margin = (y2 - y1) * 0.5
@@ -230,8 +236,10 @@ class Nornn(object):
     '''
     def __init__(self, inputs, o,
                  summaries_collections=None,
+                 depth_wise_cc=False,
                  ):
         # model parameters
+        self.depth_wise_cc = depth_wise_cc
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -257,18 +265,28 @@ class Nornn(object):
 
         def pass_cross_correlation(search, filt, o):
             # TODO: ICCV paper performed normal conv rather than depthwise_conv2d.
+            # NOTE: Regular convolution produces 2 channels as opposed to 256
+            # in depth-wise convolution. As such, it might make a huge difference.
             scoremap = []
             for i in range(o.batchsz):
-                scoremap.append(
-                        tf.nn.depthwise_conv2d(tf.expand_dims(search[i],0),
-                                               tf.expand_dims(filt[i], 3),
-                                               strides=[1,1,1,1],
-                                               padding='SAME'))
+                if self.depth_wise_cc: # Opt1. depth-wise convolution.
+                    scoremap.append(tf.nn.depthwise_conv2d(tf.expand_dims(search[i],0),
+                                                           tf.expand_dims(filt[i], 3),
+                                                           strides=[1,1,1,1],
+                                                           padding='SAME'))
+                else: # Opt2. regular convolution.
+                    scoremap.append(tf.nn.conv2d(tf.expand_dims(search[i], 0),
+                                                 tf.concat([tf.expand_dims(filt[i], 3)]*2, 3),
+                                                 strides=[1,1,1,1],
+                                                 padding='SAME'))
             return tf.concat(scoremap, 0)
 
         def pass_deconvolution(x):
             shape_to = [53, 116] # magic number picked from CNN.
-            numout_to = [32, 16]
+            if self.depth_wise_cc:
+                numout_to = [32, 16]
+            else:
+                numout_to = [x.shape.as_list()[-1]]*2
             with slim.arg_scope([slim.conv2d],
                     kernel_size=[3,3],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -381,6 +399,11 @@ class Nornn(object):
         search = []
         target = []
 
+        # TODO: If I crop, I am not sure if hmap prediction is really required.
+        # Cropping can be done by using rectangle outputs at each time-step.
+        # Maybe have an option for this and test how it goes.
+        # Heat map (and GT of it) can be used as intermediate supervision rather
+        # than an independent output of a structured prediction problem.
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr_gt = y[:, t]
@@ -410,7 +433,7 @@ class Nornn(object):
             # 1) hmap_curr_pred_oc -> hmap_curr_pred, 2) y_curr_pred_oc -> y_curr_pred.
             hmap_curr_pred_softmax = convert_hmap_image_centric(
                 tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], 3),
-                box_s_raw, box_s_val, o)
+                box_s_raw, box_s_val, o) # NOTE: this is `0` padded!
             y_curr_pred = convert_y_image_centric(y_curr_pred_oc, box_s_raw, box_s_val, o)
 
             # scheduled sampling. use GT or prediction.
