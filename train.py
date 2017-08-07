@@ -756,7 +756,7 @@ def get_loss(example, pred, o, summaries_collections=None, image_summaries_colle
         losses = dict()
 
         if 'score_ce' in o.losses:
-            assert o.output_mode == 'score_map':
+            assert o.output_mode == 'score_map'
             losses['score_ce'] = lossfunc.score_logistic(
                 y_is_valid, pred['score'], example['y'],
                 radius_pos=0.2, radius_neg=0.5,
@@ -764,7 +764,7 @@ def get_loss(example, pred, o, summaries_collections=None, image_summaries_colle
 
         # l1 distances for left-top and right-bottom
         if 'l1' in o.losses or 'l1_relative' in o.losses:
-            assert o.output_mode == 'rectangle':
+            assert o.output_mode == 'rectangle'
             y_pred = pred['y']
             y_valid = tf.boolean_mask(y, y_is_valid)
             y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
@@ -781,7 +781,7 @@ def get_loss(example, pred, o, summaries_collections=None, image_summaries_colle
 
         # CLE (center location error). Measured in l2 distance.
         if 'cle' in o.losses or 'cle_relative' in o.losses:
-            assert o.output_mode == 'rectangle':
+            assert o.output_mode == 'rectangle'
             y_pred = pred['y']
             y_valid = tf.boolean_mask(y, y_is_valid)
             y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
@@ -805,7 +805,7 @@ def get_loss(example, pred, o, summaries_collections=None, image_summaries_colle
 
         # Cross-entropy between probabilty maps (need to change label)
         if 'ce' in o.losses or 'ce_balanced' in o.losses:
-            assert o.output_mode == 'rectangle':
+            assert o.output_mode == 'rectangle'
             hmap_pred = pred['hmap']
             print 'hmap_pred.shape:', hmap_pred.shape.as_list()
             print 'hmap.shape:', hmap.shape.as_list()
