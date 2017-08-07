@@ -1038,4 +1038,7 @@ def crop_prediction_frame(pred, window_rect, crop_size, name='crop_prediction_fr
         if 'hmap_softmax' in pred:
             out['hmap_softmax'] = geom.crop_image(pred['hmap_softmax'], window_rect,
                 crop_size=crop_size)
+        if 'score_softmax' in pred:
+            out['score_softmax'] = geom.crop_image(pred['score_softmax'], window_rect,
+                crop_size=crop_size)
     return out

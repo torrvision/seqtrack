@@ -416,17 +416,24 @@ class SimpleSearch:
         elif self.output_mode == 'score_map':
             with tf.variable_scope('score_map'):
                 score = slim.conv2d(x, 1, 1, activation_fn=None, normalizer_fn=None)
-                score = tf.squeeze(score, axis=-1)
+                # Upsample to original resolution.
+                score_full_res = tf.image.resize_images(score,
+                    size=[self.frmsz, self.frmsz],
+                    method=tf.image.ResizeMethod.BICUBIC,
+                    align_corners=True)
+                # Take softmax at full resolution after resizing.
+                score_softmax = tf.sigmoid(score_full_res)
                 # Find arg max in score map.
                 # Score map is [n, h, w, 1].
-                score_dim = tf.shape(score)[1:3]
-                score_vec, _ = merge_dims(score, 1, 3)
+                score_dim = tf.constant([self.frmsz, self.frmsz])
+                # score_dim = tf.shape(score_full_res)[1:3]
+                score_vec, _ = merge_dims(score_full_res, 1, 3)
                 argmax_vec = tf.argmax(score_vec, axis=1)
                 # Note: Co-ordinates in (i, j) order.
                 argmax_i, argmax_j = tf.py_func(np.unravel_index, [argmax_vec, score_dim], [tf.int64, tf.int64])
-                argmax_i.set_shape([None])
-                argmax_j.set_shape([None])
-                argmax = tf.stack([argmax_i, argmax_j], -1)
+                argmax_i.set_shape([None, 1])
+                argmax_j.set_shape([None, 1])
+                argmax = tf.concat([argmax_i, argmax_j], -1)
                 # New position is centered at arg max in window.
                 # Assume centers of receptive fields align with first and last pixels.
                 center = tf.to_float(argmax) / tf.to_float(score_dim - 1)
@@ -437,7 +444,12 @@ class SimpleSearch:
                 # Use a rectangle of the same dimension at the new position.
                 # NOTE: If window uses size of rectangle to get next window, then this is unstable!!
                 pred_rect = geom.make_rect(center - 0.5*rect_size, center + 0.5*rect_size)
-            output = {'score': score, 'y': pred_rect}
+            output = {
+                'score':         score,
+                'score_full':    score_full_res,
+                'score_softmax': score_softmax,
+                'y':             pred_rect,
+            }
         else:
             raise ValueError('unknown output mode: {}'.format(self.output_mode))
         return output

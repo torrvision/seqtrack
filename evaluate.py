@@ -127,10 +127,11 @@ def evaluate(sess, model, sequences, visualize=None, use_gt=False):
         if num_valid < 1:
             continue
         #print 'sequence {} of {}'.format(i+1, len(sequences))
-        prediction_vars = set(['y', 'hmap_softmax']).intersection(set(model.prediction.keys()))
+        possible_vars = ['y', 'score_softmax', 'hmap_softmax']
+        prediction_vars = set(possible_vars).intersection(set(model.prediction.keys()))
         pred = track(sess, model, sequence, use_gt, prediction_vars)
         rect_pred = pred['y']
-        hmap_pred = pred.get('hmap_softmax', None)
+        hmap_pred = pred.get('score_softmax', pred.get('hmap_softmax', None))
         if visualize:
             visualize(name, sequence, rect_pred, hmap_pred)
         rect_gt = np.array(sequence['labels'])
