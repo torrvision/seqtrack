@@ -266,16 +266,14 @@ class SimpleSearch:
                     geom.rect_to_tf_box(tf.expand_dims(prediction['y'][0:1], 1))),
                 collections=self.image_summaries_collections)
 
-        # TODO: How to update window state from score map?
-        window_state = prev_window_state
-        # # Update window state for next frame.
-        # window_state = {}
-        # with tf.name_scope('update_window'):
-        #     # Obtain rectangle in image co-ordinates.
-        #     prediction_uncrop = {
-        #         'y': geom.crop_rect(prediction['y'], geom.crop_inverse(window)),
-        #     }
-        #     window_state = self._window_model.update(prediction_uncrop, prev_window_state)
+        # Update window state for next frame.
+        window_state = {}
+        with tf.name_scope('update_window'):
+            # Obtain rectangle in image co-ordinates.
+            prediction_uncrop = {
+                'y': geom.crop_rect(prediction['y'], geom.crop_inverse(window)),
+            }
+            window_state = self._window_model.update(prediction_uncrop, prev_window_state)
 
         # if self.use_rnn:
         #     state = {k: (init_state[k], curr_state[k]) for k in curr_state}
