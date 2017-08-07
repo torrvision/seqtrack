@@ -18,6 +18,7 @@ import draw
 import evaluate
 import geom
 import helpers
+import lossfunc
 import pipeline
 import sample
 import visualize
@@ -112,8 +113,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     example = _perform_data_augmentation(example, o, pad_value=stat['mean'])
     example_post_aug = dict(example)
 
-    model = create_model(stat=stat,
-                         image_summaries_collections=[SUMMARIES_IMAGES])
+    model = create_model(stat=stat, image_summaries_collections=[SUMMARIES_IMAGES])
 
     prediction_crop, window, prediction, init_state, final_state = process_sequence(
         example, run_opts, model,
@@ -185,7 +185,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
             tf.summary.image('1_to_n',
                 _draw_bounding_boxes(example_crop, prediction_crop),
                 max_outputs=o.ntimesteps, collections=[SUMMARIES_IMAGES])
-        with tf.name_scope('box'):
+        with tf.name_scope('image'):
             tf.summary.image('0',
                 _draw_init_bounding_boxes(example),
                 max_outputs=1, collections=[SUMMARIES_IMAGES])
@@ -755,97 +755,79 @@ def get_loss(example, pred, o, summaries_collections=None, image_summaries_colle
 
         losses = dict()
 
-        if o.output_mode == 'score_map':
-            if 'score_ce' in o.losses:
-                # TODO: Class balance.
-                # TODO: Use y_is_valid!
-                # Compare sliding-window score map to ground truth.
-                # pred['score']
-                # example['y']
-                score_dim = pred['score'].shape.as_list()[2:4][::-1]
-                label_map = _make_label_map(example['y'], score_dim, radius_pos=0.2, radius_neg=0.5)
-                tf.summary.image('summary_label_map',
-                    tf.image.convert_image_dtype(
-                        tf.expand_dims(0.5*(1+tf.to_float(label_map[0])), -1),
-                        tf.uint8, saturate=True),
-                    collections=image_summaries_collections)
-                tf.summary.image('summary_score',
-                    tf.image.convert_image_dtype(
-                        tf.expand_dims(tf.sigmoid(pred['score'][0]), -1),
-                        tf.uint8, saturate=True),
-                    collections=image_summaries_collections)
-                # TODO: Visualize label map.
-                loss = tf.multiply(
-                    tf.to_float(tf.not_equal(label_map, 0)),
-                    tf.nn.sigmoid_cross_entropy_with_logits(
-                        labels=tf.to_float(tf.equal(label_map, 1)),
-                        logits=pred['score']))
-                losses['score_ce'] = tf.reduce_mean(loss)
+        if 'score_ce' in o.losses:
+            assert o.output_mode == 'score_map':
+            losses['score_ce'] = lossfunc.score_logistic(
+                y_is_valid, pred['score'], example['y'],
+                radius_pos=0.2, radius_neg=0.5,
+                image_summaries_collections=image_summaries_collections)
 
-        elif o.output_mode == 'rectangle':
-            # l1 distances for left-top and right-bottom
-            if 'l1' in o.losses or 'l1_relative' in o.losses:
-                y_pred = pred['y']
-                y_valid = tf.boolean_mask(y, y_is_valid)
-                y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
-                loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid), axis=-1)
-                if 'l1' in o.losses:
-                    losses['l1'] = tf.reduce_mean(loss_l1)
-                if 'l1_relative' in o.losses:
-                    # TODO: Reduce code duplication?
-                    x_size = tf.abs(y_valid[:,2] - y_valid[:,0])
-                    y_size = tf.abs(y_valid[:,3] - y_valid[:,1])
-                    size = tf.stack([x_size, y_size], axis=-1)
-                    loss_l1_relative = loss_l1 / (tf.reduce_mean(size, axis=-1) + 0.05)
-                    losses['l1_relative'] = tf.reduce_mean(loss_l1_relative)
+        # l1 distances for left-top and right-bottom
+        if 'l1' in o.losses or 'l1_relative' in o.losses:
+            assert o.output_mode == 'rectangle':
+            y_pred = pred['y']
+            y_valid = tf.boolean_mask(y, y_is_valid)
+            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            loss_l1 = tf.reduce_mean(tf.abs(y_valid - y_pred_valid), axis=-1)
+            if 'l1' in o.losses:
+                losses['l1'] = tf.reduce_mean(loss_l1)
+            if 'l1_relative' in o.losses:
+                # TODO: Reduce code duplication?
+                x_size = tf.abs(y_valid[:,2] - y_valid[:,0])
+                y_size = tf.abs(y_valid[:,3] - y_valid[:,1])
+                size = tf.stack([x_size, y_size], axis=-1)
+                loss_l1_relative = loss_l1 / (tf.reduce_mean(size, axis=-1) + 0.05)
+                losses['l1_relative'] = tf.reduce_mean(loss_l1_relative)
 
-            # CLE (center location error). Measured in l2 distance.
-            if 'cle' in o.losses or 'cle_relative' in o.losses:
-                y_pred = pred['y']
-                y_valid = tf.boolean_mask(y, y_is_valid)
-                y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
-                x_center = (y_valid[:,2] + y_valid[:,0]) * 0.5
-                y_center = (y_valid[:,3] + y_valid[:,1]) * 0.5
-                center = tf.stack([x_center, y_center], axis=-1)
-                x_pred_center = (y_pred_valid[:,2] + y_pred_valid[:,0]) * 0.5
-                y_pred_center = (y_pred_valid[:,3] + y_pred_valid[:,1]) * 0.5
-                pred_center = tf.stack([x_pred_center, y_pred_center], axis=-1)
-                loss_cle = tf.norm(center - pred_center, axis=-1)
-                if 'cle' in o.losses:
-                    losses['cle'] = tf.reduce_mean(loss_cle)
-                if 'cle_relative' in o.losses:
-                    # TODO: Reduce code duplication?
-                    x_size = tf.abs(y_valid[:,2] - y_valid[:,0])
-                    y_size = tf.abs(y_valid[:,3] - y_valid[:,1])
-                    size = tf.stack([x_size, y_size], axis=-1)
-                    radius = tf.exp(tf.reduce_mean(tf.log(size), axis=-1))
-                    loss_cle_relative = loss_cle / (radius + 0.05)
-                    losses['cle_relative'] = tf.reduce_mean(loss_cle_relative)
+        # CLE (center location error). Measured in l2 distance.
+        if 'cle' in o.losses or 'cle_relative' in o.losses:
+            assert o.output_mode == 'rectangle':
+            y_pred = pred['y']
+            y_valid = tf.boolean_mask(y, y_is_valid)
+            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            x_center = (y_valid[:,2] + y_valid[:,0]) * 0.5
+            y_center = (y_valid[:,3] + y_valid[:,1]) * 0.5
+            center = tf.stack([x_center, y_center], axis=-1)
+            x_pred_center = (y_pred_valid[:,2] + y_pred_valid[:,0]) * 0.5
+            y_pred_center = (y_pred_valid[:,3] + y_pred_valid[:,1]) * 0.5
+            pred_center = tf.stack([x_pred_center, y_pred_center], axis=-1)
+            loss_cle = tf.norm(center - pred_center, axis=-1)
+            if 'cle' in o.losses:
+                losses['cle'] = tf.reduce_mean(loss_cle)
+            if 'cle_relative' in o.losses:
+                # TODO: Reduce code duplication?
+                x_size = tf.abs(y_valid[:,2] - y_valid[:,0])
+                y_size = tf.abs(y_valid[:,3] - y_valid[:,1])
+                size = tf.stack([x_size, y_size], axis=-1)
+                radius = tf.exp(tf.reduce_mean(tf.log(size), axis=-1))
+                loss_cle_relative = loss_cle / (radius + 0.05)
+                losses['cle_relative'] = tf.reduce_mean(loss_cle_relative)
 
-            # Cross-entropy between probabilty maps (need to change label)
-            if 'ce' in o.losses or 'ce_balanced' in o.losses:
-                hmap_pred = pred['hmap']
-                print 'hmap_pred.shape:', hmap_pred.shape.as_list()
-                print 'hmap.shape:', hmap.shape.as_list()
-                hmap_valid = tf.boolean_mask(hmap, y_is_valid)
-                hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
-                # hmap is [valid_images, height, width, 2]
-                mass = tf.reduce_sum(hmap_valid, axis=(1, 2), keep_dims=True)
-                class_mass = 0.5 / tf.cast(mass+1, tf.float32)
-                # TODO: Does this work when labels are not [1, 0] or [0, 1]?
-                coeff = tf.reduce_sum(hmap_valid * class_mass, axis=-1)
-                # Flatten to feed into softmax_cross_entropy_with_logits.
-                hmap_valid, unmerge = merge_dims(hmap_valid, 0, 3)
-                hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
-                loss_ce = tf.nn.softmax_cross_entropy_with_logits(
-                    labels=hmap_valid,
-                    logits=hmap_pred_valid)
-                loss_ce = unmerge(loss_ce, 0)
-                if 'ce' in o.losses:
-                    losses['ce'] = tf.reduce_mean(loss_ce)
-                if 'ce_balanced' in o.losses:
-                    losses['ce_balanced'] = tf.reduce_mean(
-                        tf.reduce_sum(coeff * loss_ce, axis=(1, 2)))
+        # Cross-entropy between probabilty maps (need to change label)
+        if 'ce' in o.losses or 'ce_balanced' in o.losses:
+            assert o.output_mode == 'rectangle':
+            hmap_pred = pred['hmap']
+            print 'hmap_pred.shape:', hmap_pred.shape.as_list()
+            print 'hmap.shape:', hmap.shape.as_list()
+            hmap_valid = tf.boolean_mask(hmap, y_is_valid)
+            hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
+            # hmap is [valid_images, height, width, 2]
+            mass = tf.reduce_sum(hmap_valid, axis=(1, 2), keep_dims=True)
+            class_mass = 0.5 / tf.cast(mass+1, tf.float32)
+            # TODO: Does this work when labels are not [1, 0] or [0, 1]?
+            coeff = tf.reduce_sum(hmap_valid * class_mass, axis=-1)
+            # Flatten to feed into softmax_cross_entropy_with_logits.
+            hmap_valid, unmerge = merge_dims(hmap_valid, 0, 3)
+            hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
+            loss_ce = tf.nn.softmax_cross_entropy_with_logits(
+                labels=hmap_valid,
+                logits=hmap_pred_valid)
+            loss_ce = unmerge(loss_ce, 0)
+            if 'ce' in o.losses:
+                losses['ce'] = tf.reduce_mean(loss_ce)
+            if 'ce_balanced' in o.losses:
+                losses['ce_balanced'] = tf.reduce_mean(
+                    tf.reduce_sum(coeff * loss_ce, axis=(1, 2)))
 
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
@@ -859,38 +841,6 @@ def get_loss(example, pred, o, summaries_collections=None, image_summaries_colle
                         max_outputs=o.ntimesteps+1, collections=image_summaries_collections)
 
         return tf.reduce_sum(losses.values(), name=scope)
-
-
-def _make_label_map(rect, dim, radius_pos, radius_neg):
-    '''
-    rect -- Ground truth rectangle. [b, 4]
-    dim -- Size of score map. Tensor of length 2.
-
-    It is assumed that the center of the first and last pixel in the score map
-    aligns with the first and last pixel in the (cropped) image.
-    '''
-    eps = 1e-3
-    u, v = tf.meshgrid(tf.to_float(tf.range(dim[0])) / tf.to_float(dim[0] - 1),
-                       tf.to_float(tf.range(dim[1])) / tf.to_float(dim[1] - 1),
-                       indexing='xy')
-    coords = tf.stack([u, v], axis=-1)
-    # Use same rectangle for all spatial positions.
-    # rect [n, t, 4] -> [n, t, 1, 1, 4]
-    rect = tf.expand_dims(tf.expand_dims(rect, 2), 2)
-    rect_min, rect_max = geom.rect_min_max(rect)
-    rect_center = 0.5 * (rect_min + rect_max)
-    rect_size = tf.maximum(rect_max - rect_min, 0) + eps
-    rect_diam = tf.exp(tf.reduce_mean(tf.log(rect_size), axis=-1))
-    dist = tf.norm(coords - rect_center, axis=-1)
-    rel_dist = dist / rect_diam
-    # Ensure that at least the closest element is a positive!
-    # pos = tf.logical_or(rel_dist <= radius_pos,
-    #                     rel_dist <= tf.reduce_min(rel_dist, axis=(-2, -1), keep_dims=True))
-    pos = tf.logical_or(rel_dist <= radius_pos, dist <= 0.03)
-    neg = tf.logical_and(tf.logical_not(pos),
-                         rel_dist > radius_neg)
-    label = tf.cast(pos, tf.int32) - tf.cast(neg, tf.int32)
-    return label
 
 
 def _draw_init_bounding_boxes(example, time_stride=1, name='draw_box'):
@@ -934,7 +884,7 @@ def _draw_heatmap(prob, time_stride=1, name='draw_heatmap'):
     with tf.name_scope(name) as scope:
         # prob -- [b, t, frmsz, frmsz, 2]
         # Take first channel and convert to int.
-        return tf.cast(tf.round(255*prob[:,:,:,0:1]), tf.uint8)
+        return tf.image.convert_image_dtype(prob[:,:,:,0:1], tf.uint8, saturate=True)
 
 def _draw_memory_state(model, mtype, time_stride=1, name='draw_memory_states'):
     with tf.name_scope(name) as scope:

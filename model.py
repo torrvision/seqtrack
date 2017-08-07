@@ -260,7 +260,7 @@ class SimpleSearch:
 
         # Visualize rectangle in window.
         if 'y' in prediction:
-            tf.summary.image('frame_1_to_n',
+            tf.summary.image('image',
                 tf.image.draw_bounding_boxes(
                     _normalize_image_range(example['x'][0:1]),
                     geom.rect_to_tf_box(tf.expand_dims(prediction['y'][0:1], 1))),
