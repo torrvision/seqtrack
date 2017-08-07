@@ -265,8 +265,6 @@ class Nornn(object):
 
         def pass_cross_correlation(search, filt, o):
             # TODO: ICCV paper performed normal conv rather than depthwise_conv2d.
-            # NOTE: Regular convolution produces 2 channels as opposed to 256
-            # in depth-wise convolution. As such, it might make a huge difference.
             scoremap = []
             for i in range(o.batchsz):
                 if self.depth_wise_cc: # Opt1. depth-wise convolution.
@@ -275,18 +273,16 @@ class Nornn(object):
                                                            strides=[1,1,1,1],
                                                            padding='SAME'))
                 else: # Opt2. regular convolution.
+                    numout_to = filt.shape.as_list()[-1]
                     scoremap.append(tf.nn.conv2d(tf.expand_dims(search[i], 0),
-                                                 tf.concat([tf.expand_dims(filt[i], 3)]*2, 3),
+                                                 tf.concat([tf.expand_dims(filt[i], 3)]*numout_to, 3),
                                                  strides=[1,1,1,1],
                                                  padding='SAME'))
             return tf.concat(scoremap, 0)
 
         def pass_deconvolution(x):
             shape_to = [53, 116] # magic number picked from CNN.
-            if self.depth_wise_cc:
-                numout_to = [32, 16]
-            else:
-                numout_to = [x.shape.as_list()[-1]]*2
+            numout_to = [32, 16]
             with slim.arg_scope([slim.conv2d],
                     kernel_size=[3,3],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
