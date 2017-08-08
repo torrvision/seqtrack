@@ -98,12 +98,12 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
         y1, y2 = yc-ys/2, yc+ys/2
         return x1, y1, x2, y2
 
-def pass_channelwise_normalization(feature):
+def pass_depth_wise_norm(feature):
     num_channels = feature.shape.as_list()[-1]
     feature_new = []
     for c in range(num_channels):
         mean, var = tf.nn.moments(feature[:,:,:,c], axes=[1,2], keep_dims=True)
-        feature_new.append((feature[:,:,:,c] - mean) / tf.sqrt(var))
+        feature_new.append((feature[:,:,:,c] - mean) / (tf.sqrt(var)+1e-5))
     return tf.stack(feature_new, 3)
 
 def process_target_with_hmap(x, hmap, o, threshold=0.9):
@@ -245,10 +245,12 @@ class Nornn(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  shared_cnns=False,
-                 depth_wise_cc=True,
+                 depth_wise_norm=False,
+                 depth_wise_cc=False,
                  ):
         # model parameters
         self.shared_cnns = shared_cnns
+        self.depth_wise_norm = depth_wise_norm
         self.depth_wise_cc = depth_wise_cc
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
@@ -420,23 +422,23 @@ class Nornn(object):
                     search_curr, box_s_raw, box_s_val, y_gt_oc_curr = \
                         process_search_with_hmap(x_curr, hmap_prev, o, y_curr_gt)
                     search_feat = pass_cnn(search_curr)
-                    search_feat = pass_channelwise_normalization(search_feat) # For NCC.
 
                 with tf.variable_scope('cnn2', reuse=(t > 0)):
                     target_curr = process_target_with_hmap(x_prev, hmap_prev, o)
                     target_feat = pass_cnn(target_curr)
-                    target_feat = pass_channelwise_normalization(target_feat) # For NCC.
             else:
                 with tf.variable_scope('cnn', reuse=(t > 0)) as scope:
                     search_curr, box_s_raw, box_s_val, y_gt_oc_curr = \
                         process_search_with_hmap(x_curr, hmap_prev, o, y_curr_gt)
                     search_feat = pass_cnn(search_curr)
-                    search_feat = pass_channelwise_normalization(search_feat) # For NCC.
                     if t == 0:
                         scope.reuse_variables()
                     target_curr = process_target_with_hmap(x_prev, hmap_prev, o)
                     target_feat = pass_cnn(target_curr)
-                    target_feat = pass_channelwise_normalization(target_feat) # For NCC.
+
+            if self.depth_wise_norm: # For NCC. It has some speed issue.
+                search_feat = pass_depth_wise_norm(search_feat)
+                target_feat = pass_depth_wise_norm(target_feat)
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
