@@ -397,6 +397,7 @@ class SimpleSearch:
     def _output_net(self, x, init_rect, window):
         assert len(x.shape) == 4
         output = {}
+
         if self.output_mode == 'rectangle':
             with tf.variable_scope('rectangle'):
                 with slim.arg_scope([slim.max_pool2d], kernel_size=3, padding='SAME'):
@@ -410,7 +411,8 @@ class SimpleSearch:
                     x = slim.fully_connected(x, 512)
                     x = slim.fully_connected(x, 512)
                     x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None)
-            output = {'y': x}
+                output = {'y': x}
+
         elif self.output_mode == 'score_map':
             with tf.variable_scope('score_map'):
                 score = slim.conv2d(x, 1, 1, activation_fn=None, normalizer_fn=None)
@@ -428,9 +430,13 @@ class SimpleSearch:
                 score_vec, _ = merge_dims(score_full_res, 1, 3)
                 argmax_vec = tf.argmax(score_vec, axis=1)
                 # Note: Co-ordinates in (i, j) order.
-                argmax_i, argmax_j = tf.py_func(np.unravel_index, [argmax_vec, score_dim], [tf.int64, tf.int64])
+                argmax_i, argmax_j = tf.py_func(np.unravel_index,
+                    inp=[argmax_vec, score_dim],
+                    Tout=[tf.int64, tf.int64],
+                    stateful=False)
                 argmax_i.set_shape([None, 1])
                 argmax_j.set_shape([None, 1])
+                argmax_i, argmax_j = tf.to_int32(argmax_i), tf.to_int32(argmax_j)
                 argmax = tf.concat([argmax_i, argmax_j], -1)
                 # New position is centered at arg max in window.
                 # Assume centers of receptive fields align with first and last pixels.
@@ -442,14 +448,95 @@ class SimpleSearch:
                 # Use a rectangle of the same dimension at the new position.
                 # NOTE: If window uses size of rectangle to get next window, then this is unstable!!
                 pred_rect = geom.make_rect(center - 0.5*rect_size, center + 0.5*rect_size)
-            output = {
-                'score':         score,
-                'score_full':    score_full_res,
-                'score_softmax': score_softmax,
-                'y':             pred_rect,
-            }
+                output = {
+                    'score':         score,
+                    'score_full':    score_full_res,
+                    'score_softmax': score_softmax,
+                    'y':             pred_rect,
+                }
+
+        elif self.output_mode == 'rect_map':
+            with tf.variable_scope('rect_map'):
+                # Produce a map of scores and rectangles.
+                score_map = slim.conv2d(x, 1, 1, activation_fn=None, normalizer_fn=None)
+                # warp_map is [n, h, w, 4]
+                warp_map = slim.conv2d(x, 4, 1, activation_fn=None, normalizer_fn=None)
+
+                # Create anchors. Assume a single anchor for now.
+                # TODO: Multiple anchors with a score each.
+                # Assume that window is 4x object size.
+                # TODO: Make this a parameter that is given to window model.
+                anchor_size = tf.constant(0.25 * np.array([1.0, 1.0], dtype=np.float32))
+                # anchors is [4]
+                anchors = geom.make_rect(-0.5*anchor_size, 0.5*anchor_size)
+                rect_map = geom.warp_anchor(anchors, warp_map)
+
+                # Find arg max in score_map.
+                # score_map is [n, h, w, 1].
+                n = tf.shape(score_map)[0]
+                spatial_dim = score_map.shape.as_list()[1:3]
+                assert all(spatial_dim)
+                # Flatten spatial dimensions to find arg max.
+                # Remove channel dimension for later convenience.
+                score_vec, _ = merge_dims(tf.squeeze(score_map, -1), 1, 3)
+                argmax_vec = tf.argmax(score_vec, axis=1)
+                argmax_i, argmax_j = tf.py_func(np.unravel_index,
+                    inp=[argmax_vec, spatial_dim],
+                    Tout=[tf.int64, tf.int64],
+                    stateful=False)
+                argmax_i.set_shape([None])
+                argmax_j.set_shape([None])
+                argmax_i, argmax_j = tf.to_int32(argmax_i), tf.to_int32(argmax_j)
+                # argmax is [n, 2]
+                argmax = tf.stack([argmax_i, argmax_j], axis=-1)
+
+                # Best rectangle is relative to position with max score.
+                # Assume centers of receptive fields align with first and last pixels.
+                # Convert from ij to xy when working with floats.
+                # TODO: Use rect_map instead of argmax_center?
+                argmax_center = (
+                    tf.to_float(argmax[:, ::-1]) /
+                    tf.to_float(tf.convert_to_tensor(spatial_dim[::-1]) - 1))
+
+                # Get best rectangle for each element of batch.
+                indices = tf.stack([tf.range(n), argmax_i, argmax_j], axis=-1)
+                # argmax_rect is [n, 4]
+                argmax_rect = tf.gather_nd(rect_map, indices)
+
+                # Add translation to best rectangle.
+                pred_rect = geom.rect_translate(argmax_rect, argmax_center)
+
+                # Provide center of each pixel as well.
+                # (Loss may decide how to use rectangle + center.)
+                dim_y, dim_x = spatial_dim[0], spatial_dim[1]
+                centers_x, centers_y = tf.meshgrid(
+                    tf.to_float(tf.range(dim_x)) / tf.to_float(dim_x - 1),
+                    tf.to_float(tf.range(dim_y)) / tf.to_float(dim_y - 1))
+                centers = tf.stack([centers_x, centers_y], axis=-1)
+
+                rect_map = geom.rect_translate(rect_map, centers)
+                anchor_map = tf.expand_dims(geom.rect_translate(anchors, centers), axis=0)
+
+                # Upsample to original resolution.
+                score_full_res = tf.image.resize_images(score_map,
+                    size=[self.frmsz, self.frmsz],
+                    method=tf.image.ResizeMethod.BICUBIC,
+                    align_corners=True)
+                # Take softmax at full resolution after resizing.
+                score_softmax = tf.sigmoid(score_full_res)
+
+                output = {
+                    'score':         score_map,
+                    'score_full':    score_full_res,
+                    'score_softmax': score_softmax,
+                    'y':             pred_rect,
+                    'rect_map':      rect_map,
+                    'anchor_map':    anchor_map,
+                }
+
         else:
             raise ValueError('unknown output mode: {}'.format(self.output_mode))
+
         return output
 
 
