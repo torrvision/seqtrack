@@ -154,7 +154,7 @@ class SimpleSearch:
         if self.object_centric:
             self._window_model = ConditionalWindow(
                 train_model=InitialWindow(),
-                test_model=MovingAverageWindow(0.5),
+                test_model=MovingAverageWindow(decay=0.95),
             )
         else:
             # TODO: May be more efficient to avoid cropping if using whole window?
