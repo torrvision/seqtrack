@@ -99,7 +99,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
     model = create_model(_whiten(_guard_labels(example), o, stat=stat))
-    loss_var = get_loss(example, model.outputs, o)
+    loss_var, model.outputs = get_loss(example, model.outputs, o)
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
     loss_var += r
@@ -135,15 +135,44 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
-        boxes = tf.summary.image('box',
-            _draw_bounding_boxes(example, model),
-            max_outputs=o.ntimesteps+1, collections=[])
-        image_summaries = [boxes]
-        # Produce an image summary of the heatmap.
-        if 'hmap_pred' in model.outputs:
-            hmap = tf.summary.image('hmap', _draw_heatmap(model),
+        if 'y_pred' in model.outputs:
+            boxes = tf.summary.image('box',
+                _draw_bounding_boxes(example, model),
                 max_outputs=o.ntimesteps+1, collections=[])
-            image_summaries.append(hmap)
+            image_summaries = [boxes]
+        # Produce an image summary of the heatmap (image-centric).
+        if 'hmap_pred' in model.outputs:
+            hmap_pred = tf.summary.image('hmap_pred',
+                _draw_heatmap(model, 'hmap_pred'),
+                max_outputs=o.ntimesteps+1, collections=[])
+            image_summaries.append(hmap_pred)
+        # Produce an image summary of the heatmap (object-centric).
+        # TODO: After fixing bug, maybe remove this.
+        if 'hmap_pred_oc' in model.outputs:
+            hmap_pred = tf.summary.image('hmap_pred_oc',
+                _draw_heatmap(model, 'hmap_pred_oc'),
+                max_outputs=o.ntimesteps+1, collections=[])
+            image_summaries.append(hmap_pred)
+        # Produce an image summary of the heatmap-GT.
+        if 'hmap_gt' in model.outputs:
+            hmap_gt = tf.summary.image('hmap_gt',
+                _draw_heatmap(model, 'hmap_gt'),
+                max_outputs=o.ntimesteps+1, collections=[])
+            image_summaries.append(hmap_gt)
+        # Produce an image summary of the heatmap-GT.
+        # TODO: After fixing bug, maybe remove this.
+        if 'hmap_gt_oc' in model.outputs:
+            hmap_gt = tf.summary.image('hmap_gt_oc',
+                _draw_heatmap(model, 'hmap_gt_oc'),
+                max_outputs=o.ntimesteps+1, collections=[])
+            image_summaries.append(hmap_gt)
+        # Produce an image summary of target and search images (input to CNNs).
+        if 'target' in model.outputs and 'search' in model.outputs:
+            for key in ['target', 'search']:
+                input_image = tf.summary.image('cnn_input_{}'.format(key),
+                    _draw_input_image(model, key, name='draw_{}'.format(key)),
+                    max_outputs=o.ntimesteps+1, collections=[])
+                image_summaries.append(input_image)
         # Produce an image summary of the LSTM memory states (h or c).
         if hasattr(model, 'memory'):
             for mtype in model.memory.keys():
@@ -286,12 +315,16 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     summary_var = (summary_vars_with_preview['train']
                                    if global_step % o.period_preview == 0
                                    else summary_vars['train'])
-                    _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
+                    #_, loss, summary = sess.run([optimize_op, loss_var, summary_var],
+                    #                            feed_dict=feed_dict)
+                    _, loss, summary, y_init = sess.run([optimize_op, loss_var, summary_var,
+                                                         model.state['y'][0]],
                                                 feed_dict=feed_dict)
                     dur = time.time() - start
                     writer['train'].add_summary(summary, global_step=global_step)
                 else:
-                    _, loss = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
+                    #_, loss = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
+                    _, loss, y_init = sess.run([optimize_op, loss_var, model.state['y'][0]], feed_dict=feed_dict)
                     dur = time.time() - start
                 loss_ep.append(loss)
 
@@ -588,17 +621,53 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
         for sequence in sequences:
             yield sequence
 
+def _convert_hmap_object_centric(hmap, box_s_raw, box_s_val, o):
+    x1_s_val, y1_s_val, x2_s_val, y2_s_val = tf.unstack(box_s_val, axis=2)
+    x1_s_raw, y1_s_raw, x2_s_raw, y2_s_raw = tf.unstack(box_s_raw, axis=2)
+    s_val_h = tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32)
+    s_val_w = tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32)
+    s_raw_h = tf.cast((y2_s_raw-y1_s_raw)*o.frmsz, tf.int32)
+    s_raw_w = tf.cast((x2_s_raw-x1_s_raw)*o.frmsz, tf.int32)
+    hmap_oc = []
+    for b in range(o.batchsz):
+        hmap_gt_oc_b = []
+        for t in range(o.ntimesteps):
+            # crop (only within valid region)
+            crop_val = tf.image.crop_to_bounding_box(
+                image=hmap[b,t],
+                offset_height=tf.cast(y1_s_val[b,t]*o.frmsz, tf.int32),
+                offset_width =tf.cast(x1_s_val[b,t]*o.frmsz, tf.int32),
+                target_height=s_val_h[b,t],
+                target_width =s_val_w[b,t])
+            # pad crop so that it preserves aspect ratio.
+            crop_pad = tf.image.pad_to_bounding_box(
+                image=crop_val,
+                offset_height=tf.cast((y1_s_val[b,t]-y1_s_raw[b,t])*o.frmsz, tf.int32),
+                offset_width =tf.cast((x1_s_val[b,t]-x1_s_raw[b,t])*o.frmsz, tf.int32),
+                target_height=s_raw_h[b,t],
+                target_width =s_raw_w[b,t])
+            # resize to 241 x 241
+            crop_res = tf.image.resize_images(crop_pad, [o.frmsz, o.frmsz])
+            hmap_gt_oc_b.append(crop_res)
+        hmap_oc.append(tf.stack(hmap_gt_oc_b, 0))
+    return tf.stack(hmap_oc, 0)
 
 def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
     with tf.name_scope(name) as scope:
         if 'y_gt_oc' in outputs: # object-centric approach.
+            assert False
             y_gt = outputs['y_gt_oc']
         else:
             y_gt = example['y']
-        y_is_valid = example['y_is_valid']
-        y0         = example['y0'] # need to compute delta loss
         assert(y_gt.get_shape().as_list()[1] == o.ntimesteps)
-        hmap_gt = convert_rec_to_heatmap(y_gt, o, min_size=1.0)
+
+        # Gaussian gt hmap
+        hmap_gt = convert_rec_to_heatmap(y_gt, o, min_size=1.0, Gaussian=True)
+        outputs['hmap_gt'] = hmap_gt # To visualize hmap_gt (image-centric) in summary.
+        hmap_gt = _convert_hmap_object_centric( # convert hmap_gt to hmap_gt_oc.
+                hmap_gt, outputs['box_s_raw'], outputs['box_s_val'], o)
+        outputs['hmap_gt_oc'] = hmap_gt # To visualize hmap_gt (object-centric) in summary.
+
         if o.heatmap_stride != 1:
             hmap_gt, unmerge = merge_dims(hmap_gt, 0, 2)
             hmap_gt = slim.avg_pool2d(hmap_gt,
@@ -607,10 +676,12 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
                 padding='SAME')
             hmap_gt = unmerge(hmap_gt, 0)
 
+        y_is_valid = example['y_is_valid']
         losses = dict()
 
         # l1 distances for left-top and right-bottom
         if 'l1' in o.losses or 'l1_relative' in o.losses:
+            assert False
             if 'y_pred_oc' in outputs:
                 y_pred = outputs['y_pred_oc']
             else:
@@ -630,6 +701,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 
         # CLE (center location error). Measured in l2 distance.
         if 'cle' in o.losses or 'cle_relative' in o.losses:
+            assert False
             if 'y_pred_oc' in outputs:
                 y_pred = outputs['y_pred_oc']
             else:
@@ -659,6 +731,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
             if 'hmap_pred_oc' in outputs:
                 hmap_pred = outputs['hmap_pred_oc']
             else:
+                assert False, 'This should not happen in obj-centric approach.'
                 hmap_pred = outputs['hmap_pred']
             print 'hmap_pred.shape:', hmap_pred.shape.as_list()
             print 'hmap_gt.shape:', hmap_gt.shape.as_list()
@@ -685,7 +758,7 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
             for name, loss in losses.iteritems():
                 tf.summary.scalar(name, loss, collections=summaries_collections)
 
-        return tf.reduce_sum(losses.values(), name=scope)
+        return tf.reduce_sum(losses.values(), name=scope), outputs
 
 
 def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
@@ -706,17 +779,20 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
         return tf.image.draw_bounding_boxes(image, boxes, name=scope)
 
-def _draw_heatmap(model, time_stride=1, name='draw_heatmap'):
+def _draw_heatmap(model, kind, time_stride=1, name='draw_heatmap'):
     with tf.name_scope(name) as scope:
         # model.outputs['hmap'] -- [b, t, frmsz, frmsz, 2]
-        # return tf.nn.softmax(model.outputs['hmap'][0,::time_stride,:,:,0:1])
-        #p = tf.nn.softmax(model.outputs['hmap_pred'][0,::time_stride])
-        #p = model.outputs['hmap_pred_softmax'][0,::time_stride]
-        p = model.outputs['hmap_pred'][0,::time_stride]
-        # Take first channel and convert to int.
+        p = model.outputs[kind][0,::time_stride]
+        if kind == 'hmap_pred_oc':
+            p = tf.nn.softmax(p)
         hmaps = tf.concat((tf.expand_dims(model.state['hmap'][0][0], 0), p[:,:,:,0:1]), 0) # add init hmap
-        return tf.cast(tf.round(255*hmaps), tf.uint8)
-        #return tf.cast(tf.round(255*p[:,:,:,0:1]), tf.uint8)
+        return hmaps
+        #return tf.cast(tf.round(255*hmaps), tf.uint8) # convert to int.
+
+def _draw_input_image(model, key, time_stride=1, name='draw_input_image'):
+    with tf.name_scope(name) as scope:
+        input_image = model.outputs[key][0,::time_stride]
+        return input_image
 
 def _draw_memory_state(model, mtype, time_stride=1, name='draw_memory_states'):
     with tf.name_scope(name) as scope:
