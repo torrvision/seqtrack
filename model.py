@@ -530,8 +530,8 @@ class Nornn(object):
         is_training = inputs['is_training']
 
         y0_size = tf.stack([y0[:,2]-y0[:,0], y0[:,3]-y0[:,1]], 1)
-        y0 = tf.concat([tf.maximum(y0[:,0:2], 0.0), # Force range [0,1]
-                        tf.minimum(y0[:,2:4], 1.0)], 1) # In OTB, Panda has GT error.
+        y0 = tf.concat([tf.maximum(y0[:,0], 0.0), tf.maximum(y0[:,1], 0.0), # Force range [0,1]
+                        tf.minimum(y0[:,2], 1.0), tf.minimum(y0[:,3], 1.0)], 1) # In OTB, Panda has GT error.
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
@@ -586,8 +586,10 @@ class Nornn(object):
             # Get image-centric outputs. Some are used for visualization purpose.
             c_curr_pred = convert_center_image_centric(c_curr_pred_oc, box_s_raw_curr, o)
             y_curr_pred = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1) # NOTE: temporary.
-            y_curr_pred = tf.concat([tf.maximum(y_curr_pred[:,0:2], 0.0), # Force range [0,1]
-                                     tf.minimum(y_curr_pred[:,2:4], 1.0)], 1)
+            y_curr_pred = tf.concat([tf.maximum(y_curr_pred[:,0], 0.0), # Force range [0,1]
+                                     tf.maximum(y_curr_pred[:,1], 0.0),
+                                     tf.minimum(y_curr_pred[:,2], 1.0),
+                                     tf.minimum(y_curr_pred[:,3], 1.0)], 1)
             hmap_curr_pred = convert_hmap_image_centric(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0],
                                                         box_s_raw_curr, box_s_val_curr, o)
 
