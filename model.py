@@ -166,6 +166,8 @@ def process_search_with_box(img, box, o):
         # crop (only within valid region)
         s_val_h = tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32)
         s_val_w = tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32)
+        s_val_h = tf.maximum(s_val_h, 1) # to prevent assertion error.
+        s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
         crop_val = tf.image.crop_to_bounding_box(
                 image=img[b],
                 offset_height=tf.cast(y1_s_val*o.frmsz, tf.int32),
@@ -173,12 +175,16 @@ def process_search_with_box(img, box, o):
                 target_height=s_val_h,
                 target_width =s_val_w)
         # pad crop so that it preserves aspect ratio.
+        s_raw_h = tf.cast((y2_s_raw-y1_s_raw)*o.frmsz, tf.int32)
+        s_raw_w = tf.cast((x2_s_raw-x1_s_raw)*o.frmsz, tf.int32)
+        s_raw_h = tf.maximum(s_raw_h, 1) # to prevent assertion error.
+        s_raw_w = tf.maximum(s_raw_w, 1) # to prevent assertion error.
         crop_pad = tf.image.pad_to_bounding_box(
                 image=crop_val,
                 offset_height=tf.cast((y1_s_val-y1_s_raw)*o.frmsz, tf.int32),
                 offset_width =tf.cast((x1_s_val-x1_s_raw)*o.frmsz, tf.int32),
-                target_height=tf.cast((y2_s_raw-y1_s_raw)*o.frmsz, tf.int32),
-                target_width =tf.cast((x2_s_raw-x1_s_raw)*o.frmsz, tf.int32))
+                target_height=s_raw_h,
+                target_width =s_raw_w)
         # resize to 241 x 241
         crop_res = tf.image.resize_images(crop_pad, [o.frmsz, o.frmsz])
 
@@ -233,14 +239,20 @@ def convert_hmap_image_centric(hmap_pred_oc, box_s_raw, box_s_val, o):
         # resize to search (raw). It can become bigger or smaller.
         s_raw_h = tf.cast((box_s_raw[b][3] - box_s_raw[b][1]) * o.frmsz, tf.int32)
         s_raw_w = tf.cast((box_s_raw[b][2] - box_s_raw[b][0]) * o.frmsz, tf.int32)
+        s_raw_h = tf.maximum(s_raw_h, 1) # to prevent assertion error.
+        s_raw_w = tf.maximum(s_raw_w, 1) # to prevent assertion error.
         s_raw = tf.image.resize_images(tf.expand_dims(hmap_pred_oc[b], -1), [s_raw_h, s_raw_w])
         # crop to extract only valid search area.
+        s_val_h = tf.cast((box_s_val[b][3]-box_s_val[b][1])*o.frmsz, tf.int32)
+        s_val_w = tf.cast((box_s_val[b][2]-box_s_val[b][0])*o.frmsz, tf.int32)
+        s_val_h = tf.maximum(s_val_h, 1) # to prevent assertion error.
+        s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
         s_val = tf.image.crop_to_bounding_box(
                 image=s_raw,
                 offset_height=tf.cast((box_s_val[b][1]-box_s_raw[b][1])*o.frmsz, tf.int32),
-                offset_width=tf.cast((box_s_val[b][0]-box_s_raw[b][0])*o.frmsz, tf.int32),
-                target_height=tf.cast((box_s_val[b][3]-box_s_val[b][1])*o.frmsz, tf.int32),
-                target_width=tf.cast((box_s_val[b][2]-box_s_val[b][0])*o.frmsz, tf.int32))
+                offset_width =tf.cast((box_s_val[b][0]-box_s_raw[b][0])*o.frmsz, tf.int32),
+                target_height=s_val_h,
+                target_width =s_val_w)
         # pad to reconstruct the original image-centric scale.
         hmap = tf.image.pad_to_bounding_box( # zero padded.
                 image=s_val,
@@ -518,6 +530,8 @@ class Nornn(object):
         is_training = inputs['is_training']
 
         y0_size = tf.stack([y0[:,2]-y0[:,0], y0[:,3]-y0[:,1]], 1)
+        y0 = tf.concat([tf.maximum(y0[:,0:2], 0.0), # Force range [0,1]
+                        tf.minimum(y0[:,2:4], 1.0)], 1) # In OTB, Panda has GT error.
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
@@ -572,6 +586,8 @@ class Nornn(object):
             # Get image-centric outputs. Some are used for visualization purpose.
             c_curr_pred = convert_center_image_centric(c_curr_pred_oc, box_s_raw_curr, o)
             y_curr_pred = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1) # NOTE: temporary.
+            y_curr_pred = tf.concat([tf.maximum(y_curr_pred[:,0:2], 0.0), # Force range [0,1]
+                                     tf.minimum(y_curr_pred[:,2:4], 1.0)], 1)
             hmap_curr_pred = convert_hmap_image_centric(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0],
                                                         box_s_raw_curr, box_s_val_curr, o)
 
