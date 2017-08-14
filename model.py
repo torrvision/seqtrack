@@ -82,8 +82,8 @@ def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, G
             width, height = x2 - x1, y2 - y1
             x_sigma = width * 0.3 # TODO: can be better..
             y_sigma = height * 0.3
-            masks = tf.exp(-( ((grid_x - x_center)**2) / (2 * (x_sigma**2)) +
-                              ((grid_y - y_center)**2) / (2 * (y_sigma**2)) ))
+            masks = tf.exp(-( tf.square(grid_x - x_center) / (2 * tf.square(x_sigma)) +
+                              tf.square(grid_y - y_center) / (2 * tf.square(y_sigma)) ))
 
         if kind == 'fg': # only foreground mask
             masks = tf.expand_dims(masks, 3) # to have channel dim
@@ -202,10 +202,10 @@ def process_search_with_box(img, box, o):
 
 def find_center_in_scoremap(scoremap):
     assert(len(scoremap.shape.as_list())==3)
-    max_val = tf.reduce_max(scoremap, axis=(1,2))
+    max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
     dims = scoremap.shape.as_list()[1]
-    max_val_tile = tf.stack([tf.stack([max_val]*dims, axis=1)]*dims, axis=2)
-    max_loc = tf.equal(scoremap, max_val_tile)
+    # max_val_tile = tf.stack([tf.stack([max_val]*dims, axis=1)]*dims, axis=2)
+    max_loc = tf.equal(scoremap, max_val)
     # NOTE: In case mulitiple max, I average them.
     center = []
     for b in range(scoremap.shape.as_list()[0]):
@@ -213,6 +213,9 @@ def find_center_in_scoremap(scoremap):
     center = tf.stack(center, 0)
     center = tf.stack([center[:,1], center[:,0]], 1) # To make it [x,y] format.
     center = center / dims # To keep coordinate in relative scale range [0, 1].
+    with tf.control_dependencies(
+            [tf.assert_greater_equal(center, 0.0), tf.assert_less_equal(center, 1.0)]):
+        center = tf.identity(center)
     return center
 
 def convert_center_image_centric(center_oc, box_s_raw, o):
@@ -224,10 +227,10 @@ def convert_center_image_centric(center_oc, box_s_raw, o):
     x_center = center_oc[:,0] * w_raw + box_s_raw[:,0]
     y_center = center_oc[:,1] * h_raw + box_s_raw[:,1]
     # enforce to be inside the original frame.
-    x_center = tf.maximum(x_center, tf.stack([0.0]*o.batchsz))
-    x_center = tf.minimum(x_center, tf.stack([1.0]*o.batchsz))
-    y_center = tf.maximum(y_center, tf.stack([0.0]*o.batchsz))
-    y_center = tf.minimum(y_center, tf.stack([1.0]*o.batchsz))
+    # x_center = tf.maximum(x_center, 0.0)
+    # x_center = tf.minimum(x_center, 1.0)
+    # y_center = tf.maximum(y_center, 0.0)
+    # y_center = tf.minimum(y_center, 1.0)
     return tf.stack([x_center, y_center], 1)
 
 def convert_hmap_image_centric(hmap_pred_oc, box_s_raw, box_s_val, o):
@@ -531,7 +534,7 @@ class Nornn(object):
 
         y0_size = tf.stack([y0[:,2]-y0[:,0], y0[:,3]-y0[:,1]], 1)
         y0 = tf.stack([tf.maximum(y0[:,0], 0.0), tf.maximum(y0[:,1], 0.0), # Force range [0,1]
-                        tf.minimum(y0[:,2], 1.0), tf.minimum(y0[:,3], 1.0)], 1) # In OTB, Panda has GT error.
+                       tf.minimum(y0[:,2], 1.0), tf.minimum(y0[:,3], 1.0)], 1) # In OTB, Panda has GT error.
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
@@ -586,10 +589,10 @@ class Nornn(object):
             # Get image-centric outputs. Some are used for visualization purpose.
             c_curr_pred = convert_center_image_centric(c_curr_pred_oc, box_s_raw_curr, o)
             y_curr_pred = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1) # NOTE: temporary.
-            y_curr_pred = tf.stack([tf.maximum(y_curr_pred[:,0], 0.0), # Force range [0,1]
-                                     tf.maximum(y_curr_pred[:,1], 0.0),
-                                     tf.minimum(y_curr_pred[:,2], 1.0),
-                                     tf.minimum(y_curr_pred[:,3], 1.0)], 1)
+            #y_curr_pred = tf.stack([tf.maximum(y_curr_pred[:,0], 0.0), # Force range [0,1]
+            #                        tf.maximum(y_curr_pred[:,1], 0.0),
+            #                        tf.minimum(y_curr_pred[:,2], 1.0),
+            #                        tf.minimum(y_curr_pred[:,3], 1.0)], 1)
             hmap_curr_pred = convert_hmap_image_centric(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0],
                                                         box_s_raw_curr, box_s_val_curr, o)
 
