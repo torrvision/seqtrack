@@ -204,7 +204,6 @@ def find_center_in_scoremap(scoremap):
     assert(len(scoremap.shape.as_list())==3)
     max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
     dims = scoremap.shape.as_list()[1]
-    # max_val_tile = tf.stack([tf.stack([max_val]*dims, axis=1)]*dims, axis=2)
     max_loc = tf.equal(scoremap, max_val)
     # NOTE: In case mulitiple max, I average them.
     center = []
@@ -589,10 +588,10 @@ class Nornn(object):
             # Get image-centric outputs. Some are used for visualization purpose.
             c_curr_pred = convert_center_image_centric(c_curr_pred_oc, box_s_raw_curr, o)
             y_curr_pred = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1) # NOTE: temporary.
-            #y_curr_pred = tf.stack([tf.maximum(y_curr_pred[:,0], 0.0), # Force range [0,1]
-            #                        tf.maximum(y_curr_pred[:,1], 0.0),
-            #                        tf.minimum(y_curr_pred[:,2], 1.0),
-            #                        tf.minimum(y_curr_pred[:,3], 1.0)], 1)
+            y_curr_pred = tf.stack([tf.maximum(y_curr_pred[:,0], 0.0), # Force outputs range [0,1].
+                                    tf.maximum(y_curr_pred[:,1], 0.0),
+                                    tf.minimum(y_curr_pred[:,2], 1.0),
+                                    tf.minimum(y_curr_pred[:,3], 1.0)], 1)
             hmap_curr_pred = convert_hmap_image_centric(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0],
                                                         box_s_raw_curr, box_s_val_curr, o)
 
