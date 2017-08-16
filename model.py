@@ -478,22 +478,30 @@ class Nornn(object):
             ''' Upsampling layers.
             '''
             # NOTE: Not entirely sure yet if `align_corners` option is required.
-            # TODO: It seems that the output of this function creates boundary artifacts.
-            shape_to = [61, 121, 241] # magic number picked from CNN.
-            numout_to = [32, 16, 2]
             with slim.arg_scope([slim.conv2d],
-                    kernel_size=[3,3],
+                    kernel_size=[1,1],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                for i in range(len(shape_to)):
-                    x = slim.conv2d(tf.image.resize_images(x, [shape_to[i]]*2),
-                                    num_outputs=numout_to[i],
-                                    scope='deconv{}'.format(i+1))
-            with slim.arg_scope([slim.conv2d],
-                    num_outputs=2,
-                    kernel_size=1,
-                    weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = slim.conv2d(x, scope='1x1_conv1')
-                x = slim.conv2d(x, activation_fn=None, scope='1x1_conv2') # no activation.
+                x = slim.conv2d(x, num_outputs=256, scope='deconv1')
+                x = slim.conv2d(x, num_outputs=2, scope='deconv2')
+                x = tf.image.resize_images(x, [241, 241])
+                x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
+                #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
+
+            #shape_to = [61, 121, 241] # magic number picked from CNN.
+            #numout_to = [32, 16, 2]
+            #with slim.arg_scope([slim.conv2d],
+            #        kernel_size=[3,3],
+            #        weights_regularizer=slim.l2_regularizer(o.wd)):
+            #    for i in range(len(shape_to)):
+            #        x = slim.conv2d(tf.image.resize_images(x, [shape_to[i]]*2),
+            #                        num_outputs=numout_to[i],
+            #                        scope='deconv{}'.format(i+1))
+            #with slim.arg_scope([slim.conv2d],
+            #        num_outputs=2,
+            #        kernel_size=1,
+            #        weights_regularizer=slim.l2_regularizer(o.wd)):
+            #    x = slim.conv2d(x, scope='1x1_conv1')
+            #    x = slim.conv2d(x, activation_fn=None, scope='1x1_conv2') # no activation.
             return x
 
         def pass_out_rectangle(x):
