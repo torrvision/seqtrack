@@ -315,16 +315,12 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     summary_var = (summary_vars_with_preview['train']
                                    if global_step % o.period_preview == 0
                                    else summary_vars['train'])
-                    #_, loss, summary = sess.run([optimize_op, loss_var, summary_var],
-                    #                            feed_dict=feed_dict)
-                    _, loss, summary, y_init = sess.run([optimize_op, loss_var, summary_var,
-                                                         model.state['y'][0]],
+                    _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
                                                 feed_dict=feed_dict)
                     dur = time.time() - start
                     writer['train'].add_summary(summary, global_step=global_step)
                 else:
-                    #_, loss = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
-                    _, loss, y_init = sess.run([optimize_op, loss_var, model.state['y'][0]], feed_dict=feed_dict)
+                    _, loss = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
                     dur = time.time() - start
                 loss_ep.append(loss)
 
@@ -652,6 +648,23 @@ def _convert_hmap_object_centric(hmap, box_s_raw, box_s_val, o):
         hmap_oc.append(tf.stack(hmap_gt_oc_b, 0))
     return tf.stack(hmap_oc, 0)
 
+def _generate_hmap_gt_oc(y_gt, box_s_raw, box_s_val, o, min_size=None, Gaussian=False):
+    # First, compute y_gt_oc
+    assert(len(y_gt.shape.as_list())==3)
+    x1, y1, x2, y2 = tf.unstack(y_gt, axis=2)
+    x1_raw, y1_raw, x2_raw, y2_raw = tf.unstack(box_s_raw, axis=2)
+    x1_val, y1_val, x2_val, y2_val = tf.unstack(box_s_val, axis=2)
+    s_raw_w = x2_raw - x1_raw # [0,1] range
+    s_raw_h = y2_raw - y1_raw # [0,1] range
+    x1_oc = (x1 - x1_raw) / s_raw_w
+    y1_oc = (y1 - y1_raw) / s_raw_h
+    x2_oc = (x2 - x1_raw) / s_raw_w
+    y2_oc = (y2 - y1_raw) / s_raw_h
+    y_gt_oc = tf.stack([x1_oc, y1_oc, x2_oc, y2_oc], 2)
+    # Second, generate (Gaussian) hmap_gt_oc.
+    hmap_gt_oc = convert_rec_to_heatmap(y_gt_oc, o, min_size=min_size, Gaussian=Gaussian)
+    return hmap_gt_oc
+
 def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
     with tf.name_scope(name) as scope:
         if 'y_gt_oc' in outputs: # object-centric approach.
@@ -664,9 +677,13 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         # Gaussian gt hmap
         hmap_gt = convert_rec_to_heatmap(y_gt, o, min_size=1.0, Gaussian=True)
         outputs['hmap_gt'] = hmap_gt # To visualize hmap_gt (image-centric) in summary.
-        hmap_gt = _convert_hmap_object_centric( # convert hmap_gt to hmap_gt_oc.
-                hmap_gt, outputs['box_s_raw'], outputs['box_s_val'], o)
-        outputs['hmap_gt_oc'] = hmap_gt # To visualize hmap_gt (object-centric) in summary.
+        # Approach 1 for `hmap_gt_oc`.
+        #hmap_gt = _convert_hmap_object_centric( # convert hmap_gt to hmap_gt_oc.
+        #        hmap_gt, outputs['box_s_raw'], outputs['box_s_val'], o)
+        #outputs['hmap_gt_oc'] = hmap_gt # To visualize hmap_gt (object-centric) in summary.
+        # Approach 2 for `hmap_gt_oc`.
+        hmap_gt = _generate_hmap_gt_oc(y_gt, outputs['box_s_raw'], outputs['box_s_val'], o, min_size=1.0, Gaussian=True)
+        outputs['hmap_gt_oc'] = hmap_gt
 
         if o.heatmap_stride != 1:
             hmap_gt, unmerge = merge_dims(hmap_gt, 0, 2)
