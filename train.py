@@ -19,6 +19,7 @@ import evaluate
 import geom
 import helpers
 import lossfunc
+import model_graph
 import pipeline
 import sample
 import visualize
@@ -26,7 +27,6 @@ import visualize
 from model import convert_rec_to_heatmap
 from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
 
-EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid']
 SUMMARIES_IMAGES = 'summaries_images'
 
 
@@ -115,7 +115,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
     model = create_model(stat=stat, image_summaries_collections=[SUMMARIES_IMAGES])
 
-    prediction_crop, window, prediction, init_state, final_state = process_sequence(
+    prediction_crop, window, prediction, init_state, final_state = model_graph.process_sequence(
         example, run_opts, model,
         batchsz=o.batchsz, ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype,
     )
@@ -386,63 +386,6 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         print 'total time elapsed: {0:.2f}'.format(time.time()-t_total)
 
 
-def process_sequence(example, run_opts, model, batchsz, ntimesteps, frmsz, dtype):
-    '''Takes a Model and calls init() and step() on the example.
-
-    Returns prediction in the image reference frame,
-    and prediction_crop in the window reference frame.
-    The prediction in the window reference frame can be used to apply the loss.
-    '''
-    example_input = dict(example)
-    example = _guard_labels(example, run_opts)
-    example_init = {k: example[k] for k in ['x0', 'y0']}
-    example_seq = _unstack_dict(example, ['x', 'y', 'y_is_valid'], axis=1)
-    # _unstack_example_frames(example)
-    state = [None for __ in range(ntimesteps)]
-    window = [None for __ in range(ntimesteps)]
-    prediction_crop = [None for __ in range(ntimesteps)]
-    prediction = [None for __ in range(ntimesteps)]
-
-    with tf.variable_scope('model'):
-        with tf.name_scope('frame_0'):
-            with tf.variable_scope('init'):
-                init_state = model.init(example_init, run_opts)
-        for t in range(ntimesteps):
-            with tf.name_scope('frame_{}'.format(t+1)):
-                with tf.variable_scope('frame', reuse=(t > 0)):
-                    # TODO: Whiten after crop i.e. in model.
-                    prediction_crop[t], window[t], state[t] = model.step(
-                        example_seq[t],
-                        state[t-1] if t > 0 else init_state)
-                    if t == 0:
-                        pred_keys = prediction_crop[t].keys()
-                # Obtain prediction in image frame.
-                inv_window_rect = geom.crop_inverse(window[t])
-                prediction[t] = crop_prediction_frame(prediction_crop[t], inv_window_rect,
-                    crop_size=[frmsz, frmsz])
-
-    # TODO: This may include window state!
-    final_state = state[-1]
-    window = tf.stack(window, axis=1)
-    prediction_crop = _stack_dict(prediction_crop, prediction_crop[0].keys(), axis=1)
-    prediction = _stack_dict(prediction, prediction[0].keys(), axis=1)
-
-    return prediction_crop, window, prediction, init_state, final_state
-
-def _unstack_dict(d, keys, axis):
-    # Gather lists of all elements at same index.
-    # {'x': [x0, x1], 'y': [y0, y1]} => [[x0, y0], [x1, y1]]
-    value_lists = zip(*[tf.unstack(d[k], axis=axis) for k in keys])
-    # Create a dictionary from each.
-    # [[x0, y0], [x1, y1]] => [{'x': x0, 'y': y0}, {'x': x1, 'y': y1}]
-    return [dict(zip(keys, vals)) for vals in value_lists]
-
-def _stack_dict(frames, keys, axis):
-    return {
-        k: tf.stack([frame[k] for frame in frames], axis=axis)
-        for k in keys
-    }
-
 def _get_optimizer(lr, o):
     if o.optimizer == 'sgd':
         optimizer = tf.train.GradientDescentOptimizer(lr)
@@ -486,37 +429,6 @@ def _make_input_pipeline(o,
         }
         return example_batch, feed_loop
 
-
-def _make_example_placeholders(ntimesteps, frmsz, dtype, default=None):
-    shapes = {
-        'x0':         [None, frmsz, frmsz, 3],
-        'y0':         [None, 4],
-        'x':          [None, ntimesteps, frmsz, frmsz, 3],
-        'y':          [None, ntimesteps, 4],
-        'y_is_valid': [None, ntimesteps],
-    }
-    key_dtype = lambda k: tf.bool if k.endswith('_is_valid') else dtype
-
-    if default is not None:
-        assert(set(default.keys()) == set(shapes.keys()))
-        example = {
-            k: tf.placeholder_with_default(default[k], shapes[k], name='placeholder_'+k)
-            for k in shapes.keys()}
-    else:
-        example = {
-            k: tf.placeholder(key_dtype(k), shapes[k], name='placeholder_'+k)
-            for k in EXAMPLE_KEYS}
-    return example
-
-def _make_option_placeholders():
-    run_opts = {}
-    # Add a placeholder for models that use ground-truth during training.
-    run_opts['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
-    # Add a placeholder that specifies training mode for e.g. batch_norm.
-    run_opts['is_training'] = tf.placeholder_with_default(False, [], name='is_training')
-    # Add a placeholder for scheduled sampling of y_prev_GT during training
-    run_opts['gt_ratio'] = tf.placeholder_with_default(1.0, [], name='gt_ratio')
-    return run_opts
 
 
 def _perform_data_augmentation(example_raw, o, pad_value=None, name='data_augmentation'):
@@ -671,26 +583,6 @@ def _data_augmentation_saturation(xs, o, lower=0.9, upper=1.1):
     return tf.reshape(tf.stack(xs_aug), [-1, o.ntimesteps+1, o.frmsz, o.frmsz, 3])
 
 
-def _guard_labels(example, run_opts):
-    '''Hides the 'y' labels if 'use_gt' is False.
-
-    This prevents the model from accidentally using 'y'.
-    '''
-    # example['x'] -- [b, t, h, w, 3]
-    # example['y']     -- [b, t, 4]
-    images = example['x']
-    safe = dict(example)
-    images_shape = _most_specific_shape(images)
-    safe['y'] = tf.cond(run_opts['use_gt'],
-        lambda: example['y'],
-        lambda: tf.fill(images_shape[0:2] + [4], float('nan')),
-        name='labels_safe')
-    return safe
-
-def _most_specific_shape(x):
-    static = x.shape.as_list()
-    dynamic = tf.shape(x)
-    return [static[i] or dynamic[i] for i in range(len(static))]
 
 
 # def _whiten(example_raw, dtype, stat, name='whiten'):
@@ -963,7 +855,7 @@ def _load_batch(seqs, o):
     return {k: np.stack([pad_to(x[k], o.ntimesteps, axis=0)
                              if k in sequence_keys else x[k]
                          for x in examples])
-            for k in EXAMPLE_KEYS}
+            for k in model_graph.EXAMPLE_KEYS}
 
 def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean']):
     '''Finds all results for each evaluation distribution.
@@ -1057,24 +949,3 @@ def gnuplot_str(x):
     if x is None:
         return '?'
     return str(x)
-
-
-def crop_prediction_frame(pred, window_rect, crop_size, name='crop_prediction_frame'):
-    '''
-    Args:
-        pred -- Dictionary.
-            pred['y'] -- [n, 4]
-            pred['hmap_softmax'] -- [n, h, w, 2]
-        window_rect -- [n, 4]
-    '''
-    with tf.name_scope(name):
-        out = {}
-        if 'y' in pred:
-            out['y'] = geom.crop_rect(pred['y'], window_rect)
-        if 'hmap_softmax' in pred:
-            out['hmap_softmax'] = geom.crop_image(pred['hmap_softmax'], window_rect,
-                crop_size=crop_size)
-        if 'score_softmax' in pred:
-            out['score_softmax'] = geom.crop_image(pred['score_softmax'], window_rect,
-                crop_size=crop_size)
-    return out

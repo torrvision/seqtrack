@@ -505,8 +505,8 @@ class Data_bouncing_mnist(object):
         self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
 
 
+# For backwards compatibility.
 def Data_ILSVRC(dstype, o):
-    '''For backwards compatibility.'''
     return ILSVRC(
         dstype,
         frmsz=o.frmsz,
@@ -734,22 +734,32 @@ class ILSVRC:
                 np.save(filename, self.stat)
 
 
-class Data_OTB(object):
+# For backwards compatibility.
+def Data_OTB(variant, o):
+    '''Represents OTB-50 or OTB-100 dataset.'''
+    return OTB(
+        variant=variant,
+        frmsz=o.frmsz,
+        path_data=os.path.join(o.path_data_home, 'OTB'),
+        useresizedimg=o.useresizedimg)
+
+
+class OTB:
     '''Represents OTB-50 or OTB-100 dataset.'''
 
-    def __init__(self, variant, o):
-        self.path_data = os.path.join(o.path_data_home, 'OTB')
+    def __init__(self, variant, frmsz, path_data, useresizedimg=True):
+        self.path_data = path_data
         self.variant = variant # {'OTB-50', 'OTB-100'}
         # Options to save locally.
-        self.useresizedimg = o.useresizedimg
-        self.frmsz         = o.frmsz
+        self.useresizedimg = useresizedimg
+        self.frmsz         = frmsz
 
         # TODO: OTB dataset has attributes to videos. Add them.
 
         self.videos       = None
         self.video_length = None
         self.tracks       = None
-        self._load_data(o)
+        self._load_data()
 
     def image_file(self, video, t):
         if self.useresizedimg:
@@ -762,10 +772,10 @@ class Data_OTB(object):
             filename = '{:04d}.jpg'.format(t+1)
         return os.path.join(self.path_data, video, img_dir, filename)
 
-    def _load_data(self, o):
+    def _load_data(self):
         self._update_videos()
-        self._update_exceptions(o)
-        self._update_video_info(o)
+        self._update_exceptions()
+        self._update_video_info()
 
     def _update_videos(self):
         OTB50 = [
@@ -793,7 +803,7 @@ class Data_OTB(object):
         else:
             raise ValueError('unknown OTB variant: {}'.format(self.variant))
 
-    def _update_exceptions(self, o):
+    def _update_exceptions(self):
         # Note: First frame is indexed from 1!
         self.offset = {}
         self.offset['David']    = 300
@@ -801,7 +811,7 @@ class Data_OTB(object):
         self.offset['BlurCar3'] = 3
         self.offset['BlurCar4'] = 18
 
-    def _update_video_info(self, o):
+    def _update_video_info(self):
         def load_info():
             info = {}
             for i, video in enumerate(self.videos):
@@ -1080,6 +1090,40 @@ def split_batch_fulllen_seq(batch_fl, o):
             'idx': batch_fl['idx']
             }
     return batch 
+
+
+def load_dataset(
+        name,
+        frmsz,
+        path_data_home,
+        path_aux,
+        path_stat,
+        dataset_opts=None):
+    dataset_opts = dataset_opts or {}
+
+    def load_ILSVRC(set_name):
+        return ILSVRC(set_name,
+            frmsz=frmsz,
+            path_data=os.path.join(path_data_home, 'ILSVRC'),
+            path_aux=path_aux,
+            path_stat=path_stat,
+            **dataset_opts)
+
+    def load_OTB(variant):
+        return OTB(variant,
+            frmsz=frmsz,
+            path_data=os.path.join(path_data_home, 'OTB'),
+            **dataset_opts)
+
+    func = {
+        'ILSVRC-train': lambda: load_ILSVRC('train'),
+        'ILSVRC-val':   lambda: load_ILSVRC('val'),
+        'OTB-50':       lambda: load_OTB('OTB-50'),
+        'OTB-100':      lambda: load_OTB('OTB-100'),
+    }.get(name, None)
+    if func is None:
+        raise ValueError('unknown dataset: {}'.format(name))
+    return func()
 
 
 def load_data(o):

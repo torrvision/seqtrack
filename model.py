@@ -43,7 +43,7 @@ import os
 
 import cnnutil
 import geom
-from helpers import merge_dims, most_static_shape
+from helpers import merge_dims
 from upsample import upsample
 
 concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
@@ -159,8 +159,8 @@ class SimpleSearch:
         else:
             # TODO: May be more efficient to avoid cropping if using whole window?
             self._window_model = ConditionalWindow(
-                train_model=WholeImageWindow(batchsz=batchsz),
-                test_model=WholeImageWindow(batchsz=batchsz),
+                train_model=WholeImageWindow(),
+                test_model=WholeImageWindow(),
             )
         self._window_state_keys = None
 
@@ -397,6 +397,9 @@ class SimpleSearch:
     def _output_net(self, x, init_rect, window):
         assert len(x.shape) == 4
         output = {}
+        # Size of object in object-centric window.
+        # TODO: Make this a parameter that is given to window model.
+        relative_size = 4.0
 
         if self.output_mode == 'rectangle':
             with tf.variable_scope('rectangle'):
@@ -462,23 +465,37 @@ class SimpleSearch:
                 # warp_map is [n, h, w, 4]
                 warp_map = slim.conv2d(x, 4, 1, activation_fn=None, normalizer_fn=None)
 
+                n = tf.shape(score_map)[0]
+                spatial_dim = score_map.shape.as_list()[1:3]
+                assert all(spatial_dim)
+
+                # Compute center of each pixel in [0, 1] in search area.
+                # (Loss may decide how to use rectangle + center.)
+                dim_y, dim_x = spatial_dim[0], spatial_dim[1]
+                centers_x, centers_y = tf.meshgrid(
+                    tf.to_float(tf.range(dim_x)) / tf.to_float(dim_x - 1),
+                    tf.to_float(tf.range(dim_y)) / tf.to_float(dim_y - 1))
+                centers = tf.stack([centers_x, centers_y], axis=-1)
+
+                # TODO: This will only work in object-centric mode?
+                object_size = 1.0 / relative_size
                 # Create anchors. Assume a single anchor for now.
                 # TODO: Multiple anchors with a score each.
-                # Assume that window is 4x object size.
-                # TODO: Make this a parameter that is given to window model.
-                anchor_size = tf.constant(0.25 * np.array([1.0, 1.0], dtype=np.float32))
+                anchor_size = tf.constant(object_size * np.array([1.0, 1.0], dtype=np.float32))
                 # anchors is [4]
                 anchors = geom.make_rect(-0.5*anchor_size, 0.5*anchor_size)
                 rect_map = geom.warp_anchor(anchors, warp_map)
 
-                # Find arg max in score_map.
-                # score_map is [n, h, w, 1].
-                n = tf.shape(score_map)[0]
-                spatial_dim = score_map.shape.as_list()[1:3]
-                assert all(spatial_dim)
+                # Add motion penalty to score map.
+                lambda_motion = 1.0
+                motion = tf.norm(centers - tf.constant([0.5, 0.5]), axis=-1, keep_dims=True)
+                posterior_map = score_map - (lambda_motion / object_size) * motion
+
+                # Find arg max in posterior_map.
+                # posterior_map is [n, h, w, 1].
                 # Flatten spatial dimensions to find arg max.
                 # Remove channel dimension for later convenience.
-                score_vec, _ = merge_dims(tf.squeeze(score_map, -1), 1, 3)
+                score_vec, _ = merge_dims(tf.squeeze(posterior_map, -1), 1, 3)
                 argmax_vec = tf.argmax(score_vec, axis=1)
                 argmax_i, argmax_j = tf.py_func(np.unravel_index,
                     inp=[argmax_vec, spatial_dim],
@@ -517,8 +534,8 @@ class SimpleSearch:
                 rect_map = geom.rect_translate(rect_map, centers)
                 anchor_map = tf.expand_dims(geom.rect_translate(anchors, centers), axis=0)
 
-                # Upsample to original resolution.
-                score_full_res = tf.image.resize_images(score_map,
+                # Upsample to original resolution for visualization.
+                score_full_res = tf.image.resize_images(posterior_map,
                     size=[self.frmsz, self.frmsz],
                     method=tf.image.ResizeMethod.BICUBIC,
                     align_corners=True)
@@ -625,10 +642,11 @@ The final state will be fed to the initial state to process long sequences.
 
 
 class WholeImageWindow:
-    def __init__(self, batchsz):
-        self.batchsz = batchsz
+    def __init__(self):
+        pass
 
     def init(self, example):
+        self._batchsz = tf.shape(example['x0'])[0]
         state = {}
         return state
 
@@ -642,7 +660,7 @@ class WholeImageWindow:
     def window(self, state):
         rect = [0.0, 0.0, 1.0, 1.0]
         # Use same window for every image in batch.
-        return tf.tile(tf.expand_dims(rect, 0), [self.batchsz, 1])
+        return tf.tile(tf.expand_dims(rect, 0), [self._batchsz, 1])
 
 
 class InitialWindow:

@@ -59,7 +59,7 @@ def parse_arguments():
             '--model', help='model!',
             type=str, default='')
     parser.add_argument(
-            '--output_mode', help='method of output: rectangle, score_map, rectangle_map',
+            '--output_mode', help='method of output: rectangle, score_map, rect_map',
             type=str, default='rectangle')
     parser.add_argument(
             '--losses', nargs='+', help='list of losses to be used',
