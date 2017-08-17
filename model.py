@@ -206,7 +206,11 @@ def find_center_in_scoremap(scoremap):
     # NOTE: In case mulitiple max, I average them.
     center = []
     for b in range(scoremap.shape.as_list()[0]):
-        center.append(tf.reduce_mean(tf.cast(tf.where(max_loc[b]), tf.float32), axis=0))
+        confidence = 0.5 # TODO: I'm testing this..
+        center.append(tf.cond(tf.less(max_val[b,0,0], confidence),
+                              lambda: tf.cast(tf.stack([dims, dims]), tf.float32),
+                              lambda: tf.reduce_mean(tf.cast(tf.where(max_loc[b]), tf.float32), axis=0)))
+        #center.append(tf.reduce_mean(tf.cast(tf.where(max_loc[b]), tf.float32), axis=0))
     center = tf.stack(center, 0)
     center = tf.stack([center[:,1], center[:,0]], 1) # To make it [x,y] format.
     center = center / dims # To keep coordinate in relative scale range [0, 1].
