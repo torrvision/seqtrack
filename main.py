@@ -71,6 +71,10 @@ def parse_arguments():
             type=int, default=2)
 
     parser.add_argument(
+            '--th_prob_stay', help='threshold probability to stay movement',
+            type=float, default=0.0)
+
+    parser.add_argument(
             '--nunits', help='number of hidden units in rnn cell',
             type=int, default=256)
     parser.add_argument(

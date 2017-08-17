@@ -42,6 +42,10 @@ class Opts(object):
         self.search_scale       = 2 # size of search space relative to target.
 
         #----------------------------------------------------------------------
+        # parameters for tracking
+        self.th_prob_stay       = 0.0 # threshold probability to stay movement.
+
+        #----------------------------------------------------------------------
         # model parameters - rnn
         self.nunits             = 256
         self.ntimesteps         = 20
