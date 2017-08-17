@@ -1,12 +1,30 @@
+import functools
 import math
 import numpy as np
-import random
 
 import geom
 import geom_np
 
-def add_gaussian_random_walk(trajectory,
-                             sequence_len,
+
+def make_motion_augmenter(kind, rand, **kwargs):
+    '''
+    Returns:
+        Function that maps sequence to sequence, modifying viewports.
+    '''
+    if kind == 'none':
+        return no_augment
+    elif kind == 'add_gaussian_random_walk':
+        return functools.partial(add_gaussian_random_walk, rand=rand, **kwargs)
+    else:
+        raise ValueError('unknown motion augmentation: {}'.format(kind))
+
+
+def no_augment(rects):
+    return [geom_np.rect_identity()] * len(rects)
+
+
+def add_gaussian_random_walk(rects,
+                             rand,
                              sigma_translate=0.5,
                              sigma_scale=1.1,
                              min_diameter=0.1,
@@ -14,19 +32,17 @@ def add_gaussian_random_walk(trajectory,
                              max_attempts=20):
     '''
     Args:
-        trajectory -- Dictionary that maps frame number to rectangle.
-            Rectangle is in normalized co-ordinates in (0, 1).
-            TODO: Incorporate aspect ratio of image.
+        rects: List of rectangles, or None if object is not present.
+        rand: Numpy random object.
 
     Returns:
-        A sequence of windows such that the trajectory is augmented in those windows.
+        A list of viewports for the object.
     '''
 
     eps = 0.01
 
-    times = trajectory.keys()
-    rects = np.array(trajectory.values())
-    rects_min, rects_max = geom_np.rect_min_max(rects)
+    rects_valid = np.array([r for r in rects if r is not None])
+    rects_min, rects_max = geom_np.rect_min_max(rects_valid)
     rects_size = np.maximum(0.0, rects_max - rects_min)
     orig_diameter = np.exp(np.mean(np.log(rects_size + eps), axis=-1))
     orig_mean_diameter = np.exp(np.mean(np.log(orig_diameter)))
@@ -42,13 +58,12 @@ def add_gaussian_random_walk(trajectory,
     num_attempts = 0
     while not ok:
         if num_attempts > max_attempts:
-            print 'random walk: exceeded maximum number of attempts'
-            return np.array([[0.0, 0.0, 1.0, 1.0]] * sequence_len)
+            return None
         # Sample size of object.
         # TODO: Maximum scale.
-        base_diameter = math.exp(random.uniform(math.log(min_diameter), math.log(max_diameter)))
-        rel_center = sigma_translate * sample_random_walk(sequence_len, dim=2)
-        scale = np.exp(math.log(sigma_scale) * sample_random_walk(sequence_len, dim=1))
+        base_diameter = math.exp(rand.uniform(math.log(min_diameter), math.log(max_diameter)))
+        rel_center = sigma_translate * sample_random_walk(len(rects), dim=2, rand=rand)
+        scale = np.exp(math.log(sigma_scale) * sample_random_walk(len(rects), dim=1, rand=rand))
         # Check whether this object can fit in the frame with this path.
         center = base_diameter * rel_center
         # Size of original extent after scaling in each frame.
@@ -65,7 +80,7 @@ def add_gaussian_random_walk(trajectory,
         num_attempts += 1
 
     # Choose global translation of track.
-    offset = -region_extent_min + np.random.uniform(size=(2,)) * gap
+    offset = -region_extent_min + rand.uniform(size=(2,)) * gap
     region_min += offset
     region_max += offset
     region = geom_np.make_rect(region_min, region_max)
@@ -92,9 +107,8 @@ def add_gaussian_random_walk(trajectory,
     return window
 
 
-def sample_random_walk(n, dim):
-    # TODO: Use Python random number generator?
-    steps = np.random.normal(size=(n-1, dim))
+def sample_random_walk(n, dim, rand):
+    steps = rand.normal(size=(n-1, dim))
     path = np.concatenate((
         np.zeros((1, dim)),
         np.cumsum(steps, axis=0),

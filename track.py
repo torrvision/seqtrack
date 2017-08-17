@@ -1,9 +1,8 @@
 '''Command-line utility to run tracker.'''
 
 import argparse
-import functools
 import json
-import random
+import numpy as np
 import tensorflow as tf
 
 import data
@@ -12,6 +11,7 @@ import sample
 import train
 import model as model_pkg
 import model_graph
+import motion
 
 
 def main():
@@ -33,10 +33,13 @@ def main():
         help='dataset on which to evaluate tracker')
     parser.add_argument('--path_data_home', default='./data',
         help='location of datasets')
-    parser.add_argument('--frame_sampler_params', type=json.loads,
+    parser.add_argument('--sample_frames_params', type=json.loads,
         help='JSON string to specify frame sampler',
         # default=json.dumps({'kind': 'regular', 'freq': 10}))
         default=json.dumps({'kind': 'full'}))
+    parser.add_argument('--augment_motion_params', type=json.loads,
+        help='JSON string to specify motion augmentation',
+        default=json.dumps({'kind': 'add_gaussian_random_walk'}))
     # Paths.
     parser.add_argument('--path_ckpt', default='./ckpt')
     args = parser.parse_args()
@@ -80,19 +83,21 @@ def main():
         path_aux='./aux',
         path_stat='./stat')
 
-    frame_sampler = sample.make_frame_sampler(
-        dataset=dataset,
-        ntimesteps=args.ntimesteps,
-        **args.frame_sampler_params)
-
-    # TODO: frame_sampler is a bit ugly
-    # TODO: where is motion sampler used?
     sequences = sample.epoch(
         dataset=dataset,
-        rand=random.Random(),
-        frame_sampler=functools.partial(frame_sampler, rand=random.Random()),
+        rand=np.random.RandomState(),
+        sample_frames=sample.make_frame_sampler(
+            dataset=dataset,
+            rand=np.random.RandomState(),
+            ntimesteps=args.ntimesteps,
+            **args.sample_frames_params),
+        augment_motion=motion.make_motion_augmenter(
+            rand=np.random.RandomState(),
+            **args.augment_motion_params),
         max_videos=None,
         max_objects=None)
+
+    # TODO: evaluate.track() ignores viewport?
 
     restorer = tf.train.Saver()
 
@@ -105,7 +110,9 @@ def main():
         restorer.restore(sess, model_file)
 
         results = evaluate.evaluate(sess, eval_model, sequences)
-        print results
+
+    import pprint
+    pprint.pprint(results)
 
 
 if __name__ == '__main__':

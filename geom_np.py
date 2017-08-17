@@ -39,3 +39,6 @@ def crop_rect(rects, window_rect):
     out_min = (rects_min - window_min) / window_size
     out_max = (rects_max - window_min) / window_size
     return make_rect(out_min, out_max)
+
+def rect_identity():
+    return [0.0, 0.0, 1.0, 1.0]

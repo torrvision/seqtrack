@@ -113,6 +113,7 @@ def evaluate(sess, model, sequences, visualize=None, use_gt=False):
         results: a dictionary that contains evaluation results
     '''
     sequences = list(sequences)
+    assert len(sequences) > 0
     sequence_results = []
     pbar = ProgressBar(
         maxval=len(sequences),

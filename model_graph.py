@@ -20,6 +20,13 @@ EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid']
 
 
 def make_example_placeholders(batchsz, ntimesteps, frmsz, default=None, dtype=tf.float32):
+    '''Creates place to feed inputs.
+
+    At this point, the images are type uint8, and the mean has not been subtracted.
+    Mean subtraction occurs inside the model.
+
+    Set `batchsz=None` for variable batch size.
+    '''
     shapes = {
         'x0':         [batchsz, frmsz, frmsz, 3],
         'y0':         [batchsz, 4],

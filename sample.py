@@ -15,14 +15,29 @@ import re
 import motion
 
 
-def epoch(dataset, rand, frame_sampler, max_objects=None, max_videos=None):
-    '''
+def epoch(dataset, rand, sample_frames, augment_motion, max_objects=None, max_videos=None):
+    '''Samples an epoch of sequences from a dataset using a frame sampler.
+
     Args:
         dataset: Dataset object such as ILSVRC or OTB.
         rand: Random number generator (can be module `random`).
+        sample_frames:
+            Maps (video, object) to list of frames.
+        augment_motion:
+            Maps sequence to sequence.
         max_videos: Maximum number of videos to use, or None.
             There may still be multiple tracks per video.
         max_objects: Maximum number of objects per video, or None.
+
+    Yields:
+        (name, sequence) tuple
+        sequence is a dictionary with fields:
+            image_files:    Path to image for each frame.
+            labels:         Position of object in each frame.
+            label_is_valid: Whether or not frame has a label.
+            viewports:      Sub-image to consider within each image.
+            original_image_size: (width, height)
+        Note that labels are with respect to original image, not the viewport.
     '''
     videos = list(dataset.videos)
     rand.shuffle(videos)
@@ -36,36 +51,42 @@ def epoch(dataset, rand, frame_sampler, max_objects=None, max_videos=None):
         for obj in objs:
             if max_objects is not None and num_objs >= max_objects:
                 break
-            frames = frame_sampler(video, obj)
-            if frames:
-                # yield (video, obj, frames)
-                trajectory = dataset.tracks[video][obj]
-                # viewports = np.array([[0.0, 0.0, 1.0, 1.0]] * len(frames))
-                viewports = motion.add_gaussian_random_walk(trajectory, len(frames),
-                    sigma_translate=0.5,
-                    sigma_scale=1.2,
-                )
-                name = '{}-{}'.format(_escape(video), obj)
-                yield (name, {
-                    'image_files':    [dataset.image_file(video, t)       for t in frames],
-                    'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
-                    'label_is_valid': [t in trajectory                    for t in frames],
-                    'viewports':      viewports,
-                    'original_image_size': dataset.original_image_size[video],
-                })
-                num_objs += 1
-        if num_objs > 0:
-            num_videos += 1
+            frames = sample_frames(video, obj)
+            if not frames:
+                print 'could not augment motion: ({}, {})'.format(video, obj)
+                continue
+            trajectory = dataset.tracks[video][obj]
+            # Take sub-trajectory.
+            # Use list instead of dictionary to provide length.
+            # (In dataset, length was given by length of video.)
+            rects = [trajectory.get(t, None) for t in frames]
+            viewports = augment_motion(rects)
+            if not viewports:
+                print 'could not augment motion: ({}, {})'.format(video, obj)
+                continue
+            name = '{}-{}'.format(_escape(video), obj)
+            sequence = {
+                'image_files':    [dataset.image_file(video, t)       for t in frames],
+                'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
+                'label_is_valid': [t in trajectory                    for t in frames],
+                'viewports':      viewports,
+                'original_image_size': dataset.original_image_size[video],
+            }
+            yield (name, sequence)
+            num_objs += 1
+        if num_objs == 0:
+            continue
+        num_videos += 1
 
 def _escape(s):
     s = re.sub('/', '-', s)
     return s
 
 
-def make_frame_sampler(kind, dataset, ntimesteps, **kwargs):
+def make_frame_sampler(kind, dataset, rand, ntimesteps, **kwargs):
     '''A frame sampler chooses frames within a trajectory.
 
-    A sampler maps (video, object, rand) to a list of frame indices.
+    A sampler maps (video, object) to a list of frame indices.
 
     It can return an empty list or None to reject a trajectory.
     It may return less than ntimesteps+1 frames.
@@ -74,9 +95,9 @@ def make_frame_sampler(kind, dataset, ntimesteps, **kwargs):
     This is the reason that dataset and ntimesteps are provided to this function.
     '''
     if kind == 'motion':
-        sample = make_motion_sampler(dataset, **kwargs)
-        return functools.partial(sample, ntimesteps=ntimesteps)
+        return make_motion_sampler(dataset, rand, ntimesteps, **kwargs)
     else:
+        # Simple functions that do not have state.
         if kind == 'full':
             f = full
         elif kind == 'all_with_label':
@@ -89,7 +110,7 @@ def make_frame_sampler(kind, dataset, ntimesteps, **kwargs):
             f = freq_range_fit
         else:
             raise ValueError('unknown kind of frame sampler: {}'.format(kind))
-        return functools.partial(f, dataset=dataset, ntimesteps=ntimesteps, **kwargs)
+        return functools.partial(f, rand=rand, dataset=dataset, ntimesteps=ntimesteps, **kwargs)
 
 
 def full(video, obj, rand, dataset, ntimesteps):
@@ -250,12 +271,16 @@ def _sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None
             }
 
 
+def _identity_rect():
+    return [0.0, 0.0, 1.0, 1.0]
+
+
 def _invalid_rect():
     return [float('nan')] * 4
 
 
-def make_motion_sampler(dataset, **kwargs):
-    sampler = Motion(dataset, **kwargs)
+def make_motion_sampler(dataset, rand, ntimesteps, **kwargs):
+    sampler = Motion(dataset, rand, ntimesteps, **kwargs)
     return sampler.sample
 
 class Motion:
@@ -263,12 +288,16 @@ class Motion:
 
     def __init__(self,
                  dataset,
+                 rand,
+                 ntimesteps,
                  min_speed,
                  max_speed):
                  # min_original_speed=0.0):
-        self.dataset = dataset
-        self.min_speed = min_speed
-        self.max_speed = max_speed
+        self.dataset    = dataset
+        self.rand       = rand
+        self.ntimesteps = ntimesteps
+        self.min_speed  = min_speed
+        self.max_speed  = max_speed
         # self.min_original_speed = min_original_speed
 
         self.cdfs = {}
@@ -294,29 +323,29 @@ class Motion:
         # self.video_subset = [v for v in self.dataset.videos if v in self.object_subset]
         # print 'subset of videos:', len(self.video_subset), 'of', len(self.dataset.videos)
 
-    def sample(self, video, obj_ind, rand, ntimesteps):
-        # video = rand.choice(self.video_subset)
-        # obj_ind = rand.choice(self.object_subset[video])
+    def sample(self, video, obj_ind):
+        # video = self.rand.choice(self.video_subset)
+        # obj_ind = self.rand.choice(self.object_subset[video])
         cdf = self.cdfs[video][obj_ind]
         _, full_path_length = cdf[-1]
-        # min_original_path_length = self.min_original_speed * ntimesteps
+        # min_original_path_length = self.min_original_speed * self.ntimesteps
         # assert full_path_length >= min_original_path_length
         # Limit example path length to maximum possible.
         # (Do this before choosing length to avoid always using same path.)
-        min_sample_path_length = float(self.min_speed) * ntimesteps
+        min_sample_path_length = float(self.min_speed) * self.ntimesteps
         if self.max_speed is None:
             max_sample_path_length = float('inf')
         else:
-            max_sample_path_length = float(self.max_speed) * ntimesteps
+            max_sample_path_length = float(self.max_speed) * self.ntimesteps
         if full_path_length < min_sample_path_length:
             return None
-        sample_path_length = rand.uniform(
+        sample_path_length = self.rand.uniform(
             min_sample_path_length,
             min(max_sample_path_length, full_path_length),
         )
-        d0 = rand.uniform(0, full_path_length - sample_path_length)
+        d0 = self.rand.uniform(0, full_path_length - sample_path_length)
         d1 = d0 + sample_path_length
-        sample_dists = np.linspace(d0, d1, ntimesteps+1)
+        sample_dists = np.linspace(d0, d1, self.ntimesteps+1)
         cdf_dists = [dist for t, dist in cdf]
         inds = np.round(np.interp(sample_dists, cdf_dists, range(len(cdf_dists)))).astype(int)
         times = [t for t, dist in [cdf[ind] for ind in inds]]
@@ -330,7 +359,7 @@ class Motion:
         # return {
         #     'image_files':    [self.dataset.image_file(video, t) for t in times],
         #     'labels':         [self.dataset.tracks[video][obj_ind][t] for t in times],
-        #     'label_is_valid': [True] * (ntimesteps+1),
+        #     'label_is_valid': [True] * (self.ntimesteps+1),
         #     'original_image_size': self.dataset.original_image_size[video],
         # }
 
