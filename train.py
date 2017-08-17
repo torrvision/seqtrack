@@ -617,37 +617,6 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
         for sequence in sequences:
             yield sequence
 
-def _convert_hmap_object_centric(hmap, box_s_raw, box_s_val, o):
-    x1_s_val, y1_s_val, x2_s_val, y2_s_val = tf.unstack(box_s_val, axis=2)
-    x1_s_raw, y1_s_raw, x2_s_raw, y2_s_raw = tf.unstack(box_s_raw, axis=2)
-    s_val_h = tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32)
-    s_val_w = tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32)
-    s_raw_h = tf.cast((y2_s_raw-y1_s_raw)*o.frmsz, tf.int32)
-    s_raw_w = tf.cast((x2_s_raw-x1_s_raw)*o.frmsz, tf.int32)
-    hmap_oc = []
-    for b in range(o.batchsz):
-        hmap_gt_oc_b = []
-        for t in range(o.ntimesteps):
-            # crop (only within valid region)
-            crop_val = tf.image.crop_to_bounding_box(
-                image=hmap[b,t],
-                offset_height=tf.cast(y1_s_val[b,t]*o.frmsz, tf.int32),
-                offset_width =tf.cast(x1_s_val[b,t]*o.frmsz, tf.int32),
-                target_height=s_val_h[b,t],
-                target_width =s_val_w[b,t])
-            # pad crop so that it preserves aspect ratio.
-            crop_pad = tf.image.pad_to_bounding_box(
-                image=crop_val,
-                offset_height=tf.cast((y1_s_val[b,t]-y1_s_raw[b,t])*o.frmsz, tf.int32),
-                offset_width =tf.cast((x1_s_val[b,t]-x1_s_raw[b,t])*o.frmsz, tf.int32),
-                target_height=s_raw_h[b,t],
-                target_width =s_raw_w[b,t])
-            # resize to 241 x 241
-            crop_res = tf.image.resize_images(crop_pad, [o.frmsz, o.frmsz])
-            hmap_gt_oc_b.append(crop_res)
-        hmap_oc.append(tf.stack(hmap_gt_oc_b, 0))
-    return tf.stack(hmap_oc, 0)
-
 def _generate_hmap_gt_oc(y_gt, box_s_raw, box_s_val, o, min_size=None, Gaussian=False):
     # First, compute y_gt_oc
     assert(len(y_gt.shape.as_list())==3)
@@ -677,11 +646,6 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
         # Gaussian gt hmap
         hmap_gt = convert_rec_to_heatmap(y_gt, o, min_size=1.0, Gaussian=True)
         outputs['hmap_gt'] = hmap_gt # To visualize hmap_gt (image-centric) in summary.
-        # Approach 1 for `hmap_gt_oc`.
-        #hmap_gt = _convert_hmap_object_centric( # convert hmap_gt to hmap_gt_oc.
-        #        hmap_gt, outputs['box_s_raw'], outputs['box_s_val'], o)
-        #outputs['hmap_gt_oc'] = hmap_gt # To visualize hmap_gt (object-centric) in summary.
-        # Approach 2 for `hmap_gt_oc`.
         hmap_gt = _generate_hmap_gt_oc(y_gt, outputs['box_s_raw'], outputs['box_s_val'], o, min_size=1.0, Gaussian=True)
         outputs['hmap_gt_oc'] = hmap_gt
 
