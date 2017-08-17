@@ -15,7 +15,7 @@ import re
 import motion
 
 
-def epoch(dataset, rand, sample_frames, augment_motion, max_objects=None, max_videos=None):
+def epoch(dataset, rand, sample_frames, augment_motion=None, max_objects=None, max_videos=None):
     '''Samples an epoch of sequences from a dataset using a frame sampler.
 
     Args:
@@ -39,6 +39,8 @@ def epoch(dataset, rand, sample_frames, augment_motion, max_objects=None, max_vi
             original_image_size: (width, height)
         Note that labels are with respect to original image, not the viewport.
     '''
+    if augment_motion is None:
+        augment_motion = motion.no_augment
     videos = list(dataset.videos)
     rand.shuffle(videos)
     num_videos = 0

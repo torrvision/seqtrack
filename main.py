@@ -187,16 +187,14 @@ def main():
         'OTB-100':          data.Data_OTB('OTB-100', o),
     }
 
-    # Presets are calls to sample.make_frame_sampler with all params given except dataset.
-    # Note that these are independent of the arguments to sample.epoch()
+    assert 'kind' in o.sampler_params
     sampler_presets = {
-        'full': functools.partial(sample.make_frame_sampler,
-            kind='full', ntimesteps=None),
+        'full': {'kind': 'full'},
         # The 'train' sampler is the same as used during training.
         # This may be useful for detecting over-fitting.
-        'train': functools.partial(sample.make_frame_sampler,
-            ntimesteps=o.ntimesteps, **o.sampler_params),
+        'train': o.sampler_params,
     }
+
     # Take all dataset-sampler combinations.
     # Different policies are used for choosing trajectories in OTB and ILSVRC:
     # ILSVRC is large and therefore a random subset of videos are used,
@@ -209,9 +207,11 @@ def main():
             eval_sets[d+'-'+s] = functools.partial(sample.epoch,
                 dataset=datasets[d],
                 rand=rand,
-                frame_sampler=functools.partial(
-                    sampler_presets[s](dataset=datasets[d]),
-                    rand=rand),
+                sample_frames=sample.make_frame_sampler(
+                    dataset=datasets[d],
+                    rand=rand,
+                    ntimesteps=o.ntimesteps,
+                    **sampler_presets[s]),
                 max_videos=None if d.startswith('OTB-') else o.max_eval_videos,
                 max_objects=None if d.startswith('OTB-') else 1)
 

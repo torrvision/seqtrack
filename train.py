@@ -1,6 +1,5 @@
 import sys
 import csv
-import functools
 import itertools
 import json
 import numpy as np
@@ -100,9 +99,9 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues,
                 capacity=4, num_threads=1)
-        example = _make_example_placeholders(default=from_queue,
-            ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype)
-        run_opts = _make_option_placeholders()
+        example = model_graph.make_example_placeholders(default=from_queue,
+            batchsz=None, ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype)
+        run_opts = model_graph.make_option_placeholders()
 
     # Always use same statistics for whitening (not set dependent).
     # stat = datasets['train'].stat
@@ -116,8 +115,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     model = create_model(stat=stat, image_summaries_collections=[SUMMARIES_IMAGES])
 
     prediction_crop, window, prediction, init_state, final_state = model_graph.process_sequence(
-        example, run_opts, model,
-        batchsz=o.batchsz, ntimesteps=o.ntimesteps, frmsz=o.frmsz, dtype=o.dtype,
+        model, example, run_opts,
+        batchsz=None, ntimesteps=o.ntimesteps, frmsz=o.frmsz,
     )
     # Crop ground truth label for loss.
     example_crop = geom.crop_example(example, window,
@@ -612,11 +611,12 @@ def iter_examples(dataset, o, rand=None, num_epochs=None):
     else:
         epochs = itertools.count()
 
-    frame_sampler = sample.make_frame_sampler(dataset=dataset, ntimesteps=o.ntimesteps, **o.sampler_params)
-    frame_sampler = functools.partial(frame_sampler, rand=rand)
+    assert 'kind' in o.sampler_params
+    sample_frames = sample.make_frame_sampler(dataset=dataset, rand=rand,
+        ntimesteps=o.ntimesteps, **o.sampler_params)
     for i in epochs:
         n = 0
-        sequences = sample.epoch(dataset, rand, frame_sampler, max_objects=1)
+        sequences = sample.epoch(dataset, rand, sample_frames, max_objects=1)
         # sequences = sample.sample(dataset, generator=generator,
         #                           shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
         #                           **o.sampler_params)
