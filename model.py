@@ -110,6 +110,15 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
         y1, y2 = yc-ys/2, yc+ys/2
         return x1, y1, x2, y2
 
+def enforce_inside_box(y, name='inside_box'):
+    ''' Force the box to be in range [0,1]
+    '''
+    assert len(y.shape.as_list()) == 2
+    with tf.name_scope(name) as scope:
+        y_new = tf.stack([tf.maximum(y[:,0], 0.0), tf.maximum(y[:,1], 0.0),
+                          tf.minimum(y[:,2], 1.0), tf.minimum(y[:,3], 1.0)], 1)
+    return y_new
+
 def pass_depth_wise_norm(feature):
     num_channels = feature.shape.as_list()[-1]
     feature_new = []
@@ -198,16 +207,17 @@ def process_search_with_box(img, box, o):
     box_s_val = tf.stack(box_s_val, 0)
     return search, box_s_raw, box_s_val
 
-def find_center_in_scoremap(scoremap):
+def find_center_in_scoremap(scoremap, o):
     assert(len(scoremap.shape.as_list())==3)
     max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
     dims = scoremap.shape.as_list()[1]
     max_loc = tf.equal(scoremap, max_val)
-    # NOTE: In case mulitiple max, I average them.
+    # TODO: Instead of average, weighted average? e.g., based on distance-to-center.
+    # In ideal case this can regularize the object movements.
+    # Siamese paper seems to put a cosine window on scoremap!
     center = []
     for b in range(scoremap.shape.as_list()[0]):
-        confidence = 0.5 # TODO: I'm testing this..
-        center.append(tf.cond(tf.less(max_val[b,0,0], confidence),
+        center.append(tf.cond(tf.less(max_val[b,0,0], o.th_prob_stay), # TODO: test optimal value.
                               lambda: tf.cast(tf.stack([dims, dims]), tf.float32),
                               lambda: tf.reduce_mean(tf.cast(tf.where(max_loc[b]), tf.float32), axis=0)))
         #center.append(tf.reduce_mean(tf.cast(tf.where(max_loc[b]), tf.float32), axis=0))
@@ -271,10 +281,14 @@ class Nornn(object):
                  summaries_collections=None,
                  depth_wise_norm=False,
                  depth_wise_cc=True,
+                 pred_box=False,
+                 optical_flow=False,
                  ):
         # model parameters
         self.depth_wise_norm = depth_wise_norm
         self.depth_wise_cc = depth_wise_cc
+        self.pred_box = pred_box
+        self.optical_flow = optical_flow
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -283,7 +297,7 @@ class Nornn(object):
 
     def _load_model(self, inputs, o):
 
-        def pass_cnn(x):
+        def pass_cnn(x, act=False):
             ''' Fully convolutional cnn.
             '''
             # NOTE: Use padding 'SAME' in convolutions and pooling so that
@@ -297,7 +311,10 @@ class Nornn(object):
                 x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
                 x = slim.conv2d(x, 64, 3, stride=1, scope='conv3')
                 x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
-                x = slim.conv2d(x, 256, 3, stride=1, activation_fn=None, scope='conv5') # No activation.
+                if not act: # no activation. used for Siamese.
+                    x = slim.conv2d(x, 256, 3, stride=1, activation_fn=None, scope='conv5')
+                else:
+                    x = slim.conv2d(x, 256, 3, stride=1, scope='conv5')
             return x
 
         def pass_cross_correlation(search, filt, o):
@@ -331,6 +348,18 @@ class Nornn(object):
                 #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
             return x
 
+        def pass_box_regression(x, o):
+            ''' Regress box size (i.e., width and height).
+            '''
+            with slim.arg_scope([slim.fully_connected],
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.max_pool2d(x, kernel_size=3, stride=3, scope='pool1')
+                x = slim.flatten(x)
+                x = slim.fully_connected(x, 1024, scope='fc1')
+                x = slim.fully_connected(x, 1024, scope='fc2')
+                x = slim.fully_connected(x, 2, activation_fn=None, scope='fc3')
+            return x
+
 
         x           = inputs['x']  # shape [b, ntimesteps, h, w, 3]
         x0          = inputs['x0'] # shape [b, h, w, 3]
@@ -341,8 +370,7 @@ class Nornn(object):
         is_training = inputs['is_training']
 
         y0_size = tf.stack([y0[:,2]-y0[:,0], y0[:,3]-y0[:,1]], 1)
-        y0 = tf.stack([tf.maximum(y0[:,0], 0.0), tf.maximum(y0[:,1], 0.0), # Force range [0,1]
-                       tf.minimum(y0[:,2], 1.0), tf.minimum(y0[:,3], 1.0)], 1) # In OTB, Panda has GT error.
+        y0 = enforce_inside_box(y0) # In OTB, Panda has GT error (i.e., > 1.0).
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
@@ -360,6 +388,7 @@ class Nornn(object):
         #y_pred_oc = []
         hmap_gt_oc = []
         hmap_pred_oc = []
+        boxsz_pred_oc = []
         box_s_raw = []
         box_s_val = []
         target = []
@@ -390,23 +419,37 @@ class Nornn(object):
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, o)
 
+            if self.optical_flow:
+                with tf.variable_scope('cnn_flow', reuse=(t > 0)):
+                    search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
+                    flow_feat = pass_cnn(tf.concat([search_prev, search_curr], 3), act=True)
+
+            with tf.variable_scope('box_regression', reuse=(t > 0)):
+                if not self.optical_flow:
+                    boxsz_curr_pred_oc = pass_box_regression(scoremap, o)
+                else:
+                    boxsz_curr_pred_oc = pass_box_regression(scoremap+flow_feat, o)
+
             # End of learning. Now tracking algorithm begins.
             # Find center.
-            c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0])
+            c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], o)
 
             # Get image-centric outputs. Some are used for visualization purpose.
             c_curr_pred = convert_center_image_centric(c_curr_pred_oc, box_s_raw_curr, o)
-            y_curr_pred = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1) # NOTE: temporary.
-            y_curr_pred = tf.stack([tf.maximum(y_curr_pred[:,0], 0.0), # Force outputs range [0,1].
-                                    tf.maximum(y_curr_pred[:,1], 0.0),
-                                    tf.minimum(y_curr_pred[:,2], 1.0),
-                                    tf.minimum(y_curr_pred[:,3], 1.0)], 1)
+            if not self.pred_box: # (naive approach) use y0 box.
+                y_curr_pred = tf.concat([c_curr_pred-y0_size*0.5,
+                                         c_curr_pred+y0_size*0.5], 1)
+            else:
+                y_curr_pred = tf.concat([c_curr_pred-boxsz_curr_pred_oc*0.5,
+                                         c_curr_pred+boxsz_curr_pred_oc*0.5], 1)
+            y_curr_pred = enforce_inside_box(y_curr_pred)
             hmap_curr_pred = convert_hmap_image_centric(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0],
                                                         box_s_raw_curr, box_s_val_curr, o)
 
             y_pred.append(y_curr_pred)
             hmap_pred.append(hmap_curr_pred)
             hmap_pred_oc.append(hmap_curr_pred_oc)
+            boxsz_pred_oc.append(boxsz_curr_pred_oc)
             box_s_raw.append(box_s_raw_curr)
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
@@ -417,15 +460,16 @@ class Nornn(object):
             y_prev    = y_curr_pred # NOTE: For sequence learning, use scheduled sampling during training.
             hmap_prev = hmap_curr_pred
 
-        y_pred       = tf.stack(y_pred, axis=1)
-        hmap_pred    = tf.stack(hmap_pred, axis=1)
+        y_pred        = tf.stack(y_pred, axis=1)
+        hmap_pred     = tf.stack(hmap_pred, axis=1)
         #y_pred_oc    = tf.stack(y_pred_oc, axis=1)
-        hmap_pred_oc = tf.stack(hmap_pred_oc, axis=1)
+        hmap_pred_oc  = tf.stack(hmap_pred_oc, axis=1)
+        boxsz_pred_oc = tf.stack(boxsz_pred_oc, axis=1)
         #y_gt_oc      = tf.stack(y_gt_oc, axis=1)
-        box_s_raw    = tf.stack(box_s_raw, axis=1)
-        box_s_val    = tf.stack(box_s_val, axis=1)
-        target       = tf.stack(target, axis=1)
-        search       = tf.stack(search, axis=1)
+        box_s_raw     = tf.stack(box_s_raw, axis=1)
+        box_s_val     = tf.stack(box_s_val, axis=1)
+        target        = tf.stack(target, axis=1)
+        search        = tf.stack(search, axis=1)
 
         outputs = {# image-centric outputs
                    'y_pred': y_pred,       # NOTE: Do not use this for computing loss.
@@ -434,6 +478,7 @@ class Nornn(object):
                    #'y_gt_oc':              y_gt_oc,
                    #'y_pred_oc':            y_pred_oc,
                    'hmap_pred_oc': hmap_pred_oc, # for ce loss, thus no softmax.
+                   'boxsz_pred_oc': boxsz_pred_oc,
                    #'hmap_pred_softmax_oc': tf.nn.softmax(hmap_pred_oc), # visualization purpose.
                    'box_s_raw':    box_s_raw,
                    'box_s_val':    box_s_val,
