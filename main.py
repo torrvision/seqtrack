@@ -66,6 +66,9 @@ def parse_arguments():
             type=str, default='abs')
     parser.add_argument('--heatmap_stride', type=int, default=1,
             help='stride of heatmap at loss')
+    parser.add_argument(
+            '--search_scale', help='size of search space relative to target',
+            type=int, default=2)
 
     parser.add_argument(
             '--nunits', help='number of hidden units in rnn cell',

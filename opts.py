@@ -39,6 +39,7 @@ class Opts(object):
         self.model              = '' # {rnn_basic, rnn_attention_s, rnn_attention_t}
         self.losses             = None
         self.regress            = 'abs' # {abs, delta}
+        self.search_scale       = 2 # size of search space relative to target.
 
         #----------------------------------------------------------------------
         # model parameters - rnn

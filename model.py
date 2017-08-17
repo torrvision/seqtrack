@@ -132,7 +132,7 @@ def process_target_with_box(img, box, o):
         crop.append(tf.image.crop_and_resize(tf.expand_dims(img[b],0),
                                              boxes=cropbox,
                                              box_ind=[0],
-                                             crop_size=[o.frmsz/2, o.frmsz/2])) # target size
+                                             crop_size=[o.frmsz/o.search_scale]*2)) # target size
     return tf.concat(crop, 0)
 
 def process_search_with_box(img, box, o):
@@ -151,8 +151,8 @@ def process_search_with_box(img, box, o):
         x2 = box[b,2]
         y2 = box[b,3]
         # search size: twice bigger than object.
-        w_margin = (x2 - x1) * 0.5 # TODO: change this.
-        h_margin = (y2 - y1) * 0.5
+        w_margin = ((x2 - x1) * float(o.search_scale - 1)) * 0.5
+        h_margin = ((y2 - y1) * float(o.search_scale - 1)) * 0.5
         # search box (raw)
         x1_s_raw = x1 - w_margin # can be outside of [0,1]
         y1_s_raw = y1 - h_margin
@@ -192,8 +192,6 @@ def process_search_with_box(img, box, o):
         search.append(crop_res)
         box_s_raw.append(tf.stack([x1_s_raw, y1_s_raw, x2_s_raw, y2_s_raw], 0))
         box_s_val.append(tf.stack([x1_s_val, y1_s_val, x2_s_val, y2_s_val], 0))
-
-        # TODO: Modified Ground-truth?
 
     search = tf.stack(search, 0)
     box_s_raw = tf.stack(box_s_raw, 0)
@@ -315,7 +313,7 @@ class Nornn(object):
                                                  padding='SAME'))
             return tf.concat(scoremap, 0)
 
-        def pass_deconvolution(x):
+        def pass_deconvolution(x, o):
             ''' Upsampling layers.
             '''
             # NOTE: Not entirely sure yet if `align_corners` option is required.
@@ -324,7 +322,7 @@ class Nornn(object):
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 x = slim.conv2d(x, num_outputs=256, scope='deconv1')
                 x = slim.conv2d(x, num_outputs=2, scope='deconv2')
-                x = tf.image.resize_images(x, [241, 241])
+                x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
                 x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
                 #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
             return x
@@ -386,7 +384,7 @@ class Nornn(object):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
-                hmap_curr_pred_oc = pass_deconvolution(scoremap)
+                hmap_curr_pred_oc = pass_deconvolution(scoremap, o)
 
             # End of learning. Now tracking algorithm begins.
             # Find center.
