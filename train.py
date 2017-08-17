@@ -735,6 +735,14 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
                 losses['ce_balanced'] = tf.reduce_mean(
                         tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
 
+        # l2 loss for box size.
+        if 'l2_boxsz' in o.losses:
+            boxsz_pred = outputs['boxsz_pred_oc'] # oc
+            boxsz_gt = tf.stack([y_gt[:,:,2]-y_gt[:,:,0], y_gt[:,:,3]-y_gt[:,:,1]], 2)
+            boxsz_gt_valid = tf.boolean_mask(boxsz_gt, y_is_valid) # oc
+            boxsz_pred_valid = tf.boolean_mask(boxsz_pred, y_is_valid)
+            losses['l2_boxsz'] = tf.reduce_mean(tf.square(boxsz_gt_valid - boxsz_pred_valid))
+
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
                 tf.summary.scalar(name, loss, collections=summaries_collections)
