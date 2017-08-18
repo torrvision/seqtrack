@@ -280,15 +280,17 @@ class Nornn(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  depth_wise_norm=False,
-                 depth_wise_cc=True,
                  pred_box=False,
                  optical_flow=False,
+                 resize_target=False,
+                 divide_target=False,
                  ):
         # model parameters
         self.depth_wise_norm = depth_wise_norm
-        self.depth_wise_cc = depth_wise_cc
         self.pred_box = pred_box
         self.optical_flow = optical_flow
+        self.resize_target = resize_target
+        self.divide_target = divide_target
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -317,21 +319,34 @@ class Nornn(object):
                     x = slim.conv2d(x, 256, 3, stride=1, scope='conv5')
             return x
 
-        def pass_cross_correlation(search, filt, o):
-            # TODO: ICCV paper performed normal conv rather than depthwise_conv2d.
+        def pass_cross_correlation(search, target, o):
+            ''' Perform cross-correlation (convolution) to find the target object.
+            I use channel-wise convolution, instead of normal convolution.
+            '''
+            targets = []
+            targets.append(target)
+
+            height = target.shape.as_list()[1] # height of target (=width)
+            if self.resize_target:
+                # TODO: 1) more resizings, 2) convolution before/after resizing? Is relu positivity okay?
+                targets.append(tf.image.resize_images(target, [int(height*1.2)]*2)) # x1.2 big
+                targets.append(tf.image.resize_images(target, [int(height*0.2)]*2)) # x0.2 small
+            if self.divide_target:
+                patchsz = [5] # TODO: diff sizes
+                for n in range(len(patchsz)):
+                    for i in range(0,height,patchsz[n]):
+                        for j in range(0,height,patchsz[n]):
+                            targets.append(target[:,i:i+patchsz[n], j:j+patchsz[n], :])
+
             scoremap = []
-            for i in range(o.batchsz):
-                if self.depth_wise_cc: # Opt1. depth-wise convolution.
-                    scoremap.append(tf.nn.depthwise_conv2d(tf.expand_dims(search[i],0),
-                                                           tf.expand_dims(filt[i], 3),
-                                                           strides=[1,1,1,1],
-                                                           padding='SAME'))
-                else: # Opt2. regular convolution.
-                    numout_to = filt.shape.as_list()[-1]
-                    scoremap.append(tf.nn.conv2d(tf.expand_dims(search[i], 0),
-                                                 tf.concat([tf.expand_dims(filt[i], 3)]*numout_to, 3),
-                                                 strides=[1,1,1,1],
-                                                 padding='SAME'))
+            for b in range(o.batchsz):
+                scoremap_each = []
+                for k in range(len(targets)):
+                    scoremap_each.append(tf.nn.depthwise_conv2d(tf.expand_dims(search[b], 0),
+                                                                tf.expand_dims(targets[k][b], 3),
+                                                                strides=[1,1,1,1],
+                                                                padding='SAME'))
+                scoremap.append(tf.add_n(scoremap_each) / len(targets))
             return tf.concat(scoremap, 0)
 
         def pass_deconvolution(x, o):
