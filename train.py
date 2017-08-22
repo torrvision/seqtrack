@@ -406,11 +406,14 @@ def _make_input_pipeline(o,
     with tf.name_scope(name) as scope:
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
         images = pipeline.load_images(files,
-            image_size=[o.frmsz, o.frmsz], resize=True,
-            capacity=load_capacity, num_threads=num_load_threads)
+            image_size=[o.frmsz, o.frmsz],
+            capacity=load_capacity,
+            num_threads=num_load_threads)
         images_batch = pipeline.batch(images,
-            batch_size=o.batchsz, sequence_length=o.ntimesteps+1,
-            capacity=batch_capacity, num_threads=num_batch_threads)
+            batch_size=o.batchsz,
+            sequence_length=o.ntimesteps+1,
+            capacity=batch_capacity,
+            num_threads=num_batch_threads)
 
         # Set static dimension of sequence length.
         # TODO: This may only be necessary due to how the model is written.
@@ -819,37 +822,9 @@ def _draw_memory_state(model, mtype, time_stride=1, name='draw_memory_states'):
         p = tf.nn.softmax(model.memory[mtype][0,::time_stride])
         return tf.cast(tf.round(255*p[:,:,:,0:1]), tf.uint8)
 
-def _load_sequence(seq, o):
-    '''
-    Sequence has keys:
-        'image_files'    # Tensor with shape [n] containing strings.
-        'labels'         # Tensor with shape [n, 4] containing rectangles.
-        'label_is_valid' # Tensor with shape [n] containing booleans.
-    Example has keys:
-        'x0'         # First image in sequence, shape [h, w, 3]
-        'y0'         # Position of target in first image, shape [4]
-        'x'          # Input images, shape [n-1, h, w, 3]
-        'y'          # Position of target in following frames, shape [n-1, 4]
-        'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
-    '''
-    seq_len = len(seq['image_files'])
-    assert(len(seq['labels']) == seq_len)
-    assert(len(seq['label_is_valid']) == seq_len)
-    assert(seq['label_is_valid'][0] == True)
-    f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=True),
-                            dtype=o.dtype.as_numpy_dtype)
-    images = map(f, seq['image_files'])
-    return {
-        'x0':         np.array(images[0]),
-        'y0':         np.array(seq['labels'][0]),
-        'x':          np.array(images[1:]),
-        'y':          np.array(seq['labels'][1:]),
-        'y_is_valid': np.array(seq['label_is_valid'][1:]),
-    }
-
 def _load_batch(seqs, o):
     sequence_keys = set(['x', 'y', 'y_is_valid'])
-    examples = map(lambda x: _load_sequence(x, o), seqs)
+    examples = map(lambda x: model_graph.load_sequence(x, o.frmsz), seqs)
     # Pad all sequences to o.ntimesteps.
     # NOTE: Assumes that none of the arrays to be padded are empty.
     return {k: np.stack([pad_to(x[k], o.ntimesteps, axis=0)

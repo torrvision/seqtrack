@@ -97,8 +97,6 @@ def main():
         max_videos=None,
         max_objects=None)
 
-    # TODO: evaluate.track() ignores viewport?
-
     restorer = tf.train.Saver()
 
     with tf.Session() as sess:

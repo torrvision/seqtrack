@@ -1,11 +1,9 @@
-'''
-'''
-
+import numpy as np
 import tensorflow as tf
 
 import geom
 
-from helpers import most_static_shape
+from helpers import load_image_viewport, im_to_arr, most_static_shape
 
 EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid']
 
@@ -22,7 +20,8 @@ EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid']
 def make_example_placeholders(batchsz, ntimesteps, frmsz, default=None, dtype=tf.float32):
     '''Creates place to feed inputs.
 
-    At this point, the images are type uint8, and the mean has not been subtracted.
+    Images are converted to floating point using tf.image.convert_image_dtype.
+    Pixel values are in [0, 1].
     Mean subtraction occurs inside the model.
 
     Set `batchsz=None` for variable batch size.
@@ -176,3 +175,43 @@ def crop_prediction_frame(pred, window_rect, crop_size, name='crop_prediction_fr
             out['score_softmax'] = geom.crop_image(pred['score_softmax'], window_rect,
                 crop_size=crop_size)
     return out
+
+
+def load_sequence(sequence, frmsz):
+    '''
+    Analogous to pipeline.load_images.
+    '''
+    # Sequence has keys:
+    #     'image_files'    # Tensor with shape [n] containing strings.
+    #     'viewports'      # Tensor with shape [n] containing strings.
+    #     'labels'         # Tensor with shape [n, 4] containing rectangles.
+    #     'label_is_valid' # Tensor with shape [n] containing booleans.
+    # Example has keys:
+    #     'x0'         # First image in sequence, shape [h, w, 3]
+    #     'y0'         # Position of target in first image, shape [4]
+    #     'x'          # Input images, shape [n-1, h, w, 3]
+    #     'y'          # Position of target in following frames, shape [n-1, 4]
+    #     'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
+
+    seq_len = len(sequence['image_files'])
+    assert(len(sequence['labels']) == seq_len)
+    assert(len(sequence['label_is_valid']) == seq_len)
+    assert(sequence['label_is_valid'][0] == True)
+    images = [
+        im_to_arr(load_image_viewport(
+            sequence['image_files'][t],
+            sequence['viewports'][t],
+            size=(frmsz, frmsz)))
+        for t in range(seq_len)
+    ]
+    rects = [
+        geom_np.crop_rect(sequence['labels'][t], sequence['viewports'][t])
+        for t in range(seq_len)
+    ]
+    return {
+        'x0':         np.array(images[0]),
+        'y0':         np.array(rects[0]),
+        'x':          np.array(images[1:]),
+        'y':          np.array(rects[1:]),
+        'y_is_valid': np.array(sequence['label_is_valid'][1:]),
+    }

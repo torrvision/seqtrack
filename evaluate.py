@@ -7,7 +7,7 @@ from progressbar import ProgressBar, Bar, Counter, ETA, Percentage # pip install
 
 import draw
 import data
-from helpers import load_image, im_to_arr, pad_to
+from helpers import load_image_viewport, im_to_arr, pad_to
 
 
 Model = collections.namedtuple('Model', [
@@ -39,6 +39,7 @@ def track(sess, model, sequence, use_gt, prediction_vars=None):
     sequence['image_files']    -- List of strings of length n.
     sequence['labels']         -- Numpy array of shape [n, 4]
     sequence['label_is_valid'] -- List of booleans of length n.
+    sequence['viewports']      -- Crop this window from the image.
     sequence['original_image_size'] -- (width, height) tuple.
         Required to compute IOU, etc. with correct aspect ratio.
     '''
@@ -48,7 +49,10 @@ def track(sess, model, sequence, use_gt, prediction_vars=None):
     if prediction_vars is None:
         prediction_vars = model.prediction.keys()
 
-    first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
+    first_image = load_image_viewport(
+        sequence['image_files'][0],
+        sequence['viewports'][0],
+        model.image_size)
     first_label = sequence['labels'][0]
     first_image = _single_to_batch(im_to_arr(first_image), model.batch_size)
     first_label = _single_to_batch(first_label, model.batch_size)
@@ -66,8 +70,12 @@ def track(sess, model, sequence, use_gt, prediction_vars=None):
         rem = sequence_len - start
         # Feed the next `chunk_len` frames into the model.
         chunk_len = min(rem, model.sequence_len)
-        images = map(lambda x: load_image(x, model.image_size, resize=True),
-                     sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
+        images = [
+            load_image_viewport(image_file, viewport, model.image_size)
+            for image_file, viewport in zip(
+                sequence['image_files'][start:start+chunk_len],
+                sequence['viewports'][start:start+chunk_len])
+        ]
         images = np.array(map(im_to_arr, images))
         images = _single_to_batch(pad_to(images, model.sequence_len), model.batch_size)
         y_gt = np.array(sequence['labels'][start:start+chunk_len])

@@ -2,6 +2,8 @@ import tensorflow as tf
 
 from helpers import merge_dims
 
+EPSILON = 1e-3
+
 
 def crop_example(example, window, crop_size, pad_value=None, name='crop_example'):
     '''
@@ -65,11 +67,10 @@ def crop_example_frame(example, window_rect, crop_size, pad_value=None,
 
 def object_centric_window(obj_rect, relative_size=4.0, name='object_centric_window'):
     with tf.name_scope(name) as scope:
-        eps = 0.01
         obj_min, obj_max = rect_min_max(obj_rect)
         obj_size = tf.maximum(0.0, obj_max - obj_min)
         center = 0.5 * (obj_min + obj_max)
-        obj_diam = tf.exp(tf.reduce_mean(tf.log(obj_size + eps), axis=-1))
+        obj_diam = tf.exp(tf.reduce_mean(tf.log(tf.minimum(obj_size, EPSILON)), axis=-1))
         window_diam = relative_size * obj_diam
         window_min = center - 0.5*tf.expand_dims(window_diam, -1)
         window_max = center + 0.5*tf.expand_dims(window_diam, -1)
@@ -84,10 +85,9 @@ def crop_rect(rects, window_rect, name='crop_rect'):
         window_rect -- [..., 4]
     '''
     with tf.name_scope(name) as scope:
-        eps = 0.01
         window_min, window_max = rect_min_max(window_rect)
         window_size = window_max - window_min
-        window_size = tf.sign(window_size) * (tf.abs(window_size) + eps)
+        window_size = tf.sign(window_size) * tf.minimum(tf.abs(window_size), EPSILON)
         rects_min, rects_max = rect_min_max(rects)
         out_min = (rects_min - window_min) / window_size
         out_max = (rects_max - window_min) / window_size
@@ -171,13 +171,12 @@ def crop_inverse(rect, name='crop_inverse'):
     CAUTION: Epsilon means that inverse is not exact?
     '''
     with tf.name_scope(name) as scope:
-        eps = 0.01
         # x_min, y_min, x_max, y_max = tf.unstack(rect, axis=-1)
         rect_min, rect_max = rect_min_max(rect)
         # TODO: Support reversed rectangle.
-        rect_size = tf.abs(rect_max - rect_min) + eps
-        # x_size = tf.abs(x_max - x_min) + eps
-        # y_size = tf.abs(y_max - y_min) + eps
+        rect_size = tf.abs(rect_max - rect_min) + EPSILON
+        # x_size = tf.abs(x_max - x_min) + EPSILON
+        # y_size = tf.abs(y_max - y_min) + EPSILON
         inv_min = -rect_min / rect_size
         # u_min = -x_min / x_size
         # v_min = -y_min / y_size
@@ -210,7 +209,6 @@ def rect_iou(a_rect, b_rect, name='rect_iou'):
     # Otherwise, there will be no gradient for invalid rectangles.
     # TODO: Add assertion?
     with tf.name_scope(name) as scope:
-        eps = 1e-3
         intersect_min, intersect_max = rect_min_max(rect_intersect(a_rect, b_rect))
         intersect_area = tf.reduce_prod(tf.maximum(0.0, intersect_max - intersect_min), axis=-1)
         a_min, a_max = rect_min_max(a_rect)
@@ -218,7 +216,7 @@ def rect_iou(a_rect, b_rect, name='rect_iou'):
         a_area = tf.reduce_prod(tf.maximum(0.0, a_max - a_min), axis=-1)
         b_area = tf.reduce_prod(tf.maximum(0.0, b_max - b_min), axis=-1)
         union_area = a_area + b_area - intersect_area
-        return intersect_area / (union_area + eps)
+        return intersect_area / tf.minimum(union_area, EPSILON)
 
 
 def rect_intersect(a_rect, b_rect, name='rect_intersect'):

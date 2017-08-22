@@ -128,7 +128,7 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
         coord.request_stop()
 
 
-def load_images(example, image_size, pad_value=0.5, resize=False, capacity=32, num_threads=1,
+def load_images(example, image_size, pad_value=0.5, capacity=32, num_threads=1,
         name='load_images'):
     '''Creates a queue of sequences with images loaded.
     See the package example.
@@ -202,6 +202,7 @@ def load_images(example, image_size, pad_value=0.5, resize=False, capacity=32, n
         dequeue['labels'].set_shape(example['labels'].shape)
         dequeue['label_is_valid'].set_shape(example['label_is_valid'].shape)
         return dequeue
+
 
 def batch(example, batch_size=1, capacity=32, num_threads=1, sequence_length=None, name='batch'):
     '''Creates a queue of batches of sequences (with images) from a queue of sequences.

@@ -33,6 +33,7 @@ def createScalarMap(name='hot', vmin=-10, vmax=10):
     cNorm  = colors.Normalize(vmin=vmin, vmax=vmax)
     return cmx.ScalarMappable(norm=cNorm, cmap=cm)
 
+
 def load_image(fname, size=None, resize=False):
     im = Image.open(fname)
     if im.mode != 'RGB':
@@ -46,6 +47,33 @@ def load_image(fname, size=None, resize=False):
                 pdb.set_trace()
                 raise ValueError('size does not match')
     return im
+
+def crop_and_resize(src, box, size, pad_value):
+    '''src is a PIL image'''
+    assert len(pad_value) == 3
+    # Valid region in original image.
+    valid_src = geom_np.rect_intersect(box, geom_np.rect_identity())
+    # Valid region in box.
+    valid_box = geom_np.crop_rect(valid_src, box)
+
+    valid_src_abs = np.rint(geom_np.rect_mul(valid_src, src.size)).astype(np.int)
+    valid_box_abs = np.rint(geom_np.rect_mul(valid_box, size)).astype(np.int)
+
+    im_valid_src = src.crop(valid_src_abs)
+    # Resize to final size in output image.
+    im_valid_out = im_valid_src.resize(geom_np.rect_size(valid_box_abs))
+    out = Image.new('RGB', size, pad_value)
+    out.paste(im_valid_out, valid_box_abs)
+    import pdb ; pdb.set_trace()
+    return out
+
+def load_image_viewport(fname, viewport, size, pad_value=None):
+    if pad_value is None:
+        pad_value = (128, 128, 128)
+    im = Image.open(fname)
+    if im.mode != 'RGB':
+        im = im.convert('RGB')
+    return crop_and_resize(im, viewport, size, pad_value)
 
 def im_to_arr(x, dtype=np.float32):
     return (1.0/255) * np.array(x, dtype=dtype)
