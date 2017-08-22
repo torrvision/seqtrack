@@ -19,12 +19,13 @@ import geom
 import helpers
 import lossfunc
 import model_graph
+import motion
 import pipeline
 import sample
 import visualize
 
 from model import convert_rec_to_heatmap
-from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
+from helpers import pad_to, cache_json, merge_dims
 
 SUMMARIES_IMAGES = 'summaries_images'
 
@@ -214,7 +215,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
     # Use a separate random number generator for each sampler.
     sequences = {dataset: iter_examples(datasets[dataset], o,
-                                        rand=random.Random(o.seed_global),
+                                        rand=np.random.RandomState(o.seed_global),
                                         num_epochs=None)
                  for dataset in datasets}
 
@@ -617,9 +618,17 @@ def iter_examples(dataset, o, rand=None, num_epochs=None):
     assert 'kind' in o.sampler_params
     sample_frames = sample.make_frame_sampler(dataset=dataset, rand=rand,
         ntimesteps=o.ntimesteps, **o.sampler_params)
+    augment_motion = motion.make_motion_augmenter(rand=rand, **{
+        'kind': 'add_gaussian_random_walk',
+         'sigma_translate': 0.5,
+         'sigma_scale':     1.1,
+         'min_diameter':    0.1,
+         'max_diameter':    0.5,
+    })
+
     for i in epochs:
         n = 0
-        sequences = sample.epoch(dataset, rand, sample_frames, max_objects=1)
+        sequences = sample.epoch(dataset, rand, sample_frames, augment_motion, max_objects=1)
         # sequences = sample.sample(dataset, generator=generator,
         #                           shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
         #                           **o.sampler_params)

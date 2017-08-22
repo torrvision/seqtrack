@@ -9,7 +9,8 @@ import tensorflow as tf
 
 from opts           import Opts
 import data
-import model as model_package
+import model as model_pkg
+import motion
 import train
 import sample
 
@@ -219,7 +220,7 @@ def main():
         train.generate_report(sorted(o.eval_samplers), sorted(o.eval_datasets), o)
         return
 
-    create_model = model_package.load_model(o)
+    create_model = model_pkg.load_model(o)
 
     train_datasets = {
         'train':  datasets['ILSVRC-train'],

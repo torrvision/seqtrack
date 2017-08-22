@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 
 import geom
+import geom_np
 
 from helpers import load_image_viewport, im_to_arr, most_static_shape
 

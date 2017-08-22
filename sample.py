@@ -63,7 +63,7 @@ def epoch(dataset, rand, sample_frames, augment_motion=None, max_objects=None, m
             # (In dataset, length was given by length of video.)
             rects = [trajectory.get(t, None) for t in frames]
             viewports = augment_motion(rects)
-            if not viewports:
+            if viewports is None:
                 print 'could not augment motion: ({}, {})'.format(video, obj)
                 continue
             name = '{}-{}'.format(_escape(video), obj)

@@ -7,6 +7,8 @@ import os
 from PIL import Image
 import tensorflow as tf
 
+import geom_np
+
 def get_time():
     dt = datetime.datetime.now()
     time = '{0:04d}{1:02d}{2:02d}_h{3:02d}m{4:02d}s{5:02d}'.format(
@@ -64,7 +66,6 @@ def crop_and_resize(src, box, size, pad_value):
     im_valid_out = im_valid_src.resize(geom_np.rect_size(valid_box_abs))
     out = Image.new('RGB', size, pad_value)
     out.paste(im_valid_out, valid_box_abs)
-    import pdb ; pdb.set_trace()
     return out
 
 def load_image_viewport(fname, viewport, size, pad_value=None):

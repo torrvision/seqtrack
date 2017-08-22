@@ -37,16 +37,20 @@ def crop_solve(original, result):
     return window
 
 def crop_rect(rects, window_rect):
+    rects       = np.asarray(rects)
+    window_rect = np.asarray(window_rect)
     window_min, window_max = rect_min_max(window_rect)
     window_size = window_max - window_min
-    window_size = np.sign(window_size) * np.minimum(np.abs(window_size), EPSILON)
+    window_size = np.sign(window_size) * np.maximum(np.abs(window_size), EPSILON)
     rects_min, rects_max = rect_min_max(rects)
     out_min = (rects_min - window_min) / window_size
     out_max = (rects_max - window_min) / window_size
     return make_rect(out_min, out_max)
 
 def rect_identity():
-    return np.array([0.0, 0.0, 1.0, 1.0], dtype=np.float32)
+    min_pt = np.array([0.0, 0.0], dtype=np.float32)
+    max_pt = np.array([1.0, 1.0], dtype=np.float32)
+    return make_rect(min_pt, max_pt)
 
 def rect_intersect(a_rect, b_rect):
     # Assumes that rectangles are valid (min <= max).

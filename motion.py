@@ -20,7 +20,7 @@ def make_motion_augmenter(kind, rand, **kwargs):
 
 
 def no_augment(rects):
-    return [geom_np.rect_identity()] * len(rects)
+    return np.array([geom_np.rect_identity()] * len(rects))
 
 
 def add_gaussian_random_walk(rects,
