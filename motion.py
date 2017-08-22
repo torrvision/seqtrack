@@ -29,6 +29,8 @@ def add_gaussian_random_walk(rects,
                              sigma_scale=1.1,
                              min_diameter=0.1,
                              max_diameter=0.5,
+                             min_scale=0.3,
+                             max_scale=3,
                              max_attempts=20):
     '''
     Args:
@@ -64,6 +66,7 @@ def add_gaussian_random_walk(rects,
         base_diameter = math.exp(rand.uniform(math.log(min_diameter), math.log(max_diameter)))
         rel_center = sigma_translate * sample_random_walk(len(rects), dim=2, rand=rand)
         scale = np.exp(math.log(sigma_scale) * sample_random_walk(len(rects), dim=1, rand=rand))
+        scale = np.exp(_fit_to_range(np.log(scale), math.log(min_scale), math.log(max_scale)))
         # Check whether this object can fit in the frame with this path.
         center = base_diameter * rel_center
         # Size of original extent after scaling in each frame.
@@ -105,6 +108,15 @@ def add_gaussian_random_walk(rects,
     window = geom_np.crop_solve(orig_region, region)
     # geom_np.crop_rect(orig_region, window) == region
     return window
+
+
+def _fit_to_range(x, min_val, max_val):
+    x_min = np.amin(x)
+    x_max = np.amax(x)
+    y_min = np.maximum(x_min, min_val)
+    y_max = np.minimum(x_max, max_val)
+    y = y_min + (x-x_min)/(x_max-x_min)*(y_max-y_min)
+    return y
 
 
 def sample_random_walk(n, dim, rand):
