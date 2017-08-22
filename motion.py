@@ -29,8 +29,8 @@ def add_gaussian_random_walk(rects,
                              sigma_scale=1.1,
                              min_diameter=0.1,
                              max_diameter=0.5,
-                             min_scale=0.3,
-                             max_scale=3,
+                             min_scale=0.5,
+                             max_scale=4,
                              max_attempts=20):
     '''
     Args:
@@ -49,6 +49,7 @@ def add_gaussian_random_walk(rects,
     orig_diameter = np.exp(np.mean(np.log(rects_size + eps), axis=-1))
     orig_mean_diameter = np.exp(np.mean(np.log(orig_diameter)))
     # Treat the bounding box of the object's path as a static object in an image.
+    # Scaling preserves the center of this "object"?
     orig_region_min = np.amin(rects_min, axis=0)
     orig_region_max = np.amax(rects_max, axis=0)
     orig_region_size = orig_region_max - orig_region_min
@@ -61,19 +62,27 @@ def add_gaussian_random_walk(rects,
     while not ok:
         if num_attempts > max_attempts:
             return None
-        # Sample size of object.
-        # TODO: Maximum scale.
+        # Sample (average) size of object.
         base_diameter = math.exp(rand.uniform(math.log(min_diameter), math.log(max_diameter)))
-        rel_center = sigma_translate * sample_random_walk(len(rects), dim=2, rand=rand)
-        scale = np.exp(math.log(sigma_scale) * sample_random_walk(len(rects), dim=1, rand=rand))
-        scale = np.exp(_fit_to_range(np.log(scale), math.log(min_scale), math.log(max_scale)))
+        # Sample motion, starting at 0, relative to size of object.
+        delta_position_rel = sigma_translate * sample_random_walk(len(rects), dim=2, rand=rand)
+        # Sample scale, starting at 1.0 in first frame.
+        delta_scale = np.exp(math.log(sigma_scale) * sample_random_walk(len(rects), dim=1, rand=rand))
+
+        # Do not want to shrink or grow the image too much.
+        # TODO: Consider aspect ratio here?
+        scale = base_diameter / orig_mean_diameter
+        scale = np.minimum(max_scale, np.maximum(min_scale, scale))
+        base_diameter = scale * orig_mean_diameter
+
         # Check whether this object can fit in the frame with this path.
-        center = base_diameter * rel_center
+        # TODO: Use aspect ratio.
+        delta_position = base_diameter * delta_position_rel
         # Size of original extent after scaling in each frame.
         # (Object diameter in each frame is simply base_diameter * scale.)
-        region_size = orig_region_size / orig_mean_diameter * base_diameter * scale
-        region_min = center - 0.5 * region_size
-        region_max = center + 0.5 * region_size
+        region_size = orig_region_size * scale * delta_scale
+        region_min = delta_position - 0.5 * region_size
+        region_max = delta_position + 0.5 * region_size
         # Ensure that region will fit inside image frame.
         region_extent_min = np.amin(region_min, axis=0)
         region_extent_max = np.amax(region_max, axis=0)
@@ -84,9 +93,7 @@ def add_gaussian_random_walk(rects,
 
     # Choose global translation of track.
     offset = -region_extent_min + rand.uniform(size=(2,)) * gap
-    region_min += offset
-    region_max += offset
-    region = geom_np.make_rect(region_min, region_max)
+    region = geom_np.make_rect(region_min + offset, region_max + offset)
 
     # We have generated a trajectory for the extent of the original motion.
     # The problem is now to find the sequence of windows which gives that trajectory,
@@ -108,15 +115,6 @@ def add_gaussian_random_walk(rects,
     window = geom_np.crop_solve(orig_region, region)
     # geom_np.crop_rect(orig_region, window) == region
     return window
-
-
-def _fit_to_range(x, min_val, max_val):
-    x_min = np.amin(x)
-    x_max = np.amax(x)
-    y_min = np.maximum(x_min, min_val)
-    y_max = np.minimum(x_max, max_val)
-    y = y_min + (x-x_min)/(x_max-x_min)*(y_max-y_min)
-    return y
 
 
 def sample_random_walk(n, dim, rand):
