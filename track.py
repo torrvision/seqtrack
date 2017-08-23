@@ -39,7 +39,7 @@ def main():
         default=json.dumps({'kind': 'full'}))
     parser.add_argument('--augment_motion_params', type=json.loads,
         help='JSON string to specify motion augmentation',
-        default=json.dumps({'kind': 'add_gaussian_random_walk'}))
+        default=json.dumps({'kind': 'none'}))
     # Paths.
     parser.add_argument('--path_ckpt', default='./ckpt')
     args = parser.parse_args()

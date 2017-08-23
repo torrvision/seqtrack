@@ -70,10 +70,10 @@ def add_gaussian_random_walk(is_valid, rects, rand,
         # Sample (average) size of object.
         base_diameter = math.exp(rand.uniform(math.log(min_diameter), math.log(max_diameter)))
         # Sample motion, starting at 0, relative to size of object.
-        delta_position_rel = sample_random_walk(len(rects), dim=2, rand=rand,
+        delta_position_rel = _sample_walk(len(rects), dim=2, rand=rand,
             kind=translate_kind, scale=translate_amount)
         # Sample scale, starting at 1.0 in first frame.
-        delta_scale = np.exp(sample_random_walk(len(rects), dim=1, rand=rand,
+        delta_scale = np.exp(_sample_walk(len(rects), dim=1, rand=rand,
             kind=scale_kind, scale=math.log(scale_amount)))
 
         # Do not want to shrink or grow the image too much.
@@ -154,21 +154,18 @@ def gaussian_random_walk(is_valid, rects, rand,
 
         # Sample (average) size of object.
         base_diameter = math.exp(rand.uniform(math.log(min_diameter), math.log(max_diameter)))
-        # Sample motion, starting at 0, relative to size of object.
-        delta_position_rel = sample_random_walk(len(orig_rect), dim=2, rand=rand,
-            kind=translate_kind, scale=translate_amount)
-        # Sample scale, starting at 1.0 in first frame.
-        delta_scale = np.exp(sample_random_walk(len(orig_rect), dim=1, rand=rand,
-            kind=scale_kind, scale=math.log(scale_amount)))
-
-        position_rel, scale = _combine_translate_scale(delta_position_rel, delta_scale)
-
         # Impose limits on scale.
         # This may override min_diameter and max_diameter!
         # TODO: Consider aspect ratio here?
         abs_scale = base_diameter / orig_mean_diameter
         abs_scale = np.minimum(max_scale, np.maximum(min_scale, abs_scale))
         base_diameter = abs_scale * orig_mean_diameter
+
+        position_rel, scale = _sample_scale_walk(len(orig_rect), dim=2, rand=rand,
+            translate_kind=translate_kind,
+            translate_amount=translate_amount,
+            scale_kind=scale_kind,
+            scale_amount=scale_amount)
 
         # Now move from object co-ordinates to world co-ordinates.
         position = base_diameter * position_rel
@@ -195,38 +192,81 @@ def gaussian_random_walk(is_valid, rects, rand,
     return viewport
 
 
-def sample_random_walk(n, dim, rand, kind='gaussian', scale=1.0):
+def _sample_step(n, dim, rand, kind='gaussian', scale=1.0):
     if kind == 'gaussian':
         sample = rand.normal
     elif kind == 'laplace':
         sample = rand.laplace
     else:
         raise ValueError('unknown distribution: {}'.format(kind))
-    return cumsum(sample(size=(n-1, dim), scale=scale))
+    magnitude = sample(size=(n, 1), scale=scale)
+    direction = rand.normal(size=(n, dim))
+    direction /= np.linalg.norm(direction, axis=-1, keepdims=True)
+    return magnitude * direction
 
-def cumsum(steps):
+def _sample_walk(n, dim, rand, kind='gaussian', scale=1.0):
+    return _cumsum(_sample_step(n-1, dim, rand, kind, scale))
+
+def _cumsum(steps):
     dim = steps.shape[-1]
     return np.concatenate((
         np.zeros((1, dim)),
         np.cumsum(steps, axis=0),
     ))
 
-
 def _interpolate_missing(is_valid, rects):
+    is_valid, rects = _extrapolate_missing(is_valid, rects)
     n = len(rects)
     t = np.arange(n, dtype=np.float32)
     t_valid = t[is_valid]
     rects_valid = rects[is_valid]
-    f = scipy.interpolate.interp1d(t_valid, rects_valid, kind='linear')
+    # TODO: Extrapolate is not good.
+    f = scipy.interpolate.interp1d(t_valid, rects_valid, axis=0, kind='linear', bounds_error=True)
     return f(t)
 
-def _combine_translate_scale(delta_position, delta_scale):
+def _extrapolate_missing(is_valid, rects):
+    n = len(rects)
+    t = np.arange(n)
+    t_valid = t[is_valid]
+    a = t_valid[0]
+    b = t_valid[-1] + 1
+    rects = np.concatenate((
+        np.tile(rects[a], (a, 1)),
+        rects[a:b],
+        np.tile(rects[b-1], (n - b, 1))), axis=0)
+    is_valid = np.array((
+        [True] * a +
+        list(is_valid[a:b]) +
+        [True] * (n - b)))
+    return is_valid, rects
+
+def _sample_scale_walk(n, dim, rand,
+                       translate_kind='laplace',
+                       translate_amount=0.5,
+                       scale_kind='laplace',
+                       scale_amount=1.1):
+    delta_position = _sample_step(n-1, dim, rand,
+        kind=translate_kind, scale=translate_amount)
+    delta_scale = np.exp(_sample_step(n-1, 1, rand,
+        kind=scale_kind, scale=math.log(scale_amount)))
     # Construct path relative to first frame.
-    scale = [1.0]
-    position = [0.0]
-    for t in range(1, n):
-        position_t = position[-1] + scale[-1]*delta_position[t]
-        scale_t = scale[-1] * delta_scale[t]
+    scale = [np.array([1.0], np.float32)]
+    position = [np.zeros((dim,), np.float32)]
+    for i in range(n-1):
+        position_t = position[-1] + scale[-1]*delta_position[i]
+        scale_t = scale[-1] * delta_scale[i]
         position.append(position_t)
         scale.append(scale_t)
     return np.array(position), np.array(scale)
+
+# def _combine_translate_scale(delta_position, delta_scale):
+#     # Construct path relative to first frame.
+#     n = len(delta_position)
+#     scale = [1.0]
+#     position = [0.0]
+#     for t in range(1, n):
+#         position_t = position[-1] + scale[-1]*delta_position[t]
+#         scale_t = scale[-1] * delta_scale[t]
+#         position.append(position_t)
+#         scale.append(scale_t)
+#     return np.array(position), np.array(scale)
