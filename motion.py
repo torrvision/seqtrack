@@ -15,10 +15,10 @@ def make_motion_augmenter(kind, rand, **kwargs):
     '''
     if kind == 'none':
         return no_augment
-    elif kind == 'add_gaussian_random_walk':
-        return functools.partial(add_gaussian_random_walk, rand=rand, **kwargs)
-    elif kind == 'gaussian_random_walk':
-        return functools.partial(gaussian_random_walk, rand=rand, **kwargs)
+    elif kind == 'random_walk':
+        return functools.partial(random_walk, rand=rand, **kwargs)
+    elif kind == 'add_random_walk':
+        return functools.partial(add_random_walk, rand=rand, **kwargs)
     else:
         raise ValueError('unknown motion augmentation: {}'.format(kind))
 
@@ -27,17 +27,18 @@ def no_augment(is_valid, rects):
     return np.array([geom_np.rect_identity()] * len(rects))
 
 
-def gaussian_random_walk(is_valid, rects, rand,
-                         translate_kind='laplace',
-                         translate_amount=0.5,
-                         scale_kind='laplace',
-                         scale_amount=1.1,
-                         min_diameter=0.1,
-                         max_diameter=0.5,
-                         min_scale=0.5,
-                         max_scale=4,
-                         max_attempts=20):
-    '''
+def random_walk(is_valid, rects, rand,
+                translate_kind='laplace',
+                translate_amount=0.5,
+                scale_kind='laplace',
+                scale_amount=1.1,
+                min_diameter=0.1,
+                max_diameter=0.5,
+                min_scale=0.5,
+                max_scale=4,
+                max_attempts=20):
+    '''Sets the object motion to a random walk.
+
     Args:
         rects: List of rectangles, or None if object is not present.
         rand: Numpy random object.
@@ -103,16 +104,21 @@ def gaussian_random_walk(is_valid, rects, rand,
     return viewport
 
 
-def add_gaussian_random_walk(is_valid, rects, rand,
-                             translate_kind='laplace',
-                             translate_amount=0.5,
-                             scale_kind='laplace',
-                             scale_amount=1.1,
-                             min_diameter=0.1,
-                             max_diameter=0.5,
-                             min_scale=0.5,
-                             max_scale=4,
-                             max_attempts=20):
+def add_random_walk(is_valid, rects, rand,
+                    translate_kind='laplace',
+                    translate_amount=0.5,
+                    scale_kind='laplace',
+                    scale_amount=1.1,
+                    min_diameter=0.1,
+                    max_diameter=0.5,
+                    min_scale=0.5,
+                    max_scale=4,
+                    max_attempts=20):
+    '''Adds a random walk to the whole frame.
+
+    Preserves the motion of the object within the frame.
+    '''
+
     EPSILON = 0.01
 
     orig_rect = rects
