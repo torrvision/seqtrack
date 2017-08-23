@@ -61,8 +61,9 @@ def epoch(dataset, rand, sample_frames, augment_motion=None, max_objects=None, m
             # Take sub-trajectory.
             # Use list instead of dictionary to provide length.
             # (In dataset, length was given by length of video.)
-            rects = [trajectory.get(t, None) for t in frames]
-            viewports = augment_motion(rects)
+            is_valid = np.array([t in trajectory for t in frames])
+            rects    = np.array([trajectory.get(t, _invalid_rect()) for t in frames])
+            viewports = augment_motion(is_valid, rects)
             if viewports is None:
                 print 'could not augment motion: ({}, {})'.format(video, obj)
                 continue
@@ -273,12 +274,8 @@ def _sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None
             }
 
 
-def _identity_rect():
-    return [0.0, 0.0, 1.0, 1.0]
-
-
 def _invalid_rect():
-    return [float('nan')] * 4
+    return np.array([float('nan')] * 4, dtype=np.float32)
 
 
 def make_motion_sampler(dataset, rand, ntimesteps, **kwargs):

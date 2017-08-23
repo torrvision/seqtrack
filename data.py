@@ -762,10 +762,11 @@ class OTB:
         self._load_data()
 
     def image_file(self, video, t):
-        if self.useresizedimg:
-            img_dir = 'img'
-        else:
-            img_dir = 'img_frmsz{}'.format(self.frmsz)
+        # if self.useresizedimg:
+        #     img_dir = 'img_frmsz{}'.format(self.frmsz)
+        # else:
+        #     img_dir = 'img'
+        img_dir = 'img'
         if video == 'Board':
             filename = '{:05d}.jpg'.format(t+1)
         else:

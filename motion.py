@@ -1,6 +1,7 @@
 import functools
 import math
 import numpy as np
+import scipy.interpolate
 
 import geom
 import geom_np
@@ -9,24 +10,28 @@ import geom_np
 def make_motion_augmenter(kind, rand, **kwargs):
     '''
     Returns:
+        Function that maps (is_valid, labels) to viewports.
         Function that maps sequence to sequence, modifying viewports.
     '''
     if kind == 'none':
         return no_augment
     elif kind == 'add_gaussian_random_walk':
         return functools.partial(add_gaussian_random_walk, rand=rand, **kwargs)
+    elif kind == 'gaussian_random_walk':
+        return functools.partial(gaussian_random_walk, rand=rand, **kwargs)
     else:
         raise ValueError('unknown motion augmentation: {}'.format(kind))
 
 
-def no_augment(rects):
+def no_augment(is_valid, rects):
     return np.array([geom_np.rect_identity()] * len(rects))
 
 
-def add_gaussian_random_walk(rects,
-                             rand,
-                             sigma_translate=0.5,
-                             sigma_scale=1.1,
+def add_gaussian_random_walk(is_valid, rects, rand,
+                             translate_kind='laplace',
+                             translate_amount=0.5,
+                             scale_kind='laplace',
+                             scale_amount=1.1,
                              min_diameter=0.1,
                              max_diameter=0.5,
                              min_scale=0.5,
@@ -65,11 +70,14 @@ def add_gaussian_random_walk(rects,
         # Sample (average) size of object.
         base_diameter = math.exp(rand.uniform(math.log(min_diameter), math.log(max_diameter)))
         # Sample motion, starting at 0, relative to size of object.
-        delta_position_rel = sigma_translate * sample_random_walk(len(rects), dim=2, rand=rand)
+        delta_position_rel = sample_random_walk(len(rects), dim=2, rand=rand,
+            kind=translate_kind, scale=translate_amount)
         # Sample scale, starting at 1.0 in first frame.
-        delta_scale = np.exp(math.log(sigma_scale) * sample_random_walk(len(rects), dim=1, rand=rand))
+        delta_scale = np.exp(sample_random_walk(len(rects), dim=1, rand=rand,
+            kind=scale_kind, scale=math.log(scale_amount)))
 
         # Do not want to shrink or grow the image too much.
+        # This may override min_diameter and max_diameter!
         # TODO: Consider aspect ratio here?
         scale = base_diameter / orig_mean_diameter
         scale = np.minimum(max_scale, np.maximum(min_scale, scale))
@@ -117,10 +125,108 @@ def add_gaussian_random_walk(rects,
     return window
 
 
-def sample_random_walk(n, dim, rand):
-    steps = rand.normal(size=(n-1, dim))
-    path = np.concatenate((
+def gaussian_random_walk(is_valid, rects, rand,
+                         translate_kind='laplace',
+                         translate_amount=0.5,
+                         scale_kind='laplace',
+                         scale_amount=1.1,
+                         min_diameter=0.1,
+                         max_diameter=0.5,
+                         min_scale=0.5,
+                         max_scale=4,
+                         max_attempts=20):
+    EPSILON = 0.01
+
+    orig_rect = rects
+    # Fill missing elements.
+    orig_rect = _interpolate_missing(is_valid, orig_rect)
+
+    orig_min, orig_max = geom_np.rect_min_max(orig_rect)
+    orig_size = np.maximum(0.0, orig_max - orig_min)
+    orig_diameter = np.exp(np.mean(np.log(np.maximum(EPSILON, orig_size)), axis=-1))
+    orig_mean_diameter = np.exp(np.mean(np.log(orig_diameter)))
+
+    ok = False
+    num_attempts = 0
+    while not ok:
+        if num_attempts > max_attempts:
+            return None
+
+        # Sample (average) size of object.
+        base_diameter = math.exp(rand.uniform(math.log(min_diameter), math.log(max_diameter)))
+        # Sample motion, starting at 0, relative to size of object.
+        delta_position_rel = sample_random_walk(len(orig_rect), dim=2, rand=rand,
+            kind=translate_kind, scale=translate_amount)
+        # Sample scale, starting at 1.0 in first frame.
+        delta_scale = np.exp(sample_random_walk(len(orig_rect), dim=1, rand=rand,
+            kind=scale_kind, scale=math.log(scale_amount)))
+
+        position_rel, scale = _combine_translate_scale(delta_position_rel, delta_scale)
+
+        # Impose limits on scale.
+        # This may override min_diameter and max_diameter!
+        # TODO: Consider aspect ratio here?
+        abs_scale = base_diameter / orig_mean_diameter
+        abs_scale = np.minimum(max_scale, np.maximum(min_scale, abs_scale))
+        base_diameter = abs_scale * orig_mean_diameter
+
+        # Now move from object co-ordinates to world co-ordinates.
+        position = base_diameter * position_rel
+        diameter = base_diameter * scale
+        # Preserve original size variation.
+        size = orig_size / orig_mean_diameter * diameter
+
+        out_min = position - 0.5*size
+        out_max = position + 0.5*size
+        out_extent_min = np.amin(out_min, axis=0)
+        out_extent_max = np.amax(out_max, axis=0)
+        out_extent_size = out_extent_max - out_extent_min
+
+        gap = 1.0 - out_extent_size
+        ok = np.all(gap > 0.0)
+        num_attempts += 1
+
+    # Choose global translation of track.
+    offset = -out_extent_min + rand.uniform(size=(2,)) * gap
+    out_rect = geom_np.make_rect(out_min + offset, out_max + offset)
+
+    viewport = geom_np.crop_solve(orig_rect, out_rect)
+    # geom_np.crop_rect(orig_rect, viewport) == out_rect
+    return viewport
+
+
+def sample_random_walk(n, dim, rand, kind='gaussian', scale=1.0):
+    if kind == 'gaussian':
+        sample = rand.normal
+    elif kind == 'laplace':
+        sample = rand.laplace
+    else:
+        raise ValueError('unknown distribution: {}'.format(kind))
+    return cumsum(sample(size=(n-1, dim), scale=scale))
+
+def cumsum(steps):
+    dim = steps.shape[-1]
+    return np.concatenate((
         np.zeros((1, dim)),
         np.cumsum(steps, axis=0),
     ))
-    return path
+
+
+def _interpolate_missing(is_valid, rects):
+    n = len(rects)
+    t = np.arange(n, dtype=np.float32)
+    t_valid = t[is_valid]
+    rects_valid = rects[is_valid]
+    f = scipy.interpolate.interp1d(t_valid, rects_valid, kind='linear')
+    return f(t)
+
+def _combine_translate_scale(delta_position, delta_scale):
+    # Construct path relative to first frame.
+    scale = [1.0]
+    position = [0.0]
+    for t in range(1, n):
+        position_t = position[-1] + scale[-1]*delta_position[t]
+        scale_t = scale[-1] * delta_scale[t]
+        position.append(position_t)
+        scale.append(scale_t)
+    return np.array(position), np.array(scale)

@@ -50,8 +50,8 @@ def parse_arguments():
     parser.add_argument(
             '--frmsz', help='size of a square image', type=int, default=241)
     # NOTE: (NL) any reason to have two arguments for this option?
-    parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
-    parser.set_defaults(useresizedimg=True)
+    # parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
+    # parser.set_defaults(useresizedimg=True)
     parser.add_argument(
             '--use_queues', help='enable queues for asynchronous data loading',
             action='store_true')
@@ -131,6 +131,10 @@ def parse_arguments():
     parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
             type=json.loads, default={'kind': 'regular', 'freq': 10})
+    parser.add_argument(
+            '--motion_params', help='JSON string specifying sampler',
+            type=json.loads,
+            default={'kind': 'add_gaussian_random_walk'})
     parser.add_argument(
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker',
             type=str, default=['ILSVRC-train'])

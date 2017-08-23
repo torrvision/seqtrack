@@ -618,13 +618,7 @@ def iter_examples(dataset, o, rand=None, num_epochs=None):
     assert 'kind' in o.sampler_params
     sample_frames = sample.make_frame_sampler(dataset=dataset, rand=rand,
         ntimesteps=o.ntimesteps, **o.sampler_params)
-    augment_motion = motion.make_motion_augmenter(rand=rand, **{
-        'kind': 'add_gaussian_random_walk',
-         'sigma_translate': 0.5,
-         'sigma_scale':     1.1,
-         'min_diameter':    0.1,
-         'max_diameter':    0.5,
-    })
+    augment_motion = motion.make_motion_augmenter(rand=rand, **o.motion_params)
 
     for i in epochs:
         n = 0

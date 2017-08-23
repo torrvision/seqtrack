@@ -30,7 +30,7 @@ class Opts(object):
         self.dataset            = '' # (bouncing_mnist, etc.)
         self.trainsplit         = 9 # 0,1,2,3 or 9 for all train sets
         self.frmsz              = 241
-        self.useresizedimg      = True
+        self.useresizedimg      = False
         self.use_queues         = False
         self.heatmap_stride     = 1
 
@@ -82,6 +82,7 @@ class Opts(object):
         # The sampler to use for training.
         # Do not specify `ntimesteps` or `shuffle` here.
         self.sampler_params     = {'kind': 'regular', 'freq': 10}
+        self.motion_params      = {'kind': 'add_gaussian_random_walk'}
         # Dataset and sampler to use for evaluation.
         self.eval_datasets      = ['ILSVRC-train']
         self.eval_samplers      = ['train']
