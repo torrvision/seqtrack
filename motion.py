@@ -115,15 +115,16 @@ def add_gaussian_random_walk(is_valid, rects, rand,
                              max_attempts=20):
     EPSILON = 0.01
 
-    rects_valid = np.array([r for r in rects if r is not None])
-    rects_min, rects_max = geom_np.rect_min_max(rects_valid)
-    rects_size = np.maximum(0.0, rects_max - rects_min)
-    orig_diameter = np.exp(np.mean(np.log(np.maximum(EPSILON, rects_size)), axis=-1))
+    orig_rect = rects
+    orig_rect_valid = orig_rect[is_valid]
+    orig_min, orig_max = geom_np.rect_min_max(orig_rect_valid)
+    orig_size = np.maximum(0.0, orig_max - orig_min)
+    orig_diameter = np.exp(np.mean(np.log(np.maximum(EPSILON, orig_size)), axis=-1))
     orig_mean_diameter = np.exp(np.mean(np.log(orig_diameter)))
     # Treat the bounding box of the object's path as a static object in an image.
     # Scaling preserves the center of this "object"?
-    orig_region_min = np.amin(rects_min, axis=0)
-    orig_region_max = np.amax(rects_max, axis=0)
+    orig_region_min = np.amin(orig_min, axis=0)
+    orig_region_max = np.amax(orig_max, axis=0)
     orig_region_size = orig_region_max - orig_region_min
     orig_region = geom_np.make_rect(orig_region_min, orig_region_max)
 
@@ -136,28 +137,27 @@ def add_gaussian_random_walk(is_valid, rects, rand,
             return None
         # Sample (average) size of object.
         base_diameter = math.exp(rand.uniform(math.log(min_diameter), math.log(max_diameter)))
-        # Sample motion, starting at 0, relative to size of object.
-        delta_position_rel = _sample_walk(len(rects), dim=2, rand=rand,
-            kind=translate_kind, scale=translate_amount)
-        # Sample scale, starting at 1.0 in first frame.
-        delta_scale = np.exp(_sample_walk(len(rects), dim=1, rand=rand,
-            kind=scale_kind, scale=math.log(scale_amount)))
-
         # Do not want to shrink or grow the image too much.
         # This may override min_diameter and max_diameter!
         # TODO: Consider aspect ratio here?
-        scale = base_diameter / orig_mean_diameter
-        scale = np.minimum(max_scale, np.maximum(min_scale, scale))
-        base_diameter = scale * orig_mean_diameter
+        abs_scale = base_diameter / orig_mean_diameter
+        abs_scale = np.minimum(max_scale, np.maximum(min_scale, abs_scale))
+        base_diameter = abs_scale * orig_mean_diameter
+
+        position_rel, scale = _sample_scale_walk(len(orig_rect), dim=2, rand=rand,
+            translate_kind=translate_kind,
+            translate_amount=translate_amount,
+            scale_kind=scale_kind,
+            scale_amount=scale_amount)
 
         # Check whether this object can fit in the frame with this path.
         # TODO: Use aspect ratio.
-        delta_position = base_diameter * delta_position_rel
+        position = base_diameter * position_rel
         # Size of original extent after scaling in each frame.
         # (Object diameter in each frame is simply base_diameter * scale.)
-        region_size = orig_region_size * scale * delta_scale
-        region_min = delta_position - 0.5 * region_size
-        region_max = delta_position + 0.5 * region_size
+        region_size = scale * abs_scale * orig_region_size
+        region_min = position - 0.5 * region_size
+        region_max = position + 0.5 * region_size
         # Ensure that region will fit inside image frame.
         region_extent_min = np.amin(region_min, axis=0)
         region_extent_max = np.amax(region_max, axis=0)
