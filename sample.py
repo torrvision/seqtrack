@@ -63,7 +63,9 @@ def epoch(dataset, rand, sample_frames, augment_motion=None, max_objects=None, m
             # (In dataset, length was given by length of video.)
             is_valid = np.array([t in trajectory for t in frames])
             rects    = np.array([trajectory.get(t, _invalid_rect()) for t in frames])
-            viewports = augment_motion(is_valid, rects)
+            width, height = dataset.original_image_size[video]
+            aspect = float(width) / float(height)
+            viewports = augment_motion(is_valid, rects, aspect)
             if viewports is None:
                 print 'could not augment motion: ({}, {})'.format(video, obj)
                 continue

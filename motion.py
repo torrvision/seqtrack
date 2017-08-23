@@ -23,11 +23,11 @@ def make_motion_augmenter(kind, rand, **kwargs):
         raise ValueError('unknown motion augmentation: {}'.format(kind))
 
 
-def no_augment(is_valid, rects):
+def no_augment(is_valid, rects, aspect):
     return np.array([geom_np.rect_identity()] * len(rects))
 
 
-def random_walk(is_valid, rects, rand,
+def random_walk(is_valid, rects, aspect, rand,
                 translate_kind='laplace',
                 translate_amount=0.5,
                 scale_kind='laplace',
@@ -48,13 +48,20 @@ def random_walk(is_valid, rects, rand,
     '''
 
     EPSILON = 0.01
-
     orig_rect = rects
+
+    image_size = np.array([aspect, 1.0])
+    # Balance width and height such that image diameter is 1.
+    image_size /= np.exp(np.mean(np.log(image_size)))
+    # Convert input to co-ordinates in image.
+    orig_rect = geom_np.rect_mul(orig_rect, image_size)
+
     # Fill missing elements.
     orig_rect = _interpolate_missing(is_valid, orig_rect)
-
+    # Measure average size of object.
     orig_min, orig_max = geom_np.rect_min_max(orig_rect)
     orig_size = np.maximum(0.0, orig_max - orig_min)
+    # Size of object in image.
     orig_diameter = np.exp(np.mean(np.log(np.maximum(EPSILON, orig_size)), axis=-1))
     orig_mean_diameter = np.exp(np.mean(np.log(orig_diameter)))
 
@@ -91,20 +98,24 @@ def random_walk(is_valid, rects, rand,
         out_extent_max = np.amax(out_max, axis=0)
         out_extent_size = out_extent_max - out_extent_min
 
+        # Output is a square image.
         gap = 1.0 - out_extent_size
-        ok = np.all(gap > 0.0)
+        ok = np.all(gap >= 0.0)
         num_attempts += 1
 
-    # Choose global translation of track.
+    # Choose global translation of track such that it lies in (0,0)-(1,1).
     offset = -out_extent_min + rand.uniform(size=(2,)) * gap
     out_rect = geom_np.make_rect(out_min + offset, out_max + offset)
-
-    viewport = geom_np.crop_solve(orig_rect, out_rect)
+    # Solve for viewport that gives output path.
     # geom_np.crop_rect(orig_rect, viewport) == out_rect
+    viewport = geom_np.crop_solve(orig_rect, out_rect)
+
+    # Convert back to relative co-ordinates.
+    viewport = geom_np.rect_mul(viewport, 1.0/image_size)
     return viewport
 
 
-def add_random_walk(is_valid, rects, rand,
+def add_random_walk(is_valid, rects, aspect, rand,
                     translate_kind='laplace',
                     translate_amount=0.5,
                     scale_kind='laplace',
@@ -120,8 +131,14 @@ def add_random_walk(is_valid, rects, rand,
     '''
 
     EPSILON = 0.01
-
     orig_rect = rects
+
+    image_size = np.array([aspect, 1.0])
+    # Balance width and height such that image diameter is 1.
+    image_size /= np.exp(np.mean(np.log(image_size)))
+    # Convert input to co-ordinates in image.
+    orig_rect = geom_np.rect_mul(orig_rect, image_size)
+
     orig_rect_valid = orig_rect[is_valid]
     orig_min, orig_max = geom_np.rect_min_max(orig_rect_valid)
     orig_size = np.maximum(0.0, orig_max - orig_min)
@@ -193,9 +210,12 @@ def add_random_walk(is_valid, rects, rand,
     # What about if we know a and c, and want to find b?
 
     orig_region = np.expand_dims(orig_region, 0)
-    window = geom_np.crop_solve(orig_region, region)
-    # geom_np.crop_rect(orig_region, window) == region
-    return window
+    # geom_np.crop_rect(orig_region, viewport) == region
+    viewport = geom_np.crop_solve(orig_region, region)
+
+    # Convert back to relative co-ordinates.
+    viewport = geom_np.rect_mul(viewport, 1.0/image_size)
+    return viewport
 
 
 def _sample_step(n, dim, rand, kind='gaussian', scale=1.0):
