@@ -27,6 +27,82 @@ def no_augment(is_valid, rects):
     return np.array([geom_np.rect_identity()] * len(rects))
 
 
+def gaussian_random_walk(is_valid, rects, rand,
+                         translate_kind='laplace',
+                         translate_amount=0.5,
+                         scale_kind='laplace',
+                         scale_amount=1.1,
+                         min_diameter=0.1,
+                         max_diameter=0.5,
+                         min_scale=0.5,
+                         max_scale=4,
+                         max_attempts=20):
+    '''
+    Args:
+        rects: List of rectangles, or None if object is not present.
+        rand: Numpy random object.
+
+    Returns:
+        A list of viewports for the object.
+    '''
+
+    EPSILON = 0.01
+
+    orig_rect = rects
+    # Fill missing elements.
+    orig_rect = _interpolate_missing(is_valid, orig_rect)
+
+    orig_min, orig_max = geom_np.rect_min_max(orig_rect)
+    orig_size = np.maximum(0.0, orig_max - orig_min)
+    orig_diameter = np.exp(np.mean(np.log(np.maximum(EPSILON, orig_size)), axis=-1))
+    orig_mean_diameter = np.exp(np.mean(np.log(orig_diameter)))
+
+    ok = False
+    num_attempts = 0
+    while not ok:
+        if num_attempts > max_attempts:
+            return None
+
+        # Sample (average) size of object.
+        base_diameter = math.exp(rand.uniform(math.log(min_diameter), math.log(max_diameter)))
+        # Impose limits on scale.
+        # This may override min_diameter and max_diameter!
+        # TODO: Consider aspect ratio here?
+        abs_scale = base_diameter / orig_mean_diameter
+        abs_scale = np.minimum(max_scale, np.maximum(min_scale, abs_scale))
+        base_diameter = abs_scale * orig_mean_diameter
+
+        position_rel, scale = _sample_scale_walk(len(orig_rect), dim=2, rand=rand,
+            translate_kind=translate_kind,
+            translate_amount=translate_amount,
+            scale_kind=scale_kind,
+            scale_amount=scale_amount)
+
+        # Now move from object co-ordinates to world co-ordinates.
+        position = base_diameter * position_rel
+        diameter = base_diameter * scale
+        # Preserve original size variation.
+        size = orig_size / orig_mean_diameter * diameter
+
+        out_min = position - 0.5*size
+        out_max = position + 0.5*size
+        out_extent_min = np.amin(out_min, axis=0)
+        out_extent_max = np.amax(out_max, axis=0)
+        out_extent_size = out_extent_max - out_extent_min
+
+        gap = 1.0 - out_extent_size
+        ok = np.all(gap > 0.0)
+        num_attempts += 1
+
+    # Choose global translation of track.
+    offset = -out_extent_min + rand.uniform(size=(2,)) * gap
+    out_rect = geom_np.make_rect(out_min + offset, out_max + offset)
+
+    viewport = geom_np.crop_solve(orig_rect, out_rect)
+    # geom_np.crop_rect(orig_rect, viewport) == out_rect
+    return viewport
+
+
 def add_gaussian_random_walk(is_valid, rects, rand,
                              translate_kind='laplace',
                              translate_amount=0.5,
@@ -37,21 +113,12 @@ def add_gaussian_random_walk(is_valid, rects, rand,
                              min_scale=0.5,
                              max_scale=4,
                              max_attempts=20):
-    '''
-    Args:
-        rects: List of rectangles, or None if object is not present.
-        rand: Numpy random object.
-
-    Returns:
-        A list of viewports for the object.
-    '''
-
-    eps = 0.01
+    EPSILON = 0.01
 
     rects_valid = np.array([r for r in rects if r is not None])
     rects_min, rects_max = geom_np.rect_min_max(rects_valid)
     rects_size = np.maximum(0.0, rects_max - rects_min)
-    orig_diameter = np.exp(np.mean(np.log(rects_size + eps), axis=-1))
+    orig_diameter = np.exp(np.mean(np.log(np.maximum(EPSILON, rects_size)), axis=-1))
     orig_mean_diameter = np.exp(np.mean(np.log(orig_diameter)))
     # Treat the bounding box of the object's path as a static object in an image.
     # Scaling preserves the center of this "object"?
@@ -123,73 +190,6 @@ def add_gaussian_random_walk(is_valid, rects, rand,
     window = geom_np.crop_solve(orig_region, region)
     # geom_np.crop_rect(orig_region, window) == region
     return window
-
-
-def gaussian_random_walk(is_valid, rects, rand,
-                         translate_kind='laplace',
-                         translate_amount=0.5,
-                         scale_kind='laplace',
-                         scale_amount=1.1,
-                         min_diameter=0.1,
-                         max_diameter=0.5,
-                         min_scale=0.5,
-                         max_scale=4,
-                         max_attempts=20):
-    EPSILON = 0.01
-
-    orig_rect = rects
-    # Fill missing elements.
-    orig_rect = _interpolate_missing(is_valid, orig_rect)
-
-    orig_min, orig_max = geom_np.rect_min_max(orig_rect)
-    orig_size = np.maximum(0.0, orig_max - orig_min)
-    orig_diameter = np.exp(np.mean(np.log(np.maximum(EPSILON, orig_size)), axis=-1))
-    orig_mean_diameter = np.exp(np.mean(np.log(orig_diameter)))
-
-    ok = False
-    num_attempts = 0
-    while not ok:
-        if num_attempts > max_attempts:
-            return None
-
-        # Sample (average) size of object.
-        base_diameter = math.exp(rand.uniform(math.log(min_diameter), math.log(max_diameter)))
-        # Impose limits on scale.
-        # This may override min_diameter and max_diameter!
-        # TODO: Consider aspect ratio here?
-        abs_scale = base_diameter / orig_mean_diameter
-        abs_scale = np.minimum(max_scale, np.maximum(min_scale, abs_scale))
-        base_diameter = abs_scale * orig_mean_diameter
-
-        position_rel, scale = _sample_scale_walk(len(orig_rect), dim=2, rand=rand,
-            translate_kind=translate_kind,
-            translate_amount=translate_amount,
-            scale_kind=scale_kind,
-            scale_amount=scale_amount)
-
-        # Now move from object co-ordinates to world co-ordinates.
-        position = base_diameter * position_rel
-        diameter = base_diameter * scale
-        # Preserve original size variation.
-        size = orig_size / orig_mean_diameter * diameter
-
-        out_min = position - 0.5*size
-        out_max = position + 0.5*size
-        out_extent_min = np.amin(out_min, axis=0)
-        out_extent_max = np.amax(out_max, axis=0)
-        out_extent_size = out_extent_max - out_extent_min
-
-        gap = 1.0 - out_extent_size
-        ok = np.all(gap > 0.0)
-        num_attempts += 1
-
-    # Choose global translation of track.
-    offset = -out_extent_min + rand.uniform(size=(2,)) * gap
-    out_rect = geom_np.make_rect(out_min + offset, out_max + offset)
-
-    viewport = geom_np.crop_solve(orig_rect, out_rect)
-    # geom_np.crop_rect(orig_rect, viewport) == out_rect
-    return viewport
 
 
 def _sample_step(n, dim, rand, kind='gaussian', scale=1.0):
