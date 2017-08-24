@@ -117,6 +117,7 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
 class SimpleSearch:
 
     # NOTE: To reduce confusion, avoid putting tensors in member variables.
+    # (Except those give in init().)
 
     # TODO: Make stat part of the model (i.e. a variable?)
     def __init__(self, ntimesteps, frmsz, batchsz, output_mode, stat, weight_decay=0.0,
@@ -127,6 +128,7 @@ class SimpleSearch:
             use_heatmap=False,
             use_batch_norm=False, # Caution when use_rnn is True.
             object_centric=False,
+            motion_penalty=1.0,
             # normalize_size=False,
             # normalize_first_only=False
             ):
@@ -144,6 +146,7 @@ class SimpleSearch:
         self.use_heatmap    = use_heatmap
         self.use_batch_norm = use_batch_norm
         self.object_centric = object_centric
+        self.motion_penalty = motion_penalty
 
         # Public model properties:
         self.batch_size = None # Model accepts variable batch size.
@@ -487,9 +490,8 @@ class SimpleSearch:
                 rect_map = geom.warp_anchor(anchors, warp_map)
 
                 # Add motion penalty to score map.
-                lambda_motion = 1.0
                 motion = tf.norm(centers - tf.constant([0.5, 0.5]), axis=-1, keep_dims=True)
-                posterior_map = score_map - (lambda_motion / object_size) * motion
+                posterior_map = score_map - (self.motion_penalty / object_size) * motion
 
                 # Find arg max in posterior_map.
                 # posterior_map is [n, h, w, 1].
