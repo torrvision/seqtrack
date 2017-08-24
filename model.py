@@ -205,6 +205,13 @@ class SimpleSearch:
                 first_image_with_mask = concat([example['x0'], p0], axis=3)
                 state['template'] = self._template_net(first_image_with_mask)
 
+                # Visualize mask.
+                tf.summary.image('object_mask',
+                    tf.image.convert_image_dtype(
+                        p0[0:1] * _normalize_image_range(example['x0'][0:1]),
+                        dtype=tf.uint8),
+                    collections=self.image_summaries_collections)
+
         # Ensure that there is no key collision.
         assert len(set(state.keys()).intersection(set(window_state.keys()))) == 0
         state.update(window_state)
