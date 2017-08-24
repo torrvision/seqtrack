@@ -128,7 +128,9 @@ class SimpleSearch:
             use_heatmap=False,
             use_batch_norm=False, # Caution when use_rnn is True.
             object_centric=False,
-            motion_penalty=1.0,
+            motion_penalty_profile='linear',
+            motion_penalty_radius=1.0,
+            motion_penalty_weight=1.0,
             # normalize_size=False,
             # normalize_first_only=False
             ):
@@ -146,7 +148,9 @@ class SimpleSearch:
         self.use_heatmap    = use_heatmap
         self.use_batch_norm = use_batch_norm
         self.object_centric = object_centric
-        self.motion_penalty = motion_penalty
+        self.motion_penalty_profile = motion_penalty_profile
+        self.motion_penalty_radius  = motion_penalty_radius
+        self.motion_penalty_weight  = motion_penalty_weight
 
         # Public model properties:
         self.batch_size = None # Model accepts variable batch size.
@@ -491,7 +495,8 @@ class SimpleSearch:
 
                 # Add motion penalty to score map.
                 motion = tf.norm(centers - tf.constant([0.5, 0.5]), axis=-1, keep_dims=True)
-                posterior_map = score_map - (self.motion_penalty / object_size) * motion
+                motion_penalty = self._motion_penalty(motion / object_size)
+                posterior_map = score_map + motion_penalty
 
                 # Find arg max in posterior_map.
                 # posterior_map is [n, h, w, 1].
@@ -557,6 +562,22 @@ class SimpleSearch:
             raise ValueError('unknown output mode: {}'.format(self.output_mode))
 
         return output
+
+    def _motion_penalty(self, motion_norm):
+        weight  = self.motion_penalty_weight
+        profile = self.motion_penalty_profile
+        radius  = self.motion_penalty_radius
+        profile_func = {
+            'linear': lambda x: -x,
+            'cosine': lambda x: -_half_cosine(x),
+        }.get(profile, None)
+        if profile_func is None:
+            raise ValueError('unknown profile: {}'.format(profile))
+        return weight * profile_func(motion_norm / radius)
+
+
+def _half_cosine(x):
+    return tf.to_float(tf.abs(x) <= 1.0) * tf.cos(x * (math.pi/2.0))
 
 
 class ConditionalWindow:
