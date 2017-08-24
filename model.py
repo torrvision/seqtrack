@@ -570,6 +570,7 @@ class SimpleSearch:
         profile_func = {
             'linear': lambda x: -x,
             'cosine': lambda x: -_half_cosine(x),
+            'step':   lambda x: -tf.to_float(x <= 1.0),
         }.get(profile, None)
         if profile_func is None:
             raise ValueError('unknown profile: {}'.format(profile))
@@ -577,7 +578,7 @@ class SimpleSearch:
 
 
 def _half_cosine(x):
-    return tf.to_float(tf.abs(x) <= 1.0) * tf.cos(x * (math.pi/2.0))
+    return tf.to_float(x <= 1.0) * tf.cos(x * (math.pi/2.0))
 
 
 class ConditionalWindow:
