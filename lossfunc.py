@@ -4,41 +4,6 @@ import geom
 import helpers
 
 
-def score_logistic(mask, score_pred, rect_gt, radius_pos=0.2, radius_neg=0.5,
-                   image_summaries_collections=None):
-    '''
-    Args:
-        mask       -- [b, t]
-        score_pred -- [b, t, h, w, 1]
-        rect_gt    -- [b, t, 4]
-    '''
-    # TODO: Use y_is_valid!
-    # Compare sliding-window score map to ground truth.
-    # score_pred
-    # rect_gt
-    with tf.name_scope('score_logistic'):
-        score_pred = tf.squeeze(score_pred, -1)
-        score_dim = score_pred.shape.as_list()[2:4]
-        label_map = _make_label_map(mask, rect_gt, score_dim, radius_pos, radius_neg)
-        loss = balanced_mean_logistic(label_map, tf.squeeze(score_pred, -1), axis=(2, 3))
-
-        with tf.name_scope('summary'):
-            tf.summary.image('label_map',
-                tf.image.convert_image_dtype(
-                    0.5 * (1.0 + tf.to_float(label_map[0])),
-                    tf.uint8, saturate=True),
-                collections=image_summaries_collections)
-            tf.summary.image('score',
-                tf.image.convert_image_dtype(
-                    tf.sigmoid(score_pred[0]),
-                    tf.uint8, saturate=True),
-                collections=image_summaries_collections)
-
-        # Take mean over images, excluding images without labels.
-        # NOTE: Batch must contain at least 1 valid example!
-        return tf.reduce_mean(tf.boolean_mask(loss, mask))
-
-
 def balanced_mean_logistic(labels, logits, axis=None, name='balanced_mean_logistic'):
     '''
     Args:
@@ -111,70 +76,7 @@ def rect_map_l1(is_pos, rect_map, rect_gt, normalize=False):
             axis=(2, 3))
 
 
-# def rectangle_map_cross_entropy(
-#         score_map, anchor_map, rect_gt,
-#         ):
-#     '''
-#     Args:
-#         score_map  -- [b, t, h, w, 1]
-#         anchor_map -- [h, w, 4]
-#         rect_gt    -- [b, t, 4]
-#     '''
-#     # TODO: Use y_is_valid!
-#     # Compare sliding-window score_map to ground truth.
-#     with tf.name_scope('rect_map_l1'):
-#         # Find anchor with greatest IOU.
-#         # anchor_iou is [b, t, h, w]
-#         anchor_iou = geom.rect_iou(
-#             anchor_map,
-#             tf.expand_dims(tf.expand_dims(rect_gt, -2), -2))
-#         # Find maximum IOU over spatial dimensions.
-#         max_anchor_iou = tf.reduce_max(anchor_iou, axis=(2, 3), keep_dims=True)
-# 
-#         # Take all rectangles with considerable IOU.
-#         # TODO: Assert that at least one rectangle has non-zero IOU.
-#         is_pos = tf.logical_or(
-#             tf.equal(anchor_iou, max_anchor_iou), # Best anchor.
-#             tf.less_equal(anchor_iou, iou_positive_anchor)) # Anchor within threshold.
-#         is_neg = tf.logical_not(is_pos)
-# 
-#         num_pos = tf.reduce_sum(is_pos, axis=(2, 3), keep_dims=True)
-#         num_neg = tf.reduce_sum(is_neg, axis=(2, 3), keep_dims=True)
-# 
-#         score_loss_raw = tf.nn.sigmoid_cross_entropy_with_logits(
-#             labels=tf.to_float(anchor_is_pos),
-#             logits=tf.squeeze(score_map, -1))
-#         # score_loss is [b, t]
-#         score_loss = tf.reduce_sum(
-#             tf.add(
-#                 tf.multiply(tf.to_float(is_pos), score_loss_raw) / tf.to_float(num_pos + 1),
-#                 tf.multiply(tf.to_float(is_neg), score_loss_raw) / tf.to_float(num_neg + 1)),
-#             axis=(2, 3))
-# 
-#         # rect_loss_raw = _l1(
-#         #     rect_map,
-#         #     tf.expand_dims(tf.expand_dims(rect_gt, -2), -2),
-#         #     normalize=normalize)
-#         # rect_loss = tf.reduce_sum(
-#         #     tf.multiply(tf.to_float(is_pos), rect_loss_raw) / tf.to_float(num_pos + 1),
-#         #     axis=(2, 3))
-# 
-#         with tf.name_scope('summary'):
-#             tf.summary.image('is_pos',
-#                 tf.image.convert_image_dtype(
-#                     tf.expand_dims(0.5 * (1.0 + tf.to_float(is_pos[0])), -1),
-#                     tf.uint8, saturate=True),
-#                 collections=image_summaries_collections)
-#             tf.summary.image('score',
-#                 tf.image.convert_image_dtype(
-#                     tf.sigmoid(score_map[0]),
-#                     tf.uint8, saturate=True),
-#                 collections=image_summaries_collections)
-# 
-#         return score_loss, is_pos
-
-
-def _make_label_map(mask, rect, dim, radius_pos, radius_neg):
+def make_label_map_dist(mask, rect, dim, radius_pos, radius_neg):
     '''
     Args:
         mask -- [b, t]

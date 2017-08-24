@@ -666,7 +666,7 @@ def get_loss(example, pred, o, summaries_collections=None, image_summaries_colle
                     labels=anchor_label,
                     logits=tf.squeeze(pred['score'], -1),
                     axis=(2, 3))
-                losses['ce'] = tf.reduce_mean(tf.boolean_mask(loss_ce, y_is_valid))
+                losses['ce'] = tf.reduce_mean(tf.boolean_mask(loss_ce, example['y_is_valid']))
 
             if 'l1' in o.losses:
                 loss_l1 = lossfunc.rect_map_l1(
@@ -674,7 +674,7 @@ def get_loss(example, pred, o, summaries_collections=None, image_summaries_colle
                     rect_map=pred['rect_map'],
                     rect_gt=example['y'],
                     normalize=False)
-                losses['l1'] = tf.reduce_mean(tf.boolean_mask(loss_l1, y_is_valid))
+                losses['l1'] = tf.reduce_mean(tf.boolean_mask(loss_l1, example['y_is_valid']))
 
             with tf.name_scope('summary'):
                 tf.summary.image('anchor_label',
@@ -690,10 +690,29 @@ def get_loss(example, pred, o, summaries_collections=None, image_summaries_colle
 
         elif o.output_mode == 'score_map':
             if 'ce' in o.losses:
-                losses['score_ce'] = lossfunc.score_logistic(
-                    y_is_valid, pred['score'], example['y'],
-                    radius_pos=0.2, radius_neg=0.5,
-                    image_summaries_collections=image_summaries_collections)
+                score_label = lossfunc.make_label_map_dist(
+                    mask=example['y_is_valid'],
+                    rect=example['y'],
+                    dim=pred['score'].shape.as_list()[-3:-1],
+                    radius_pos=0.2,
+                    radius_neg=0.5)
+                loss_ce = lossfunc.balanced_mean_logistic(
+                    labels=score_label,
+                    logits=tf.squeeze(pred['score'], -1),
+                    axis=(2, 3))
+                losses['ce'] = tf.reduce_mean(tf.boolean_mask(loss_ce, example['y_is_valid']))
+
+                with tf.name_scope('summary'):
+                    tf.summary.image('score_label',
+                        tf.image.convert_image_dtype(
+                            tf.expand_dims(0.5 * (1.0 + tf.to_float(score_label[0])), -1),
+                            tf.uint8, saturate=True),
+                        collections=image_summaries_collections)
+                    tf.summary.image('score',
+                        tf.image.convert_image_dtype(
+                            tf.sigmoid(pred['score'][0]),
+                            tf.uint8, saturate=True),
+                        collections=image_summaries_collections)
 
         elif o.output_mode == 'rectangle':
             # l1 distances for left-top and right-bottom
