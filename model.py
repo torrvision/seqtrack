@@ -434,17 +434,33 @@ class SimpleSearch:
             with tf.variable_scope('score_map'):
                 score = slim.conv2d(x, 1, 1, activation_fn=None, normalizer_fn=None)
                 # Upsample to original resolution.
-                score_full_res = tf.image.resize_images(score,
+                score_high = tf.image.resize_images(score,
                     size=[self.frmsz, self.frmsz],
                     method=tf.image.ResizeMethod.BICUBIC,
                     align_corners=True)
                 # Take softmax at full resolution after resizing.
-                score_softmax = tf.sigmoid(score_full_res)
+                score_softmax = tf.sigmoid(score_high)
+
+                # Compute center of each pixel in [0, 1] in search area.
+                # (Loss may decide how to use rectangle + center.)
+                dim_y, dim_x = self.frmsz, self.frmsz
+                centers_x, centers_y = tf.meshgrid(
+                    tf.to_float(tf.range(dim_x)) / tf.to_float(dim_x - 1),
+                    tf.to_float(tf.range(dim_y)) / tf.to_float(dim_y - 1))
+                centers = tf.stack([centers_x, centers_y], axis=-1)
+
+                # TODO: This will only work in object-centric mode?
+                object_size = 1.0 / relative_size
+                # Add motion penalty to score map.
+                motion = tf.norm(centers - tf.constant([0.5, 0.5]), axis=-1, keep_dims=True)
+                motion_penalty = self._motion_penalty(motion / object_size)
+                posterior_map = score_high + motion_penalty
+
                 # Find arg max in score map.
                 # Score map is [n, h, w, 1].
                 score_dim = tf.constant([self.frmsz, self.frmsz])
-                # score_dim = tf.shape(score_full_res)[1:3]
-                score_vec, _ = merge_dims(score_full_res, 1, 3)
+                # score_dim = tf.shape(score_high)[1:3]
+                score_vec, _ = merge_dims(posterior_map, 1, 3)
                 argmax_vec = tf.argmax(score_vec, axis=1)
                 # Note: Co-ordinates in (i, j) order.
                 argmax_i, argmax_j = tf.py_func(np.unravel_index,
@@ -467,7 +483,7 @@ class SimpleSearch:
                 pred_rect = geom.make_rect(center - 0.5*rect_size, center + 0.5*rect_size)
                 output = {
                     'score':         score,
-                    'score_full':    score_full_res,
+                    'score_full':    score_high,
                     'score_softmax': score_softmax,
                     'y':             pred_rect,
                 }
