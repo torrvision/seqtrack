@@ -65,9 +65,9 @@ def track(sess, inputs, model, sequence, use_gt):
             # Add the previous state to the feed dictionary.
             feed_dict.update({init_state[k]: prev_state[k] for k in init_state})
         # Get output and final state.
-        y_pred, prev_state, hmap_pred = sess.run([model.outputs['y_pred'],
+        y_pred, prev_state, hmap_pred = sess.run([model.outputs['y']['ic'],
                                                   final_state,
-                                                  model.outputs['hmap_pred']],
+                                                  model.outputs['hmap']['ic']],
                                                   feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
         y_pred = y_pred[0][:chunk_len]
