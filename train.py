@@ -21,7 +21,7 @@ import pipeline
 import sample
 import visualize
 
-from model import convert_rec_to_heatmap
+from model import convert_rec_to_heatmap, to_object_centric_coordinate
 from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
 
 EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
@@ -99,7 +99,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
     model = create_model(_whiten(_guard_labels(example), o, stat=stat))
-    loss_var, model.outputs = get_loss(example, model.outputs, o)
+    loss_var, model.gt = get_loss(example, model.outputs, model.gt, o)
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
     loss_var += r
@@ -135,37 +135,25 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
     with tf.name_scope('summary'):
         # Create a preview and add it to the list of summaries.
-        if 'y_pred' in model.outputs:
+        if 'y' in model.outputs:
             boxes = tf.summary.image('box',
                 _draw_bounding_boxes(example, model),
                 max_outputs=o.ntimesteps+1, collections=[])
             image_summaries = [boxes]
-        # Produce an image summary of the heatmap (image-centric).
-        if 'hmap_pred' in model.outputs:
-            hmap_pred = tf.summary.image('hmap_pred',
-                _draw_heatmap(model, 'hmap_pred'),
-                max_outputs=o.ntimesteps+1, collections=[])
-            image_summaries.append(hmap_pred)
-        # Produce an image summary of the heatmap (object-centric).
-        # TODO: After fixing bug, maybe remove this.
-        if 'hmap_pred_oc' in model.outputs:
-            hmap_pred = tf.summary.image('hmap_pred_oc',
-                _draw_heatmap(model, 'hmap_pred_oc'),
-                max_outputs=o.ntimesteps+1, collections=[])
-            image_summaries.append(hmap_pred)
-        # Produce an image summary of the heatmap-GT.
-        if 'hmap_gt' in model.outputs:
-            hmap_gt = tf.summary.image('hmap_gt',
-                _draw_heatmap(model, 'hmap_gt'),
-                max_outputs=o.ntimesteps+1, collections=[])
-            image_summaries.append(hmap_gt)
-        # Produce an image summary of the heatmap-GT.
-        # TODO: After fixing bug, maybe remove this.
-        if 'hmap_gt_oc' in model.outputs:
-            hmap_gt = tf.summary.image('hmap_gt_oc',
-                _draw_heatmap(model, 'hmap_gt_oc'),
-                max_outputs=o.ntimesteps+1, collections=[])
-            image_summaries.append(hmap_gt)
+        # Produce an image summary of the heatmap prediction (ic and oc).
+        if 'hmap' in model.outputs:
+            for key in model.outputs['hmap']:
+                hmap = tf.summary.image('hmap_pred_{}'.format(key),
+                                        _draw_heatmap(model, pred=True, perspective=key),
+                        max_outputs=o.ntimesteps+1, collections=[])
+                image_summaries.append(hmap)
+        # Produce an image summary of the heatmap gt (ic and oc).
+        if 'hmap' in model.gt:
+            for key in model.gt['hmap']:
+                hmap = tf.summary.image('hmap_gt_{}'.format(key),
+                                        _draw_heatmap(model, pred=False, perspective=key),
+                        max_outputs=o.ntimesteps+1, collections=[])
+                image_summaries.append(hmap)
         # Produce an image summary of target and search images (input to CNNs).
         if 'target' in model.outputs and 'search' in model.outputs:
             for key in ['target', 'search']:
@@ -617,37 +605,17 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
         for sequence in sequences:
             yield sequence
 
-def _generate_hmap_gt_oc(y_gt, box_s_raw, box_s_val, o, min_size=None, Gaussian=False):
-    # First, compute y_gt_oc
-    assert(len(y_gt.shape.as_list())==3)
-    x1, y1, x2, y2 = tf.unstack(y_gt, axis=2)
-    x1_raw, y1_raw, x2_raw, y2_raw = tf.unstack(box_s_raw, axis=2)
-    x1_val, y1_val, x2_val, y2_val = tf.unstack(box_s_val, axis=2)
-    s_raw_w = x2_raw - x1_raw # [0,1] range
-    s_raw_h = y2_raw - y1_raw # [0,1] range
-    x1_oc = (x1 - x1_raw) / s_raw_w
-    y1_oc = (y1 - y1_raw) / s_raw_h
-    x2_oc = (x2 - x1_raw) / s_raw_w
-    y2_oc = (y2 - y1_raw) / s_raw_h
-    y_gt_oc = tf.stack([x1_oc, y1_oc, x2_oc, y2_oc], 2)
-    # Second, generate (Gaussian) hmap_gt_oc.
-    hmap_gt_oc = convert_rec_to_heatmap(y_gt_oc, o, min_size=min_size, Gaussian=Gaussian)
-    return hmap_gt_oc
-
-def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
+def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
     with tf.name_scope(name) as scope:
-        if 'y_gt_oc' in outputs: # object-centric approach.
-            assert False
-            y_gt = outputs['y_gt_oc']
-        else:
-            y_gt = example['y']
-        assert(y_gt.get_shape().as_list()[1] == o.ntimesteps)
+        y_gt    = {'ic': None, 'oc': None}
+        hmap_gt = {'ic': None, 'oc': None}
 
-        # Gaussian gt hmap
-        hmap_gt = convert_rec_to_heatmap(y_gt, o, min_size=1.0, Gaussian=True)
-        outputs['hmap_gt'] = hmap_gt # To visualize hmap_gt (image-centric) in summary.
-        hmap_gt = _generate_hmap_gt_oc(y_gt, outputs['box_s_raw'], outputs['box_s_val'], o, min_size=1.0, Gaussian=True)
-        outputs['hmap_gt_oc'] = hmap_gt
+        y_gt['ic'] = example['y']
+        y_gt['oc'] = to_object_centric_coordinate(example['y'], outputs['box_s_raw'], outputs['box_s_val'], o)
+        hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, Gaussian=True)
+        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, Gaussian=True)
+
+        assert(y_gt['ic'].get_shape().as_list()[1] == o.ntimesteps)
 
         if o.heatmap_stride != 1:
             hmap_gt, unmerge = merge_dims(hmap_gt, 0, 2)
@@ -657,18 +625,12 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
                 padding='SAME')
             hmap_gt = unmerge(hmap_gt, 0)
 
-        y_is_valid = example['y_is_valid']
         losses = dict()
 
         # l1 distances for left-top and right-bottom
         if 'l1' in o.losses or 'l1_relative' in o.losses:
-            assert False
-            if 'y_pred_oc' in outputs:
-                y_pred = outputs['y_pred_oc']
-            else:
-                y_pred = outputs['y_pred']
-            y_gt_valid = tf.boolean_mask(y_gt, y_is_valid)
-            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            y_gt_valid   = tf.boolean_mask(y_gt[o.perspective], example['y_is_valid'])
+            y_pred_valid = tf.boolean_mask(outputs['y'][o.perspective], example['y_is_valid'])
             loss_l1 = tf.reduce_mean(tf.abs(y_gt_valid - y_pred_valid), axis=-1)
             if 'l1' in o.losses:
                 losses['l1'] = tf.reduce_mean(loss_l1)
@@ -682,13 +644,8 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 
         # CLE (center location error). Measured in l2 distance.
         if 'cle' in o.losses or 'cle_relative' in o.losses:
-            assert False
-            if 'y_pred_oc' in outputs:
-                y_pred = outputs['y_pred_oc']
-            else:
-                y_pred = outputs['y_pred']
-            y_gt_valid = tf.boolean_mask(y_gt, y_is_valid)
-            y_pred_valid = tf.boolean_mask(y_pred, y_is_valid)
+            y_gt_valid   = tf.boolean_mask(y_gt[o.perspective], example['y_is_valid'])
+            y_pred_valid = tf.boolean_mask(outputs['y'][o.perspective], example['y_is_valid'])
             x_center = (y_gt_valid[:,2] + y_gt_valid[:,0]) * 0.5
             y_center = (y_gt_valid[:,3] + y_gt_valid[:,1]) * 0.5
             center = tf.stack([x_center, y_center], axis=-1)
@@ -709,15 +666,8 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
 
         # Cross-entropy between probabilty maps (need to change label)
         if 'ce' in o.losses or 'ce_balanced' in o.losses:
-            if 'hmap_pred_oc' in outputs:
-                hmap_pred = outputs['hmap_pred_oc']
-            else:
-                assert False, 'This should not happen in obj-centric approach.'
-                hmap_pred = outputs['hmap_pred']
-            print 'hmap_pred.shape:', hmap_pred.shape.as_list()
-            print 'hmap_gt.shape:', hmap_gt.shape.as_list()
-            hmap_gt_valid = tf.boolean_mask(hmap_gt, y_is_valid)
-            hmap_pred_valid = tf.boolean_mask(hmap_pred, y_is_valid)
+            hmap_gt_valid   = tf.boolean_mask(hmap_gt[o.perspective], example['y_is_valid'])
+            hmap_pred_valid = tf.boolean_mask(outputs['hmap'][o.perspective], example['y_is_valid'])
             # hmap is [valid_images, height, width, 2]
             count = tf.reduce_sum(hmap_gt_valid, axis=(1, 2), keep_dims=True)
             class_weight = 0.5 / tf.cast(count+1, tf.float32)
@@ -735,20 +685,13 @@ def get_loss(example, outputs, o, summaries_collections=None, name='loss'):
                 losses['ce_balanced'] = tf.reduce_mean(
                         tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
 
-        # l2 loss for box size.
-        if 'l2_boxsz' in o.losses:
-            boxsz_pred = outputs['boxsz_pred_oc'] # oc
-            boxsz_gt = tf.stack([y_gt[:,:,2]-y_gt[:,:,0], y_gt[:,:,3]-y_gt[:,:,1]], 2)
-            boxsz_gt_valid = tf.boolean_mask(boxsz_gt, y_is_valid) # oc
-            boxsz_pred_valid = tf.boolean_mask(boxsz_pred, y_is_valid)
-            losses['l2_boxsz'] = tf.reduce_mean(tf.square(boxsz_gt_valid - boxsz_pred_valid))
-
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
                 tf.summary.scalar(name, loss, collections=summaries_collections)
 
-        return tf.reduce_sum(losses.values(), name=scope), outputs
-
+        gt['y']    = {'ic': y_gt['ic'],    'oc': y_gt['oc']}
+        gt['hmap'] = {'ic': hmap_gt['ic'], 'oc': hmap_gt['oc']} # for visualization in summary.
+        return tf.reduce_sum(losses.values(), name=scope), gt
 
 def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
     # Note: This will produce INT_MIN when casting NaN to int.
@@ -759,7 +702,7 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         # Just do the first example in the batch.
         image = (1.0/255)*example['x_raw'][0][::time_stride]
         y_gt   = example['y'][0][::time_stride]
-        y_pred = model.outputs['y_pred'][0][::time_stride]
+        y_pred = model.outputs['y']['ic'][0][::time_stride]
         image  = tf.concat((tf.expand_dims(model.state['x'][0][0], 0),  image), 0) # add init frame
         y_gt   = tf.concat((tf.expand_dims(model.state['y'][0][0], 0),   y_gt), 0) # add init y_gt
         y_pred = tf.concat((tf.expand_dims(model.state['y'][0][0], 0), y_pred), 0) # add init y_gt for pred too
@@ -768,12 +711,16 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
         return tf.image.draw_bounding_boxes(image, boxes, name=scope)
 
-def _draw_heatmap(model, kind, time_stride=1, name='draw_heatmap'):
+def _draw_heatmap(model, pred, perspective, time_stride=1, name='draw_heatmap'):
     with tf.name_scope(name) as scope:
         # model.outputs['hmap'] -- [b, t, frmsz, frmsz, 2]
-        p = model.outputs[kind][0,::time_stride]
-        if kind == 'hmap_pred_oc':
-            p = tf.nn.softmax(p)
+        if pred:
+            p = model.outputs['hmap'][perspective][0,::time_stride]
+            if perspective == 'oc':
+                p = tf.nn.softmax(p)
+        else:
+            p = model.gt['hmap'][perspective][0,::time_stride]
+
         hmaps = tf.concat((tf.expand_dims(model.state['hmap'][0][0], 0), p[:,:,:,0:1]), 0) # add init hmap
         return hmaps
         #return tf.cast(tf.round(255*hmaps), tf.uint8) # convert to int.
