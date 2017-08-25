@@ -229,17 +229,45 @@ def find_center_in_scoremap(scoremap, o):
         center = tf.identity(center)
     return center
 
-def convert_center_image_centric(center_oc, box_s_raw, o):
-    ''' Convert object-centric center to image-centric center.
+def to_image_centric_coordinate(coord, box_s_raw, o):
+    ''' Convert object-centric coordinates to image-centric coordinates.
+    Assume that `coord` is either center [x_center,y_center] or box [x1,y1,x2,y2].
     '''
     # scale the size in image-centric and move.
     w_raw = box_s_raw[:,2] - box_s_raw[:,0]
     h_raw = box_s_raw[:,3] - box_s_raw[:,1]
-    x_center = center_oc[:,0] * w_raw + box_s_raw[:,0]
-    y_center = center_oc[:,1] * h_raw + box_s_raw[:,1]
-    return tf.stack([x_center, y_center], 1)
+    if coord.shape.as_list()[-1] == 2: # center
+        x_center = coord[:,0] * w_raw + box_s_raw[:,0]
+        y_center = coord[:,1] * h_raw + box_s_raw[:,1]
+        return tf.stack([x_center, y_center], 1)
+    elif coord.shape.as_list()[-1] == 4: # box
+        x1 = coord[:,0] * w_raw + box_s_raw[:,0]
+        y1 = coord[:,1] * h_raw + box_s_raw[:,1]
+        x2 = coord[:,2] * w_raw + box_s_raw[:,0]
+        y2 = coord[:,3] * h_raw + box_s_raw[:,1]
+        return tf.stack([x1, y1, x2, y2], 1)
+    else:
+        raise ValueError('coord is not expected form.')
 
-def convert_hmap_image_centric(hmap_pred_oc, box_s_raw, box_s_val, o):
+def to_object_centric_coordinate(y, box_s_raw, box_s_val, o):
+    ''' Convert image-centric coordinates to object-centric coordinates.
+    Assume that `coord` is either center [x_center,y_center] or box [x1,y1,x2,y2].
+    '''
+    #NOTE: currently only assuming input as box.
+    coord_axis = len(y.shape.as_list())-1
+    x1, y1, x2, y2 = tf.unstack(y, axis=coord_axis)
+    x1_raw, y1_raw, x2_raw, y2_raw = tf.unstack(box_s_raw, axis=coord_axis)
+    x1_val, y1_val, x2_val, y2_val = tf.unstack(box_s_val, axis=coord_axis)
+    s_raw_w = x2_raw - x1_raw # [0,1] range
+    s_raw_h = y2_raw - y1_raw # [0,1] range
+    x1_oc = (x1 - x1_raw) / s_raw_w
+    y1_oc = (y1 - y1_raw) / s_raw_h
+    x2_oc = (x2 - x1_raw) / s_raw_w
+    y2_oc = (y2 - y1_raw) / s_raw_h
+    y_oc = tf.stack([x1_oc, y1_oc, x2_oc, y2_oc], coord_axis)
+    return y_oc
+
+def to_image_centric_hmap(hmap_pred_oc, box_s_raw, box_s_val, o):
     ''' Convert object-centric hmap to image-centric hmap.
     Input hmap is assumed to be softmax-ed (i.e., range [0,1]) and foreground only.
     '''
@@ -292,7 +320,7 @@ class Nornn(object):
         self.resize_target = resize_target
         self.divide_target = divide_target
         # Ignore sumaries_collections - model does not generate any summaries.
-        self.outputs, self.state, self.dbg = self._load_model(inputs, o)
+        self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
         self.batch_size   = o.batchsz
@@ -328,10 +356,12 @@ class Nornn(object):
 
             height = target.shape.as_list()[1] # height of target (=width)
             if self.resize_target:
+                assert False, 'fix problem first. for bigger resize, it fails'
                 # TODO: 1) more resizings, 2) convolution before/after resizing? Is relu positivity okay?
                 targets.append(tf.image.resize_images(target, [int(height*1.2)]*2)) # x1.2 big
                 targets.append(tf.image.resize_images(target, [int(height*0.2)]*2)) # x0.2 small
             if self.divide_target:
+                assert False, 'Not available yet.'
                 patchsz = [5] # TODO: diff sizes
                 for n in range(len(patchsz)):
                     for i in range(0,height,patchsz[n]):
@@ -363,8 +393,8 @@ class Nornn(object):
                 #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
             return x
 
-        def pass_box_regression(x, o):
-            ''' Regress box size (i.e., width and height).
+        def pass_regress_box(x):
+            ''' Regress output rectangle.
             '''
             with slim.arg_scope([slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -372,8 +402,20 @@ class Nornn(object):
                 x = slim.flatten(x)
                 x = slim.fully_connected(x, 1024, scope='fc1')
                 x = slim.fully_connected(x, 1024, scope='fc2')
-                x = slim.fully_connected(x, 2, activation_fn=None, scope='fc3')
+                x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
+
+        #def pass_box_regression(x, o):
+        #    ''' Regress box size (i.e., width and height).
+        #    '''
+        #    with slim.arg_scope([slim.fully_connected],
+        #            weights_regularizer=slim.l2_regularizer(o.wd)):
+        #        x = slim.max_pool2d(x, kernel_size=3, stride=3, scope='pool1')
+        #        x = slim.flatten(x)
+        #        x = slim.fully_connected(x, 1024, scope='fc1')
+        #        x = slim.fully_connected(x, 1024, scope='fc2')
+        #        x = slim.fully_connected(x, 2, activation_fn=None, scope='fc3')
+        #    return x
 
 
         x           = inputs['x']  # shape [b, ntimesteps, h, w, 3]
@@ -400,10 +442,9 @@ class Nornn(object):
         hmap_pred = []
         # Case of object-centric approach.
         #y_gt_oc = []
-        #y_pred_oc = []
+        y_pred_oc = []
         hmap_gt_oc = []
         hmap_pred_oc = []
-        boxsz_pred_oc = []
         box_s_raw = []
         box_s_val = []
         target = []
@@ -428,43 +469,36 @@ class Nornn(object):
                 search_feat = pass_depth_wise_norm(search_feat)
                 target_feat = pass_depth_wise_norm(target_feat)
 
+            #if self.optical_flow:
+            #    with tf.variable_scope('cnn_flow', reuse=(t > 0)):
+            #        search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
+            #        flow_feat = pass_cnn(tf.concat([search_prev, search_curr], 3), act=True)
+
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, o)
 
-            if self.optical_flow:
-                with tf.variable_scope('cnn_flow', reuse=(t > 0)):
-                    search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
-                    flow_feat = pass_cnn(tf.concat([search_prev, search_curr], 3), act=True)
-
-            with tf.variable_scope('box_regression', reuse=(t > 0)):
-                if not self.optical_flow:
-                    boxsz_curr_pred_oc = pass_box_regression(scoremap, o)
-                else:
-                    boxsz_curr_pred_oc = pass_box_regression(scoremap+flow_feat, o)
-
-            # End of learning. Now tracking algorithm begins.
-            # Find center.
-            c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], o)
+            if self.pred_box: # regress box from scoremap
+                with tf.variable_scope('regress_box', reuse=(t > 0)):
+                    y_curr_pred_oc = pass_regress_box(hmap_curr_pred_oc)
+                    y_curr_pred    = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
+            else: # argmax to find center (then use x0's box or regress box size - the latter didn't work)
+                c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], o)
+                c_curr_pred    = to_image_centric_coordinate(c_curr_pred_oc, box_s_raw_curr, o)
+                y_curr_pred    = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1)
+                y_curr_pred_oc = to_object_centric_coordinate(y_curr_pred, box_s_raw_curr, box_s_val_curr, o)
 
             # Get image-centric outputs. Some are used for visualization purpose.
-            c_curr_pred = convert_center_image_centric(c_curr_pred_oc, box_s_raw_curr, o)
-            if not self.pred_box: # (naive approach) use y0 box.
-                y_curr_pred = tf.concat([c_curr_pred-y0_size*0.5,
-                                         c_curr_pred+y0_size*0.5], 1)
-            else:
-                y_curr_pred = tf.concat([c_curr_pred-boxsz_curr_pred_oc*0.5,
-                                         c_curr_pred+boxsz_curr_pred_oc*0.5], 1)
-            y_curr_pred = enforce_inside_box(y_curr_pred)
-            hmap_curr_pred = convert_hmap_image_centric(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0],
-                                                        box_s_raw_curr, box_s_val_curr, o)
+            y_curr_pred    = enforce_inside_box(y_curr_pred)
+            hmap_curr_pred = to_image_centric_hmap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0],
+                                                   box_s_raw_curr, box_s_val_curr, o)
 
             y_pred.append(y_curr_pred)
+            y_pred_oc.append(y_curr_pred_oc)
             hmap_pred.append(hmap_curr_pred)
             hmap_pred_oc.append(hmap_curr_pred_oc)
-            boxsz_pred_oc.append(boxsz_curr_pred_oc)
             box_s_raw.append(box_s_raw_curr)
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
@@ -477,37 +511,28 @@ class Nornn(object):
 
         y_pred        = tf.stack(y_pred, axis=1)
         hmap_pred     = tf.stack(hmap_pred, axis=1)
-        #y_pred_oc    = tf.stack(y_pred_oc, axis=1)
+        y_pred_oc     = tf.stack(y_pred_oc, axis=1)
         hmap_pred_oc  = tf.stack(hmap_pred_oc, axis=1)
-        boxsz_pred_oc = tf.stack(boxsz_pred_oc, axis=1)
         #y_gt_oc      = tf.stack(y_gt_oc, axis=1)
         box_s_raw     = tf.stack(box_s_raw, axis=1)
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
 
-        outputs = {# image-centric outputs
-                   'y_pred': y_pred,       # NOTE: Do not use this for computing loss.
-                   'hmap_pred': hmap_pred, # NOTE: Do not use this for computing loss.
-                   # object-centric outputs
-                   #'y_gt_oc':              y_gt_oc,
-                   #'y_pred_oc':            y_pred_oc,
-                   'hmap_pred_oc': hmap_pred_oc, # for ce loss, thus no softmax.
-                   'boxsz_pred_oc': boxsz_pred_oc,
-                   #'hmap_pred_softmax_oc': tf.nn.softmax(hmap_pred_oc), # visualization purpose.
-                   'box_s_raw':    box_s_raw,
-                   'box_s_val':    box_s_val,
-                   'target':       target,
-                   'search':       search,
+        outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
+                   'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
+                   'box_s_raw': box_s_raw,
+                   'box_s_val': box_s_val,
+                   'target':    target,
+                   'search':    search,
                    }
         state = {}
         state.update({'x': (x_init, x_prev)})
         state.update({'hmap': (hmap_init, hmap_prev)})
         state.update({'y': (y_init, y_prev)})
-
-        #dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
-        dbg = {}
-        return outputs, state, dbg
+        gt = {}
+        dbg = {} # dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
+        return outputs, state, gt, dbg
 
 
 class RNN_dual_mix(object):
