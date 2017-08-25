@@ -61,14 +61,14 @@ def parse_arguments():
     parser.add_argument(
             '--losses', nargs='+', help='list of losses to be used',
             type=str) # example [l1, iou]
-    parser.add_argument(
-            '--regress', help='whether regress absolute position or delta for box',
-            type=str, default='abs')
     parser.add_argument('--heatmap_stride', type=int, default=1,
             help='stride of heatmap at loss')
     parser.add_argument(
             '--search_scale', help='size of search space relative to target',
             type=int, default=2)
+    parser.add_argument(
+            '--perspective', help='ic: image-centric, oc: object-centric',
+            type=str, default='oc')
 
     parser.add_argument(
             '--th_prob_stay', help='threshold probability to stay movement',
