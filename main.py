@@ -169,6 +169,9 @@ def parse_arguments():
             '--period_assess', help='period to run evaluation',
             type=int, default=10000)
     parser.add_argument(
+            '--period_skip', help='until this period skip evaluation',
+            type=int, default=10000)
+    parser.add_argument(
             '--save_videos', help='create video during evaluation',
             action='store_true')
     parser.add_argument(
