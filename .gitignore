@@ -9,3 +9,4 @@ env/
 summary
 output
 aux/*.npy
+.ipynb_checkpoints
