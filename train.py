@@ -194,7 +194,21 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         it will fail to restore by the saver.
         '''
         vars_to_restore = list(tf.trainable_variables())
-        saver_pretrained = tf.train.Saver(vars_to_restore)
+        saver_cl = tf.train.Saver(vars_to_restore)
+
+    if o.cnn_pretrain:
+        ''' In case of loading pre-trained CNN (e.g., vgg_16), create a separate
+        Saver object that is going to be used to restore when session starts.
+        '''
+        #from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
+        #print_tensors_in_checkpoint_file('./pretrained/vgg_16.ckpt', None, False)
+        # or
+        #from tensorflow.python import pywrap_tensorflow
+        #reader = pywrap_tensorflow.NewCheckpointReader('./pretrained/vgg_16.ckpt')
+        #var_to_shape_map = reader.get_variable_to_shape_map()
+        vars_to_restore = {v.name.split(':')[0]: v for v in tf.trainable_variables()
+                           if o.cnn_model in v.name}
+        saver_external = tf.train.Saver(vars_to_restore)
 
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
@@ -210,13 +224,22 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
             saver.restore(sess, model_file)
             print 'done: restore'
             prev_ckpt = global_step_var.eval()
+        elif o.cnn_pretrain:
+            model_file = os.path.join(o.path_data_home, 'pretrained', '{}.ckpt'.format(o.cnn_model))
+            saver_external.restore(sess, model_file)
+            #print sess.run(tf.report_uninitialized_variables()) # To check
+            # initialize uninitialized variables
+            vars_uninit = sess.run(tf.report_uninitialized_variables())
+            sess.run(tf.variables_initializer([v for v in tf.global_variables()
+                                               if v.name.split(':')[0] in vars_uninit]))
+            assert len(sess.run(tf.report_uninitialized_variables())) == 0
         else:
             sess.run(init_op)
             if o.curriculum_learning:
-                if o.model_file is None: # e.g., '/some_path/ckpt/iteration-150000'
+                if o.pretrained_cl is None: # e.g., '/some_path/ckpt/iteration-150000'
                     raise ValueError('could not find checkpoint')
-                print 'restore: {}'.format(o.model_file)
-                saver_pretrained.restore(sess, o.model_file)
+                print 'restore: {}'.format(o.pretrained_cl)
+                saver_cl.restore(sess, o.pretrained_cl)
                 print 'done: (partial) restore for curriculum learning'
 
         if use_queues:
