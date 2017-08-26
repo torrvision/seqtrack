@@ -54,15 +54,18 @@ def parse_arguments():
     parser.add_argument(
             '--use_queues', help='enable queues for asynchronous data loading',
             action='store_true')
+    parser.add_argument('--heatmap_stride', type=int, default=1,
+            help='stride of heatmap at loss')
 
     parser.add_argument(
             '--model', help='model!',
             type=str, default='')
     parser.add_argument(
+            '--model_params', help='JSON string specifying model',
+            type=json.loads, default={})
+    parser.add_argument(
             '--losses', nargs='+', help='list of losses to be used',
             type=str) # example [l1, iou]
-    parser.add_argument('--heatmap_stride', type=int, default=1,
-            help='stride of heatmap at loss')
     parser.add_argument(
             '--search_scale', help='size of search space relative to target',
             type=int, default=2)
@@ -71,8 +74,11 @@ def parse_arguments():
             type=str, default='oc')
 
     parser.add_argument(
-            '--th_prob_stay', help='threshold probability to stay movement',
-            type=float, default=0.0)
+            '--cnn_pretrain', help='specify if using pretrained model',
+            action='store_true')
+    parser.add_argument(
+            '--cnn_model', help='pretrained CNN model',
+            type=str, default='custom')
 
     parser.add_argument(
             '--nunits', help='number of hidden units in rnn cell',
@@ -80,10 +86,6 @@ def parse_arguments():
     parser.add_argument(
             '--ntimesteps', help='number of time steps for rnn',
             type=int, default=20)
-
-    parser.add_argument(
-            '--model_params', help='JSON string specifying model',
-            type=json.loads, default={})
 
     parser.add_argument(
             '--nepoch', help='number of epochs',
@@ -121,7 +123,7 @@ def parse_arguments():
             '--curriculum_learning', help='restore variables from a pre-trained model (on short sequences)',
             action='store_true')
     parser.add_argument(
-            '--model_file', help='pretrained model file to be used for curriculum_learning',
+            '--pretrained_cl', help='pretrained model to be used for curriculum_learning',
             type=str, default=None)
     parser.add_argument(
             '--use_gt_train', help='use ground-truth during training',
@@ -129,6 +131,10 @@ def parse_arguments():
     parser.add_argument(
             '--use_gt_eval', help='use ground-truth during evaluation', # Should be set False in most cases.
             action='store_true')
+
+    parser.add_argument(
+            '--th_prob_stay', help='threshold probability to stay movement',
+            type=float, default=0.0)
 
     parser.add_argument(
             '--data_augmentation', help='JSON string specifying data augmentation',

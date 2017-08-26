@@ -37,24 +37,20 @@ class Opts(object):
         #----------------------------------------------------------------------
         # model - general
         self.model              = '' # {rnn_basic, rnn_attention_s, rnn_attention_t}
+        self.model_params       = {}
         self.losses             = None
         self.search_scale       = 2 # size of search space relative to target.
         self.perspective        = 'oc' # ic: image-centric, oc: object-centric
 
         #----------------------------------------------------------------------
-        # parameters for tracking
-        self.th_prob_stay       = 0.0 # threshold probability to stay movement.
+        # model parameters - cnn
+        self.cnn_model          = 'custom' # custom, vgg_16, etc.
+        self.cnn_pretrain       = False # specify whether to load pretrained params.
 
         #----------------------------------------------------------------------
         # model parameters - rnn
         self.nunits             = 256
         self.ntimesteps         = 20
-
-        #----------------------------------------------------------------------
-        # model parameters - cnn (or feature extractor)
-        self.cnn_pretrain       = False 
-        self.cnn_model          = 'vgg' # vgg, resnet, imagenet, etc.
-        self.model_params       = {}
 
         #----------------------------------------------------------------------
         # training policies
@@ -70,9 +66,13 @@ class Opts(object):
         self.gt_decay_rate      = -1e-2
         self.min_gt_ratio       = 0.75
         self.curriculum_learning= False
-        self.model_file         = None
+        self.pretrained_cl      = None
         self.use_gt_train       = False
         self.use_gt_eval        = False
+
+        #----------------------------------------------------------------------
+        # parameters for tracking
+        self.th_prob_stay       = 0.0 # threshold probability to stay movement.
 
         #----------------------------------------------------------------------
         # Data augmentation
@@ -170,6 +170,8 @@ class Opts(object):
     def _run_sanitycheck(self):
         '''Options sanity check!
         '''
+        assert (self.cnn_model == 'custom' and not self.cnn_pretrain) or \
+               (not self.cnn_model == 'custom')
         pass
 
 
