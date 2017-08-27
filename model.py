@@ -328,7 +328,7 @@ class Nornn(object):
 
     def _load_model(self, inputs, o):
 
-        def pass_cnn(x, cnn_model, act=False):
+        def pass_cnn(x, o, act=False):
             ''' Fully convolutional cnn.
             Either custom or other popular model.
             Note that Slim pre-defined networks can't be directly used, as they
@@ -338,7 +338,7 @@ class Nornn(object):
             # NOTE: Use padding 'SAME' in convolutions and pooling so that
             # corners of before/after convolutions match! If training example
             # pairs are centered, it may not need to be this way though.
-            if cnn_model == 'custom':
+            if o.cnn_model == 'custom':
                 with slim.arg_scope([slim.conv2d],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     x = slim.conv2d(x, 16, 11, stride=2, scope='conv1')
@@ -351,11 +351,13 @@ class Nornn(object):
                         x = slim.conv2d(x, 256, 3, stride=1, activation_fn=None, scope='conv5')
                     else:
                         x = slim.conv2d(x, 256, 3, stride=1, scope='conv5')
-            elif cnn_model == 'vgg_16':
+            elif o.cnn_model == 'vgg_16':
                 # TODO: Test with/without fixing the weights for pretrained model.
                 #with slim.arg_scope(alexnet.alexnet_v2_arg_scope()):
                 #    nets, end_points = alexnet.alexnet_v2(x, spatial_squeeze=False)
                 with slim.arg_scope([slim.conv2d],
+                        trainable=o.cnn_trainable,
+                        variables_collections=[o.cnn_model],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     x = slim.repeat(x, 2, slim.conv2d, 64, [3, 3], scope='conv1')
                     x = slim.max_pool2d(x, [2, 2], padding='SAME', scope='pool1')
@@ -474,11 +476,11 @@ class Nornn(object):
                 target_curr = tf.cond(is_training, # TODO: check the condition being passed.
                                       lambda: process_target_with_box(x_prev, y_prev, o),
                                       lambda: process_target_with_box(x0, y0, o))
-                target_feat = pass_cnn(target_curr, o.cnn_model)
+                target_feat = pass_cnn(target_curr, o)
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
                 search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
-                search_feat = pass_cnn(search_curr, o.cnn_model)
+                search_feat = pass_cnn(search_curr, o)
 
             if self.depth_wise_norm: # For NCC. It has some speed issue. # TODO: test this properly.
                 search_feat = pass_depth_wise_norm(search_feat)

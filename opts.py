@@ -46,6 +46,7 @@ class Opts(object):
         # model parameters - cnn
         self.cnn_model          = 'custom' # custom, vgg_16, etc.
         self.cnn_pretrain       = False # specify whether to load pretrained params.
+        self.cnn_trainable      = False # set True to also learn pretrained params.
 
         #----------------------------------------------------------------------
         # model parameters - rnn

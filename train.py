@@ -206,8 +206,11 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         #from tensorflow.python import pywrap_tensorflow
         #reader = pywrap_tensorflow.NewCheckpointReader('./pretrained/vgg_16.ckpt')
         #var_to_shape_map = reader.get_variable_to_shape_map()
-        vars_to_restore = {v.name.split(':')[0]: v for v in tf.trainable_variables()
-                           if o.cnn_model in v.name}
+        # Approach 1. Use tf.trainable_variables won't work if variables are non-trainable.
+        #vars_to_restore = {v.name.split(':')[0]: v for v in tf.trainable_variables()
+        #                   if o.cnn_model in v.name}
+        # Approach 2. Use collection to get variables.
+        vars_to_restore = {v.name.split(':')[0]: v for v in tf.get_collection(o.cnn_model)}
         saver_external = tf.train.Saver(vars_to_restore)
 
     t_total = time.time()

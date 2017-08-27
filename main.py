@@ -74,11 +74,14 @@ def parse_arguments():
             type=str, default='oc')
 
     parser.add_argument(
+            '--cnn_model', help='pretrained CNN model',
+            type=str, default='custom')
+    parser.add_argument(
             '--cnn_pretrain', help='specify if using pretrained model',
             action='store_true')
     parser.add_argument(
-            '--cnn_model', help='pretrained CNN model',
-            type=str, default='custom')
+            '--cnn_trainable', help='set False to fix pretrained params',
+            action='store_true')
 
     parser.add_argument(
             '--nunits', help='number of hidden units in rnn cell',
