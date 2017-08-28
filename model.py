@@ -133,8 +133,9 @@ class SimpleSearch:
             motion_penalty_weight=1.0,
             window_translate_damp=0.0,
             window_scale_damp=0.9,
-            # normalize_size=False,
-            # normalize_first_only=False
+            search_method='concat', # concat, dot
+            crop_template=False,
+            share_weights=False,
             ):
         # TODO: Possible to automate this? Yuck!
         self.ntimesteps                  = ntimesteps
@@ -156,11 +157,17 @@ class SimpleSearch:
         self.window_translate_damp  = window_translate_damp
         self.window_scale_damp      = window_scale_damp
 
+        self.search_method = search_method
+        self.crop_template = crop_template
+        self.share_weights = share_weights
+
         # Public model properties:
         self.batch_size = None # Model accepts variable batch size.
 
         # Model state.
         self._run_opts = None
+        # For variable sharing.
+        self._num_steps = 0
 
         if self.object_centric:
             self._window_model = ConditionalWindow(
@@ -182,6 +189,7 @@ class SimpleSearch:
         self._init_example = example
 
         with tf.name_scope('extract_window'):
+            # ASSUME OBJECT CENTRIC
             window_state = self._window_model.init(example, run_opts['is_training'])
             self._window_state_keys = window_state.keys()
             # Use the search window for the second frame to crop the initial example.
@@ -192,6 +200,25 @@ class SimpleSearch:
             }
             # Do not pass gradients back to window.
             example = {k: tf.stop_gradient(v) for k, v in example.items()}
+
+            if self.crop_template:
+                # Crop but do not resize.
+                target_height = (self.frmsz-1)/2 + 1 # 241 -> 121
+                assert (target_height-1)*2 == self.frmsz-1
+                offset_height = (self.frmsz - target_height) / 2
+                assert 2 * offset_height == self.frmsz - target_height
+                target_width = target_height
+                offset_width = offset_height
+                offset = np.array([offset_width, offset_height])
+                target = np.array([target_width, target_height])
+                image_size = np.array([self.frmsz, self.frmsz])
+                example = {
+                    'x0': tf.image.crop_to_bounding_box(example['x0'],
+                        offset_height, offset_width, target_height, target_width),
+                    'y0': geom.crop_rect(example['y0'], geom.make_rect(
+                        (np.asfarray(offset) / image_size).astype(np.float32),
+                        (np.asfarray(offset+target) / image_size).astype(np.float32))),
+                }
 
         example['x0'] = self._whiten(example['x0'])
 
@@ -204,20 +231,23 @@ class SimpleSearch:
 
         with slim.arg_scope(self._arg_scope(is_training=self._run_opts['is_training'])):
             # Process initial image and label to get "template".
-            with tf.variable_scope('template'):
-                p0 = get_masks_from_rectangles(example['y0'], frmsz=self.frmsz)
-                first_image_with_mask = concat([example['x0'], p0], axis=3)
-                state['template'] = self._template_net(first_image_with_mask)
-
-                # Visualize mask.
-                tf.summary.image('object_mask',
-                    tf.image.convert_image_dtype(
-                        p0[0:1] * _normalize_image_range(example['x0'][0:1]),
-                        dtype=tf.uint8),
-                    collections=self.image_summaries_collections)
+            if self.share_weights:
+                with tf.variable_scope('features', reuse=False):
+                    state['template'] = self._feat_net(example['x0'])
+            else:
+                with tf.variable_scope('template', reuse=False):
+                    p0 = get_masks_from_rectangles(example['y0'], frmsz=self.frmsz)
+                    first_image_with_mask = concat([example['x0'], p0], axis=3)
+                    state['template'] = self._template_net(first_image_with_mask)
+                    # Visualize mask.
+                    tf.summary.image('object_mask',
+                        tf.image.convert_image_dtype(
+                            p0[0:1] * _normalize_image_range(example['x0'][0:1]),
+                            dtype=tf.uint8),
+                        collections=self.image_summaries_collections)
 
         # Ensure that there is no key collision.
-        assert len(set(state.keys()).intersection(set(window_state.keys()))) == 0
+        assert _intersection_empty(state.keys(), window_state.keys())
         state.update(window_state)
         # Do not over-write elements of state used in init().
         state = {k: tf.identity(v) for k, v in state.items()}
@@ -239,14 +269,16 @@ class SimpleSearch:
             example = {k: tf.stop_gradient(v) for k, v in example.items()}
 
         example['x'] = self._whiten(example['x'])
-
         x = example['x']
+
         with slim.arg_scope(self._arg_scope(is_training=self._run_opts['is_training'])):
             # Process all images from all sequences with feature net.
-            with tf.variable_scope('features'):
+            with tf.variable_scope('features',
+                    reuse=(self._num_steps > 0 or self.share_weights)):
                 feat = self._feat_net(x)
             # Search each image using result of template network.
-            with tf.variable_scope('search'):
+            with tf.variable_scope('search', reuse=(self._num_steps > 0)):
+                # TODO: Handle different search methods.
                 similarity = self._search_net(feat, prev_state['template'])
             # if self.use_rnn:
             #     # Update abstract position likelihood of object.
@@ -263,11 +295,11 @@ class SimpleSearch:
             #     position_map = similarity
             position_map = similarity
             # Transform abstract position position_map into rectangle.
-            with tf.variable_scope('output'):
+            with tf.variable_scope('output', reuse=(self._num_steps > 0)):
                 prediction = self._output_net(position_map, self._init_example['y0'], window)
 
             if self.use_heatmap:
-                with tf.variable_scope('foreground'):
+                with tf.variable_scope('foreground', reuse=(self._num_steps > 0)):
                     # Map abstract position_map to probability of foreground.
                     prediction['hmap'] = self._foreground_net(position_map)
                     prediction['hmap_full'] = tf.image.resize_images(prediction['hmap'],
@@ -283,6 +315,8 @@ class SimpleSearch:
                     _normalize_image_range(example['x'][0:1]),
                     geom.rect_to_tf_box(tf.expand_dims(prediction['y'][0:1], 1))),
                 collections=self.image_summaries_collections)
+
+        self._num_steps += 1
 
         # Update window state for next frame.
         window_state = {}
@@ -358,13 +392,29 @@ class SimpleSearch:
     def _search_net(self, x, f):
         assert len(x.shape) == 4
         assert len(f.shape) == 4
+
         dim = 256
-        # x.shape is [b, hx, wx, c]
-        # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
-        # Search for f in x.
-        x = tf.nn.relu(x + f)
-        x = slim.conv2d(x, dim, 1)
-        x = slim.conv2d(x, dim, 1)
+        if self.search_method == 'concat':
+            # x.shape is [b, hx, wx, c]
+            # f.shape is [b, hf, wf, c] = [b, 1, 1, c]
+            # Search for f in x.
+            x = tf.nn.relu(x + f)
+            x = slim.conv2d(x, dim, 1)
+            x = slim.conv2d(x, dim, 1)
+        elif self.search_method == 'dot':
+            # x.shape is [b, hx, wx, c]
+            # f.shape is [b, hf, wf, c]
+            # [b, hx, wx, c] -> [hx, wx, b, c] -> [hx, wx, b*c]
+            x, restore = merge_dims(tf.transpose(x, [1, 2, 0, 3]), 2, 4)
+            # [b, hf, wf, c] -> [hf, wf, b, c] -> [hf, wf, b*c]
+            f, _ = merge_dims(tf.transpose(f, [1, 2, 0, 3]), 2, 4)
+            x = tf.expand_dims(x, axis=0) # [1, hx, wx, b*c]
+            f = tf.expand_dims(f, axis=3) # [hf, wf, b*c, 1]
+            x = tf.nn.depthwise_conv2d(x, f, strides=[1, 1, 1, 1], padding='SAME')
+            x = tf.squeeze(x, axis=0) # [ho, wo, b*c]
+            # [ho, wo, b*c] -> [ho, wo, b, c] -> [b, ho, wo, c]
+            x = tf.transpose(restore(x, axis=2), [2, 0, 1, 3])
+
         return x
 
     # def _initial_state_net(self, x0, y0, state_dim=16):
@@ -780,6 +830,9 @@ def _normalize_image_range(x):
 def _whiten_image(x, mean, std, name='whiten_image'):
     with tf.name_scope(name) as scope:
         return tf.divide(x - mean, std, name=scope)
+
+def _intersection_empty(a, b):
+    return len(set(a).intersection(set(b))) == 0
 
 
 def load_model(o):

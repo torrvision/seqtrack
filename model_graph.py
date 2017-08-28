@@ -97,17 +97,15 @@ def process_sequence(model, example, run_opts, batchsz, ntimesteps, frmsz):
 
     with tf.variable_scope('model'):
         with tf.name_scope('frame_0'):
-            with tf.variable_scope('init'):
-                init_state = model.init(example_init, run_opts)
+            init_state = model.init(example_init, run_opts)
         for t in range(ntimesteps):
             with tf.name_scope('frame_{}'.format(t+1)):
-                with tf.variable_scope('frame', reuse=(t > 0)):
-                    # TODO: Whiten after crop i.e. in model.
-                    prediction_crop[t], viewport[t], state[t] = model.step(
-                        example_seq[t],
-                        state[t-1] if t > 0 else init_state)
-                    if t == 0:
-                        pred_keys = prediction_crop[t].keys()
+                # TODO: Whiten after crop i.e. in model.
+                prediction_crop[t], viewport[t], state[t] = model.step(
+                    example_seq[t],
+                    state[t-1] if t > 0 else init_state)
+                if t == 0:
+                    pred_keys = prediction_crop[t].keys()
                 # Obtain prediction in image frame.
                 inv_viewport_rect = geom.crop_inverse(viewport[t])
                 # TODO: Should this be inside this function or outside?
