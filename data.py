@@ -517,6 +517,8 @@ def Data_ILSVRC(dstype, o):
         useresizedimg=o.useresizedimg,
     )
 
+EXCLUDE_OCCLUDED = False
+
 class ILSVRC:
     def __init__(self, dstype, frmsz, path_data, path_aux=None, path_stat=None, trainsplit=9, useresizedimg=True):
         self.dstype      = dstype
@@ -626,7 +628,7 @@ class ILSVRC:
             tracks = {}
             for t, frame_objects in enumerate(frames):
                 for obj_id, rect, occluded in frame_objects:
-                    if occluded:
+                    if EXCLUDE_OCCLUDED and occluded:
                         continue
                     # List of (frame, rectangle) pairs instead of dictionary
                     # because JSON does not support integer keys.
