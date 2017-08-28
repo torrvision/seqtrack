@@ -24,6 +24,7 @@ import functools
 import tensorflow as tf
 from tensorflow.contrib import slim
 from tensorflow.contrib.slim.python.slim.nets import alexnet, inception, vgg
+from transformer.spatial_transformer import transformer
 import math
 import numpy as np
 import os
@@ -313,6 +314,7 @@ class Nornn(object):
                  optical_flow=False,
                  resize_target=False,
                  divide_target=False,
+                 stn=False,
                  ):
         # model parameters
         self.depth_wise_norm = depth_wise_norm
@@ -320,6 +322,7 @@ class Nornn(object):
         self.optical_flow = optical_flow
         self.resize_target = resize_target
         self.divide_target = divide_target
+        self.stn = stn
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -327,6 +330,20 @@ class Nornn(object):
         self.batch_size   = o.batchsz
 
     def _load_model(self, inputs, o):
+
+        def pass_stn_localization(x):
+            ''' Localization network in Spatial Transformer Network
+            '''
+            with slim.arg_scope([slim.fully_connected],
+                    activation_fn=tf.nn.tanh,
+                    weights_initializer=tf.zeros_initializer,
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.flatten(x)
+                x = slim.fully_connected(x, 1024, scope='fc1')
+                b_init = np.array([[1., 0, 0], [0, 1., 0]]).astype('float32').flatten() # identity at start.
+                x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
+            return x
+
 
         def pass_cnn(x, o, act=False):
             ''' Fully convolutional cnn.
@@ -408,19 +425,22 @@ class Nornn(object):
             with slim.arg_scope([slim.conv2d],
                     kernel_size=[1,1],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                #x = slim.conv2d(x, num_outputs=256, scope='deconv1')
-                #x = slim.conv2d(x, num_outputs=2, scope='deconv2')
-                #x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
-                #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
-                ##x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
-
-                x = slim.conv2d(x, num_outputs=512, scope='deconv1')
-                x = tf.image.resize_images(x, [61, 61])
-                x = slim.conv2d(x, num_outputs=256, scope='deconv2')
-                x = tf.image.resize_images(x, [121, 121])
-                x = slim.conv2d(x, num_outputs=2, scope='deconv3')
-                x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
-                x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
+                if o.cnn_model == 'custom':
+                    x = slim.conv2d(x, num_outputs=256, scope='deconv1')
+                    x = slim.conv2d(x, num_outputs=2, scope='deconv2')
+                    x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
+                    x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
+                    #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
+                elif o.cnn_model == 'vgg_16':
+                    x = slim.conv2d(x, num_outputs=512, scope='deconv1')
+                    x = tf.image.resize_images(x, [61, 61])
+                    x = slim.conv2d(x, num_outputs=256, scope='deconv2')
+                    x = tf.image.resize_images(x, [121, 121])
+                    x = slim.conv2d(x, num_outputs=2, scope='deconv3')
+                    x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
+                    x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
+                else:
+                    assert False, 'Not available option.'
             return x
 
         def pass_regress_box(x):
@@ -471,15 +491,24 @@ class Nornn(object):
             x_curr = x[:, t]
             y_curr_gt = y[:, t]
 
+            # target and search images
+            #target_curr = process_target_with_box(x_prev, y_prev, o)
+            target_curr = tf.cond(is_training, # TODO: check the condition being passed.
+                                  lambda: process_target_with_box(x_prev, y_prev, o),
+                                  lambda: process_target_with_box(x0, y0, o))
+            search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
+
+            if self.stn:
+                with tf.variable_scope('stn_localization', reuse=(t > 0)):
+                    theta = pass_stn_localization(target_curr)
+                    size = target_curr.shape.as_list()
+                    target_curr = transformer(target_curr, theta, size[1:3])
+                    target_curr.set_shape(size)
+
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
-                #target_curr = process_target_with_box(x_prev, y_prev, o)
-                target_curr = tf.cond(is_training, # TODO: check the condition being passed.
-                                      lambda: process_target_with_box(x_prev, y_prev, o),
-                                      lambda: process_target_with_box(x0, y0, o))
                 target_feat = pass_cnn(target_curr, o)
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
-                search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
                 search_feat = pass_cnn(search_curr, o)
 
             if self.depth_wise_norm: # For NCC. It has some speed issue. # TODO: test this properly.
