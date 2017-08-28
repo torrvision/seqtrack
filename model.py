@@ -131,6 +131,8 @@ class SimpleSearch:
             motion_penalty_profile='linear',
             motion_penalty_radius=1.0,
             motion_penalty_weight=1.0,
+            window_translate_damp=0.0,
+            window_scale_damp=0.9,
             # normalize_size=False,
             # normalize_first_only=False
             ):
@@ -151,6 +153,8 @@ class SimpleSearch:
         self.motion_penalty_profile = motion_penalty_profile
         self.motion_penalty_radius  = motion_penalty_radius
         self.motion_penalty_weight  = motion_penalty_weight
+        self.window_translate_damp  = window_translate_damp
+        self.window_scale_damp      = window_scale_damp
 
         # Public model properties:
         self.batch_size = None # Model accepts variable batch size.
@@ -161,14 +165,14 @@ class SimpleSearch:
         if self.object_centric:
             self._window_model = ConditionalWindow(
                 train_model=InitialWindow(),
-                test_model=MovingAverageWindow(decay=0.95),
-            )
+                test_model=MovingAverageWindow(
+                    translate_damp=self.window_translate_damp,
+                    scale_damp=self.window_scale_damp))
         else:
             # TODO: May be more efficient to avoid cropping if using whole window?
             self._window_model = ConditionalWindow(
                 train_model=WholeImageWindow(),
-                test_model=WholeImageWindow(),
-            )
+                test_model=WholeImageWindow())
         self._window_state_keys = None
 
 
@@ -732,8 +736,9 @@ class InitialWindow:
 
 
 class MovingAverageWindow:
-    def __init__(self, decay, relative_size=4.0):
-        self.decay = decay
+    def __init__(self, translate_damp=0.0, scale_damp=0.0, relative_size=4.0):
+        self.translate_damp = translate_damp
+        self.scale_damp = scale_damp
         self.relative_size = relative_size
         self.eps = 0.01
 
@@ -745,8 +750,8 @@ class MovingAverageWindow:
     def update(self, prediction, prev_state):
         center, log_diameter = self._center_log_diameter(prediction['y'])
         # Moving average.
-        center = self.decay * prev_state['center'] + (1 - self.decay) * center
-        log_diameter = self.decay * prev_state['log_diameter'] + (1 - self.decay) * log_diameter
+        center = self.translate_damp * prev_state['center'] + (1 - self.translate_damp) * center
+        log_diameter = self.scale_damp * prev_state['log_diameter'] + (1 - self.scale_damp) * log_diameter
         state = {'center': center, 'log_diameter': log_diameter}
         return state
 
