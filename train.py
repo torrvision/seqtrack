@@ -310,8 +310,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                                 use_gt=o.use_gt_eval,
                                 save_frames=o.save_frames),
                             makedir=True)
-                        print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}'.format(
-                            result['iou_mean'], result['auc'], result['cle_mean'])
+                        print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
+                            result['iou_mean'], result['auc'], result['cle_mean'],result['cle_representative'])
 
                 # Take a training step.
                 start = time.time()
