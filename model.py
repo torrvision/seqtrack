@@ -390,32 +390,40 @@ class Nornn(object):
             ''' Perform cross-correlation (convolution) to find the target object.
             I use channel-wise convolution, instead of normal convolution.
             '''
-            targets = []
-            targets.append(target)
+            targets, weights = [], [] # without `weighted` average, training fails.
+            targets.append(target); weights.append(1.0)
 
-            height = target.shape.as_list()[1] # height of target (=width)
             if self.resize_target:
-                assert False, 'fix problem first. for bigger resize, it fails'
-                # TODO: 1) more resizings, 2) convolution before/after resizing? Is relu positivity okay?
-                targets.append(tf.image.resize_images(target, [int(height*1.2)]*2)) # x1.2 big
-                targets.append(tf.image.resize_images(target, [int(height*0.2)]*2)) # x0.2 small
+                height = target.shape.as_list()[1]
+                scales = [0.8, 0.9, 1.1, 1.2] # TODO: 1) more scales, 2) conv before/after resize - Relu okay?
+                for s in scales:
+                    targets.append(tf.image.resize_images(target, [int(height*s)]*2))
+                    weights.append(1.0 - abs(1.0 - s))
+
             if self.divide_target:
-                assert False, 'Not available yet.'
+                #assert False, 'Not available yet.'
+                # NOTE: Somehow this didn't work until STN option was enabled.
+                height = target.shape.as_list()[1]
                 patchsz = [5] # TODO: diff sizes
                 for n in range(len(patchsz)):
                     for i in range(0,height,patchsz[n]):
                         for j in range(0,height,patchsz[n]):
                             targets.append(target[:,i:i+patchsz[n], j:j+patchsz[n], :])
+                            weights.append(float(patchsz[n])/height)
+
+            weights = [w/sum(weights) for w in weights]
+            assert(len(weights)==len(targets))
 
             scoremap = []
             for b in range(o.batchsz):
                 scoremap_each = []
                 for k in range(len(targets)):
-                    scoremap_each.append(tf.nn.depthwise_conv2d(tf.expand_dims(search[b], 0),
+                    scoremap_each.append(weights[k] *
+                                         tf.nn.depthwise_conv2d(tf.expand_dims(search[b], 0),
                                                                 tf.expand_dims(targets[k][b], 3),
                                                                 strides=[1,1,1,1],
                                                                 padding='SAME'))
-                scoremap.append(tf.add_n(scoremap_each) / len(targets))
+                scoremap.append(tf.add_n(scoremap_each))
             return tf.concat(scoremap, 0)
 
         def pass_deconvolution(x, o):
@@ -510,6 +518,11 @@ class Nornn(object):
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
                 search_feat = pass_cnn(search_curr, o)
+            #with tf.variable_scope(o.cnn_model + '-A', reuse=(t > 0)) as scope:
+            #    target_feat = pass_cnn(target_curr, o)
+
+            #with tf.variable_scope(o.cnn_model + '-S', reuse=(t > 0)) as scope:
+            #    search_feat = pass_cnn(search_curr, o)
 
             if self.depth_wise_norm: # For NCC. It has some speed issue. # TODO: test this properly.
                 search_feat = pass_depth_wise_norm(search_feat)
