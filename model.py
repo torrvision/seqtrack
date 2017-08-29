@@ -219,10 +219,11 @@ def find_center_in_scoremap(scoremap, o):
     # Siamese paper seems to put a cosine window on scoremap!
     center = []
     for b in range(scoremap.shape.as_list()[0]):
+        maxlocs = tf.cast(tf.where(max_loc[b]), tf.float32)
+        avg_center = tf.reduce_mean(maxlocs, axis=0)
         center.append(tf.cond(tf.less(max_val[b,0,0], o.th_prob_stay), # TODO: test optimal value.
-                              lambda: tf.cast(tf.stack([dims, dims]), tf.float32),
-                              lambda: tf.reduce_mean(tf.cast(tf.where(max_loc[b]), tf.float32), axis=0)))
-        #center.append(tf.reduce_mean(tf.cast(tf.where(max_loc[b]), tf.float32), axis=0))
+                              lambda: tf.stack([dims/2.]*2),
+                              lambda: avg_center))
     center = tf.stack(center, 0)
     center = tf.stack([center[:,1], center[:,0]], 1) # To make it [x,y] format.
     center = center / dims # To keep coordinate in relative scale range [0, 1].
@@ -316,7 +317,7 @@ class Nornn(object):
     '''
     def __init__(self, inputs, o,
                  summaries_collections=None,
-                 feat_act='linear',
+                 feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
                  depth_wise_norm=False,
                  pred_box=False,
                  optical_flow=False,
@@ -433,7 +434,7 @@ class Nornn(object):
                             targets.append(target[:,i:i+patchsz[n], j:j+patchsz[n], :])
                             weights.append(float(patchsz[n])/height)
 
-            # TODO: Investigate different weighting.
+            # TODO: Investigate different weighting. Try Attention mechanism!
             weights = [w/sum(weights) for w in weights]
             assert(len(weights)==len(targets))
 
