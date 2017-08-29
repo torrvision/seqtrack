@@ -302,6 +302,13 @@ def to_image_centric_hmap(hmap_pred_oc, box_s_raw, box_s_val, o):
         hmap_pred.append(hmap)
     return tf.stack(hmap_pred, 0)
 
+def get_act(act):
+    if act == 'relu':
+        return tf.nn.relu
+    elif act =='tanh':
+        return tf.nn.tanh
+    elif act == 'linear':
+        return None
 
 class Nornn(object):
     '''
@@ -309,6 +316,7 @@ class Nornn(object):
     '''
     def __init__(self, inputs, o,
                  summaries_collections=None,
+                 feat_act='linear',
                  depth_wise_norm=False,
                  pred_box=False,
                  optical_flow=False,
@@ -317,6 +325,7 @@ class Nornn(object):
                  stn=False,
                  ):
         # model parameters
+        self.feat_act = feat_act
         self.depth_wise_norm = depth_wise_norm
         self.pred_box = pred_box
         self.optical_flow = optical_flow
@@ -344,8 +353,7 @@ class Nornn(object):
                 x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
             return x
 
-
-        def pass_cnn(x, o, act=False):
+        def pass_cnn(x, o):
             ''' Fully convolutional cnn.
             Either custom or other popular model.
             Note that Slim pre-defined networks can't be directly used, as they
@@ -355,6 +363,7 @@ class Nornn(object):
             # NOTE: Use padding 'SAME' in convolutions and pooling so that
             # corners of before/after convolutions match! If training example
             # pairs are centered, it may not need to be this way though.
+            # TODO: Not really sure if activation should really be gone. TEST.
             if o.cnn_model == 'custom':
                 with slim.arg_scope([slim.conv2d],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -364,12 +373,19 @@ class Nornn(object):
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
                     x = slim.conv2d(x, 64, 3, stride=1, scope='conv3')
                     x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
-                    if not act: # no activation. used for Siamese.
-                        x = slim.conv2d(x, 256, 3, stride=1, activation_fn=None, scope='conv5')
-                    else:
-                        x = slim.conv2d(x, 256, 3, stride=1, scope='conv5')
+                    x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(self.feat_act), scope='conv5')
+            elif o.cnn_model =='siamese': # exactly same as Siamese
+                with slim.arg_scope([slim.conv2d],
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    x = slim.conv2d(x, 96, 11, stride=2, scope='conv1')
+                    x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
+                    x = slim.conv2d(x, 256, 5, stride=1, scope='conv2')
+                    x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
+                    x = slim.conv2d(x, 192, 3, stride=1, scope='conv3')
+                    x = slim.conv2d(x, 192, 3, stride=1, scope='conv4')
+                    x = slim.conv2d(x, 128, 3, stride=1, activation_fn=get_act(self.feat_act), scope='conv5')
             elif o.cnn_model == 'vgg_16':
-                # TODO: Test with/without fixing the weights for pretrained model.
+                # TODO: NEED TO TEST AGAIN. Previously I had activation at the end.. :(
                 #with slim.arg_scope(alexnet.alexnet_v2_arg_scope()):
                 #    nets, end_points = alexnet.alexnet_v2(x, spatial_squeeze=False)
                 with slim.arg_scope([slim.conv2d],
@@ -383,7 +399,13 @@ class Nornn(object):
                     x = slim.repeat(x, 3, slim.conv2d, 256, [3, 3], scope='conv3')
                     x = slim.max_pool2d(x, [2, 2], padding='SAME', scope='pool3')
                     x = slim.repeat(x, 3, slim.conv2d, 512, [3, 3], scope='conv4')
-                    x = slim.repeat(x, 3, slim.conv2d, 512, [3, 3], scope='conv5')
+                    # No use repeat. Split so that no activation applied at the end.
+                    #x = slim.repeat(x, 3, slim.conv2d, 512, [3, 3], scope='conv5')
+                    x = slim.conv2d(x, 512, [3, 3], scope='conv5/conv5_1')
+                    x = slim.conv2d(x, 512, [3, 3], scope='conv5/conv5_2')
+                    x = slim.conv2d(x, 512, [3, 3], activation_fn=get_act(self.feat_act), scope='conv5/conv5_3')
+            else:
+                assert False, 'Model not available'
             return x
 
         def pass_cross_correlation(search, target, o):
@@ -411,6 +433,7 @@ class Nornn(object):
                             targets.append(target[:,i:i+patchsz[n], j:j+patchsz[n], :])
                             weights.append(float(patchsz[n])/height)
 
+            # TODO: Investigate different weighting.
             weights = [w/sum(weights) for w in weights]
             assert(len(weights)==len(targets))
 
@@ -433,13 +456,14 @@ class Nornn(object):
             with slim.arg_scope([slim.conv2d],
                     kernel_size=[1,1],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                if o.cnn_model == 'custom':
-                    x = slim.conv2d(x, num_outputs=256, scope='deconv1')
+                if o.cnn_model in ['custom', 'siamese']:
+                    x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1], scope='deconv1')
                     x = slim.conv2d(x, num_outputs=2, scope='deconv2')
                     x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
                     x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
                     #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
                 elif o.cnn_model == 'vgg_16':
+                    assert False, 'Please update this better before using it..'
                     x = slim.conv2d(x, num_outputs=512, scope='deconv1')
                     x = tf.image.resize_images(x, [61, 61])
                     x = slim.conv2d(x, num_outputs=256, scope='deconv2')
@@ -518,11 +542,6 @@ class Nornn(object):
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
                 search_feat = pass_cnn(search_curr, o)
-            #with tf.variable_scope(o.cnn_model + '-A', reuse=(t > 0)) as scope:
-            #    target_feat = pass_cnn(target_curr, o)
-
-            #with tf.variable_scope(o.cnn_model + '-S', reuse=(t > 0)) as scope:
-            #    search_feat = pass_cnn(search_curr, o)
 
             if self.depth_wise_norm: # For NCC. It has some speed issue. # TODO: test this properly.
                 search_feat = pass_depth_wise_norm(search_feat)
