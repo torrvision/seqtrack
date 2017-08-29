@@ -128,6 +128,8 @@ class SimpleSearch:
             use_heatmap=False,
             use_batch_norm=False, # Caution when use_rnn is True.
             object_centric=False,
+            context_size=2, # Only has effect with crop_template=True
+            search_size=4,
             motion_penalty_profile='linear',
             motion_penalty_radius=1.0,
             motion_penalty_weight=1.0,
@@ -151,6 +153,8 @@ class SimpleSearch:
         self.use_heatmap    = use_heatmap
         self.use_batch_norm = use_batch_norm
         self.object_centric = object_centric
+        self.context_size = context_size
+        self.search_size  = search_size
         self.motion_penalty_profile = motion_penalty_profile
         self.motion_penalty_radius  = motion_penalty_radius
         self.motion_penalty_weight  = motion_penalty_weight
@@ -171,8 +175,10 @@ class SimpleSearch:
 
         if self.object_centric:
             self._window_model = ConditionalWindow(
-                train_model=InitialWindow(),
+                train_model=InitialWindow(
+                    relative_size=self.search_size),
                 test_model=MovingAverageWindow(
+                    relative_size=self.search_size,
                     translate_damp=self.window_translate_damp,
                     scale_damp=self.window_scale_damp))
         else:
@@ -203,8 +209,8 @@ class SimpleSearch:
 
             if self.crop_template:
                 # Crop but do not resize.
-                target_height = (self.frmsz-1)/2 + 1 # 241 -> 121
-                assert (target_height-1)*2 == self.frmsz-1
+                target_height = (self.frmsz-1)*self.context_size/self.search_size + 1
+                assert (target_height-1)*self.search_size/self.context_size == self.frmsz-1
                 offset_height = (self.frmsz - target_height) / 2
                 assert 2 * offset_height == self.frmsz - target_height
                 target_width = target_height
@@ -467,7 +473,6 @@ class SimpleSearch:
         output = {}
         # Size of object in object-centric window.
         # TODO: Make this a parameter that is given to window model.
-        relative_size = 4.0
 
         if self.output_mode == 'rectangle':
             with tf.variable_scope('rectangle'):
@@ -504,7 +509,7 @@ class SimpleSearch:
                 centers = tf.stack([centers_x, centers_y], axis=-1)
 
                 # TODO: This will only work in object-centric mode?
-                object_size = 1.0 / relative_size
+                object_size = 1.0 / float(self.search_size)
                 # Add motion penalty to score map.
                 motion = tf.norm(centers - tf.constant([0.5, 0.5]), axis=-1, keep_dims=True)
                 motion_penalty = self._motion_penalty(motion / object_size)
@@ -562,7 +567,7 @@ class SimpleSearch:
                 centers = tf.stack([centers_x, centers_y], axis=-1)
 
                 # TODO: This will only work in object-centric mode?
-                object_size = 1.0 / relative_size
+                object_size = 1.0 / float(self.search_size)
                 # Create anchors. Assume a single anchor for now.
                 # TODO: Multiple anchors with a score each.
                 anchor_size = tf.constant(object_size * np.array([1.0, 1.0], dtype=np.float32))
@@ -765,7 +770,7 @@ class WholeImageWindow:
 
 
 class InitialWindow:
-    def __init__(self, relative_size=4.0):
+    def __init__(self, relative_size):
         self.relative_size = relative_size
 
     def init(self, example):
@@ -786,7 +791,7 @@ class InitialWindow:
 
 
 class MovingAverageWindow:
-    def __init__(self, translate_damp=0.0, scale_damp=0.0, relative_size=4.0):
+    def __init__(self, relative_size, translate_damp=0.0, scale_damp=0.0):
         self.translate_damp = translate_damp
         self.scale_damp = scale_damp
         self.relative_size = relative_size
