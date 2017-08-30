@@ -217,7 +217,8 @@ def find_center_in_scoremap(scoremap, o):
     assert(len(scoremap.shape.as_list())==3)
     max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
     dims = scoremap.shape.as_list()[1]
-    max_loc = tf.equal(scoremap, max_val)
+    #max_loc = tf.equal(scoremap, max_val) # only max.
+    max_loc = tf.greater(scoremap, max_val*0.9) # values over 90% of max.
     # NOTE: weighted average based on distance to the center, instead of average.
     # This is to reguarlize object movement, but it's a hack and will not always work.
     # Ideally, learning motion dynamics can solve this without this.
@@ -225,11 +226,7 @@ def find_center_in_scoremap(scoremap, o):
     center = []
     for b in range(scoremap.shape.as_list()[0]):
         maxlocs = tf.cast(tf.where(max_loc[b]), tf.float32)
-        #avg_center = tf.reduce_mean(maxlocs, axis=0)
-        dist_max_to_center = tf.sqrt(tf.reduce_sum(tf.square([round(dims/2.)]*2 - maxlocs), axis=1))
-        dist_max_to_center /= tf.reduce_sum(dist_max_to_center)
-        weights = 1.0 - dist_max_to_center
-        avg_center = tf.reduce_mean(maxlocs * tf.expand_dims(weights, -1), axis=0)
+        avg_center = tf.reduce_mean(maxlocs, axis=0)
         center.append(tf.cond(tf.less(max_val[b,0,0], o.th_prob_stay), # TODO: test optimal value.
                               lambda: tf.stack([dims/2.]*2),
                               lambda: avg_center))
