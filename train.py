@@ -615,7 +615,8 @@ def _whiten(example_raw, o, stat=None, name='whiten'):
 
 def _whiten_image(x, mean, std, name='whiten_image'):
     with tf.name_scope(name) as scope:
-        return tf.divide(x - mean, std, name=scope)
+        #return tf.divide(x - mean, std, name=scope)
+        return tf.divide(x - 0.0, 1.0, name=scope)
 
 
 def iter_examples(dataset, o, generator=None, num_epochs=None):

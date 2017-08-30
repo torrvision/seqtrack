@@ -362,7 +362,7 @@ class Nornn(object):
                 x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
             return x
 
-        def pass_cnn(x, o):
+        def pass_cnn(x, o, is_training):
             ''' Fully convolutional cnn.
             Either custom or other popular model.
             Note that Slim pre-defined networks can't be directly used, as they
@@ -375,6 +375,8 @@ class Nornn(object):
             # TODO: Not really sure if activation should really be gone. TEST.
             if o.cnn_model == 'custom':
                 with slim.arg_scope([slim.conv2d],
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'is_training': is_training},
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     x = slim.conv2d(x, 16, 11, stride=2, scope='conv1')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
@@ -556,10 +558,10 @@ class Nornn(object):
                     target_curr.set_shape(size)
 
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
-                target_feat = pass_cnn(target_curr, o)
+                target_feat = pass_cnn(target_curr, o, is_training)
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
-                search_feat = pass_cnn(search_curr, o)
+                search_feat = pass_cnn(search_curr, o, is_training)
 
             if self.depth_wise_norm: # For NCC. It has some speed issue. # TODO: test this properly.
                 search_feat = pass_depth_wise_norm(search_feat)
