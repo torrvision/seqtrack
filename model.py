@@ -451,8 +451,8 @@ class Nornn(object):
                             targets.append(target * tf.expand_dims(tf.cast(mask, tf.float32), -1))
                             weights.append(float(patchsz[n])/height)
 
-            # TODO: Investigate different weighting. Try Attention mechanism!
-            weights = [w/sum(weights) for w in weights]
+            # TODO: Need investigate more.
+            #weights = [w/sum(weights) for w in weights]
             assert(len(weights)==len(targets))
 
             scoremap = []
