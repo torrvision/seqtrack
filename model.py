@@ -117,8 +117,12 @@ def enforce_inside_box(y, name='inside_box'):
     '''
     assert len(y.shape.as_list()) == 2
     with tf.name_scope(name) as scope:
-        y_new = tf.stack([tf.maximum(y[:,0], 0.0), tf.maximum(y[:,1], 0.0),
-                          tf.minimum(y[:,2], 1.0), tf.minimum(y[:,3], 1.0)], 1)
+        # outside [0,1]
+        y = tf.maximum(y, 0.0)
+        y = tf.minimum(y, 1.0)
+        # also enforce no flip
+        #y = tf.stack([tf.minimum(y[:,0], y[:,2]), tf.minimum(y[:,1], y[:,3]),
+        #              tf.maximum(y[:,2], y[:,2]), tf.maximum(y[:,1], y[:,3])], 1)
     return y_new
 
 def pass_depth_wise_norm(feature):
