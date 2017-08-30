@@ -323,6 +323,7 @@ class Nornn(object):
                  resize_target=False,
                  divide_target=False,
                  stn=False,
+                 coarse_hmap=False,
                  ):
         # model parameters
         self.feat_act = feat_act
@@ -332,6 +333,7 @@ class Nornn(object):
         self.resize_target = resize_target
         self.divide_target = divide_target
         self.stn = stn
+        self.coarse_hmap = coarse_hmap
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -458,10 +460,13 @@ class Nornn(object):
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 if o.cnn_model in ['custom', 'siamese']:
                     x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1], scope='deconv1')
-                    x = slim.conv2d(x, num_outputs=2, scope='deconv2')
-                    x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
-                    x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
-                    #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
+                    if self.coarse_hmap:
+                        x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv2')
+                    else:
+                        x = slim.conv2d(x, num_outputs=2, scope='deconv2')
+                        x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
+                        x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
+                        #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
                 elif o.cnn_model == 'vgg_16':
                     assert False, 'Please update this better before using it..'
                     x = slim.conv2d(x, num_outputs=512, scope='deconv1')

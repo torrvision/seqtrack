@@ -78,6 +78,8 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
             This option is used to evaluate full-length sequences.
             '''
             return range(valid_frames[0], valid_frames[-1]+1)
+        else:
+            raise ValueError('unknown sampler: {}'.format(kind))
 
     assert((ntimesteps is None) == (kind == 'full'))
     videos = list(dataset.videos) # copy
