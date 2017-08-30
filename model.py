@@ -123,7 +123,7 @@ def enforce_inside_box(y, name='inside_box'):
         # also enforce no flip
         #y = tf.stack([tf.minimum(y[:,0], y[:,2]), tf.minimum(y[:,1], y[:,3]),
         #              tf.maximum(y[:,2], y[:,2]), tf.maximum(y[:,1], y[:,3])], 1)
-    return y_new
+    return y
 
 def pass_depth_wise_norm(feature):
     num_channels = feature.shape.as_list()[-1]
@@ -316,6 +316,8 @@ def get_act(act):
         return tf.nn.tanh
     elif act == 'linear':
         return None
+    else:
+        assert False, 'wrong activation type'
 
 class Nornn(object):
     '''
