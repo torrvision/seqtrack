@@ -55,7 +55,7 @@ def epoch(dataset, rand, sample_frames, augment_motion=None, max_objects=None, m
                 break
             frames = sample_frames(video, obj)
             if not frames:
-                print 'could not augment motion: ({}, {})'.format(video, obj)
+                # print 'could not augment motion: ({}, {})'.format(video, obj)
                 continue
             trajectory = dataset.tracks[video][obj]
             # Take sub-trajectory.
@@ -67,7 +67,7 @@ def epoch(dataset, rand, sample_frames, augment_motion=None, max_objects=None, m
             aspect = float(width) / float(height)
             viewports = augment_motion(is_valid, rects, aspect)
             if viewports is None:
-                print 'could not augment motion: ({}, {})'.format(video, obj)
+                # print 'could not augment motion: ({}, {})'.format(video, obj)
                 continue
             name = '{}-{}'.format(_escape(video), obj)
             sequence = {
