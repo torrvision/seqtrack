@@ -432,14 +432,23 @@ class Nornn(object):
                     weights.append(1.0 - abs(1.0 - s))
 
             if self.divide_target:
-                #assert False, 'Not available yet.'
-                # NOTE: Somehow this didn't work until STN option was enabled.
                 height = target.shape.as_list()[1]
                 patchsz = [5] # TODO: diff sizes
                 for n in range(len(patchsz)):
                     for i in range(0,height,patchsz[n]):
                         for j in range(0,height,patchsz[n]):
-                            targets.append(target[:,i:i+patchsz[n], j:j+patchsz[n], :])
+                            #targets.append(target[:,i:i+patchsz[n], j:j+patchsz[n], :])
+                            # Instead of divide, use mask operation to preserve patch size.
+                            grid_x = tf.expand_dims(tf.range(height), 0)
+                            grid_y = tf.expand_dims(tf.range(height), 1)
+                            x1 = tf.expand_dims(j, -1)
+                            x2 = tf.expand_dims(j+patchsz[n]-1, -1)
+                            y1 = tf.expand_dims(i, -1)
+                            y2 = tf.expand_dims(i+patchsz[n]-1, -1)
+                            mask = tf.logical_and(
+                                tf.logical_and(tf.less_equal(x1, grid_x), tf.less_equal(grid_x, x2)),
+                                tf.logical_and(tf.less_equal(y1, grid_y), tf.less_equal(grid_y, y2)))
+                            targets.append(target * tf.expand_dims(tf.cast(mask, tf.float32), -1))
                             weights.append(float(patchsz[n])/height)
 
             # TODO: Investigate different weighting. Try Attention mechanism!
