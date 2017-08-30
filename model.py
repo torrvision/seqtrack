@@ -225,7 +225,8 @@ def find_center_in_scoremap(scoremap, o):
         #center.append(tf.reduce_mean(tf.cast(tf.where(max_loc[b]), tf.float32), axis=0))
     center = tf.stack(center, 0)
     center = tf.stack([center[:,1], center[:,0]], 1) # To make it [x,y] format.
-    center = center / dims # To keep coordinate in relative scale range [0, 1].
+    # JV: Use dims - 1 and resize with align_corners=True to preserve alignment.
+    center = center / (dims - 1) # To keep coordinate in relative scale range [0, 1].
     with tf.control_dependencies(
             [tf.assert_greater_equal(center, 0.0), tf.assert_less_equal(center, 1.0)]):
         center = tf.identity(center)
