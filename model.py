@@ -185,8 +185,8 @@ def process_search_with_box(img, box, o):
         s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
         crop_val = tf.image.crop_to_bounding_box(
                 image=img[b],
-                offset_height=tf.cast(y1_s_val*o.frmsz, tf.int32),
-                offset_width =tf.cast(x1_s_val*o.frmsz, tf.int32),
+                offset_height=tf.cast(y1_s_val*(o.frmsz-1), tf.int32),
+                offset_width =tf.cast(x1_s_val*(o.frmsz-1), tf.int32),
                 target_height=s_val_h,
                 target_width =s_val_w)
         # pad crop so that it preserves aspect ratio.
@@ -196,8 +196,8 @@ def process_search_with_box(img, box, o):
         s_raw_w = tf.maximum(s_raw_w, 1) # to prevent assertion error.
         crop_pad = tf.image.pad_to_bounding_box(
                 image=crop_val,
-                offset_height=tf.cast((y1_s_val-y1_s_raw)*o.frmsz, tf.int32),
-                offset_width =tf.cast((x1_s_val-x1_s_raw)*o.frmsz, tf.int32),
+                offset_height=tf.cast((y1_s_val-y1_s_raw)*(o.frmsz-1), tf.int32),
+                offset_width =tf.cast((x1_s_val-x1_s_raw)*(o.frmsz-1), tf.int32),
                 target_height=s_raw_h,
                 target_width =s_raw_w)
         # resize to 241 x 241
@@ -295,17 +295,17 @@ def to_image_centric_hmap(hmap_pred_oc, box_s_raw, box_s_val, o):
         s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
         s_val = tf.image.crop_to_bounding_box(
                 image=s_raw,
-                offset_height=tf.cast((box_s_val[b][1]-box_s_raw[b][1])*o.frmsz, tf.int32),
-                offset_width =tf.cast((box_s_val[b][0]-box_s_raw[b][0])*o.frmsz, tf.int32),
+                offset_height=tf.cast((box_s_val[b][1]-box_s_raw[b][1])*(o.frmsz-1), tf.int32),
+                offset_width =tf.cast((box_s_val[b][0]-box_s_raw[b][0])*(o.frmsz-1), tf.int32),
                 target_height=s_val_h,
                 target_width =s_val_w)
         # pad to reconstruct the original image-centric scale.
         hmap = tf.image.pad_to_bounding_box( # zero padded.
                 image=s_val,
-                offset_height=tf.cast(box_s_val[b][1]*o.frmsz, tf.int32),
-                offset_width=tf.cast(box_s_val[b][0]*o.frmsz, tf.int32),
+                offset_height=tf.cast(box_s_val[b][1]*(o.frmsz-1), tf.int32),
+                offset_width =tf.cast(box_s_val[b][0]*(o.frmsz-1), tf.int32),
                 target_height=o.frmsz,
-                target_width=o.frmsz)
+                target_width =o.frmsz)
         hmap_pred.append(hmap)
     return tf.stack(hmap_pred, 0)
 
@@ -318,6 +318,32 @@ def get_act(act):
         return None
     else:
         assert False, 'wrong activation type'
+
+def regularize_scale(y_prev, y_curr, y0=None, global_bound=0.1):
+    ''' This function (only) regularize scale of new box.
+    It is used when `pred_box` option is enabled.
+    '''
+    w_prev = y_prev[:,2] - y_prev[:,0]
+    h_prev = y_prev[:,3] - y_prev[:,1]
+    c_prev = tf.stack([(y_prev[:,2] + y_prev[:,0]), (y_prev[:,3] + y_prev[:,1])], 1) / 2.0
+    w_curr = y_curr[:,2] - y_curr[:,0]
+    h_curr = y_curr[:,3] - y_curr[:,1]
+    c_curr = tf.stack([(y_curr[:,2] + y_curr[:,0]), (y_curr[:,3] + y_curr[:,1])], 1) / 2.0
+
+    bound = 0.1 # upper bound for scale change in percentage
+    w_reg = tf.minimum(tf.maximum(w_curr, w_prev*(1-bound)), w_prev*(1+bound))
+    h_reg = tf.minimum(tf.maximum(h_curr, h_prev*(1-bound)), h_prev*(1+bound))
+
+    # add global bound w.r.t. y0
+    if y0 is not None:
+        w0 = y0[:,2] - y0[:,0]
+        h0 = y0[:,3] - y0[:,1]
+        w_reg = tf.minimum(tf.maximum(w_reg, w0*(1-global_bound)), w0*(1+global_bound))
+        h_reg = tf.minimum(tf.maximum(h_reg, h0*(1-global_bound)), h0*(1+global_bound))
+
+    y_reg = tf.stack([c_curr[:,0]-w_reg/2.0, c_curr[:,1]-h_reg/2.0,
+                      c_curr[:,0]+w_reg/2.0, c_curr[:,1]+h_reg/2.0], 1)
+    return y_reg
 
 class Nornn(object):
     '''
@@ -467,21 +493,38 @@ class Nornn(object):
                                                                 strides=[1,1,1,1],
                                                                 padding='SAME'))
                 scoremap.append(tf.add_n(scoremap_each))
-            return tf.concat(scoremap, 0)
+            scoremap = tf.concat(scoremap, 0)
+
+            # After cross-correlation, put some convolutions (separately from deconv).
+            with slim.arg_scope([slim.conv2d],
+                    num_outputs=scoremap.shape.as_list()[-1],
+                    kernel_size=3,
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                scoremap = slim.conv2d(scoremap, scope='conv1')
+                scoremap = slim.conv2d(scoremap, scope='conv2')
+            return scoremap
 
         def pass_deconvolution(x, o):
             ''' Upsampling layers.
+            The last layer should not have an activation!
             '''
             # NOTE: Not entirely sure yet if `align_corners` option is required.
             with slim.arg_scope([slim.conv2d],
-                    kernel_size=[1,1],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 if o.cnn_model in ['custom', 'siamese']:
-                    x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1], scope='deconv1')
-                    x = slim.conv2d(x, num_outputs=2, scope='deconv2')
-                    x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
-                    x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
-                    #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
+                    x = tf.image.resize_images(x, [o.frmsz/2]*2)
+                    x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1]/2, kernel_size=3, scope='deconv1')
+                    x = tf.image.resize_images(x, [o.frmsz]*2)
+                    x = slim.conv2d(x, num_outputs=2, kernel_size=3, scope='deconv2')
+                    x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv3')
+
+                    # previous shallow
+                    #kernel_size=[1,1],
+                    #x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1], scope='deconv1')
+                    #x = slim.conv2d(x, num_outputs=2, scope='deconv2')
+                    #x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
+                    #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
+                    ##x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
                 elif o.cnn_model == 'vgg_16':
                     assert False, 'Please update this better before using it..'
                     x = slim.conv2d(x, num_outputs=512, scope='deconv1')
@@ -498,12 +541,14 @@ class Nornn(object):
         def pass_regress_box(x):
             ''' Regress output rectangle.
             '''
-            with slim.arg_scope([slim.fully_connected],
+            with slim.arg_scope([slim.conv2d, slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = slim.max_pool2d(x, kernel_size=3, stride=3, scope='pool1')
+                x = tf.nn.relu(x, 'relu')
+                x = slim.conv2d(x, 2, 7, stride=3, scope='conv1')
+                #x = slim.max_pool2d(x, kernel_size=3, stride=3, scope='pool1')
                 x = slim.flatten(x)
-                x = slim.fully_connected(x, 1024, scope='fc1')
-                x = slim.fully_connected(x, 1024, scope='fc2')
+                x = slim.fully_connected(x, 4096, scope='fc1')
+                x = slim.fully_connected(x, 4096, scope='fc2')
                 x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
@@ -589,6 +634,7 @@ class Nornn(object):
                 y_curr_pred_oc = to_object_centric_coordinate(y_curr_pred, box_s_raw_curr, box_s_val_curr, o)
 
             # Get image-centric outputs. Some are used for visualization purpose.
+            y_curr_pred    = regularize_scale(y_prev, y_curr_pred, y0)
             y_curr_pred    = enforce_inside_box(y_curr_pred)
             hmap_curr_pred = to_image_centric_hmap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0],
                                                    box_s_raw_curr, box_s_val_curr, o)
