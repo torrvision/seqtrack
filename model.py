@@ -117,9 +117,13 @@ def enforce_inside_box(y, name='inside_box'):
     '''
     assert len(y.shape.as_list()) == 2
     with tf.name_scope(name) as scope:
-        y_new = tf.stack([tf.maximum(y[:,0], 0.0), tf.maximum(y[:,1], 0.0),
-                          tf.minimum(y[:,2], 1.0), tf.minimum(y[:,3], 1.0)], 1)
-    return y_new
+        # outside [0,1]
+        y = tf.maximum(y, 0.0)
+        y = tf.minimum(y, 1.0)
+        # also enforce no flip
+        #y = tf.stack([tf.minimum(y[:,0], y[:,2]), tf.minimum(y[:,1], y[:,3]),
+        #              tf.maximum(y[:,2], y[:,2]), tf.maximum(y[:,1], y[:,3])], 1)
+    return y
 
 def pass_depth_wise_norm(feature):
     num_channels = feature.shape.as_list()[-1]
@@ -213,16 +217,19 @@ def find_center_in_scoremap(scoremap, o):
     assert(len(scoremap.shape.as_list())==3)
     max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
     dims = scoremap.shape.as_list()[1]
-    max_loc = tf.equal(scoremap, max_val)
-    # TODO: Instead of average, weighted average? e.g., based on distance-to-center.
-    # In ideal case this can regularize the object movements.
+    #max_loc = tf.equal(scoremap, max_val) # only max.
+    max_loc = tf.greater(scoremap, max_val*0.9) # values over 90% of max.
+    # NOTE: weighted average based on distance to the center, instead of average.
+    # This is to reguarlize object movement, but it's a hack and will not always work.
+    # Ideally, learning motion dynamics can solve this without this.
     # Siamese paper seems to put a cosine window on scoremap!
     center = []
     for b in range(scoremap.shape.as_list()[0]):
+        maxlocs = tf.cast(tf.where(max_loc[b]), tf.float32)
+        avg_center = tf.reduce_mean(maxlocs, axis=0)
         center.append(tf.cond(tf.less(max_val[b,0,0], o.th_prob_stay), # TODO: test optimal value.
-                              lambda: tf.cast(tf.stack([dims, dims]), tf.float32),
-                              lambda: tf.reduce_mean(tf.cast(tf.where(max_loc[b]), tf.float32), axis=0)))
-        #center.append(tf.reduce_mean(tf.cast(tf.where(max_loc[b]), tf.float32), axis=0))
+                              lambda: tf.stack([dims/2.]*2),
+                              lambda: avg_center))
     center = tf.stack(center, 0)
     center = tf.stack([center[:,1], center[:,0]], 1) # To make it [x,y] format.
     # JV: Use dims - 1 and resize with align_corners=True to preserve alignment.
@@ -310,6 +317,8 @@ def get_act(act):
         return tf.nn.tanh
     elif act == 'linear':
         return None
+    else:
+        assert False, 'wrong activation type'
 
 class Nornn(object):
     '''
@@ -317,7 +326,7 @@ class Nornn(object):
     '''
     def __init__(self, inputs, o,
                  summaries_collections=None,
-                 feat_act='linear',
+                 feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
                  depth_wise_norm=False,
                  pred_box=False,
                  optical_flow=False,
@@ -356,7 +365,7 @@ class Nornn(object):
                 x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
             return x
 
-        def pass_cnn(x, o):
+        def pass_cnn(x, o, is_training):
             ''' Fully convolutional cnn.
             Either custom or other popular model.
             Note that Slim pre-defined networks can't be directly used, as they
@@ -369,6 +378,8 @@ class Nornn(object):
             # TODO: Not really sure if activation should really be gone. TEST.
             if o.cnn_model == 'custom':
                 with slim.arg_scope([slim.conv2d],
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'is_training': is_training},
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     x = slim.conv2d(x, 16, 11, stride=2, scope='conv1')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
@@ -426,18 +437,27 @@ class Nornn(object):
                     weights.append(1.0 - abs(1.0 - s))
 
             if self.divide_target:
-                #assert False, 'Not available yet.'
-                # NOTE: Somehow this didn't work until STN option was enabled.
                 height = target.shape.as_list()[1]
                 patchsz = [5] # TODO: diff sizes
                 for n in range(len(patchsz)):
                     for i in range(0,height,patchsz[n]):
                         for j in range(0,height,patchsz[n]):
-                            targets.append(target[:,i:i+patchsz[n], j:j+patchsz[n], :])
+                            #targets.append(target[:,i:i+patchsz[n], j:j+patchsz[n], :])
+                            # Instead of divide, use mask operation to preserve patch size.
+                            grid_x = tf.expand_dims(tf.range(height), 0)
+                            grid_y = tf.expand_dims(tf.range(height), 1)
+                            x1 = tf.expand_dims(j, -1)
+                            x2 = tf.expand_dims(j+patchsz[n]-1, -1)
+                            y1 = tf.expand_dims(i, -1)
+                            y2 = tf.expand_dims(i+patchsz[n]-1, -1)
+                            mask = tf.logical_and(
+                                tf.logical_and(tf.less_equal(x1, grid_x), tf.less_equal(grid_x, x2)),
+                                tf.logical_and(tf.less_equal(y1, grid_y), tf.less_equal(grid_y, y2)))
+                            targets.append(target * tf.expand_dims(tf.cast(mask, tf.float32), -1))
                             weights.append(float(patchsz[n])/height)
 
-            # TODO: Investigate different weighting.
-            weights = [w/sum(weights) for w in weights]
+            # TODO: Need investigate more.
+            #weights = [w/sum(weights) for w in weights]
             assert(len(weights)==len(targets))
 
             scoremap = []
@@ -544,10 +564,10 @@ class Nornn(object):
                     target_curr.set_shape(size)
 
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
-                target_feat = pass_cnn(target_curr, o)
+                target_feat = pass_cnn(target_curr, o, is_training)
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
-                search_feat = pass_cnn(search_curr, o)
+                search_feat = pass_cnn(search_curr, o, is_training)
 
             if self.depth_wise_norm: # For NCC. It has some speed issue. # TODO: test this properly.
                 search_feat = pass_depth_wise_norm(search_feat)
