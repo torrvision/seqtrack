@@ -130,6 +130,7 @@ class SimpleSearch:
             object_centric=False,
             context_size=2, # Only has effect with crop_template=True
             search_size=4,
+            conv1_stride=4,
             motion_penalty_profile='linear',
             motion_penalty_radius=1.0,
             motion_penalty_weight=1.0,
@@ -367,7 +368,7 @@ class SimpleSearch:
         assert len(x.shape) == 4
         with slim.arg_scope([slim.max_pool2d], kernel_size=3, padding='SAME'):
             # conv1
-            x = slim.conv2d(x, 64, 11, stride=4)
+            x = slim.conv2d(x, 64, 11, stride=self.conv1_stride)
             x = slim.max_pool2d(x)
             # conv2
             x = slim.conv2d(x, 128, 5)
