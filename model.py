@@ -156,6 +156,7 @@ class SimpleSearch:
         self.object_centric = object_centric
         self.context_size = context_size
         self.search_size  = search_size
+        self.conv1_stride = conv1_stride
         self.motion_penalty_profile = motion_penalty_profile
         self.motion_penalty_radius  = motion_penalty_radius
         self.motion_penalty_weight  = motion_penalty_weight
