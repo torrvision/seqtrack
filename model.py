@@ -517,25 +517,34 @@ class SimpleSearch:
                 motion_penalty = self._motion_penalty(motion / object_size)
                 posterior_map = score_high + motion_penalty
 
-                # Find arg max in score map.
-                # Score map is [n, h, w, 1].
-                score_dim = tf.constant([self.frmsz, self.frmsz])
-                # score_dim = tf.shape(score_high)[1:3]
-                score_vec, _ = merge_dims(posterior_map, 1, 3)
-                argmax_vec = tf.argmax(score_vec, axis=1)
-                # Note: Co-ordinates in (i, j) order.
-                argmax_i, argmax_j = tf.py_func(np.unravel_index,
-                    inp=[argmax_vec, score_dim],
-                    Tout=[tf.int64, tf.int64],
-                    stateful=False)
-                argmax_i.set_shape([None, 1])
-                argmax_j.set_shape([None, 1])
-                argmax_i, argmax_j = tf.to_int32(argmax_i), tf.to_int32(argmax_j)
-                argmax = tf.concat([argmax_i, argmax_j], -1)
-                # New position is centered at arg max in window.
-                # Assume centers of receptive fields align with first and last pixels.
-                center = tf.to_float(argmax) / tf.to_float(score_dim - 1)
-                center = center[:, ::-1]
+                prob = tf.sigmoid(posterior_map)
+                max_prob = tf.reduce_max(prob, axis=(1, 2), keep_dims=True)
+                is_max = tf.to_float(tf.greater_equal(prob, 0.9 * max_prob))
+
+                # # Find arg max in score map.
+                # # Score map is [n, h, w, 1].
+                # score_dim = tf.constant([self.frmsz, self.frmsz])
+                # # score_dim = tf.shape(score_high)[1:3]
+                # score_vec, _ = merge_dims(posterior_map, 1, 3)
+                # argmax_vec = tf.argmax(score_vec, axis=1)
+                # # Note: Co-ordinates in (i, j) order.
+                # argmax_i, argmax_j = tf.py_func(np.unravel_index,
+                #     inp=[argmax_vec, score_dim],
+                #     Tout=[tf.int64, tf.int64],
+                #     stateful=False)
+                # argmax_i.set_shape([None, 1])
+                # argmax_j.set_shape([None, 1])
+                # argmax_i, argmax_j = tf.to_int32(argmax_i), tf.to_int32(argmax_j)
+                # argmax = tf.concat([argmax_i, argmax_j], -1)
+                # # New position is centered at arg max in window.
+                # # Assume centers of receptive fields align with first and last pixels.
+                # center = tf.to_float(argmax) / tf.to_float(score_dim - 1)
+                # center = center[:, ::-1]
+
+                center = tf.divide(
+                    tf.reduce_sum(centers * is_max, axis=(1, 2)),
+                    tf.reduce_sum(is_max, axis=(1, 2)))
+
                 # Get size of initial rectangle in reference frame of search window.
                 old_rect_min, old_rect_max = geom.rect_min_max(geom.crop_rect(init_rect, window))
                 rect_size = old_rect_max - old_rect_min
