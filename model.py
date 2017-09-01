@@ -218,7 +218,7 @@ def find_center_in_scoremap(scoremap, o):
     max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
     dims = scoremap.shape.as_list()[1]
     #max_loc = tf.equal(scoremap, max_val) # only max.
-    max_loc = tf.greater(scoremap, max_val*0.9) # values over 90% of max.
+    max_loc = tf.greater(scoremap, max_val*0.95) # values over 95% of max.
     # NOTE: weighted average based on distance to the center, instead of average.
     # This is to reguarlize object movement, but it's a hack and will not always work.
     # Ideally, learning motion dynamics can solve this without this.
@@ -388,7 +388,7 @@ class Nornn(object):
                 x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
             return x
 
-        def pass_cnn(x, o, is_training):
+        def pass_cnn(x, o, is_training, act):
             ''' Fully convolutional cnn.
             Either custom or other popular model.
             Note that Slim pre-defined networks can't be directly used, as they
@@ -410,7 +410,7 @@ class Nornn(object):
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
                     x = slim.conv2d(x, 64, 3, stride=1, scope='conv3')
                     x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
-                    x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(self.feat_act), scope='conv5')
+                    x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
             elif o.cnn_model =='siamese': # exactly same as Siamese
                 with slim.arg_scope([slim.conv2d],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -420,7 +420,7 @@ class Nornn(object):
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
                     x = slim.conv2d(x, 192, 3, stride=1, scope='conv3')
                     x = slim.conv2d(x, 192, 3, stride=1, scope='conv4')
-                    x = slim.conv2d(x, 128, 3, stride=1, activation_fn=get_act(self.feat_act), scope='conv5')
+                    x = slim.conv2d(x, 128, 3, stride=1, activation_fn=get_act(act), scope='conv5')
             elif o.cnn_model == 'vgg_16':
                 # TODO: NEED TO TEST AGAIN. Previously I had activation at the end.. :(
                 #with slim.arg_scope(alexnet.alexnet_v2_arg_scope()):
@@ -440,7 +440,7 @@ class Nornn(object):
                     #x = slim.repeat(x, 3, slim.conv2d, 512, [3, 3], scope='conv5')
                     x = slim.conv2d(x, 512, [3, 3], scope='conv5/conv5_1')
                     x = slim.conv2d(x, 512, [3, 3], scope='conv5/conv5_2')
-                    x = slim.conv2d(x, 512, [3, 3], activation_fn=get_act(self.feat_act), scope='conv5/conv5_3')
+                    x = slim.conv2d(x, 512, [3, 3], activation_fn=get_act(act), scope='conv5/conv5_3')
             else:
                 assert False, 'Model not available'
             return x
@@ -539,17 +539,18 @@ class Nornn(object):
                     assert False, 'Not available option.'
             return x
 
-        def pass_regress_box(x):
+        def pass_regress_box(x, is_training):
             ''' Regress output rectangle.
             '''
             with slim.arg_scope([slim.conv2d, slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = tf.nn.relu(x, 'relu')
-                x = slim.conv2d(x, 2, 7, stride=3, scope='conv1')
+                x = slim.conv2d(x, x.shape.as_list()[-1]*2, 11, 5, scope='conv1')
                 #x = slim.max_pool2d(x, kernel_size=3, stride=3, scope='pool1')
                 x = slim.flatten(x)
                 x = slim.fully_connected(x, 4096, scope='fc1')
+                x = slim.dropout(x, keep_prob=0.5, is_training, scope='dropout1')
                 x = slim.fully_connected(x, 4096, scope='fc2')
+                x = slim.dropout(x, keep_prob=0.5, is_training, scope='dropout2')
                 x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
@@ -604,19 +605,20 @@ class Nornn(object):
                     target_curr.set_shape(size)
 
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
-                target_feat = pass_cnn(target_curr, o, is_training)
+                target_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
-                search_feat = pass_cnn(search_curr, o, is_training)
+                search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
 
             if self.depth_wise_norm: # For NCC. It has some speed issue. # TODO: test this properly.
                 search_feat = pass_depth_wise_norm(search_feat)
                 target_feat = pass_depth_wise_norm(target_feat)
 
-            #if self.optical_flow:
-            #    with tf.variable_scope('cnn_flow', reuse=(t > 0)):
-            #        search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
-            #        flow_feat = pass_cnn(tf.concat([search_prev, search_curr], 3), act=True)
+            if self.optical_flow:
+                with tf.variable_scope('cnn_flow', reuse=(t > 0)):
+                    search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
+                    #flow_feat = pass_cnn(tf.concat([search_prev, search_curr], 3), o, is_training, 'relu')
+                    flow_feat = pass_cnn(search_prev-search_curr, o, is_training, 'relu') # diff.
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
@@ -624,9 +626,13 @@ class Nornn(object):
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, o)
 
-            if self.pred_box: # regress box from scoremap
+            if self.pred_box: # regress box from `scoremap`.
                 with tf.variable_scope('regress_box', reuse=(t > 0)):
-                    y_curr_pred_oc = pass_regress_box(hmap_curr_pred_oc)
+                    if not self.optical_flow:
+                        y_curr_pred_oc = pass_regress_box(scoremap, is_training)
+                    else:
+                        #y_curr_pred_oc = pass_regress_box(tf.concat([scoremap, flow_feat], 3))
+                        y_curr_pred_oc = pass_regress_box(scoremap+flow_feat, is_training)
                     y_curr_pred    = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
             else: # argmax to find center (then use x0's box or regress box size - the latter didn't work)
                 c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], o)
