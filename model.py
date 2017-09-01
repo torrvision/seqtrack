@@ -319,7 +319,7 @@ def get_act(act):
     else:
         assert False, 'wrong activation type'
 
-def regularize_scale(y_prev, y_curr, y0=None, global_bound=0.1):
+def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.05, global_bound=0.5):
     ''' This function (only) regularize scale of new box.
     It is used when `pred_box` option is enabled.
     '''
@@ -330,9 +330,9 @@ def regularize_scale(y_prev, y_curr, y0=None, global_bound=0.1):
     h_curr = y_curr[:,3] - y_curr[:,1]
     c_curr = tf.stack([(y_curr[:,2] + y_curr[:,0]), (y_curr[:,3] + y_curr[:,1])], 1) / 2.0
 
-    bound = 0.1 # upper bound for scale change in percentage
-    w_reg = tf.minimum(tf.maximum(w_curr, w_prev*(1-bound)), w_prev*(1+bound))
-    h_reg = tf.minimum(tf.maximum(h_curr, h_prev*(1-bound)), h_prev*(1+bound))
+    # add local bound
+    w_reg = tf.minimum(tf.maximum(w_curr, w_prev*(1-local_bound)), w_prev*(1+local_bound))
+    h_reg = tf.minimum(tf.maximum(h_curr, h_prev*(1-local_bound)), h_prev*(1+local_bound))
 
     # add global bound w.r.t. y0
     if y0 is not None:
@@ -460,6 +460,7 @@ class Nornn(object):
                     weights.append(1.0 - abs(1.0 - s))
 
             if self.divide_target:
+                assert False, 'Do not use it now.'
                 height = target.shape.as_list()[1]
                 patchsz = [5] # TODO: diff sizes
                 for n in range(len(patchsz)):
