@@ -94,7 +94,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
         # Do not shuffle objects within a sequence.
         # Assume that if the sampler is used for SGD, then max_objects = 1.
 
-        for trajectory in trajectories:
+        for cnt, trajectory in enumerate(trajectories):
             frame_is_valid = [(t in trajectory) for t in range(dataset.video_length[video])]
             frames = _select_frames(frame_is_valid, trajectory.keys())
             if not frames:
@@ -109,6 +109,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
                 'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
                 'label_is_valid': label_is_valid,
                 'original_image_size': dataset.original_image_size[video],
+                'video_name':     video + '-{}'.format(cnt) if len(trajectories) > 1 else video,
             }
 
 def _invalid_rect():
