@@ -319,8 +319,8 @@ def get_act(act):
     else:
         assert False, 'wrong activation type'
 
-def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.05, global_bound=0.5):
-    ''' This function (only) regularize scale of new box.
+def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.01, global_bound=0.5):
+    ''' This function regularize (only) scale of new box.
     It is used when `pred_box` option is enabled.
     '''
     w_prev = y_prev[:,2] - y_prev[:,0]
@@ -354,6 +354,7 @@ class Nornn(object):
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
                  depth_wise_norm=False,
                  pred_box=False,
+                 target_mask=False,
                  optical_flow=False,
                  resize_target=False,
                  divide_target=False,
@@ -363,6 +364,7 @@ class Nornn(object):
         self.feat_act = feat_act
         self.depth_wise_norm = depth_wise_norm
         self.pred_box = pred_box
+        self.target_mask = target_mask
         self.optical_flow = optical_flow
         self.resize_target = resize_target
         self.divide_target = divide_target
@@ -542,15 +544,17 @@ class Nornn(object):
         def pass_regress_box(x, is_training):
             ''' Regress output rectangle.
             '''
+            # TODO: Batch norm or dropout.
             with slim.arg_scope([slim.conv2d, slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = slim.conv2d(x, x.shape.as_list()[-1]*2, 11, 5, scope='conv1')
-                #x = slim.max_pool2d(x, kernel_size=3, stride=3, scope='pool1')
+                x = slim.conv2d(x, 32, 5, 2, scope='conv1')
+                x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                x = slim.conv2d(x, 64, 5, 2, scope='conv2')
+                x = slim.max_pool2d(x, 2, 2, scope='pool2')
+                x = slim.conv2d(x, 128, 5, 2, scope='conv3')
                 x = slim.flatten(x)
                 x = slim.fully_connected(x, 4096, scope='fc1')
-                x = slim.dropout(x, keep_prob=0.5, is_training, scope='dropout1')
                 x = slim.fully_connected(x, 4096, scope='fc2')
-                x = slim.dropout(x, keep_prob=0.5, is_training, scope='dropout2')
                 x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
@@ -614,26 +618,35 @@ class Nornn(object):
                 search_feat = pass_depth_wise_norm(search_feat)
                 target_feat = pass_depth_wise_norm(target_feat)
 
-            if self.optical_flow:
-                with tf.variable_scope('cnn_flow', reuse=(t > 0)):
-                    search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
-                    #flow_feat = pass_cnn(tf.concat([search_prev, search_curr], 3), o, is_training, 'relu')
-                    flow_feat = pass_cnn(search_prev-search_curr, o, is_training, 'relu') # diff.
-
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, o)
 
+            if self.optical_flow or self.pred_box:
+                search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
+                img_pair = tf.concat([search_prev, search_curr], 3)
+
+            if self.optical_flow:
+                with tf.variable_scope('cnn_flow', reuse=(t > 0)):
+                    flow_feat = pass_cnn(img_pair, o, is_training, 'relu')
+                with tf.variable_scope('deconvolution_flow', reuse=(t > 0)):
+                    flow_curr_pred_oc = pass_deconvolution(flow_feat, o)
+
             if self.pred_box: # regress box from `scoremap`.
                 with tf.variable_scope('regress_box', reuse=(t > 0)):
-                    if not self.optical_flow:
-                        y_curr_pred_oc = pass_regress_box(scoremap, is_training)
-                    else:
-                        #y_curr_pred_oc = pass_regress_box(tf.concat([scoremap, flow_feat], 3))
-                        y_curr_pred_oc = pass_regress_box(scoremap+flow_feat, is_training)
-                    y_curr_pred    = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
+                    inputs = tf.concat([img_pair, hmap_curr_pred_oc], 3) # basic input
+                    if self.target_mask: # Add target_mask to inputs.
+                        target_mask, _, _ = process_search_with_box(
+                            get_masks_from_rectangles(y_prev, o), y_prev, o)
+                        inputs = tf.concat([inputs, target_mask], 3)
+                    if self.optical_flow: # Add optical flow to inputs.
+                        assert False, 'Add reconstruction loss'
+                        inputs = tf.concat([inputs, flow_curr_pred_oc], 3)
+                    inputs = tf.stop_gradient(inputs) # TODO: with flow, need recon. loss to use this.
+                    y_curr_pred_oc = pass_regress_box(inputs, is_training)
+                    y_curr_pred = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
             else: # argmax to find center (then use x0's box or regress box size - the latter didn't work)
                 c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], o)
                 c_curr_pred    = to_image_centric_coordinate(c_curr_pred_oc, box_s_raw_curr, o)
