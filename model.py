@@ -319,7 +319,7 @@ def get_act(act):
     else:
         assert False, 'wrong activation type'
 
-def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.01, global_bound=0.5):
+def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.01, global_bound=0.1):
     ''' This function regularize (only) scale of new box.
     It is used when `pred_box` option is enabled.
     '''
@@ -547,15 +547,18 @@ class Nornn(object):
             # TODO: Batch norm or dropout.
             with slim.arg_scope([slim.conv2d, slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = slim.conv2d(x, 32, 5, 2, scope='conv1')
-                x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                x = slim.conv2d(x, 64, 5, 2, scope='conv2')
-                x = slim.max_pool2d(x, 2, 2, scope='pool2')
-                x = slim.conv2d(x, 128, 5, 2, scope='conv3')
-                x = slim.flatten(x)
-                x = slim.fully_connected(x, 4096, scope='fc1')
-                x = slim.fully_connected(x, 4096, scope='fc2')
-                x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
+                with slim.arg_scope([slim.conv2d],
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'is_training': is_training}):
+                    x = slim.conv2d(x, 32, 5, 2, scope='conv1')
+                    x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                    x = slim.conv2d(x, 64, 5, 2, scope='conv2')
+                    x = slim.max_pool2d(x, 2, 2, scope='pool2')
+                    x = slim.conv2d(x, 128, 5, 2, scope='conv3')
+                    x = slim.flatten(x)
+                    x = slim.fully_connected(x, 4096, scope='fc1')
+                    x = slim.fully_connected(x, 4096, scope='fc2')
+                    x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
         x           = inputs['x']  # shape [b, ntimesteps, h, w, 3]
@@ -636,7 +639,17 @@ class Nornn(object):
 
             if self.pred_box: # regress box from `scoremap`.
                 with tf.variable_scope('regress_box', reuse=(t > 0)):
-                    inputs = tf.concat([img_pair, hmap_curr_pred_oc], 3) # basic input
+                    #inputs = tf.concat([img_pair, hmap_curr_pred_oc], 3) # basic input
+                    # NOTE: The gaussian is created based on a max loc, instead of estimation.
+                    # Also, y0 size is used in this process.
+                    c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], o)
+                    c_curr_pred    = to_image_centric_coordinate(c_curr_pred_oc, box_s_raw_curr, o)
+                    y_curr_pred    = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1)
+                    #y_prev_size = tf.stack([y_prev[:,2]-y_prev[:,0], y_prev[:,3]-y_prev[:,1]], 1)
+                    #y_curr_pred    = tf.concat([c_curr_pred-y_prev_size*0.5, c_curr_pred+y_prev_size*0.5], 1)
+                    y_curr_pred_oc = to_object_centric_coordinate(y_curr_pred, box_s_raw_curr, box_s_val_curr, o)
+                    new_hmap = get_masks_from_rectangles(y_curr_pred_oc, o, Gaussian=True)
+                    inputs = tf.concat([img_pair, new_hmap], 3) # basic input
                     if self.target_mask: # Add target_mask to inputs.
                         target_mask, _, _ = process_search_with_box(
                             get_masks_from_rectangles(y_prev, o), y_prev, o)
