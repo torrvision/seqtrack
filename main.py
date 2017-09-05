@@ -72,6 +72,10 @@ def parse_arguments():
     parser.add_argument(
             '--perspective', help='ic: image-centric, oc: object-centric',
             type=str, default='oc')
+    parser.add_argument(
+            '--aspect_method', help='method for fixing aspect ratio',
+            type=str, default='stretch',
+            choices=['stretch', 'area', 'perimeter'])
 
     parser.add_argument(
             '--cnn_model', help='pretrained CNN model',

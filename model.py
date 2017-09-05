@@ -30,6 +30,7 @@ import numpy as np
 import os
 
 import cnnutil
+import geom
 from helpers import merge_dims
 from upsample import upsample
 
@@ -140,15 +141,26 @@ def process_target_with_box(img, box, o):
     with tf.control_dependencies(
             [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0)]):
         box = tf.identity(box)
-
-    crop = []
-    for b in range(o.batchsz):
-        cropbox = tf.expand_dims(tf.stack([box[b,1], box[b,0], box[b,3], box[b,2]], 0), 0)
-        crop.append(tf.image.crop_and_resize(tf.expand_dims(img[b],0),
-                                             boxes=cropbox,
-                                             box_ind=[0],
-                                             crop_size=[o.frmsz/o.search_scale]*2)) # target size
-    return tf.concat(crop, 0)
+    # JV: Take a different rectange at the same position.
+    box = modify_aspect_ratio(box, o.aspect_method)
+    # crop = []
+    # for b in range(o.batchsz):
+    #     cropbox = tf.expand_dims(tf.stack([box[b,1], box[b,0], box[b,3], box[b,2]], 0), 0)
+    #     crop.append(tf.image.crop_and_resize(tf.expand_dims(img[b],0),
+    #                                          boxes=cropbox,
+    #                                          box_ind=[0],
+    #                                          crop_size=[o.frmsz/o.search_scale]*2)) # target size
+    # return tf.concat(crop, 0)
+    batch_len = tf.shape(img)[0]
+    crop_size = (o.frmsz - 1) / o.search_scale + 1
+    # Check that search_scale divides (frame_size - 1).
+    assert (crop_size - 1) * o.search_scale == o.frmsz - 1
+    # TODO: Set extrapolation_value.
+    crop = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
+        box_ind=tf.range(batch_len),
+        crop_size=[crop_size]*2,
+        extrapolation_value=None)
+    return crop
 
 def process_search_with_box(img, box, o):
     ''' Crop search image x with box y.
@@ -157,61 +169,99 @@ def process_search_with_box(img, box, o):
             [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0)]):
         box = tf.identity(box)
 
-    search = []
-    box_s_raw = []
-    box_s_val = []
-    for b in range(o.batchsz):
-        x1 = box[b,0]
-        y1 = box[b,1]
-        x2 = box[b,2]
-        y2 = box[b,3]
-        # search size: twice bigger than object.
-        w_margin = ((x2 - x1) * float(o.search_scale - 1)) * 0.5
-        h_margin = ((y2 - y1) * float(o.search_scale - 1)) * 0.5
-        # search box (raw)
-        x1_s_raw = x1 - w_margin # can be outside of [0,1]
-        y1_s_raw = y1 - h_margin
-        x2_s_raw = x2 + w_margin
-        y2_s_raw = y2 + h_margin
-        # search box (valid)
-        x1_s_val = tf.maximum(x1_s_raw, 0.0)
-        y1_s_val = tf.maximum(y1_s_raw, 0.0)
-        x2_s_val = tf.minimum(x2_s_raw, 1.0)
-        y2_s_val = tf.minimum(y2_s_raw, 1.0)
-        # crop (only within valid region)
-        s_val_h = tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32)
-        s_val_w = tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32)
-        s_val_h = tf.maximum(s_val_h, 1) # to prevent assertion error.
-        s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
-        crop_val = tf.image.crop_to_bounding_box(
-                image=img[b],
-                offset_height=tf.cast(y1_s_val*(o.frmsz-1), tf.int32),
-                offset_width =tf.cast(x1_s_val*(o.frmsz-1), tf.int32),
-                target_height=s_val_h,
-                target_width =s_val_w)
-        # pad crop so that it preserves aspect ratio.
-        s_raw_h = tf.cast((y2_s_raw-y1_s_raw)*o.frmsz, tf.int32)
-        s_raw_w = tf.cast((x2_s_raw-x1_s_raw)*o.frmsz, tf.int32)
-        s_raw_h = tf.maximum(s_raw_h, 1) # to prevent assertion error.
-        s_raw_w = tf.maximum(s_raw_w, 1) # to prevent assertion error.
-        crop_pad = tf.image.pad_to_bounding_box(
-                image=crop_val,
-                offset_height=tf.cast((y1_s_val-y1_s_raw)*(o.frmsz-1), tf.int32),
-                offset_width =tf.cast((x1_s_val-x1_s_raw)*(o.frmsz-1), tf.int32),
-                target_height=s_raw_h,
-                target_width =s_raw_w)
-        # resize to 241 x 241
-        crop_res = tf.image.resize_images(crop_pad, [o.frmsz, o.frmsz])
+    # search = []
+    # box_s_raw = []
+    # box_s_val = []
+    # for b in range(o.batchsz):
+    #     x1 = box[b,0]
+    #     y1 = box[b,1]
+    #     x2 = box[b,2]
+    #     y2 = box[b,3]
+    #     # search size: twice bigger than object.
+    #     w_margin = ((x2 - x1) * float(o.search_scale - 1)) * 0.5
+    #     h_margin = ((y2 - y1) * float(o.search_scale - 1)) * 0.5
+    #     # search box (raw)
+    #     x1_s_raw = x1 - w_margin # can be outside of [0,1]
+    #     y1_s_raw = y1 - h_margin
+    #     x2_s_raw = x2 + w_margin
+    #     y2_s_raw = y2 + h_margin
+    #     # search box (valid)
+    #     x1_s_val = tf.maximum(x1_s_raw, 0.0)
+    #     y1_s_val = tf.maximum(y1_s_raw, 0.0)
+    #     x2_s_val = tf.minimum(x2_s_raw, 1.0)
+    #     y2_s_val = tf.minimum(y2_s_raw, 1.0)
+    #     # crop (only within valid region)
+    #     s_val_h = tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32)
+    #     s_val_w = tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32)
+    #     s_val_h = tf.maximum(s_val_h, 1) # to prevent assertion error.
+    #     s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
+    #     crop_val = tf.image.crop_to_bounding_box(
+    #             image=img[b],
+    #             offset_height=tf.cast(y1_s_val*(o.frmsz-1), tf.int32),
+    #             offset_width =tf.cast(x1_s_val*(o.frmsz-1), tf.int32),
+    #             target_height=s_val_h,
+    #             target_width =s_val_w)
+    #     # pad crop so that it preserves aspect ratio.
+    #     s_raw_h = tf.cast((y2_s_raw-y1_s_raw)*o.frmsz, tf.int32)
+    #     s_raw_w = tf.cast((x2_s_raw-x1_s_raw)*o.frmsz, tf.int32)
+    #     s_raw_h = tf.maximum(s_raw_h, 1) # to prevent assertion error.
+    #     s_raw_w = tf.maximum(s_raw_w, 1) # to prevent assertion error.
+    #     crop_pad = tf.image.pad_to_bounding_box(
+    #             image=crop_val,
+    #             offset_height=tf.cast((y1_s_val-y1_s_raw)*(o.frmsz-1), tf.int32),
+    #             offset_width =tf.cast((x1_s_val-x1_s_raw)*(o.frmsz-1), tf.int32),
+    #             target_height=s_raw_h,
+    #             target_width =s_raw_w)
+    #     # resize to 241 x 241
+    #     crop_res = tf.image.resize_images(crop_pad, [o.frmsz, o.frmsz])
 
-        # outputs we need.
-        search.append(crop_res)
-        box_s_raw.append(tf.stack([x1_s_raw, y1_s_raw, x2_s_raw, y2_s_raw], 0))
-        box_s_val.append(tf.stack([x1_s_val, y1_s_val, x2_s_val, y2_s_val], 0))
+    #     # outputs we need.
+    #     search.append(crop_res)
+    #     box_s_raw.append(tf.stack([x1_s_raw, y1_s_raw, x2_s_raw, y2_s_raw], 0))
+    #     box_s_val.append(tf.stack([x1_s_val, y1_s_val, x2_s_val, y2_s_val], 0))
 
-    search = tf.stack(search, 0)
-    box_s_raw = tf.stack(box_s_raw, 0)
-    box_s_val = tf.stack(box_s_val, 0)
-    return search, box_s_raw, box_s_val
+    # search = tf.stack(search, 0)
+    # box_s_raw = tf.stack(box_s_raw, 0)
+    # box_s_val = tf.stack(box_s_val, 0)
+    # return search, box_s_raw, box_s_val
+
+    box = modify_aspect_ratio(box, o.aspect_method)
+    box = scale_rectangle_size(o.search_scale, box)
+    box_val = geom.rect_intersect(box, geom.unit_rect())
+
+    batch_len = tf.shape(img)[0]
+    # TODO: Set extrapolation_value.
+    search = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
+        box_ind=tf.range(batch_len),
+        crop_size=[o.frmsz]*2,
+        extrapolation_value=None)
+    return search, box, box_val
+
+def modify_aspect_ratio(rect, method='stretch'):
+    EPSILON = 1e-3
+    if method == 'stretch':
+        return rect # No change.
+    min_pt, max_pt = geom.rect_min_max(rect)
+    center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
+    with tf.control_dependencies([tf.assert_greater_equal(size, 0.0)]):
+        size = tf.identity(size)
+    if method == 'perimeter':
+        # Average of dimensions.
+        width = tf.reduce_mean(size, axis=-1, keep_dims=True)
+        return geom.make_rect(center - 0.5*width, center + 0.5*width)
+    if method == 'area':
+        # Geometric average of dimensions.
+        width = tf.exp(tf.reduce_mean(tf.log(tf.maximum(size, EPSILON)),
+                                      axis=-1,
+                                      keep_dims=True))
+        return geom.make_rect(center - 0.5*width, center + 0.5*width)
+    raise ValueError('unknown method: {}'.format(method))
+
+def scale_rectangle_size(alpha, rect)
+    min_pt, max_pt = geom.rect_min_max(box)
+    center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
+    size *= alpha
+    return geom.make_rect(center-0.5*size, center+0.5*size)
 
 def find_center_in_scoremap(scoremap, o):
     assert(len(scoremap.shape.as_list())==3)
