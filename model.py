@@ -257,8 +257,8 @@ def modify_aspect_ratio(rect, method='stretch'):
         return geom.make_rect(center - 0.5*width, center + 0.5*width)
     raise ValueError('unknown method: {}'.format(method))
 
-def scale_rectangle_size(alpha, rect)
-    min_pt, max_pt = geom.rect_min_max(box)
+def scale_rectangle_size(alpha, rect):
+    min_pt, max_pt = geom.rect_min_max(rect)
     center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
     size *= alpha
     return geom.make_rect(center-0.5*size, center+0.5*size)
