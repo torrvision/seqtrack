@@ -130,7 +130,7 @@ class SimpleSearch:
             object_centric=False,
             context_size=2, # Only has effect with crop_template=True
             search_size=4,
-            conv1_stride=4,
+            conv1_stride=2,
             motion_penalty_profile='linear',
             motion_penalty_radius=1.0,
             motion_penalty_weight=1.0,
