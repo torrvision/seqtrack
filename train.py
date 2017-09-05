@@ -749,6 +749,8 @@ def _draw_heatmap(model, pred, perspective, time_stride=1, name='draw_heatmap'):
             p = model.gt['hmap'][perspective][0,::time_stride]
 
         hmaps = tf.concat((tf.expand_dims(model.state['hmap'][0][0], 0), p[:,:,:,0:1]), 0) # add init hmap
+        # JV: Show absolute scale of heatmap (not `imagesc`)
+        hmaps = tf.image.convert_image_dtype(hmaps, tf.uint8)
         return hmaps
         #return tf.cast(tf.round(255*hmaps), tf.uint8) # convert to int.
 
