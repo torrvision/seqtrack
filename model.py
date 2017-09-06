@@ -555,11 +555,17 @@ class Nornn(object):
             targets.append(target); weights.append(1.0)
 
             if self.resize_target:
+                # NOTE: To confirm the feature in this module, there should be
+                # enough training pairs different in scale during training -> data augmentation.
                 height = target.shape.as_list()[1]
-                scales = [0.8, 0.9, 1.1, 1.2] # TODO: 1) more scales, 2) conv before/after resize - Relu okay?
+                scales = [0.8, 1.2] # TODO: 1) more scales, 2) conv before/after resize - Relu okay?
                 for s in scales:
-                    targets.append(tf.image.resize_images(target, [int(height*s)]*2))
-                    weights.append(1.0 - abs(1.0 - s))
+                    targets.append(tf.image.resize_images(target,
+                                                          [int(height*s)]*2,
+                                                          method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
+                                                          align_corners=True))
+                    #weights.append(1.0 - abs(1.0 - s))
+                    weights.append(1.0)
 
             if self.divide_target:
                 assert False, 'Do not use it now.'
@@ -615,9 +621,9 @@ class Nornn(object):
             with slim.arg_scope([slim.conv2d],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 if o.cnn_model in ['custom', 'siamese']:
-                    x = tf.image.resize_images(x, [o.frmsz/2]*2)
+                    x = tf.image.resize_images(x, [o.frmsz/2]*2, align_corners=True)
                     x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1]/2, kernel_size=3, scope='deconv1')
-                    x = tf.image.resize_images(x, [o.frmsz]*2)
+                    x = tf.image.resize_images(x, [o.frmsz]*2, align_corners=True)
                     x = slim.conv2d(x, num_outputs=2, kernel_size=3, scope='deconv2')
                     x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv3')
 
@@ -786,8 +792,8 @@ class Nornn(object):
             target.append(target_curr) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
             s_prev.append(search_prev)
-            s_recon.append(search_recon)
-            flow.append(flow_curr_pred_oc)
+            s_recon.append(search_recon if self.optical_flow else None)
+            flow.append(flow_curr_pred_oc if self.optical_flow else None)
 
             # for next time-step
             x_prev    = x_curr
@@ -804,8 +810,8 @@ class Nornn(object):
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
         s_prev        = tf.stack(s_prev, axis=1)
-        s_recon       = tf.stack(s_recon, axis=1)
-        flow          = tf.stack(flow, axis=1)
+        s_recon       = tf.stack(s_recon, axis=1) if self.optical_flow else None
+        flow          = tf.stack(flow, axis=1) if self.optical_flow else None
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
                    'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
