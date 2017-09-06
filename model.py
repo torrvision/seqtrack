@@ -331,19 +331,119 @@ def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.01, global_bound=0.1
     c_curr = tf.stack([(y_curr[:,2] + y_curr[:,0]), (y_curr[:,3] + y_curr[:,1])], 1) / 2.0
 
     # add local bound
-    w_reg = tf.minimum(tf.maximum(w_curr, w_prev*(1-local_bound)), w_prev*(1+local_bound))
-    h_reg = tf.minimum(tf.maximum(h_curr, h_prev*(1-local_bound)), h_prev*(1+local_bound))
+    #w_reg = tf.minimum(tf.maximum(w_curr, w_prev*(1-local_bound)), w_prev*(1+local_bound))
+    #h_reg = tf.minimum(tf.maximum(h_curr, h_prev*(1-local_bound)), h_prev*(1+local_bound))
+    w_reg = tf.clip_by_value(w_curr, w_prev*(1-local_bound), w_prev*(1+local_bound))
+    h_reg = tf.clip_by_value(h_curr, h_prev*(1-local_bound), h_prev*(1+local_bound))
 
     # add global bound w.r.t. y0
     if y0 is not None:
         w0 = y0[:,2] - y0[:,0]
         h0 = y0[:,3] - y0[:,1]
-        w_reg = tf.minimum(tf.maximum(w_reg, w0*(1-global_bound)), w0*(1+global_bound))
-        h_reg = tf.minimum(tf.maximum(h_reg, h0*(1-global_bound)), h0*(1+global_bound))
+        #w_reg = tf.minimum(tf.maximum(w_reg, w0*(1-global_bound)), w0*(1+global_bound))
+        #h_reg = tf.minimum(tf.maximum(h_reg, h0*(1-global_bound)), h0*(1+global_bound))
+        w_reg = tf.clip_by_value(w_reg, w0*(1-global_bound), w0*(1+global_bound))
+        h_reg = tf.clip_by_value(h_reg, h0*(1-global_bound), h0*(1+global_bound))
 
     y_reg = tf.stack([c_curr[:,0]-w_reg/2.0, c_curr[:,1]-h_reg/2.0,
                       c_curr[:,0]+w_reg/2.0, c_curr[:,1]+h_reg/2.0], 1)
     return y_reg
+
+def spatial_transform_by_flow(img2, flow):
+    ''' Perform spatial transform where transformation is flow.
+    The output image is a reconstructed image I1.
+    '''
+    def _repeat(x, n_repeats):
+        rep = tf.transpose(
+            tf.expand_dims(tf.ones(shape=tf.stack([n_repeats, ])), 1), [1, 0])
+        rep = tf.cast(rep, 'int32')
+        x = tf.matmul(tf.reshape(x, (-1, 1)), rep)
+        return tf.reshape(x, [-1])
+
+    def _interpolate(im, x, y, out_size):
+        # constants
+        num_batch = tf.shape(im)[0]
+        height = tf.shape(im)[1]
+        width = tf.shape(im)[2]
+        channels = tf.shape(im)[3]
+
+        #x = tf.cast(x, 'float32')
+        #y = tf.cast(y, 'float32')
+        height_f = tf.cast(height, 'float32')
+        width_f = tf.cast(width, 'float32')
+        out_height = out_size[0]
+        out_width = out_size[1]
+        zero = tf.zeros([], dtype='int32')
+        max_y = tf.cast(tf.shape(im)[1] - 1, 'int32')
+        max_x = tf.cast(tf.shape(im)[2] - 1, 'int32')
+
+        # scale indices from [-1, 1] to [0, width/height]
+        #x = (x + 1.0)*(width_f) / 2.0
+        #y = (y + 1.0)*(height_f) / 2.0
+
+        # do sampling
+        x0 = tf.cast(tf.floor(x), 'int32')
+        x1 = x0 + 1
+        y0 = tf.cast(tf.floor(y), 'int32')
+        y1 = y0 + 1
+
+        x0 = tf.clip_by_value(x0, zero, max_x)
+        x1 = tf.clip_by_value(x1, zero, max_x)
+        y0 = tf.clip_by_value(y0, zero, max_y)
+        y1 = tf.clip_by_value(y1, zero, max_y)
+        dim2 = width
+        dim1 = width*height
+        base = _repeat(tf.range(num_batch)*dim1, out_height*out_width)
+        base_y0 = base + y0*dim2
+        base_y1 = base + y1*dim2
+        idx_a = base_y0 + x0
+        idx_b = base_y1 + x0
+        idx_c = base_y0 + x1
+        idx_d = base_y1 + x1
+
+        # use indices to lookup pixels in the flat image and restore
+        # channels dim
+        im_flat = tf.reshape(im, tf.stack([-1, channels]))
+        im_flat = tf.cast(im_flat, 'float32')
+        Ia = tf.gather(im_flat, idx_a)
+        Ib = tf.gather(im_flat, idx_b)
+        Ic = tf.gather(im_flat, idx_c)
+        Id = tf.gather(im_flat, idx_d)
+
+        # and finally calculate interpolated values
+        x0_f = tf.cast(x0, 'float32')
+        x1_f = tf.cast(x1, 'float32')
+        y0_f = tf.cast(y0, 'float32')
+        y1_f = tf.cast(y1, 'float32')
+        wa = tf.expand_dims(((x1_f-x) * (y1_f-y)), 1)
+        wb = tf.expand_dims(((x1_f-x) * (y-y0_f)), 1)
+        wc = tf.expand_dims(((x-x0_f) * (y1_f-y)), 1)
+        wd = tf.expand_dims(((x-x0_f) * (y-y0_f)), 1)
+        output = tf.add_n([wa*Ia, wb*Ib, wc*Ic, wd*Id])
+        return output
+
+    def _transform_grid(imgsz, flow):
+        # grid
+        x_range = tf.cast(tf.range(imgsz[2]), tf.float32)
+        y_range = tf.cast(tf.range(imgsz[1]), tf.float32)
+        grid_x, grid_y = tf.meshgrid(x_range, y_range)
+        grid = tf.stack([tf.reshape(grid_x, [-1]), tf.reshape(grid_y, [-1])], 1)
+        grid = tf.stack([grid]*imgsz[0])
+        # grid transform by flow
+        grid_new = grid + tf.reshape(flow, [imgsz[0], -1, flow.shape.as_list()[-1]])
+        #grid_new = tf.cast(tf.round(grid_new), tf.int32)
+        #grid_new = tf.clip_by_value(grid_new, 0, imgsz[1]-1)
+        x_s_flat = tf.reshape(grid_new[:,:,0], [-1])
+        y_s_flat = tf.reshape(grid_new[:,:,1], [-1])
+        return x_s_flat, y_s_flat
+
+    imgsz = img2.shape.as_list()
+    x_s_flat, y_s_flat = _transform_grid(imgsz, flow)
+
+    # interpolate
+    input_transformed = _interpolate(img2, x_s_flat, y_s_flat, imgsz[1:3])
+    img1_recon = tf.reshape(input_transformed, imgsz)
+    return img1_recon
 
 class Nornn(object):
     '''
@@ -592,6 +692,9 @@ class Nornn(object):
         box_s_val = []
         target = []
         search = []
+        s_prev = []
+        s_recon = []
+        flow = []
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
@@ -612,6 +715,7 @@ class Nornn(object):
                     target_curr.set_shape(size)
 
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
+                # TODO: Perform multi-scale resize for target here.
                 target_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
@@ -636,6 +740,7 @@ class Nornn(object):
                     flow_feat = pass_cnn(img_pair, o, is_training, 'relu')
                 with tf.variable_scope('deconvolution_flow', reuse=(t > 0)):
                     flow_curr_pred_oc = pass_deconvolution(flow_feat, o)
+                    search_recon = spatial_transform_by_flow(search_curr, flow_curr_pred_oc)
 
             if self.pred_box: # regress box from `scoremap`.
                 with tf.variable_scope('regress_box', reuse=(t > 0)):
@@ -655,7 +760,7 @@ class Nornn(object):
                             get_masks_from_rectangles(y_prev, o), y_prev, o)
                         inputs = tf.concat([inputs, target_mask], 3)
                     if self.optical_flow: # Add optical flow to inputs.
-                        assert False, 'Add reconstruction loss'
+                        # NOTE: Consider passing only flow of target (perhaps by masking).
                         inputs = tf.concat([inputs, flow_curr_pred_oc], 3)
                     inputs = tf.stop_gradient(inputs) # TODO: with flow, need recon. loss to use this.
                     y_curr_pred_oc = pass_regress_box(inputs, is_training)
@@ -680,6 +785,9 @@ class Nornn(object):
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
+            s_prev.append(search_prev)
+            s_recon.append(search_recon)
+            flow.append(flow_curr_pred_oc)
 
             # for next time-step
             x_prev    = x_curr
@@ -695,6 +803,9 @@ class Nornn(object):
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
+        s_prev        = tf.stack(s_prev, axis=1)
+        s_recon       = tf.stack(s_recon, axis=1)
+        flow          = tf.stack(flow, axis=1)
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
                    'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
@@ -702,6 +813,9 @@ class Nornn(object):
                    'box_s_val': box_s_val,
                    'target':    target,
                    'search':    search,
+                   's_prev':    s_prev,
+                   's_recon':   s_recon,
+                   'flow':      flow,
                    }
         state = {}
         state.update({'x': (x_init, x_prev)})
