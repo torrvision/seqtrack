@@ -185,8 +185,8 @@ def process_search_with_box(img, box, o):
         s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
         crop_val = tf.image.crop_to_bounding_box(
                 image=img[b],
-                offset_height=tf.cast(y1_s_val*o.frmsz, tf.int32),
-                offset_width =tf.cast(x1_s_val*o.frmsz, tf.int32),
+                offset_height=tf.cast(y1_s_val*(o.frmsz-1), tf.int32),
+                offset_width =tf.cast(x1_s_val*(o.frmsz-1), tf.int32),
                 target_height=s_val_h,
                 target_width =s_val_w)
         # pad crop so that it preserves aspect ratio.
@@ -196,8 +196,8 @@ def process_search_with_box(img, box, o):
         s_raw_w = tf.maximum(s_raw_w, 1) # to prevent assertion error.
         crop_pad = tf.image.pad_to_bounding_box(
                 image=crop_val,
-                offset_height=tf.cast((y1_s_val-y1_s_raw)*o.frmsz, tf.int32),
-                offset_width =tf.cast((x1_s_val-x1_s_raw)*o.frmsz, tf.int32),
+                offset_height=tf.cast((y1_s_val-y1_s_raw)*(o.frmsz-1), tf.int32),
+                offset_width =tf.cast((x1_s_val-x1_s_raw)*(o.frmsz-1), tf.int32),
                 target_height=s_raw_h,
                 target_width =s_raw_w)
         # resize to 241 x 241
@@ -218,7 +218,7 @@ def find_center_in_scoremap(scoremap, o):
     max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
     dims = scoremap.shape.as_list()[1]
     #max_loc = tf.equal(scoremap, max_val) # only max.
-    max_loc = tf.greater(scoremap, max_val*0.9) # values over 90% of max.
+    max_loc = tf.greater(scoremap, max_val*0.95) # values over 95% of max.
     # NOTE: weighted average based on distance to the center, instead of average.
     # This is to reguarlize object movement, but it's a hack and will not always work.
     # Ideally, learning motion dynamics can solve this without this.
@@ -296,17 +296,17 @@ def to_image_centric_hmap(hmap_pred_oc, box_s_raw, box_s_val, o):
         s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
         s_val = tf.image.crop_to_bounding_box(
                 image=s_raw,
-                offset_height=tf.cast((box_s_val[b][1]-box_s_raw[b][1])*o.frmsz, tf.int32),
-                offset_width =tf.cast((box_s_val[b][0]-box_s_raw[b][0])*o.frmsz, tf.int32),
+                offset_height=tf.cast((box_s_val[b][1]-box_s_raw[b][1])*(o.frmsz-1), tf.int32),
+                offset_width =tf.cast((box_s_val[b][0]-box_s_raw[b][0])*(o.frmsz-1), tf.int32),
                 target_height=s_val_h,
                 target_width =s_val_w)
         # pad to reconstruct the original image-centric scale.
         hmap = tf.image.pad_to_bounding_box( # zero padded.
                 image=s_val,
-                offset_height=tf.cast(box_s_val[b][1]*o.frmsz, tf.int32),
-                offset_width=tf.cast(box_s_val[b][0]*o.frmsz, tf.int32),
+                offset_height=tf.cast(box_s_val[b][1]*(o.frmsz-1), tf.int32),
+                offset_width =tf.cast(box_s_val[b][0]*(o.frmsz-1), tf.int32),
                 target_height=o.frmsz,
-                target_width=o.frmsz)
+                target_width =o.frmsz)
         hmap_pred.append(hmap)
     return tf.stack(hmap_pred, 0)
 
@@ -320,6 +320,32 @@ def get_act(act):
     else:
         assert False, 'wrong activation type'
 
+def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.01, global_bound=0.1):
+    ''' This function regularize (only) scale of new box.
+    It is used when `pred_box` option is enabled.
+    '''
+    w_prev = y_prev[:,2] - y_prev[:,0]
+    h_prev = y_prev[:,3] - y_prev[:,1]
+    c_prev = tf.stack([(y_prev[:,2] + y_prev[:,0]), (y_prev[:,3] + y_prev[:,1])], 1) / 2.0
+    w_curr = y_curr[:,2] - y_curr[:,0]
+    h_curr = y_curr[:,3] - y_curr[:,1]
+    c_curr = tf.stack([(y_curr[:,2] + y_curr[:,0]), (y_curr[:,3] + y_curr[:,1])], 1) / 2.0
+
+    # add local bound
+    w_reg = tf.minimum(tf.maximum(w_curr, w_prev*(1-local_bound)), w_prev*(1+local_bound))
+    h_reg = tf.minimum(tf.maximum(h_curr, h_prev*(1-local_bound)), h_prev*(1+local_bound))
+
+    # add global bound w.r.t. y0
+    if y0 is not None:
+        w0 = y0[:,2] - y0[:,0]
+        h0 = y0[:,3] - y0[:,1]
+        w_reg = tf.minimum(tf.maximum(w_reg, w0*(1-global_bound)), w0*(1+global_bound))
+        h_reg = tf.minimum(tf.maximum(h_reg, h0*(1-global_bound)), h0*(1+global_bound))
+
+    y_reg = tf.stack([c_curr[:,0]-w_reg/2.0, c_curr[:,1]-h_reg/2.0,
+                      c_curr[:,0]+w_reg/2.0, c_curr[:,1]+h_reg/2.0], 1)
+    return y_reg
+
 class Nornn(object):
     '''
     This model has two RNNs (ConvLSTM for Dynamics and LSTM for Appearances).
@@ -329,6 +355,7 @@ class Nornn(object):
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
                  depth_wise_norm=False,
                  pred_box=False,
+                 target_mask=False,
                  optical_flow=False,
                  resize_target=False,
                  divide_target=False,
@@ -339,6 +366,7 @@ class Nornn(object):
         self.feat_act = feat_act
         self.depth_wise_norm = depth_wise_norm
         self.pred_box = pred_box
+        self.target_mask = target_mask
         self.optical_flow = optical_flow
         self.resize_target = resize_target
         self.divide_target = divide_target
@@ -365,7 +393,7 @@ class Nornn(object):
                 x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
             return x
 
-        def pass_cnn(x, o, is_training):
+        def pass_cnn(x, o, is_training, act):
             ''' Fully convolutional cnn.
             Either custom or other popular model.
             Note that Slim pre-defined networks can't be directly used, as they
@@ -387,7 +415,7 @@ class Nornn(object):
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
                     x = slim.conv2d(x, 64, 3, stride=1, scope='conv3')
                     x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
-                    x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(self.feat_act), scope='conv5')
+                    x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
             elif o.cnn_model =='siamese': # exactly same as Siamese
                 with slim.arg_scope([slim.conv2d],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -397,7 +425,7 @@ class Nornn(object):
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
                     x = slim.conv2d(x, 192, 3, stride=1, scope='conv3')
                     x = slim.conv2d(x, 192, 3, stride=1, scope='conv4')
-                    x = slim.conv2d(x, 128, 3, stride=1, activation_fn=get_act(self.feat_act), scope='conv5')
+                    x = slim.conv2d(x, 128, 3, stride=1, activation_fn=get_act(act), scope='conv5')
             elif o.cnn_model == 'vgg_16':
                 # TODO: NEED TO TEST AGAIN. Previously I had activation at the end.. :(
                 #with slim.arg_scope(alexnet.alexnet_v2_arg_scope()):
@@ -417,7 +445,7 @@ class Nornn(object):
                     #x = slim.repeat(x, 3, slim.conv2d, 512, [3, 3], scope='conv5')
                     x = slim.conv2d(x, 512, [3, 3], scope='conv5/conv5_1')
                     x = slim.conv2d(x, 512, [3, 3], scope='conv5/conv5_2')
-                    x = slim.conv2d(x, 512, [3, 3], activation_fn=get_act(self.feat_act), scope='conv5/conv5_3')
+                    x = slim.conv2d(x, 512, [3, 3], activation_fn=get_act(act), scope='conv5/conv5_3')
             else:
                 assert False, 'Model not available'
             return x
@@ -437,6 +465,7 @@ class Nornn(object):
                     weights.append(1.0 - abs(1.0 - s))
 
             if self.divide_target:
+                assert False, 'Do not use it now.'
                 height = target.shape.as_list()[1]
                 patchsz = [5] # TODO: diff sizes
                 for n in range(len(patchsz)):
@@ -470,24 +499,43 @@ class Nornn(object):
                                                                 strides=[1,1,1,1],
                                                                 padding='SAME'))
                 scoremap.append(tf.add_n(scoremap_each))
-            return tf.concat(scoremap, 0)
+            scoremap = tf.concat(scoremap, 0)
+
+            # After cross-correlation, put some convolutions (separately from deconv).
+            with slim.arg_scope([slim.conv2d],
+                    num_outputs=scoremap.shape.as_list()[-1],
+                    kernel_size=3,
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                scoremap = slim.conv2d(scoremap, scope='conv1')
+                scoremap = slim.conv2d(scoremap, scope='conv2')
+            return scoremap
 
         def pass_deconvolution(x, o):
             ''' Upsampling layers.
+            The last layer should not have an activation!
             '''
             # NOTE: Not entirely sure yet if `align_corners` option is required.
             with slim.arg_scope([slim.conv2d],
-                    kernel_size=[1,1],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 if o.cnn_model in ['custom', 'siamese']:
-                    x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1], scope='deconv1')
                     if self.coarse_hmap:
-                        x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv2')
+                        # No upsample layers.
+                        dim = x.shape.as_list()[-1]
+                        x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='deconv1')
+                        x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv2')
                     else:
-                        x = slim.conv2d(x, num_outputs=2, scope='deconv2')
-                        x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
-                        x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
-                        #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
+                        x = tf.image.resize_images(x, [o.frmsz/2]*2)
+                        x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1]/2, kernel_size=3, scope='deconv1')
+                        x = tf.image.resize_images(x, [o.frmsz]*2)
+                        x = slim.conv2d(x, num_outputs=2, kernel_size=3, scope='deconv2')
+                        x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv3')
+                        # previous shallow
+                        #kernel_size=[1,1],
+                        #x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1], scope='deconv1')
+                        #x = slim.conv2d(x, num_outputs=2, scope='deconv2')
+                        #x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
+                        #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
+                        ##x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
                 elif o.cnn_model == 'vgg_16':
                     assert False, 'Please update this better before using it..'
                     x = slim.conv2d(x, num_outputs=512, scope='deconv1')
@@ -501,16 +549,24 @@ class Nornn(object):
                     assert False, 'Not available option.'
             return x
 
-        def pass_regress_box(x):
+        def pass_regress_box(x, is_training):
             ''' Regress output rectangle.
             '''
-            with slim.arg_scope([slim.fully_connected],
+            # TODO: Batch norm or dropout.
+            with slim.arg_scope([slim.conv2d, slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = slim.max_pool2d(x, kernel_size=3, stride=3, scope='pool1')
-                x = slim.flatten(x)
-                x = slim.fully_connected(x, 1024, scope='fc1')
-                x = slim.fully_connected(x, 1024, scope='fc2')
-                x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
+                with slim.arg_scope([slim.conv2d],
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'is_training': is_training}):
+                    x = slim.conv2d(x, 32, 5, 2, scope='conv1')
+                    x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                    x = slim.conv2d(x, 64, 5, 2, scope='conv2')
+                    x = slim.max_pool2d(x, 2, 2, scope='pool2')
+                    x = slim.conv2d(x, 128, 5, 2, scope='conv3')
+                    x = slim.flatten(x)
+                    x = slim.fully_connected(x, 4096, scope='fc1')
+                    x = slim.fully_connected(x, 4096, scope='fc2')
+                    x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
         x           = inputs['x']  # shape [b, ntimesteps, h, w, 3]
@@ -564,19 +620,14 @@ class Nornn(object):
                     target_curr.set_shape(size)
 
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
-                target_feat = pass_cnn(target_curr, o, is_training)
+                target_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
-                search_feat = pass_cnn(search_curr, o, is_training)
+                search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
 
             if self.depth_wise_norm: # For NCC. It has some speed issue. # TODO: test this properly.
                 search_feat = pass_depth_wise_norm(search_feat)
                 target_feat = pass_depth_wise_norm(target_feat)
-
-            #if self.optical_flow:
-            #    with tf.variable_scope('cnn_flow', reuse=(t > 0)):
-            #        search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
-            #        flow_feat = pass_cnn(tf.concat([search_prev, search_curr], 3), act=True)
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
@@ -584,10 +635,39 @@ class Nornn(object):
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, o)
 
-            if self.pred_box: # regress box from scoremap
+            if self.optical_flow or self.pred_box:
+                search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
+                img_pair = tf.concat([search_prev, search_curr], 3)
+
+            if self.optical_flow:
+                with tf.variable_scope('cnn_flow', reuse=(t > 0)):
+                    flow_feat = pass_cnn(img_pair, o, is_training, 'relu')
+                with tf.variable_scope('deconvolution_flow', reuse=(t > 0)):
+                    flow_curr_pred_oc = pass_deconvolution(flow_feat, o)
+
+            if self.pred_box: # regress box from `scoremap`.
                 with tf.variable_scope('regress_box', reuse=(t > 0)):
-                    y_curr_pred_oc = pass_regress_box(hmap_curr_pred_oc)
-                    y_curr_pred    = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
+                    #inputs = tf.concat([img_pair, hmap_curr_pred_oc], 3) # basic input
+                    # NOTE: The gaussian is created based on a max loc, instead of estimation.
+                    # Also, y0 size is used in this process.
+                    c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], o)
+                    c_curr_pred    = to_image_centric_coordinate(c_curr_pred_oc, box_s_raw_curr, o)
+                    y_curr_pred    = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1)
+                    #y_prev_size = tf.stack([y_prev[:,2]-y_prev[:,0], y_prev[:,3]-y_prev[:,1]], 1)
+                    #y_curr_pred    = tf.concat([c_curr_pred-y_prev_size*0.5, c_curr_pred+y_prev_size*0.5], 1)
+                    y_curr_pred_oc = to_object_centric_coordinate(y_curr_pred, box_s_raw_curr, box_s_val_curr, o)
+                    new_hmap = get_masks_from_rectangles(y_curr_pred_oc, o, Gaussian=True)
+                    inputs = tf.concat([img_pair, new_hmap], 3) # basic input
+                    if self.target_mask: # Add target_mask to inputs.
+                        target_mask, _, _ = process_search_with_box(
+                            get_masks_from_rectangles(y_prev, o), y_prev, o)
+                        inputs = tf.concat([inputs, target_mask], 3)
+                    if self.optical_flow: # Add optical flow to inputs.
+                        assert False, 'Add reconstruction loss'
+                        inputs = tf.concat([inputs, flow_curr_pred_oc], 3)
+                    inputs = tf.stop_gradient(inputs) # TODO: with flow, need recon. loss to use this.
+                    y_curr_pred_oc = pass_regress_box(inputs, is_training)
+                    y_curr_pred = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
             else: # argmax to find center (then use x0's box or regress box size - the latter didn't work)
                 c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], o)
                 c_curr_pred    = to_image_centric_coordinate(c_curr_pred_oc, box_s_raw_curr, o)
@@ -595,6 +675,7 @@ class Nornn(object):
                 y_curr_pred_oc = to_object_centric_coordinate(y_curr_pred, box_s_raw_curr, box_s_val_curr, o)
 
             # Get image-centric outputs. Some are used for visualization purpose.
+            y_curr_pred    = regularize_scale(y_prev, y_curr_pred, y0)
             y_curr_pred    = enforce_inside_box(y_curr_pred)
             hmap_curr_pred = to_image_centric_hmap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0],
                                                    box_s_raw_curr, box_s_val_curr, o)
