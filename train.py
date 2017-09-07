@@ -144,15 +144,15 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         if 'hmap' in model.outputs:
             for key in model.outputs['hmap']:
                 hmap = tf.summary.image('hmap_pred_{}'.format(key),
-                                        _draw_heatmap(model, pred=True, perspective=key),
-                        max_outputs=o.ntimesteps+1, collections=[])
+                    _draw_heatmap(model, pred=True, perspective=key),
+                    max_outputs=o.ntimesteps+1, collections=[])
                 image_summaries.append(hmap)
         # Produce an image summary of the heatmap gt (ic and oc).
         if 'hmap' in model.gt:
             for key in model.gt['hmap']:
                 hmap = tf.summary.image('hmap_gt_{}'.format(key),
-                                        _draw_heatmap(model, pred=False, perspective=key),
-                        max_outputs=o.ntimesteps+1, collections=[])
+                    _draw_heatmap(model, pred=False, perspective=key),
+                    max_outputs=o.ntimesteps+1, collections=[])
                 image_summaries.append(hmap)
         # Produce an image summary of target and search images (input to CNNs).
         if 'target' in model.outputs and 'search' in model.outputs:
@@ -660,13 +660,17 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
 
         assert(y_gt['ic'].get_shape().as_list()[1] == o.ntimesteps)
 
-        if o.heatmap_stride != 1:
-            hmap_gt, unmerge = merge_dims(hmap_gt, 0, 2)
-            hmap_gt = slim.avg_pool2d(hmap_gt,
-                kernel_size=o.heatmap_stride+1,
-                stride=o.heatmap_stride,
-                padding='SAME')
-            hmap_gt = unmerge(hmap_gt, 0)
+        if 'oc' in outputs['hmap']:
+            # Resize GT heatmap to match size of prediction if necessary.
+            pred_size = outputs['hmap']['oc'].shape.as_list()[2:4]
+            assert all(pred_size) # Must not be None.
+            gt_size = hmap_gt['oc'].shape.as_list()[2:4]
+            if gt_size != pred_size:
+                hmap_gt['oc'], unmerge = merge_dims(hmap_gt['oc'], 0, 2)
+                hmap_gt['oc'] = tf.image.resize_images(hmap_gt['oc'], pred_size,
+                    method=tf.image.ResizeMethod.BILINEAR,
+                    align_corners=True)
+                hmap_gt['oc'] = unmerge(hmap_gt['oc'], axis=0)
 
         losses = dict()
 
@@ -772,9 +776,13 @@ def _draw_heatmap(model, pred, perspective, time_stride=1, name='draw_heatmap'):
         else:
             p = model.gt['hmap'][perspective][0,::time_stride]
 
-        hmaps = tf.concat((tf.expand_dims(model.state['hmap'][0][0], 0), p[:,:,:,0:1]), 0) # add init hmap
+        # JV: Not sure what model.state['hmap'] is, and...
+        # JV: concat() fails when hmap is coarse (lower resolution than input image).
+        # hmaps = tf.concat((model.state['hmap'][0][0:1], p[:,:,:,0:1]), 0) # add init hmap
+        hmaps = p[:,:,:,0:1]
+        # Convert to uint8 for absolute scale.
+        hmaps = tf.image.convert_image_dtype(hmaps, tf.uint8)
         return hmaps
-        #return tf.cast(tf.round(255*hmaps), tf.uint8) # convert to int.
 
 def _draw_flow_fields(model, key, time_stride=1, name='draw_flow_fields'):
     with tf.name_scope(name) as scope:

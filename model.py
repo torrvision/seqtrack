@@ -219,7 +219,8 @@ def find_center_in_scoremap(scoremap, o):
     max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
     dims = scoremap.shape.as_list()[1]
     #max_loc = tf.equal(scoremap, max_val) # only max.
-    max_loc = tf.greater(scoremap, max_val*0.95) # values over 95% of max.
+    with tf.control_dependencies([tf.assert_greater_equal(scoremap, 0.0)]):
+        max_loc = tf.greater(scoremap, max_val*0.95) # values over 95% of max.
     # NOTE: weighted average based on distance to the center, instead of average.
     # This is to reguarlize object movement, but it's a hack and will not always work.
     # Ideally, learning motion dynamics can solve this without this.
@@ -233,9 +234,11 @@ def find_center_in_scoremap(scoremap, o):
                               lambda: avg_center))
     center = tf.stack(center, 0)
     center = tf.stack([center[:,1], center[:,0]], 1) # To make it [x,y] format.
-    center = center / dims # To keep coordinate in relative scale range [0, 1].
-    with tf.control_dependencies(
-            [tf.assert_greater_equal(center, 0.0), tf.assert_less_equal(center, 1.0)]):
+    # JV: Use dims - 1 and resize with align_corners=True to preserve alignment.
+    center = center / (dims - 1) # To keep coordinate in relative scale range [0, 1].
+    EPSILON = 1e-4
+    with tf.control_dependencies([tf.assert_greater_equal(center, -EPSILON),
+                                  tf.assert_less_equal(center, 1.0+EPSILON)]):
         center = tf.identity(center)
     return center
 
@@ -463,6 +466,7 @@ class Nornn(object):
                  resize_target=False,
                  divide_target=False,
                  stn=False,
+                 coarse_hmap=False,
                  ):
         # model parameters
         self.feat_act          = feat_act
@@ -476,6 +480,7 @@ class Nornn(object):
         self.resize_target     = resize_target
         self.divide_target     = divide_target
         self.stn               = stn
+        self.coarse_hmap       = coarse_hmap
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -628,19 +633,25 @@ class Nornn(object):
             with slim.arg_scope([slim.conv2d],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 if o.cnn_model in ['custom', 'siamese']:
-                    x = tf.image.resize_images(x, [o.frmsz/2]*2, align_corners=True)
-                    x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1]/2, kernel_size=3, scope='deconv1')
-                    x = tf.image.resize_images(x, [o.frmsz]*2, align_corners=True)
-                    x = slim.conv2d(x, num_outputs=2, kernel_size=3, scope='deconv2')
-                    x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv3')
+                    if self.coarse_hmap:
+                        # No upsample layers.
+                        dim = x.shape.as_list()[-1]
+                        x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='deconv1')
+                        x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv2')
+                    else:
+                        x = tf.image.resize_images(x, [o.frmsz/2]*2, align_corners=True)
+                        x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1]/2, kernel_size=3, scope='deconv1')
+                        x = tf.image.resize_images(x, [o.frmsz]*2, align_corners=True)
+                        x = slim.conv2d(x, num_outputs=2, kernel_size=3, scope='deconv2')
+                        x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv3')
 
-                    # previous shallow
-                    #kernel_size=[1,1],
-                    #x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1], scope='deconv1')
-                    #x = slim.conv2d(x, num_outputs=2, scope='deconv2')
-                    #x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
-                    #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
-                    ##x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
+                        # previous shallow
+                        #kernel_size=[1,1],
+                        #x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1], scope='deconv1')
+                        #x = slim.conv2d(x, num_outputs=2, scope='deconv2')
+                        #x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
+                        #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
+                        ##x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
                 elif o.cnn_model == 'vgg_16':
                     assert False, 'Please update this better before using it..'
                     x = slim.conv2d(x, num_outputs=512, scope='deconv1')
