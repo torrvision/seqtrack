@@ -161,6 +161,22 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     _draw_input_image(model, key, name='draw_{}'.format(key)),
                     max_outputs=o.ntimesteps+1, collections=[])
                 image_summaries.append(input_image)
+        # Produce an image summary of s_prev and s_recon.
+        if 's_prev' in model.outputs and 's_recon' in model.outputs:
+            if model.outputs['s_recon'] is not None:
+                for key in ['s_prev', 's_recon']:
+                    input_image = tf.summary.image('flow_{}'.format(key),
+                        _draw_input_image(model, key, name='draw_{}'.format(key)),
+                        max_outputs=o.ntimesteps+1, collections=[])
+                    image_summaries.append(input_image)
+        # Produce an image summary of flow.
+        if 'flow' in model.outputs:
+            if model.outputs['flow'] is not None:
+                for key in ['u', 'v']:
+                    flow_fields = tf.summary.image('flow_{}'.format(key),
+                        _draw_flow_fields(model, key, name='draw_{}'.format(key)),
+                        max_outputs=o.ntimesteps+1, collections=[])
+                    image_summaries.append(flow_fields)
         # Produce an image summary of the LSTM memory states (h or c).
         if hasattr(model, 'memory'):
             for mtype in model.memory.keys():
@@ -716,6 +732,14 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
                 losses['ce_balanced'] = tf.reduce_mean(
                         tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
 
+        # Reconstruction loss using generalized Charbonnier penalty
+        if 'recon' in o.losses:
+            alpha = 0.25
+            s_prev_valid  = tf.boolean_mask(outputs['s_prev'],  example['y_is_valid'])
+            s_recon_valid = tf.boolean_mask(outputs['s_recon'], example['y_is_valid'])
+            charbonnier_penalty = tf.pow(tf.square(s_prev_valid - s_recon_valid) + 1e-10, alpha)
+            losses['recon'] = tf.reduce_mean(charbonnier_penalty)
+
         with tf.name_scope('summary'):
             for name, loss in losses.iteritems():
                 tf.summary.scalar(name, loss, collections=summaries_collections)
@@ -759,6 +783,16 @@ def _draw_heatmap(model, pred, perspective, time_stride=1, name='draw_heatmap'):
         # Convert to uint8 for absolute scale.
         hmaps = tf.image.convert_image_dtype(hmaps, tf.uint8)
         return hmaps
+
+def _draw_flow_fields(model, key, time_stride=1, name='draw_flow_fields'):
+    with tf.name_scope(name) as scope:
+        if key == 'u':
+            input_image = tf.expand_dims(model.outputs['flow'][0,::time_stride, :, :, 0], -1)
+        elif key =='v':
+            input_image = tf.expand_dims(model.outputs['flow'][0,::time_stride, :, :, 1], -1)
+        else:
+            assert False , 'No available flow fields'
+        return input_image
 
 def _draw_input_image(model, key, time_stride=1, name='draw_input_image'):
     with tf.name_scope(name) as scope:
