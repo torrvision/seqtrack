@@ -220,7 +220,8 @@ def find_center_in_scoremap(scoremap, o):
     dims = scoremap.shape.as_list()[1]
     #max_loc = tf.equal(scoremap, max_val) # only max.
     with tf.control_dependencies([tf.assert_greater_equal(scoremap, 0.0)]):
-        max_loc = tf.greater(scoremap, max_val*0.95) # values over 95% of max.
+        # JV: Use greater_equal in case scoremap is all zero.
+        max_loc = tf.greater_equal(scoremap, max_val*0.95) # values over 95% of max.
     # NOTE: weighted average based on distance to the center, instead of average.
     # This is to reguarlize object movement, but it's a hack and will not always work.
     # Ideally, learning motion dynamics can solve this without this.
