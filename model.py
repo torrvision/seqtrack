@@ -814,7 +814,7 @@ class Nornn(object):
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
-            s_prev.append(search_prev if self.boxreg else None)
+            s_prev.append(search_prev if self.boxreg_flow else None)
             s_recon.append(search_recon if self.boxreg_flow else None)
             flow.append(flow_curr_pred_oc if self.boxreg_flow else None)
 
@@ -832,7 +832,7 @@ class Nornn(object):
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
-        s_prev        = tf.stack(s_prev, axis=1)
+        s_prev        = tf.stack(s_prev, axis=1) if self.boxreg_flow else None
         s_recon       = tf.stack(s_recon, axis=1) if self.boxreg_flow else None
         flow          = tf.stack(flow, axis=1) if self.boxreg_flow else None
 
