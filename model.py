@@ -264,11 +264,14 @@ def scale_rectangle_size(alpha, rect):
     return geom.make_rect(center-0.5*size, center+0.5*size)
 
 def find_center_in_scoremap(scoremap, o):
+    scoremap = tf.squeeze(scoremap)
     assert(len(scoremap.shape.as_list())==3)
     max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
     dims = scoremap.shape.as_list()[1]
     #max_loc = tf.equal(scoremap, max_val) # only max.
-    max_loc = tf.greater(scoremap, max_val*0.95) # values over 95% of max.
+    with tf.control_dependencies([tf.assert_greater_equal(scoremap, 0.0)]):
+        # JV: Use greater_equal in case scoremap is all zero.
+        max_loc = tf.greater_equal(scoremap, max_val*0.95) # values over 95% of max.
     # NOTE: weighted average based on distance to the center, instead of average.
     # This is to reguarlize object movement, but it's a hack and will not always work.
     # Ideally, learning motion dynamics can solve this without this.
@@ -284,8 +287,9 @@ def find_center_in_scoremap(scoremap, o):
     center = tf.stack([center[:,1], center[:,0]], 1) # To make it [x,y] format.
     # JV: Use dims - 1 and resize with align_corners=True to preserve alignment.
     center = center / (dims - 1) # To keep coordinate in relative scale range [0, 1].
-    with tf.control_dependencies(
-            [tf.assert_greater_equal(center, 0.0), tf.assert_less_equal(center, 1.0)]):
+    EPSILON = 1e-4
+    with tf.control_dependencies([tf.assert_greater_equal(center, -EPSILON),
+                                  tf.assert_less_equal(center, 1.0+EPSILON)]):
         center = tf.identity(center)
     return center
 
@@ -338,7 +342,7 @@ def to_image_centric_hmap(hmap_pred_oc, box_s_raw, box_s_val, o):
         s_raw_w = tf.cast((box_s_raw[b][2] - box_s_raw[b][0]) * o.frmsz, tf.int32)
         s_raw_h = tf.maximum(s_raw_h, 1) # to prevent assertion error.
         s_raw_w = tf.maximum(s_raw_w, 1) # to prevent assertion error.
-        s_raw = tf.image.resize_images(tf.expand_dims(hmap_pred_oc[b], -1), [s_raw_h, s_raw_w])
+        s_raw = tf.image.resize_images(hmap_pred_oc[b], [s_raw_h, s_raw_w])
         # crop to extract only valid search area.
         s_val_h = tf.cast((box_s_val[b][3]-box_s_val[b][1])*o.frmsz, tf.int32)
         s_val_w = tf.cast((box_s_val[b][2]-box_s_val[b][0])*o.frmsz, tf.int32)
@@ -372,7 +376,7 @@ def get_act(act):
 
 def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.01, global_bound=0.1):
     ''' This function regularize (only) scale of new box.
-    It is used when `pred_box` option is enabled.
+    It is used when `boxreg` option is enabled.
     '''
     w_prev = y_prev[:,2] - y_prev[:,0]
     h_prev = y_prev[:,3] - y_prev[:,1]
@@ -382,19 +386,119 @@ def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.01, global_bound=0.1
     c_curr = tf.stack([(y_curr[:,2] + y_curr[:,0]), (y_curr[:,3] + y_curr[:,1])], 1) / 2.0
 
     # add local bound
-    w_reg = tf.minimum(tf.maximum(w_curr, w_prev*(1-local_bound)), w_prev*(1+local_bound))
-    h_reg = tf.minimum(tf.maximum(h_curr, h_prev*(1-local_bound)), h_prev*(1+local_bound))
+    #w_reg = tf.minimum(tf.maximum(w_curr, w_prev*(1-local_bound)), w_prev*(1+local_bound))
+    #h_reg = tf.minimum(tf.maximum(h_curr, h_prev*(1-local_bound)), h_prev*(1+local_bound))
+    w_reg = tf.clip_by_value(w_curr, w_prev*(1-local_bound), w_prev*(1+local_bound))
+    h_reg = tf.clip_by_value(h_curr, h_prev*(1-local_bound), h_prev*(1+local_bound))
 
     # add global bound w.r.t. y0
     if y0 is not None:
         w0 = y0[:,2] - y0[:,0]
         h0 = y0[:,3] - y0[:,1]
-        w_reg = tf.minimum(tf.maximum(w_reg, w0*(1-global_bound)), w0*(1+global_bound))
-        h_reg = tf.minimum(tf.maximum(h_reg, h0*(1-global_bound)), h0*(1+global_bound))
+        #w_reg = tf.minimum(tf.maximum(w_reg, w0*(1-global_bound)), w0*(1+global_bound))
+        #h_reg = tf.minimum(tf.maximum(h_reg, h0*(1-global_bound)), h0*(1+global_bound))
+        w_reg = tf.clip_by_value(w_reg, w0*(1-global_bound), w0*(1+global_bound))
+        h_reg = tf.clip_by_value(h_reg, h0*(1-global_bound), h0*(1+global_bound))
 
     y_reg = tf.stack([c_curr[:,0]-w_reg/2.0, c_curr[:,1]-h_reg/2.0,
                       c_curr[:,0]+w_reg/2.0, c_curr[:,1]+h_reg/2.0], 1)
     return y_reg
+
+def spatial_transform_by_flow(img2, flow):
+    ''' Perform spatial transform where transformation is flow.
+    The output image is a reconstructed image I1.
+    '''
+    def _repeat(x, n_repeats):
+        rep = tf.transpose(
+            tf.expand_dims(tf.ones(shape=tf.stack([n_repeats, ])), 1), [1, 0])
+        rep = tf.cast(rep, 'int32')
+        x = tf.matmul(tf.reshape(x, (-1, 1)), rep)
+        return tf.reshape(x, [-1])
+
+    def _interpolate(im, x, y, out_size):
+        # constants
+        num_batch = tf.shape(im)[0]
+        height = tf.shape(im)[1]
+        width = tf.shape(im)[2]
+        channels = tf.shape(im)[3]
+
+        #x = tf.cast(x, 'float32')
+        #y = tf.cast(y, 'float32')
+        height_f = tf.cast(height, 'float32')
+        width_f = tf.cast(width, 'float32')
+        out_height = out_size[0]
+        out_width = out_size[1]
+        zero = tf.zeros([], dtype='int32')
+        max_y = tf.cast(tf.shape(im)[1] - 1, 'int32')
+        max_x = tf.cast(tf.shape(im)[2] - 1, 'int32')
+
+        # scale indices from [-1, 1] to [0, width/height]
+        #x = (x + 1.0)*(width_f) / 2.0
+        #y = (y + 1.0)*(height_f) / 2.0
+
+        # do sampling
+        x0 = tf.cast(tf.floor(x), 'int32')
+        x1 = x0 + 1
+        y0 = tf.cast(tf.floor(y), 'int32')
+        y1 = y0 + 1
+
+        x0 = tf.clip_by_value(x0, zero, max_x)
+        x1 = tf.clip_by_value(x1, zero, max_x)
+        y0 = tf.clip_by_value(y0, zero, max_y)
+        y1 = tf.clip_by_value(y1, zero, max_y)
+        dim2 = width
+        dim1 = width*height
+        base = _repeat(tf.range(num_batch)*dim1, out_height*out_width)
+        base_y0 = base + y0*dim2
+        base_y1 = base + y1*dim2
+        idx_a = base_y0 + x0
+        idx_b = base_y1 + x0
+        idx_c = base_y0 + x1
+        idx_d = base_y1 + x1
+
+        # use indices to lookup pixels in the flat image and restore
+        # channels dim
+        im_flat = tf.reshape(im, tf.stack([-1, channels]))
+        im_flat = tf.cast(im_flat, 'float32')
+        Ia = tf.gather(im_flat, idx_a)
+        Ib = tf.gather(im_flat, idx_b)
+        Ic = tf.gather(im_flat, idx_c)
+        Id = tf.gather(im_flat, idx_d)
+
+        # and finally calculate interpolated values
+        x0_f = tf.cast(x0, 'float32')
+        x1_f = tf.cast(x1, 'float32')
+        y0_f = tf.cast(y0, 'float32')
+        y1_f = tf.cast(y1, 'float32')
+        wa = tf.expand_dims(((x1_f-x) * (y1_f-y)), 1)
+        wb = tf.expand_dims(((x1_f-x) * (y-y0_f)), 1)
+        wc = tf.expand_dims(((x-x0_f) * (y1_f-y)), 1)
+        wd = tf.expand_dims(((x-x0_f) * (y-y0_f)), 1)
+        output = tf.add_n([wa*Ia, wb*Ib, wc*Ic, wd*Id])
+        return output
+
+    def _transform_grid(imgsz, flow):
+        # grid
+        x_range = tf.cast(tf.range(imgsz[2]), tf.float32)
+        y_range = tf.cast(tf.range(imgsz[1]), tf.float32)
+        grid_x, grid_y = tf.meshgrid(x_range, y_range)
+        grid = tf.stack([tf.reshape(grid_x, [-1]), tf.reshape(grid_y, [-1])], 1)
+        grid = tf.stack([grid]*imgsz[0])
+        # grid transform by flow
+        grid_new = grid + tf.reshape(flow, [imgsz[0], -1, flow.shape.as_list()[-1]])
+        #grid_new = tf.cast(tf.round(grid_new), tf.int32)
+        #grid_new = tf.clip_by_value(grid_new, 0, imgsz[1]-1)
+        x_s_flat = tf.reshape(grid_new[:,:,0], [-1])
+        y_s_flat = tf.reshape(grid_new[:,:,1], [-1])
+        return x_s_flat, y_s_flat
+
+    imgsz = img2.shape.as_list()
+    x_s_flat, y_s_flat = _transform_grid(imgsz, flow)
+
+    # interpolate
+    input_transformed = _interpolate(img2, x_s_flat, y_s_flat, imgsz[1:3])
+    img1_recon = tf.reshape(input_transformed, imgsz)
+    return img1_recon
 
 class Nornn(object):
     '''
@@ -404,24 +508,30 @@ class Nornn(object):
                  summaries_collections=None,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
                  depth_wise_norm=False,
-                 pred_box=False,
-                 target_mask=False,
-                 optical_flow=False,
+                 boxreg=False,
+                 boxreg_imgpair=False,
+                 boxreg_hmap=False,
+                 boxreg_hmap_clean=False,
+                 boxreg_mask=False,
+                 boxreg_flow=False,
                  resize_target=False,
                  divide_target=False,
                  stn=False,
                  coarse_hmap=False,
                  ):
         # model parameters
-        self.feat_act = feat_act
-        self.depth_wise_norm = depth_wise_norm
-        self.pred_box = pred_box
-        self.target_mask = target_mask
-        self.optical_flow = optical_flow
-        self.resize_target = resize_target
-        self.divide_target = divide_target
-        self.stn = stn
-        self.coarse_hmap = coarse_hmap
+        self.feat_act          = feat_act
+        self.depth_wise_norm   = depth_wise_norm
+        self.boxreg            = boxreg
+        self.boxreg_imgpair    = boxreg_imgpair
+        self.boxreg_hmap       = boxreg_hmap
+        self.boxreg_hmap_clean = boxreg_hmap_clean
+        self.boxreg_mask       = boxreg_mask
+        self.boxreg_flow       = boxreg_flow
+        self.resize_target     = resize_target
+        self.divide_target     = divide_target
+        self.stn               = stn
+        self.coarse_hmap       = coarse_hmap
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -508,11 +618,17 @@ class Nornn(object):
             targets.append(target); weights.append(1.0)
 
             if self.resize_target:
+                # NOTE: To confirm the feature in this module, there should be
+                # enough training pairs different in scale during training -> data augmentation.
                 height = target.shape.as_list()[1]
-                scales = [0.8, 0.9, 1.1, 1.2] # TODO: 1) more scales, 2) conv before/after resize - Relu okay?
+                scales = [0.8, 1.2] # TODO: 1) more scales, 2) conv before/after resize - Relu okay?
                 for s in scales:
-                    targets.append(tf.image.resize_images(target, [int(height*s)]*2))
-                    weights.append(1.0 - abs(1.0 - s))
+                    targets.append(tf.image.resize_images(target,
+                                                          [int(height*s)]*2,
+                                                          method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
+                                                          align_corners=True))
+                    #weights.append(1.0 - abs(1.0 - s))
+                    weights.append(1.0)
 
             if self.divide_target:
                 assert False, 'Do not use it now.'
@@ -574,11 +690,12 @@ class Nornn(object):
                         x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='deconv1')
                         x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv2')
                     else:
-                        x = tf.image.resize_images(x, [o.frmsz/2]*2)
+                        x = tf.image.resize_images(x, [o.frmsz/2]*2, align_corners=True)
                         x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1]/2, kernel_size=3, scope='deconv1')
-                        x = tf.image.resize_images(x, [o.frmsz]*2)
+                        x = tf.image.resize_images(x, [o.frmsz]*2, align_corners=True)
                         x = slim.conv2d(x, num_outputs=2, kernel_size=3, scope='deconv2')
                         x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv3')
+
                         # previous shallow
                         #kernel_size=[1,1],
                         #x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1], scope='deconv1')
@@ -650,6 +767,9 @@ class Nornn(object):
         box_s_val = []
         target = []
         search = []
+        s_prev = []
+        s_recon = []
+        flow = []
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
@@ -670,6 +790,7 @@ class Nornn(object):
                     target_curr.set_shape(size)
 
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
+                # TODO: Perform multi-scale resize for target here.
                 target_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
@@ -684,42 +805,48 @@ class Nornn(object):
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, o)
+                hmap_curr_pred_oc_fg = tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], -1)
 
-            if self.optical_flow or self.pred_box:
-                search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
-                img_pair = tf.concat([search_prev, search_curr], 3)
-
-            if self.optical_flow:
-                with tf.variable_scope('cnn_flow', reuse=(t > 0)):
-                    flow_feat = pass_cnn(img_pair, o, is_training, 'relu')
-                with tf.variable_scope('deconvolution_flow', reuse=(t > 0)):
-                    flow_curr_pred_oc = pass_deconvolution(flow_feat, o)
-
-            if self.pred_box: # regress box from `scoremap`.
-                with tf.variable_scope('regress_box', reuse=(t > 0)):
-                    #inputs = tf.concat([img_pair, hmap_curr_pred_oc], 3) # basic input
-                    # NOTE: The gaussian is created based on a max loc, instead of estimation.
-                    # Also, y0 size is used in this process.
-                    c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], o)
+            if self.boxreg: # regress box from `scoremap`.
+                # Create inputs to regression network.
+                boxreg_inputs = []
+                if self.boxreg_imgpair: # Add raw image pair.
+                    # TODO: image pair used to regress box can be different from image pair for flow.
+                    # i.e., whether A0 is used or not. Note that this will make difference for sequence.
+                    search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
+                    img_pair = tf.concat([search_prev, search_curr], 3)
+                    boxreg_inputs.append(img_pair)
+                if self.boxreg_hmap: # Add hmap estimate.
+                    boxreg_inputs.append(hmap_curr_pred_oc_fg) # TODO: never tested fg only yet.
+                if self.boxreg_hmap_clean: # Add hmap clean. Use argmax & y0_size.
+                    c_curr_pred_oc = find_center_in_scoremap(hmap_curr_pred_oc_fg, o)
                     c_curr_pred    = to_image_centric_coordinate(c_curr_pred_oc, box_s_raw_curr, o)
                     y_curr_pred    = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1)
                     #y_prev_size = tf.stack([y_prev[:,2]-y_prev[:,0], y_prev[:,3]-y_prev[:,1]], 1)
                     #y_curr_pred    = tf.concat([c_curr_pred-y_prev_size*0.5, c_curr_pred+y_prev_size*0.5], 1)
                     y_curr_pred_oc = to_object_centric_coordinate(y_curr_pred, box_s_raw_curr, box_s_val_curr, o)
                     new_hmap = get_masks_from_rectangles(y_curr_pred_oc, o, Gaussian=True)
-                    inputs = tf.concat([img_pair, new_hmap], 3) # basic input
-                    if self.target_mask: # Add target_mask to inputs.
-                        target_mask, _, _ = process_search_with_box(
-                            get_masks_from_rectangles(y_prev, o), y_prev, o)
-                        inputs = tf.concat([inputs, target_mask], 3)
-                    if self.optical_flow: # Add optical flow to inputs.
-                        assert False, 'Add reconstruction loss'
-                        inputs = tf.concat([inputs, flow_curr_pred_oc], 3)
-                    inputs = tf.stop_gradient(inputs) # TODO: with flow, need recon. loss to use this.
-                    y_curr_pred_oc = pass_regress_box(inputs, is_training)
+                    boxreg_inputs.append(new_hmap)
+                if self.boxreg_mask: # Add target_mask to inputs.
+                    target_mask, _, _ = process_search_with_box(
+                        get_masks_from_rectangles(y_prev, o), y_prev, o)
+                    boxreg_inputs.append(target_mask)
+                if self.boxreg_flow: # Add optical flow to inputs.
+                    with tf.variable_scope('cnn_flow', reuse=(t > 0)):
+                        flow_feat = pass_cnn(img_pair, o, is_training, 'relu')
+                    with tf.variable_scope('deconvolution_flow', reuse=(t > 0)):
+                        flow_curr_pred_oc = pass_deconvolution(flow_feat, o)
+                        search_recon = spatial_transform_by_flow(search_curr, flow_curr_pred_oc)
+                    # NOTE: Consider passing only flow of target (perhaps by masking).
+                    boxreg_inputs.append(flow_curr_pred_oc)
+                boxreg_inputs = tf.concat(boxreg_inputs, 3)
+                boxreg_inputs = tf.stop_gradient(boxreg_inputs)
+                # Box regression.
+                with tf.variable_scope('regress_box', reuse=(t > 0)):
+                    y_curr_pred_oc = pass_regress_box(boxreg_inputs, is_training)
                     y_curr_pred = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
             else: # argmax to find center (then use x0's box or regress box size - the latter didn't work)
-                c_curr_pred_oc = find_center_in_scoremap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], o)
+                c_curr_pred_oc = find_center_in_scoremap(hmap_curr_pred_oc_fg, o)
                 c_curr_pred    = to_image_centric_coordinate(c_curr_pred_oc, box_s_raw_curr, o)
                 y_curr_pred    = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1)
                 y_curr_pred_oc = to_object_centric_coordinate(y_curr_pred, box_s_raw_curr, box_s_val_curr, o)
@@ -727,8 +854,7 @@ class Nornn(object):
             # Get image-centric outputs. Some are used for visualization purpose.
             y_curr_pred    = regularize_scale(y_prev, y_curr_pred, y0)
             y_curr_pred    = enforce_inside_box(y_curr_pred)
-            hmap_curr_pred = to_image_centric_hmap(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0],
-                                                   box_s_raw_curr, box_s_val_curr, o)
+            hmap_curr_pred = to_image_centric_hmap(hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o)
 
             y_pred.append(y_curr_pred)
             y_pred_oc.append(y_curr_pred_oc)
@@ -738,6 +864,9 @@ class Nornn(object):
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
+            s_prev.append(search_prev if self.boxreg_flow else None)
+            s_recon.append(search_recon if self.boxreg_flow else None)
+            flow.append(flow_curr_pred_oc if self.boxreg_flow else None)
 
             # for next time-step
             x_prev    = x_curr
@@ -753,6 +882,9 @@ class Nornn(object):
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
+        s_prev        = tf.stack(s_prev, axis=1) if self.boxreg_flow else None
+        s_recon       = tf.stack(s_recon, axis=1) if self.boxreg_flow else None
+        flow          = tf.stack(flow, axis=1) if self.boxreg_flow else None
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
                    'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
@@ -760,6 +892,9 @@ class Nornn(object):
                    'box_s_val': box_s_val,
                    'target':    target,
                    'search':    search,
+                   's_prev':    s_prev,
+                   's_recon':   s_recon,
+                   'flow':      flow,
                    }
         state = {}
         state.update({'x': (x_init, x_prev)})
