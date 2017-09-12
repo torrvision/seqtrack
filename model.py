@@ -450,6 +450,15 @@ def spatial_transform_by_flow(img2, flow):
     img1_recon = tf.reshape(input_transformed, imgsz)
     return img1_recon
 
+def get_rectangles_from_hmap(hmap_oc_fg, box_s_raw, box_s_val, o, y_ref):
+    center_oc = find_center_in_scoremap(hmap_oc_fg, o)
+    center = to_image_centric_coordinate(center_oc, box_s_raw, o)
+    y_ref_size = tf.stack([y_ref[:,2]-y_ref[:,0], y_ref[:,3]-y_ref[:,1]], 1)
+    y_tmp = tf.concat([center-y_ref_size*0.5, center+y_ref_size*0.5], 1)
+    y_tmp_oc = to_object_centric_coordinate(y_tmp, box_s_raw, box_s_val, o)
+    return y_tmp_oc, y_tmp
+
+
 class Nornn(object):
     '''
     This model has two RNNs (ConvLSTM for Dynamics and LSTM for Appearances).
@@ -684,6 +693,7 @@ class Nornn(object):
                     x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
+        # Inputs to the model.
         x           = inputs['x']  # shape [b, ntimesteps, h, w, 3]
         x0          = inputs['x0'] # shape [b, h, w, 3]
         y0          = inputs['y0'] # shape [b, 4]
@@ -692,17 +702,15 @@ class Nornn(object):
         gt_ratio    = inputs['gt_ratio']
         is_training = inputs['is_training']
 
-        y0_size = tf.stack([y0[:,2]-y0[:,0], y0[:,3]-y0[:,1]], 1)
         y0 = enforce_inside_box(y0) # In OTB, Panda has GT error (i.e., > 1.0).
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
         y_init = tf.identity(y0) # for `delta` regression type output.
-        hmap_init = tf.identity(get_masks_from_rectangles(y0, o, Gaussian=True))
-
         x_prev = x_init
         y_prev = y_init
 
+        # Outputs from the model.
         y_pred = []
         hmap_pred = []
         # Case of object-centric approach.
@@ -717,10 +725,12 @@ class Nornn(object):
         s_recon = []
         flow = []
 
+        # Some pre-processing.
         target_curr = process_target_with_box(x0, y0, o)
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
+            y_curr = y[:, t]
 
             # target and search images
             #target_curr = process_target_with_box(x_prev, y_prev, o)
@@ -760,20 +770,18 @@ class Nornn(object):
                 if self.boxreg_hmap: # Add hmap estimate.
                     boxreg_inputs.append(hmap_curr_pred_oc_fg)
                 if self.boxreg_hmap_clean: # Add hmap clean. Use argmax & y0_size.
-                    c_curr_pred_oc = find_center_in_scoremap(hmap_curr_pred_oc_fg, o)
-                    c_curr_pred    = to_image_centric_coordinate(c_curr_pred_oc, box_s_raw_curr, o)
-                    y_curr_pred    = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1)
-                    #y_prev_size = tf.stack([y_prev[:,2]-y_prev[:,0], y_prev[:,3]-y_prev[:,1]], 1)
-                    #y_curr_pred    = tf.concat([c_curr_pred-y_prev_size*0.5, c_curr_pred+y_prev_size*0.5], 1)
-                    y_curr_pred_oc = to_object_centric_coordinate(y_curr_pred, box_s_raw_curr, box_s_val_curr, o)
-                    new_hmap = get_masks_from_rectangles(y_curr_pred_oc, o, Gaussian=True)
-                    boxreg_inputs.append(new_hmap)
+                    y_tmp_oc, _ = get_rectangles_from_hmap(
+                            hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
+                    hmap_clean = get_masks_from_rectangles(y_tmp_oc, o, Gaussian=True)
+                    boxreg_inputs.append(hmap_clean)
                 if self.boxreg_mask: # Add target_mask to inputs.
                     target_mask, _, _ = process_search_with_box(
                         get_masks_from_rectangles(y_prev, o), y_prev, o)
                     boxreg_inputs.append(target_mask)
                 if self.boxreg_flow: # Add optical flow to inputs.
                     with tf.variable_scope('cnn_flow', reuse=(t > 0)):
+                        search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
+                        img_pair = tf.concat([search_prev, search_curr], 3)
                         flow_feat = pass_cnn(img_pair, o, is_training, 'relu')
                     with tf.variable_scope('deconvolution_flow', reuse=(t > 0)):
                         flow_curr_pred_oc = pass_deconvolution(flow_feat, o)
@@ -786,20 +794,21 @@ class Nornn(object):
                 with tf.variable_scope('regress_box', reuse=(t > 0)):
                     y_curr_pred_oc = pass_regress_box(boxreg_inputs, is_training)
                     y_curr_pred = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
-            else: # argmax to find center (then use x0's box or regress box size - the latter didn't work)
-                c_curr_pred_oc = find_center_in_scoremap(hmap_curr_pred_oc_fg, o)
-                c_curr_pred    = to_image_centric_coordinate(c_curr_pred_oc, box_s_raw_curr, o)
-                y_curr_pred    = tf.concat([c_curr_pred-y0_size*0.5, c_curr_pred+y0_size*0.5], 1)
-                y_curr_pred_oc = to_object_centric_coordinate(y_curr_pred, box_s_raw_curr, box_s_val_curr, o)
+            else: # argmax to find center (then use x0's box)
+                y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
+                        hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
+
+            # Post-processing.
+            y_curr_pred = regularize_scale(y_prev, y_curr_pred, y0)
+            y_curr_pred = enforce_inside_box(y_curr_pred)
 
             # Get image-centric outputs. Some are used for visualization purpose.
-            y_curr_pred    = regularize_scale(y_prev, y_curr_pred, y0)
-            y_curr_pred    = enforce_inside_box(y_curr_pred)
             hmap_curr_pred = to_image_centric_hmap(hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o)
 
+            # Outputs.
             y_pred.append(y_curr_pred)
-            y_pred_oc.append(y_curr_pred_oc)
             hmap_pred.append(hmap_curr_pred)
+            y_pred_oc.append(y_curr_pred_oc)
             hmap_pred_oc.append(hmap_curr_pred_oc)
             box_s_raw.append(box_s_raw_curr)
             box_s_val.append(box_s_val_curr)
@@ -810,8 +819,12 @@ class Nornn(object):
             flow.append(flow_curr_pred_oc if self.boxreg_flow else None)
 
             # for next time-step
-            x_prev    = x_curr
-            y_prev    = y_curr_pred # NOTE: For sequence learning, use scheduled sampling during training.
+            x_prev = x_curr
+            y_prev = y_curr_pred # NOTE: For sequence learning, use scheduled sampling during training.
+            #rand_prob = tf.random_uniform([], minval=0, maxval=1)
+            #gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
+            #y_prev = tf.cond(gt_condition, lambda: y_curr, lambda: y_curr_pred)
+
 
         y_pred        = tf.stack(y_pred, axis=1)
         hmap_pred     = tf.stack(hmap_pred, axis=1)
