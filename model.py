@@ -457,7 +457,6 @@ class Nornn(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
-                 depth_wise_norm=False,
                  boxreg=False,
                  boxreg_imgpair=False,
                  boxreg_hmap=False,
@@ -471,7 +470,6 @@ class Nornn(object):
                  ):
         # model parameters
         self.feat_act          = feat_act
-        self.depth_wise_norm   = depth_wise_norm
         self.boxreg            = boxreg
         self.boxreg_imgpair    = boxreg_imgpair
         self.boxreg_hmap       = boxreg_hmap
@@ -704,12 +702,10 @@ class Nornn(object):
 
         x_prev = x_init
         y_prev = y_init
-        #hmap_prev = hmap_init # Not being used anymore.
 
         y_pred = []
         hmap_pred = []
         # Case of object-centric approach.
-        #y_gt_oc = []
         y_pred_oc = []
         hmap_gt_oc = []
         hmap_pred_oc = []
@@ -721,23 +717,24 @@ class Nornn(object):
         s_recon = []
         flow = []
 
+        target_curr = process_target_with_box(x0, y0, o)
+
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
-            y_curr_gt = y[:, t]
 
             # target and search images
             #target_curr = process_target_with_box(x_prev, y_prev, o)
-            target_curr = tf.cond(is_training, # TODO: check the condition being passed.
-                                  lambda: process_target_with_box(x_prev, y_prev, o),
-                                  lambda: process_target_with_box(x0, y0, o))
+            #target_curr = tf.cond(is_training, # TODO: check the condition being passed.
+            #                      lambda: process_target_with_box(x_prev, y_prev, o),
+            #                      lambda: process_target_with_box(x0, y0, o))
             search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
 
-            if self.stn:
-                with tf.variable_scope('stn_localization', reuse=(t > 0)):
-                    theta = pass_stn_localization(target_curr)
-                    size = target_curr.shape.as_list()
-                    target_curr = transformer(target_curr, theta, size[1:3])
-                    target_curr.set_shape(size)
+            #if self.stn:
+            #    with tf.variable_scope('stn_localization', reuse=(t > 0)):
+            #        theta = pass_stn_localization(target_curr)
+            #        size = target_curr.shape.as_list()
+            #        target_curr = transformer(target_curr, theta, size[1:3])
+            #        target_curr.set_shape(size)
 
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
                 # TODO: Perform multi-scale resize for target here.
@@ -745,10 +742,6 @@ class Nornn(object):
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
                 search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
-
-            if self.depth_wise_norm: # For NCC. It has some speed issue. # TODO: test this properly.
-                search_feat = pass_depth_wise_norm(search_feat)
-                target_feat = pass_depth_wise_norm(target_feat)
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
@@ -760,14 +753,12 @@ class Nornn(object):
             if self.boxreg: # regress box from `scoremap`.
                 # Create inputs to regression network.
                 boxreg_inputs = []
-                if self.boxreg_imgpair: # Add raw image pair.
-                    # TODO: image pair used to regress box can be different from image pair for flow.
-                    # i.e., whether A0 is used or not. Note that this will make difference for sequence.
+                if self.boxreg_imgpair: # Add raw image pair. # TODO: Try diff image pair.
                     search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
                     img_pair = tf.concat([search_prev, search_curr], 3)
                     boxreg_inputs.append(img_pair)
                 if self.boxreg_hmap: # Add hmap estimate.
-                    boxreg_inputs.append(hmap_curr_pred_oc_fg) # TODO: never tested fg only yet.
+                    boxreg_inputs.append(hmap_curr_pred_oc_fg)
                 if self.boxreg_hmap_clean: # Add hmap clean. Use argmax & y0_size.
                     c_curr_pred_oc = find_center_in_scoremap(hmap_curr_pred_oc_fg, o)
                     c_curr_pred    = to_image_centric_coordinate(c_curr_pred_oc, box_s_raw_curr, o)
@@ -814,25 +805,23 @@ class Nornn(object):
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
-            s_prev.append(search_prev if self.boxreg else None)
+            s_prev.append(search_prev if self.boxreg_flow else None)
             s_recon.append(search_recon if self.boxreg_flow else None)
             flow.append(flow_curr_pred_oc if self.boxreg_flow else None)
 
             # for next time-step
             x_prev    = x_curr
             y_prev    = y_curr_pred # NOTE: For sequence learning, use scheduled sampling during training.
-            hmap_prev = hmap_curr_pred
 
         y_pred        = tf.stack(y_pred, axis=1)
         hmap_pred     = tf.stack(hmap_pred, axis=1)
         y_pred_oc     = tf.stack(y_pred_oc, axis=1)
         hmap_pred_oc  = tf.stack(hmap_pred_oc, axis=1)
-        #y_gt_oc      = tf.stack(y_gt_oc, axis=1)
         box_s_raw     = tf.stack(box_s_raw, axis=1)
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
-        s_prev        = tf.stack(s_prev, axis=1)
+        s_prev        = tf.stack(s_prev, axis=1) if self.boxreg_flow else None
         s_recon       = tf.stack(s_recon, axis=1) if self.boxreg_flow else None
         flow          = tf.stack(flow, axis=1) if self.boxreg_flow else None
 
@@ -848,7 +837,6 @@ class Nornn(object):
                    }
         state = {}
         state.update({'x': (x_init, x_prev)})
-        state.update({'hmap': (hmap_init, hmap_prev)})
         state.update({'y': (y_init, y_prev)})
         gt = {}
         dbg = {} # dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
