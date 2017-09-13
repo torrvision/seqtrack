@@ -843,7 +843,7 @@ def _load_batch(seqs, o):
                          for x in examples])
             for k in EXAMPLE_KEYS}
 
-def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean']):
+def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean', 'cle_representative']):
     '''Finds all results for each evaluation distribution.
 
     Identifies the best result for each metric.
@@ -851,7 +851,7 @@ def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean
     '''
     def helper():
         eval_id_fn = lambda sampler, dataset: '{}-{}'.format(dataset, sampler)
-        best_fn = {'iou_mean': np.amax, 'auc': np.amax, 'cle_mean': np.amin}
+        best_fn = {'iou_mean': np.amax, 'auc': np.amax, 'cle_mean': np.amin, 'cle_representative': np.amax}
         report_dir = os.path.join(o.path_output, 'report')
         if not os.path.isdir(report_dir): os.makedirs(report_dir)
 
