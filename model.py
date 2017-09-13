@@ -115,14 +115,10 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
 def enforce_inside_box(y, name='inside_box'):
     ''' Force the box to be in range [0,1]
     '''
-    assert len(y.shape.as_list()) == 2
+    assert y.shape.as_list()[-1] == 4
+    # inside range [0,1]
     with tf.name_scope(name) as scope:
-        # outside [0,1]
-        y = tf.maximum(y, 0.0)
-        y = tf.minimum(y, 1.0)
-        # also enforce no flip
-        #y = tf.stack([tf.minimum(y[:,0], y[:,2]), tf.minimum(y[:,1], y[:,3]),
-        #              tf.maximum(y[:,2], y[:,2]), tf.maximum(y[:,1], y[:,3])], 1)
+        y = tf.clip_by_value(y, 0.0, 1.0)
     return y
 
 def pass_depth_wise_norm(feature):
@@ -153,8 +149,14 @@ def process_target_with_box(img, box, o):
 def process_search_with_box(img, box, o):
     ''' Crop search image x with box y.
     '''
+    # NOTE: Input box might be `line at the side` or `dot at the corner` of frame.
+    # `enforce_inside_box` function doesn't guarantee that box has width or height > 0.0.
+    # This will make `box_s_raw` and `box_s_val` have width or height of size 0.
     with tf.control_dependencies(
-            [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0)]):
+            [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0), # box coordinate range.
+             #tf.assert_greater(box[:,2]-box[:,0], 0.0), # box size range.
+             #tf.assert_greater(box[:,3]-box[:,1], 0.0)
+             ]):
         box = tf.identity(box)
 
     search = []
@@ -165,19 +167,22 @@ def process_search_with_box(img, box, o):
         y1 = box[b,1]
         x2 = box[b,2]
         y2 = box[b,3]
-        # search size: twice bigger than object.
+        # search size: `search_scale` times bigger than object.
         w_margin = ((x2 - x1) * float(o.search_scale - 1)) * 0.5
         h_margin = ((y2 - y1) * float(o.search_scale - 1)) * 0.5
+        # NOTE: Both s_raw or s_val can have size of 0.
         # search box (raw)
         x1_s_raw = x1 - w_margin # can be outside of [0,1]
         y1_s_raw = y1 - h_margin
         x2_s_raw = x2 + w_margin
         y2_s_raw = y2 + h_margin
         # search box (valid)
-        x1_s_val = tf.maximum(x1_s_raw, 0.0)
-        y1_s_val = tf.maximum(y1_s_raw, 0.0)
-        x2_s_val = tf.minimum(x2_s_raw, 1.0)
-        y2_s_val = tf.minimum(y2_s_raw, 1.0)
+        # NOTE: when box_s_raw is completely outside of frame, by doing below
+        # it should/will be either `dot at the corner` or `line at the side`.
+        x1_s_val = tf.clip_by_value(x1_s_raw, 0.0, 1.0)
+        y1_s_val = tf.clip_by_value(y1_s_raw, 0.0, 1.0)
+        x2_s_val = tf.clip_by_value(x2_s_raw, 0.0, 1.0)
+        y2_s_val = tf.clip_by_value(y2_s_raw, 0.0, 1.0)
         # crop (only within valid region)
         s_val_h = tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32)
         s_val_w = tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32)
@@ -274,10 +279,13 @@ def to_object_centric_coordinate(y, box_s_raw, box_s_val, o):
     x1_val, y1_val, x2_val, y2_val = tf.unstack(box_s_val, axis=coord_axis)
     s_raw_w = x2_raw - x1_raw # [0,1] range
     s_raw_h = y2_raw - y1_raw # [0,1] range
-    x1_oc = (x1 - x1_raw) / s_raw_w
-    y1_oc = (y1 - y1_raw) / s_raw_h
-    x2_oc = (x2 - x1_raw) / s_raw_w
-    y2_oc = (y2 - y1_raw) / s_raw_h
+    # NOTE: Remember that due to the limitation of `enforce_inside_box`,
+    # `process_search_with_box` can yield box_s with size of 0.
+    #with tf.control_dependencies([tf.assert_greater(s_raw_w, 0.0), tf.assert_greater(s_raw_h, 0.0)]):
+    x1_oc = (x1 - x1_raw) / (s_raw_w + 1e-5)
+    y1_oc = (y1 - y1_raw) / (s_raw_h + 1e-5)
+    x2_oc = (x2 - x1_raw) / (s_raw_w + 1e-5)
+    y2_oc = (y2 - y1_raw) / (s_raw_h + 1e-5)
     y_oc = tf.stack([x1_oc, y1_oc, x2_oc, y2_oc], coord_axis)
     return y_oc
 
@@ -702,7 +710,9 @@ class Nornn(object):
         gt_ratio    = inputs['gt_ratio']
         is_training = inputs['is_training']
 
+        # TODO: This would better be during loading data.
         y0 = enforce_inside_box(y0) # In OTB, Panda has GT error (i.e., > 1.0).
+        y  = enforce_inside_box(y)
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
@@ -727,6 +737,8 @@ class Nornn(object):
 
         # Some pre-processing.
         target_curr = process_target_with_box(x0, y0, o)
+        with tf.variable_scope(o.cnn_model):
+            target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
@@ -747,8 +759,7 @@ class Nornn(object):
             #        target_curr.set_shape(size)
 
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
-                # TODO: Perform multi-scale resize for target here.
-                target_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
+                #target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
                 search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
@@ -820,10 +831,10 @@ class Nornn(object):
 
             # for next time-step
             x_prev = x_curr
-            y_prev = y_curr_pred # NOTE: For sequence learning, use scheduled sampling during training.
-            #rand_prob = tf.random_uniform([], minval=0, maxval=1)
-            #gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
-            #y_prev = tf.cond(gt_condition, lambda: y_curr, lambda: y_curr_pred)
+            #y_prev = y_curr_pred # NOTE: For sequence learning, use scheduled sampling during training.
+            rand_prob = tf.random_uniform([], minval=0, maxval=1)
+            gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
+            y_prev = tf.cond(gt_condition, lambda: y_curr, lambda: y_curr_pred)
 
 
         y_pred        = tf.stack(y_pred, axis=1)
