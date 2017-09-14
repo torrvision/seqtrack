@@ -709,6 +709,7 @@ class Nornn(object):
         use_gt      = inputs['use_gt']
         gt_ratio    = inputs['gt_ratio']
         is_training = inputs['is_training']
+        y_is_valid  = inputs['y_is_valid']
 
         # TODO: This would better be during loading data.
         y0 = enforce_inside_box(y0) # In OTB, Panda has GT error (i.e., > 1.0).
@@ -775,7 +776,8 @@ class Nornn(object):
                 # Create inputs to regression network.
                 boxreg_inputs = []
                 if self.boxreg_imgpair: # Add raw image pair. # TODO: Try diff image pair.
-                    search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
+                    #search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
+                    search_prev, _, _ = process_search_with_box(x0, y0, o)
                     img_pair = tf.concat([search_prev, search_curr], 3)
                     boxreg_inputs.append(img_pair)
                 if self.boxreg_hmap: # Add hmap estimate.
@@ -829,13 +831,15 @@ class Nornn(object):
             s_recon.append(search_recon if self.boxreg_flow else None)
             flow.append(flow_curr_pred_oc if self.boxreg_flow else None)
 
-            # for next time-step
+            # Update for next time-step.
             x_prev = x_curr
-            #y_prev = y_curr_pred # NOTE: For sequence learning, use scheduled sampling during training.
+            #y_prev = y_curr_pred
+            # Scheduled sampling. In case label is invalid, use prediction.
             rand_prob = tf.random_uniform([], minval=0, maxval=1)
             gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
-            y_prev = tf.cond(gt_condition, lambda: y_curr, lambda: y_curr_pred)
-
+            y_prev = tf.cond(gt_condition,
+                             lambda: tf.where(y_is_valid[:,t], y_curr, y_curr_pred),
+                             lambda: y_curr_pred)
 
         y_pred        = tf.stack(y_pred, axis=1)
         hmap_pred     = tf.stack(hmap_pred, axis=1)
