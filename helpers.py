@@ -107,3 +107,29 @@ def merge_dims(x, a, b):
                  [x_static[i] or x_dynamic[i] for i in range(b, n)])
     y = tf.reshape(x, y_dynamic)
     return y, restore
+
+
+def diag_conv(x, f, strides, padding, **kwargs):
+    '''
+    Args:
+        x: [b, hx, wx, c]
+        f: [b, hf, wf, c]
+
+    Returns:
+        [b, ho, wo, c]
+    '''
+    assert len(x.shape) == 4
+    assert len(f.shape) == 4
+    # x.shape is [b, hx, wx, c]
+    # f.shape is [b, hf, wf, c]
+    # [b, hx, wx, c] -> [hx, wx, b, c] -> [hx, wx, b*c]
+    x, restore = merge_dims(tf.transpose(x, [1, 2, 0, 3]), 2, 4)
+    # [b, hf, wf, c] -> [hf, wf, b, c] -> [hf, wf, b*c]
+    f, _ = merge_dims(tf.transpose(f, [1, 2, 0, 3]), 2, 4)
+    x = tf.expand_dims(x, axis=0) # [1, hx, wx, b*c]
+    f = tf.expand_dims(f, axis=3) # [hf, wf, b*c, 1]
+    x = tf.nn.depthwise_conv2d(x, f, strides=strides, padding=padding, **kwargs)
+    x = tf.squeeze(x, axis=0) # [ho, wo, b*c]
+    # [ho, wo, b*c] -> [ho, wo, b, c] -> [b, ho, wo, c]
+    x = tf.transpose(restore(x, axis=2), [2, 0, 1, 3])
+    return x
