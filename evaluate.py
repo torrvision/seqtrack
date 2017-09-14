@@ -53,11 +53,14 @@ def track(sess, inputs, model, sequence, use_gt):
         images = _single_to_batch(pad_to(images, model.sequence_len), model.batch_size)
         y_gt = np.array(sequence['labels'][start:start+chunk_len])
         y_gt = _single_to_batch(pad_to(y_gt, model.sequence_len), model.batch_size)
+        is_valid = np.array(sequence['label_is_valid'][start:start+chunk_len])
+        is_valid = _single_to_batch(pad_to(is_valid, model.sequence_len), model.batch_size)
         feed_dict = {
             inputs['x_raw']:  images,
             inputs['x0_raw']: first_image,
             inputs['y0']:     first_label,
             inputs['y']:      y_gt,
+            inputs['y_is_valid']: is_valid,
             inputs['use_gt']: use_gt,
         }
         if start > 1:
