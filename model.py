@@ -154,7 +154,7 @@ def process_target_with_box(img, box, o):
     crop = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
         box_ind=tf.range(batch_len),
         crop_size=[crop_size]*2,
-        extrapolation_value=None)
+        extrapolation_value=128)
     return crop
 
 def process_search_with_box(img, box, o):
@@ -238,7 +238,7 @@ def process_search_with_box(img, box, o):
     search = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
         box_ind=tf.range(batch_len),
         crop_size=[o.frmsz]*2,
-        extrapolation_value=None)
+        extrapolation_value=128)
     return search, box, box_val
 
 def scale_rectangle_size(alpha, rect):
@@ -541,6 +541,8 @@ class Nornn(object):
                  divide_target=False,
                  stn=False,
                  coarse_hmap=False,
+                 bnorm_xcorr=False,
+                 bnorm_deconv=False,
                  ):
         # model parameters
         self.feat_act          = feat_act
@@ -554,6 +556,8 @@ class Nornn(object):
         self.divide_target     = divide_target
         self.stn               = stn
         self.coarse_hmap       = coarse_hmap
+        self.bnorm_xcorr       = bnorm_xcorr
+        self.bnorm_deconv      = bnorm_deconv
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -589,7 +593,7 @@ class Nornn(object):
             if o.cnn_model == 'custom':
                 with slim.arg_scope([slim.conv2d],
                         normalizer_fn=slim.batch_norm,
-                        normalizer_params={'is_training': is_training},
+                        normalizer_params={'is_training': is_training, 'fused': True},
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     x = slim.conv2d(x, 16, 11, stride=2, scope='conv1')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
@@ -697,15 +701,20 @@ class Nornn(object):
             scoremap = tf.add_n(scoremap)
 
             # After cross-correlation, put some convolutions (separately from deconv).
+            bnorm_args = {} if not self.bnorm_xcorr else {
+                'normalizer_fn': slim.batch_norm,
+                'normalizer_params': {'is_training': is_training, 'fused': True},
+            }
             with slim.arg_scope([slim.conv2d],
                     num_outputs=scoremap.shape.as_list()[-1],
                     kernel_size=3,
-                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                    weights_regularizer=slim.l2_regularizer(o.wd),
+                    **bnorm_args):
                 scoremap = slim.conv2d(scoremap, scope='conv1')
                 scoremap = slim.conv2d(scoremap, scope='conv2')
             return scoremap
 
-        def pass_deconvolution(x, o):
+        def pass_deconvolution(x, is_training, o):
             ''' Upsampling layers.
             The last layer should not have an activation!
             '''
@@ -719,11 +728,25 @@ class Nornn(object):
                         x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='deconv1')
                         x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv2')
                     else:
-                        x = tf.image.resize_images(x, [o.frmsz/2]*2, align_corners=True)
-                        x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1]/2, kernel_size=3, scope='deconv1')
-                        x = tf.image.resize_images(x, [o.frmsz]*2, align_corners=True)
-                        x = slim.conv2d(x, num_outputs=2, kernel_size=3, scope='deconv2')
-                        x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv3')
+                        bnorm_args = {} if not self.bnorm_deconv else {
+                            'normalizer_fn': slim.batch_norm,
+                            'normalizer_params': {'is_training': is_training, 'fused': True},
+                        }
+                        with slim.arg_scope([slim.conv2d], **bnorm_args):
+                            # Careful: Sometimes activations go to zero.
+                            # (Seems to be solved with batch norm.)
+                            # tf.summary.histogram('deconv_0', x)
+                            x = tf.image.resize_images(x, [(o.frmsz-1)/2+1]*2, align_corners=True)
+                            dim = x.shape.as_list()[-1] / 2
+                            x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='deconv1')
+                            # tf.summary.histogram('deconv_1', x)
+                            x = tf.image.resize_images(x, [o.frmsz]*2, align_corners=True)
+                            # x = slim.conv2d(x, num_outputs=2, kernel_size=3, scope='deconv2')
+                            # tf.summary.histogram('deconv_2', x)
+                            x = slim.conv2d(x, num_outputs=2, kernel_size=1,
+                                            activation_fn=None,
+                                            normalizer_fn=None,
+                                            scope='deconv3')
 
                         # previous shallow
                         #kernel_size=[1,1],
@@ -753,7 +776,7 @@ class Nornn(object):
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 with slim.arg_scope([slim.conv2d],
                         normalizer_fn=slim.batch_norm,
-                        normalizer_params={'is_training': is_training}):
+                        normalizer_params={'is_training': is_training, 'fused': True}):
                     x = slim.conv2d(x, 32, 5, 2, scope='conv1')
                     x = slim.max_pool2d(x, 2, 2, scope='pool1')
                     x = slim.conv2d(x, 64, 5, 2, scope='conv2')
@@ -833,7 +856,7 @@ class Nornn(object):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
-                hmap_curr_pred_oc = pass_deconvolution(scoremap, o)
+                hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o)
                 hmap_curr_pred_oc_fg = tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], -1)
 
             if self.boxreg: # regress box from `scoremap`.
