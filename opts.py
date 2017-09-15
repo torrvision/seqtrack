@@ -40,7 +40,9 @@ class Opts(object):
         self.model_params       = {}
         self.losses             = None
         self.search_scale       = 2 # size of search space relative to target.
+        self.target_scale       = 1 # size of context relative to target.
         self.perspective        = 'oc' # ic: image-centric, oc: object-centric
+        self.aspect_method      = 'stretch'
 
         #----------------------------------------------------------------------
         # model parameters - cnn

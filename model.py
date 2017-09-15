@@ -137,6 +137,9 @@ def process_target_with_box(img, box, o):
     with tf.control_dependencies(
             [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0)]):
         box = tf.identity(box)
+    # JV: Take a different rectange at the same position.
+    box = modify_aspect_ratio(box, o.aspect_method)
+    box = scale_rectangle_size(o.target_scale, box)
     # JV: Remove dependence on explicit batch size.
     # crop = []
     # for b in range(o.batchsz):
@@ -147,9 +150,9 @@ def process_target_with_box(img, box, o):
     #                                          crop_size=[o.frmsz/o.search_scale]*2)) # target size
     # return tf.concat(crop, 0)
     batch_len = tf.shape(img)[0]
-    crop_size = (o.frmsz - 1) / o.search_scale + 1
-    # Check that search_scale divides (frame_size - 1).
-    assert (crop_size - 1) * o.search_scale == o.frmsz - 1
+    crop_size = (o.frmsz - 1) * o.target_scale / o.search_scale + 1
+    # Check that target_scale / search_scale * (frame_size-1) is an integer.
+    assert (crop_size - 1) * o.search_scale == (o.frmsz - 1) * o.target_scale
     # TODO: Set extrapolation_value.
     crop = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
         box_ind=tf.range(batch_len),
@@ -230,6 +233,7 @@ def process_search_with_box(img, box, o):
     # box_s_val = tf.stack(box_s_val, 0)
     # return search, box_s_raw, box_s_val
 
+    box = modify_aspect_ratio(box, o.aspect_method)
     box = scale_rectangle_size(o.search_scale, box)
     box_val = geom.rect_intersect(box, geom.unit_rect())
 
@@ -240,6 +244,26 @@ def process_search_with_box(img, box, o):
         crop_size=[o.frmsz]*2,
         extrapolation_value=128)
     return search, box, box_val
+
+def modify_aspect_ratio(rect, method='stretch'):
+    EPSILON = 1e-3
+    if method == 'stretch':
+        return rect # No change.
+    min_pt, max_pt = geom.rect_min_max(rect)
+    center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
+    with tf.control_dependencies([tf.assert_greater_equal(size, 0.0)]):
+        size = tf.identity(size)
+    if method == 'perimeter':
+        # Average of dimensions.
+        width = tf.reduce_mean(size, axis=-1, keep_dims=True)
+        return geom.make_rect(center - 0.5*width, center + 0.5*width)
+    if method == 'area':
+        # Geometric average of dimensions.
+        width = tf.exp(tf.reduce_mean(tf.log(tf.maximum(size, EPSILON)),
+                                      axis=-1,
+                                      keep_dims=True))
+        return geom.make_rect(center - 0.5*width, center + 0.5*width)
+    raise ValueError('unknown method: {}'.format(method))
 
 def scale_rectangle_size(alpha, rect):
     min_pt, max_pt = geom.rect_min_max(rect)
