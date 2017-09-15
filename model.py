@@ -139,6 +139,7 @@ def process_target_with_box(img, box, o):
         box = tf.identity(box)
     # JV: Take a different rectange at the same position.
     box = modify_aspect_ratio(box, o.aspect_method)
+    box = scale_rectangle_size(o.target_scale, box)
     # JV: Remove dependence on explicit batch size.
     # crop = []
     # for b in range(o.batchsz):
@@ -149,9 +150,9 @@ def process_target_with_box(img, box, o):
     #                                          crop_size=[o.frmsz/o.search_scale]*2)) # target size
     # return tf.concat(crop, 0)
     batch_len = tf.shape(img)[0]
-    crop_size = (o.frmsz - 1) / o.search_scale + 1
-    # Check that search_scale divides (frame_size - 1).
-    assert (crop_size - 1) * o.search_scale == o.frmsz - 1
+    crop_size = (o.frmsz - 1) * o.target_scale / o.search_scale + 1
+    # Check that target_scale / search_scale * (frame_size-1) is an integer.
+    assert (crop_size - 1) * o.search_scale == (o.frmsz - 1) * o.target_scale
     # TODO: Set extrapolation_value.
     crop = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
         box_ind=tf.range(batch_len),

@@ -70,6 +70,9 @@ def parse_arguments():
             '--search_scale', help='size of search space relative to target',
             type=int, default=2)
     parser.add_argument(
+            '--target_scale', help='size of context relative to target',
+            type=int, default=1)
+    parser.add_argument(
             '--perspective', help='ic: image-centric, oc: object-centric',
             type=str, default='oc')
     parser.add_argument(
