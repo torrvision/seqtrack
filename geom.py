@@ -5,6 +5,48 @@ from helpers import merge_dims
 EPSILON = 1e-3
 
 
+def crop_rect(rects, window_rect, name='crop_rect'):
+    '''Returns each rectangle relative to a window.
+
+    Args:
+        rects -- [..., 4]
+        window_rect -- [..., 4]
+    '''
+    with tf.name_scope(name) as scope:
+        window_min, window_max = rect_min_max(window_rect)
+        window_size = window_max - window_min
+        window_size = tf.sign(window_size) * tf.maximum(tf.abs(window_size), EPSILON)
+        rects_min, rects_max = rect_min_max(rects)
+        out_min = (rects_min - window_min) / window_size
+        out_max = (rects_max - window_min) / window_size
+        return make_rect(out_min, out_max, name=scope)
+
+
+def crop_inverse(rect, name='crop_inverse'):
+    '''Returns the rectangle that reverses the crop.
+
+    If q = crop_inverse(r), then crop(crop(im, r), q) restores the image.
+    That is, cropping is a group operation with an inverse.
+
+    CAUTION: Epsilon means that inverse is not exact?
+    '''
+    with tf.name_scope(name) as scope:
+        # x_min, y_min, x_max, y_max = tf.unstack(rect, axis=-1)
+        rect_min, rect_max = rect_min_max(rect)
+        # TODO: Support reversed rectangle.
+        rect_size = tf.maximum(tf.abs(rect_max - rect_min), EPSILON)
+        # x_size = tf.maximum(tf.abs(x_max - x_min), EPSILON)
+        # y_size = tf.maximum(tf.abs(y_max - y_min), EPSILON)
+        inv_min = -rect_min / rect_size
+        # u_min = -x_min / x_size
+        # v_min = -y_min / y_size
+        inv_max = (1 - rect_min) / rect_size
+        # inv_max = inv_min + 1 / rect_size
+        # u_max = u_min + 1 / x_size
+        # v_max = v_min + 1 / y_size
+        return make_rect(inv_min, inv_max, name='scope')
+
+
 def rect_min_max(rect, name='rect_min_max'):
     with tf.name_scope(name) as scope:
         x_min, y_min, x_max, y_max = tf.unstack(rect, axis=-1)
