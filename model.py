@@ -733,28 +733,16 @@ class Nornn(object):
                             'normalizer_params': {'is_training': is_training, 'fused': True},
                         }
                         with slim.arg_scope([slim.conv2d], **bnorm_args):
-                            # Careful: Sometimes activations go to zero.
-                            # (Seems to be solved with batch norm.)
-                            # tf.summary.histogram('deconv_0', x)
+                            dim = x.shape.as_list()[-1]
+                            x = tf.image.resize_images(x, [(o.frmsz-1)/4+1]*2, align_corners=True)
+                            x = slim.conv2d(x, num_outputs=dim/2, kernel_size=3, scope='deconv1')
                             x = tf.image.resize_images(x, [(o.frmsz-1)/2+1]*2, align_corners=True)
-                            dim = x.shape.as_list()[-1] / 2
-                            x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='deconv1')
-                            # tf.summary.histogram('deconv_1', x)
+                            x = slim.conv2d(x, num_outputs=dim/4, kernel_size=3, scope='deconv2')
                             x = tf.image.resize_images(x, [o.frmsz]*2, align_corners=True)
-                            # x = slim.conv2d(x, num_outputs=2, kernel_size=3, scope='deconv2')
-                            # tf.summary.histogram('deconv_2', x)
                             x = slim.conv2d(x, num_outputs=2, kernel_size=1,
                                             activation_fn=None,
                                             normalizer_fn=None,
                                             scope='deconv3')
-
-                        # previous shallow
-                        #kernel_size=[1,1],
-                        #x = slim.conv2d(x, num_outputs=x.shape.as_list()[-1], scope='deconv1')
-                        #x = slim.conv2d(x, num_outputs=2, scope='deconv2')
-                        #x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
-                        #x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv3')
-                        ##x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
                 elif o.cnn_model == 'vgg_16':
                     assert False, 'Please update this better before using it..'
                     x = slim.conv2d(x, num_outputs=512, scope='deconv1')
