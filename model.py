@@ -53,26 +53,41 @@ def convert_rec_to_heatmap(rec, o, min_size=None, Gaussian=False):
         masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size, Gaussian=Gaussian)
         return unmerge(masks, 0)
 
-def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, Gaussian=False, name='mask'):
+def get_masks_from_rectangles(rec, o, output_size=None, kind='fg', typecast=True, min_size=None, Gaussian=False, name='mask'):
+    '''
+    Args:
+        rec: [..., 4]
+            Rectangles in standard format (xmin, ymin, xmax, ymax).
+        output_size: (height, width)
+            If None, then height = width = o.frmsz.
+
+    Returns:
+        [..., height, width]
+    '''
     with tf.name_scope(name) as scope:
+        if output_size is None:
+            output_size = (o.frmsz, o.frmsz)
+        size_y, size_x = output_size
         # create mask using rec; typically rec=y_prev
-        # rec -- [b, 4]
-        rec *= float(o.frmsz)
-        # x1, y1, x2, y2 -- [b]
+        # rec -- [..., 4]
+        # JV: Allow different output size.
+        # rec *= float(o.frmsz)
+        rec = geom.rect_scale(rec, tf.to_float([size_x, size_y]))
+        # x1, y1, x2, y2 -- [...]
         x1, y1, x2, y2 = tf.unstack(rec, axis=1)
         if min_size is not None:
             x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, min_size=min_size)
-        # grid_x -- [1, frmsz]
-        # grid_y -- [frmsz, 1]
-        grid_x = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 0)
-        grid_y = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 1)
+        # grid_x -- [1, width]
+        # grid_y -- [height, 1]
+        grid_x = tf.expand_dims(tf.cast(tf.range(size_x), o.dtype), 0)
+        grid_y = tf.expand_dims(tf.cast(tf.range(size_y), o.dtype), 1)
         # resize tensors so that they can be compared
-        # x1, y1, x2, y2 -- [b, 1, 1]
+        # x1, y1, x2, y2 -- [..., 1, 1]
         x1 = tf.expand_dims(tf.expand_dims(x1, -1), -1)
         x2 = tf.expand_dims(tf.expand_dims(x2, -1), -1)
         y1 = tf.expand_dims(tf.expand_dims(y1, -1), -1)
         y2 = tf.expand_dims(tf.expand_dims(y2, -1), -1)
-        # masks -- [b, frmsz, frmsz]
+        # masks -- [..., frmsz, frmsz]
         if not Gaussian:
             masks = tf.logical_and(
                 tf.logical_and(tf.less_equal(x1, grid_x),
@@ -89,14 +104,18 @@ def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, G
                               tf.square(grid_y - y_center) / (2 * tf.square(y_sigma)) ))
 
         if kind == 'fg': # only foreground mask
-            masks = tf.expand_dims(masks, 3) # to have channel dim
+            # JV: Make this more general.
+            # masks = tf.expand_dims(masks, 3) # to have channel dim
+            masks = tf.expand_dims(masks, -1) # to have channel dim
         elif kind == 'bg': # add background mask
             if not Gaussian:
                 masks_bg = tf.logical_not(masks)
             else:
                 masks_bg = 1.0 - masks
-            masks = concat(
-                    (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
+            # JV: Make this more general.
+            # masks = concat(
+            #         (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
+            masks = tf.stack([masks, masks_bg], -1)
         if typecast: # type cast so that it can be concatenated with x
             masks = tf.cast(masks, o.dtype)
         return masks
@@ -158,7 +177,7 @@ def process_target_with_box(img, box, o):
         box_ind=tf.range(batch_len),
         crop_size=[crop_size]*2,
         extrapolation_value=128)
-    return crop
+    return crop, box
 
 def process_search_with_box(img, box, o):
     ''' Crop search image x with box y.
@@ -567,6 +586,9 @@ class Nornn(object):
                  coarse_hmap=False,
                  bnorm_xcorr=False,
                  bnorm_deconv=False,
+                 normalize_input_range=False,
+                 target_share=True,
+                 target_concat_mask=False, # can only be True if share is False
                  ):
         # model parameters
         self.feat_act          = feat_act
@@ -582,6 +604,9 @@ class Nornn(object):
         self.coarse_hmap       = coarse_hmap
         self.bnorm_xcorr       = bnorm_xcorr
         self.bnorm_deconv      = bnorm_deconv
+        self.normalize_input_range = normalize_input_range
+        self.target_share          = target_share
+        self.target_concat_mask    = target_concat_mask
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -836,9 +861,23 @@ class Nornn(object):
         flow = []
 
         # Some pre-processing.
-        target_curr = process_target_with_box(x0, y0, o)
-        with tf.variable_scope(o.cnn_model):
-            target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
+        target_curr, box_context = process_target_with_box(x0, y0, o)
+        if self.normalize_input_range:
+            target_curr *= 1. / 255.
+        if self.target_concat_mask:
+            target_mask_oc = get_masks_from_rectangles(
+                geom.crop_rect(y0, box_context), o,
+                output_size=target_curr.shape.as_list()[-3:-1])
+            # Magnitude of mask should be similar to colors.
+            if not self.normalize_input_range:
+                target_mask_oc *= 255.
+            target_input = tf.concat([target_curr, target_mask_oc], axis=-1)
+        else:
+            target_input = target_curr
+
+        vs_name = o.cnn_model if self.target_share else o.cnn_model+'_target'
+        with tf.variable_scope(vs_name):
+            target_feat = pass_cnn(target_input, o, is_training, self.feat_act) # TODO: Try RSZ target.
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
@@ -858,10 +897,14 @@ class Nornn(object):
             #        target_curr = transformer(target_curr, theta, size[1:3])
             #        target_curr.set_shape(size)
 
-            with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
+            if self.normalize_input_range:
+                search_curr *= 1. / 255.
+            vs_name = o.cnn_model if self.target_share else o.cnn_model+'_search'
+            with tf.variable_scope(vs_name, reuse=(t > 0 or self.target_share)) as scope:
                 #target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
-                if t == 0:
-                    scope.reuse_variables() # two Siamese CNNs shared.
+                # JV: Replaced by logic above.
+                # if t == 0:
+                #     scope.reuse_variables() # two Siamese CNNs shared.
                 search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
