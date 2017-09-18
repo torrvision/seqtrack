@@ -558,12 +558,7 @@ def get_initial_rnn_state(cell_type, cell_size, num_layers=1):
     with tf.variable_scope('rnn_state'):
         for l in range(num_layers):
             for key in state[l].keys():
-                state[l][key] = tf.get_variable('layer{}/{}'.format(l, key),
-                                                shape=cell_size,
-                                                #validate_shape=False, # TODO: check batchsize.
-                                                trainable=False,
-                                                initializer=tf.zeros_initializer())
-                state[l][key].set_shape([None] + cell_size[1:])
+                state[l][key] = tf.fill(cell_size, 0.0, name='layer{}/{}'.format(l, key))
     return state
 
 def pass_rnn(x, state, cell, o):
@@ -630,6 +625,7 @@ class Nornn(object):
                  bnorm_deconv=False,
                  rnn_cell_type='gru',
                  rnn_num_layers=0,
+                 rnn_residual=False,
                  ):
         # model parameters
         self.feat_act          = feat_act
@@ -647,6 +643,7 @@ class Nornn(object):
         self.bnorm_deconv      = bnorm_deconv
         self.rnn_cell_type     = rnn_cell_type
         self.rnn_num_layers    = rnn_num_layers
+        self.rnn_residual      = rnn_residual
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -881,8 +878,7 @@ class Nornn(object):
 
         # RNN cell states
         rnn_state_init = get_initial_rnn_state(cell_type=self.rnn_cell_type,
-                                               #cell_size=[o.batchsz, o.frmsz, o.frmsz, 2],
-                                               cell_size=[o.batchsz, 31, 31, 256],
+                                               cell_size=tf.stack([tf.shape(x0)[0], 31, 31, 256]),
                                                num_layers=self.rnn_num_layers)
 
         # Add identity op to ensure that we can feed state here.
@@ -941,7 +937,12 @@ class Nornn(object):
 
             for l in range(self.rnn_num_layers):
                 with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
-                    scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o)
+                    if self.rnn_residual:
+                        scoremap_ori = tf.identity(scoremap)
+                        scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o)
+                        scoremap += scoremap_ori
+                    else:
+                        scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o)
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o)
