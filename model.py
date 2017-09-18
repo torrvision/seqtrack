@@ -886,7 +886,9 @@ class Nornn(object):
         y_init = tf.identity(y0) # for `delta` regression type output.
         x_prev = x_init
         y_prev = y_init
-        rnn_state = rnn_state_init
+        rnn_state = [{k: tf.identity(rnn_state_init[l][k])
+                     for k in rnn_state_init[l].keys()}
+                     for l in range(len(rnn_state_init))]
 
         # Outputs from the model.
         y_pred = []
