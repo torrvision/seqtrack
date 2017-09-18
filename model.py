@@ -547,6 +547,67 @@ def get_rectangles_from_hmap(hmap_oc_fg, box_s_raw, box_s_val, o, y_ref):
     y_tmp_oc = to_object_centric_coordinate(y_tmp, box_s_raw, box_s_val, o)
     return y_tmp_oc, y_tmp
 
+def get_initial_rnn_state(cell_type, cell_size, num_layers=1):
+    if cell_type == 'lstm':
+        state = [{'h': None, 'c': None} for l in range(num_layers)]
+    elif cell_type == 'gru':
+        state = [{'h': None} for l in range(num_layers)]
+    else:
+        assert False, 'Not available cell type.'
+
+    with tf.variable_scope('rnn_state'):
+        for l in range(num_layers):
+            for key in state[l].keys():
+                state[l][key] = tf.get_variable('layer{}/{}'.format(l, key),
+                                                shape=cell_size,
+                                                #validate_shape=False, # TODO: check batchsize.
+                                                trainable=False,
+                                                initializer=tf.zeros_initializer())
+                state[l][key].set_shape([None] + cell_size[1:])
+    return state
+
+def pass_rnn(x, state, cell, o):
+    ''' Convolutional RNN.
+    '''
+    # TODO:
+    # 1. (LSTM) Initialize forget bias 1.
+    # 2. (LSTM) Try LSTM architecture as defined in "An Empirical Exploration of-".
+    # 2. Try channel-wise convolution.
+
+    if cell == 'lstm':
+        h_prev, c_prev = state['h'], state['c']
+        with slim.arg_scope([slim.conv2d],
+                #num_outputs=2,
+                num_outputs=h_prev.shape.as_list()[-1],
+                kernel_size=3,
+                activation_fn=None,
+                weights_regularizer=slim.l2_regularizer(o.wd)):
+            it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') + slim.conv2d(h_prev, scope='hi'))
+            ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') + slim.conv2d(h_prev, scope='hf'))
+            ct_tilda = tf.nn.tanh(slim.conv2d(x, scope='xc') + slim.conv2d(h_prev, scope='hc'))
+            ct = (ft * c_prev) + (it * ct_tilda)
+            ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') + slim.conv2d(h_prev, scope='ho'))
+            ht = ot * tf.nn.tanh(ct)
+        output = ht
+        state['h'], state['c'] = ht, ct
+    elif cell == 'gru':
+        h_prev = state['h']
+        with slim.arg_scope([slim.conv2d],
+                #num_outputs=2,
+                num_outputs=h_prev.shape.as_list()[-1],
+                kernel_size=3,
+                activation_fn=None,
+                weights_regularizer=slim.l2_regularizer(o.wd)):
+            rt = tf.nn.sigmoid(slim.conv2d(x, scope='xr') + slim.conv2d(h_prev, scope='hr'))
+            zt = tf.nn.sigmoid(slim.conv2d(x, scope='xz') + slim.conv2d(h_prev, scope='hz'))
+            h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') + slim.conv2d(rt * h_prev, scope='hh'))
+            ht = zt * h_prev + (1-zt) * h_tilda
+        output = ht
+        state['h'] = ht
+    else:
+        assert False, 'Not available cell type.'
+    return output, state
+
 
 class Nornn(object):
     '''
@@ -567,6 +628,8 @@ class Nornn(object):
                  coarse_hmap=False,
                  bnorm_xcorr=False,
                  bnorm_deconv=False,
+                 rnn_cell_type='gru',
+                 rnn_num_layers=0,
                  ):
         # model parameters
         self.feat_act          = feat_act
@@ -582,6 +645,8 @@ class Nornn(object):
         self.coarse_hmap       = coarse_hmap
         self.bnorm_xcorr       = bnorm_xcorr
         self.bnorm_deconv      = bnorm_deconv
+        self.rnn_cell_type     = rnn_cell_type
+        self.rnn_num_layers    = rnn_num_layers
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -613,7 +678,7 @@ class Nornn(object):
             # NOTE: Use padding 'SAME' in convolutions and pooling so that
             # corners of before/after convolutions match! If training example
             # pairs are centered, it may not need to be this way though.
-            # TODO: Not really sure if activation should really be gone. TEST.
+            # TODO: Try DenseNet! Diverse feature, lower parameters, data augmentation effect.
             if o.cnn_model == 'custom':
                 with slim.arg_scope([slim.conv2d],
                         normalizer_fn=slim.batch_norm,
@@ -814,11 +879,18 @@ class Nornn(object):
         y0 = enforce_inside_box(y0) # In OTB, Panda has GT error (i.e., > 1.0).
         y  = enforce_inside_box(y)
 
+        # RNN cell states
+        rnn_state_init = get_initial_rnn_state(cell_type=self.rnn_cell_type,
+                                               #cell_size=[o.batchsz, o.frmsz, o.frmsz, 2],
+                                               cell_size=[o.batchsz, 31, 31, 256],
+                                               num_layers=self.rnn_num_layers)
+
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
         y_init = tf.identity(y0) # for `delta` regression type output.
         x_prev = x_init
         y_prev = y_init
+        rnn_state = rnn_state_init
 
         # Outputs from the model.
         y_pred = []
@@ -866,6 +938,10 @@ class Nornn(object):
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
+
+            for l in range(self.rnn_num_layers):
+                with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
+                    scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o)
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o)
@@ -965,6 +1041,9 @@ class Nornn(object):
         state = {}
         state.update({'x': (x_init, x_prev)})
         state.update({'y': (y_init, y_prev)})
+        state.update({'rnn_state_{}_{}'.format(i,k): (rnn_state_init[i][k], rnn_state[i][k])
+                      for i in range(self.rnn_num_layers)
+                      for k in rnn_state[i].keys()})
         gt = {}
         dbg = {} # dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
         return outputs, state, gt, dbg
