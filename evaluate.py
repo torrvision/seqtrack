@@ -7,14 +7,15 @@ from progressbar import ProgressBar, Bar, Counter, ETA, Percentage # pip install
 
 import draw
 import data
-from helpers import load_image, im_to_arr, pad_to
+from helpers import load_image, im_to_arr, pad_to, to_nested_tuple
 
 
 def track(sess, inputs, model, sequence, use_gt):
     '''Run an instantiated tracker on a sequence.
 
     model.outputs      -- Dictionary of tensors
-    model.state        -- Dictionary of 2-tuples of tensors
+    model.state_init   -- Nested collection of tensors.
+    model.state_final  -- Nested collection of tensors.
     model.sequence_len -- Integer
     model.batch_size   -- Integer or None
 
@@ -31,9 +32,6 @@ def track(sess, inputs, model, sequence, use_gt):
     first_label = sequence['labels'][0]
     first_image = _single_to_batch(im_to_arr(first_image), model.batch_size)
     first_label = _single_to_batch(first_label, model.batch_size)
-
-    init_state  = {k: v[0] for k, v in model.state.iteritems()}
-    final_state = {k: v[1] for k, v in model.state.iteritems()}
 
     sequence_len = len(sequence['image_files'])
     assert(sequence_len >= 2)
@@ -66,10 +64,11 @@ def track(sess, inputs, model, sequence, use_gt):
         if start > 1:
             # This is not the first chunk.
             # Add the previous state to the feed dictionary.
-            feed_dict.update({init_state[k]: prev_state[k] for k in init_state})
+            tensor, value = to_nested_tuple(model.state_init, prev_state)
+            feed_dict[tensor] = value
         # Get output and final state.
         y_pred, prev_state, hmap_pred = sess.run([model.outputs['y']['ic'],
-                                                  final_state,
+                                                  model.state_final,
                                                   model.outputs['hmap']['ic']],
                                                   feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
