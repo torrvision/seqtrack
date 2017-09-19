@@ -148,9 +148,11 @@ def to_nested_tuple(tensor, value):
             assert len(tensor) == len(value)
             pairs = zip(tensor, value)
         pairs = map(lambda pair: to_nested_tuple(*pair), pairs)
-        # Convert from list of tuples to tuple of lists.
+        # Remove pairs that are empty ((), ()).
+        pairs = filter(lambda x: any(x), pairs)
         if len(pairs) == 0:
-            import pdb ; pdb.set_trace()
+            return None, None
+        # Convert from list of tuples to tuple of lists.
         tensor, value = zip(*pairs)
         # Convert from lists to tuples.
         return tuple(tensor), tuple(value)

@@ -1056,17 +1056,10 @@ class Nornn(object):
                    's_recon':   s_recon,
                    'flow':      flow,
                    }
-        # JV: Use two separate state variables.
-        # state = {}
         state_init, state_final = {}, {}
-        # state.update({'x': (x_init, x_prev)})
-        # state.update({'y': (y_init, y_prev)})
+        # TODO: JV: From evaluate_test, it seems that 'x' may not be required?
         state_init['x'], state_final['x'] = x_init, x_prev
         state_init['y'], state_final['y'] = y_init, y_prev
-        # JV: Use nested collection of state.
-        # state.update({'rnn_state_{}_{}'.format(i,k): (rnn_state_init[i][k], rnn_state[i][k])
-        #               for i in range(self.rnn_num_layers)
-        #               for k in rnn_state[i].keys()})
         if rnn_state:
             state_init['rnn'] = rnn_state_init
             state_final['rnn'] = rnn_state
