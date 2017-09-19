@@ -133,3 +133,28 @@ def diag_conv(x, f, strides, padding, **kwargs):
     # [ho, wo, b*c] -> [ho, wo, b, c] -> [b, ho, wo, c]
     x = tf.transpose(restore(x, axis=2), [2, 0, 1, 3])
     return x
+
+
+def to_nested_tuple(tensor, value):
+    if isinstance(tensor, dict) or isinstance(tensor, list) or isinstance(tensor, tuple):
+        # Recurse on collection.
+        if isinstance(tensor, dict):
+            assert isinstance(value, dict)
+            assert set(tensor.keys()) == set(value.keys())
+            keys = sorted(tensor.keys()) # Not necessary but may as well.
+            pairs = [(tensor[k], value[k]) for k in keys]
+        else:
+            assert isinstance(value, list) or isinstance(value, tuple)
+            assert len(tensor) == len(value)
+            pairs = zip(tensor, value)
+        pairs = map(lambda pair: to_nested_tuple(*pair), pairs)
+        # Convert from list of tuples to tuple of lists.
+        if len(pairs) == 0:
+            import pdb ; pdb.set_trace()
+        tensor, value = zip(*pairs)
+        # Convert from lists to tuples.
+        return tuple(tensor), tuple(value)
+    else:
+        # TODO: Assert tensor is tf.Tensor?
+        # TODO: Assert value is np.array?
+        return tensor, value

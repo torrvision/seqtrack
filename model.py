@@ -658,7 +658,7 @@ class Nornn(object):
         self.rnn_residual      = rnn_residual
         self.rnn_skip          = rnn_skip
         # Ignore sumaries_collections - model does not generate any summaries.
-        self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
+        self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
         self.batch_size   = None # Batch size of model instance, or None if dynamic.
@@ -1056,15 +1056,23 @@ class Nornn(object):
                    's_recon':   s_recon,
                    'flow':      flow,
                    }
-        state = {}
-        state.update({'x': (x_init, x_prev)})
-        state.update({'y': (y_init, y_prev)})
-        state.update({'rnn_state_{}_{}'.format(i,k): (rnn_state_init[i][k], rnn_state[i][k])
-                      for i in range(self.rnn_num_layers)
-                      for k in rnn_state[i].keys()})
+        # JV: Use two separate state variables.
+        # state = {}
+        state_init, state_final = {}, {}
+        # state.update({'x': (x_init, x_prev)})
+        # state.update({'y': (y_init, y_prev)})
+        state_init['x'], state_final['x'] = x_init, x_prev
+        state_init['y'], state_final['y'] = y_init, y_prev
+        # JV: Use nested collection of state.
+        # state.update({'rnn_state_{}_{}'.format(i,k): (rnn_state_init[i][k], rnn_state[i][k])
+        #               for i in range(self.rnn_num_layers)
+        #               for k in rnn_state[i].keys()})
+        if rnn_state:
+            state_init['rnn'] = rnn_state_init
+            state_final['rnn'] = rnn_state
         gt = {}
         dbg = {} # dbg = {'h2': tf.stack(h2, axis=1), 'y_pred': y_pred}
-        return outputs, state, gt, dbg
+        return outputs, state_init, state_final, gt, dbg
 
 
 class RNN_dual_mix(object):

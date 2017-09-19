@@ -758,9 +758,14 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         image = (1.0/255)*example['x_raw'][0][::time_stride]
         y_gt   = example['y'][0][::time_stride]
         y_pred = model.outputs['y']['ic'][0][::time_stride]
-        image  = tf.concat((tf.expand_dims(model.state['x'][0][0], 0),  image), 0) # add init frame
-        y_gt   = tf.concat((tf.expand_dims(model.state['y'][0][0], 0),   y_gt), 0) # add init y_gt
-        y_pred = tf.concat((tf.expand_dims(model.state['y'][0][0], 0), y_pred), 0) # add init y_gt for pred too
+        # TODO: Do not use model.state here. Breaks encapsulation.
+        # JV: Use new model state format.
+        # image  = tf.concat((tf.expand_dims(model.state['x'][0][0], 0),  image), 0) # add init frame
+        # y_gt   = tf.concat((tf.expand_dims(model.state['y'][0][0], 0),   y_gt), 0) # add init y_gt
+        # y_pred = tf.concat((tf.expand_dims(model.state['y'][0][0], 0), y_pred), 0) # add init y_gt for pred too
+        image  = tf.concat((tf.expand_dims(model.state_init['x'][0], 0),  image), 0) # add init frame
+        y_gt   = tf.concat((tf.expand_dims(model.state_init['y'][0], 0),   y_gt), 0) # add init y_gt
+        y_pred = tf.concat((tf.expand_dims(model.state_init['y'][0], 0), y_pred), 0) # add init y_gt for pred too
         y = tf.stack([y_gt, y_pred], axis=1)
         coords = tf.unstack(y, axis=2)
         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
