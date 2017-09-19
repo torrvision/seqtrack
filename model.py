@@ -561,8 +561,9 @@ def get_initial_rnn_state(cell_type, cell_size, num_layers=1):
                 state[l][key] = tf.fill(cell_size, 0.0, name='layer{}/{}'.format(l, key))
     return state
 
-def pass_rnn(x, state, cell, o):
+def pass_rnn(x, state, cell, o, skip=False):
     ''' Convolutional RNN.
+    Currently, `dense` skip type is supported; All hidden states are summed.
     '''
     # TODO:
     # 1. (LSTM) Initialize forget bias 1.
@@ -570,7 +571,10 @@ def pass_rnn(x, state, cell, o):
     # 2. Try channel-wise convolution.
 
     if cell == 'lstm':
-        h_prev, c_prev = state['h'], state['c']
+        if skip:
+            h_prev, c_prev = tf.reduce_sum(state['h'], 1), tf.reduce_sum(state['c'], 1)
+        else:
+            h_prev, c_prev = state['h'], state['c']
         with slim.arg_scope([slim.conv2d],
                 #num_outputs=2,
                 num_outputs=h_prev.shape.as_list()[-1],
@@ -584,9 +588,13 @@ def pass_rnn(x, state, cell, o):
             ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') + slim.conv2d(h_prev, scope='ho'))
             ht = ot * tf.nn.tanh(ct)
         output = ht
-        state['h'], state['c'] = ht, ct
+        if skip: # Pop the oldest state and push the current state.
+            state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht,1)], 1)
+            state['c'] = tf.concat([state['c'][:,1:], tf.expand_dims(ct,1)], 1)
+        else:
+            state['h'], state['c'] = ht, ct
     elif cell == 'gru':
-        h_prev = state['h']
+        h_prev = tf.reduce_sum(state['h'], 1) if skip else state['h']
         with slim.arg_scope([slim.conv2d],
                 #num_outputs=2,
                 num_outputs=h_prev.shape.as_list()[-1],
@@ -598,7 +606,10 @@ def pass_rnn(x, state, cell, o):
             h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') + slim.conv2d(rt * h_prev, scope='hh'))
             ht = zt * h_prev + (1-zt) * h_tilda
         output = ht
-        state['h'] = ht
+        if skip: # Pop the oldest state and push the current state.
+            state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht, 1)], 1)
+        else:
+            state['h'] = ht
     else:
         assert False, 'Not available cell type.'
     return output, state
@@ -626,6 +637,7 @@ class Nornn(object):
                  rnn_cell_type='gru',
                  rnn_num_layers=0,
                  rnn_residual=False,
+                 rnn_skip=False,
                  ):
         # model parameters
         self.feat_act          = feat_act
@@ -644,6 +656,7 @@ class Nornn(object):
         self.rnn_cell_type     = rnn_cell_type
         self.rnn_num_layers    = rnn_num_layers
         self.rnn_residual      = rnn_residual
+        self.rnn_skip          = rnn_skip
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -877,8 +890,10 @@ class Nornn(object):
         y  = enforce_inside_box(y)
 
         # RNN cell states
+        cell_size = tf.stack([tf.shape(x0)[0], o.ntimesteps, 31, 31, 256] if self.rnn_skip else
+                             [tf.shape(x0)[0], 31, 31, 256])
         rnn_state_init = get_initial_rnn_state(cell_type=self.rnn_cell_type,
-                                               cell_size=tf.stack([tf.shape(x0)[0], 31, 31, 256]),
+                                               cell_size=cell_size,
                                                num_layers=self.rnn_num_layers)
 
         # Add identity op to ensure that we can feed state here.
@@ -941,10 +956,10 @@ class Nornn(object):
                 with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
                     if self.rnn_residual:
                         scoremap_ori = tf.identity(scoremap)
-                        scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o)
+                        scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
                         scoremap += scoremap_ori
                     else:
-                        scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o)
+                        scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o)
