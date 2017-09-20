@@ -594,21 +594,41 @@ def pass_rnn(x, state, cell, o, skip=False):
         else:
             state['h'], state['c'] = ht, ct
     elif cell == 'gru':
-        h_prev = tf.reduce_sum(state['h'], 1) if skip else state['h']
-        with slim.arg_scope([slim.conv2d],
-                #num_outputs=2,
-                num_outputs=h_prev.shape.as_list()[-1],
-                kernel_size=3,
-                activation_fn=None,
-                weights_regularizer=slim.l2_regularizer(o.wd)):
-            rt = tf.nn.sigmoid(slim.conv2d(x, scope='xr') + slim.conv2d(h_prev, scope='hr'))
-            zt = tf.nn.sigmoid(slim.conv2d(x, scope='xz') + slim.conv2d(h_prev, scope='hz'))
-            h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') + slim.conv2d(rt * h_prev, scope='hh'))
-            ht = zt * h_prev + (1-zt) * h_tilda
-        output = ht
-        if skip: # Pop the oldest state and push the current state.
+        h_prev = state['h']
+        num_states = state['h'].shape.as_list()[1]
+        #h_prev = tf.reduce_sum(state['h'], 1) if skip else state['h']
+        if skip:
+            with slim.arg_scope([slim.conv2d],
+                    num_outputs=h_prev.shape.as_list()[-1],
+                    kernel_size=3,
+                    activation_fn=None,
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                hr = []
+                for s in range(num_states):
+                    hr.append(slim.conv2d(h_prev[:,s], scope='hr_{}'.format(s)))
+                rt = tf.nn.sigmoid(slim.conv2d(x, scope='xr') + tf.add_n(hr))
+                hz = []
+                for s in range(num_states):
+                    hz.append(slim.conv2d(h_prev[:,s], scope='hz_{}'.format(s)))
+                zt = tf.nn.sigmoid(slim.conv2d(x, scope='xz') + tf.add_n(hz))
+                hh = []
+                for s in range(num_states):
+                    hh.append(slim.conv2d(rt*h_prev[:,s], scope='hh_{}'.format(s)))
+                h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') + tf.add_n(hh))
+                ht = tf.reduce_sum(tf.expand_dims(zt, 1) * h_prev, 1) + (1-zt) * h_tilda
+            output = ht
             state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht, 1)], 1)
         else:
+            with slim.arg_scope([slim.conv2d],
+                    num_outputs=h_prev.shape.as_list()[-1],
+                    kernel_size=3,
+                    activation_fn=None,
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                rt = tf.nn.sigmoid(slim.conv2d(x, scope='xr') + slim.conv2d(h_prev, scope='hr'))
+                zt = tf.nn.sigmoid(slim.conv2d(x, scope='xz') + slim.conv2d(h_prev, scope='hz'))
+                h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') + slim.conv2d(rt * h_prev, scope='hh'))
+                ht = zt * h_prev + (1-zt) * h_tilda
+            output = ht
             state['h'] = ht
     else:
         assert False, 'Not available cell type.'
