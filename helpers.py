@@ -148,8 +148,8 @@ def to_nested_tuple(tensor, value):
             assert len(tensor) == len(value)
             pairs = zip(tensor, value)
         pairs = map(lambda pair: to_nested_tuple(*pair), pairs)
-        # Remove pairs that are empty ((), ()).
-        pairs = filter(lambda x: any(x), pairs)
+        # Remove pairs that are empty.
+        pairs = filter(lambda x: x != (None, None), pairs)
         if len(pairs) == 0:
             return None, None
         # Convert from list of tuples to tuple of lists.
