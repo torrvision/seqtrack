@@ -11,6 +11,18 @@ def crop_rect(rects, window_rect, name='crop_rect'):
     Args:
         rects -- [..., 4]
         window_rect -- [..., 4]
+
+    Let a, b, c be rectangles.
+    Let b/c denote rectangle b with respect to rectangle c.
+    The rectangle a with respect to b is obtained:
+        a/b = crop(a, b) = crop(a/c, b/c)
+
+    To recover a/c from a/b and b/c ("uncrop"), use:
+        a/c = crop(a/b, c/b)
+            = crop(a/b, inv(b/c))
+
+    To recover b/c given a/b and a/c, use:
+        b/c = solve(a/c, a/b)
     '''
     with tf.name_scope(name) as scope:
         window_min, window_max = rect_min_max(window_rect)
@@ -45,6 +57,26 @@ def crop_inverse(rect, name='crop_inverse'):
         # u_max = u_min + 1 / x_size
         # v_max = v_min + 1 / y_size
         return make_rect(inv_min, inv_max, name='scope')
+
+
+def crop_solve(original, result, name='crop_solve'):
+    '''Finds window such that result = crop(original, window).'''
+    with tf.name_scope(name) as scope:
+        original_min, original_max = rect_min_max(original)
+        result_min, result_max = rect_min_max(result)
+        # If original is x, result is r and window is w, then
+        #   (x_max - x_min) / (w_max - w_min) = r_max - r_min
+        original_size = original_max - original_min
+        result_size = result_max - result_min
+        window_size = original_size / result_size
+        # and
+        #   (x_min - w_min) / (w_max - w_min) = r_min
+        #   x_min - w_min = r_min * (w_max - w_min)
+        #   x_min - r_min * (w_max - w_min) = w_min
+        window_min = original_min - result_min * window_size
+        window_max = window_min + window_size
+        window = make_rect(window_min, window_max)
+        return window
 
 
 def rect_min_max(rect, name='rect_min_max'):
@@ -99,6 +131,12 @@ def rect_translate(rect, delta, name='rect_translate'):
     with tf.name_scope(name) as scope:
         min_pt, max_pt = rect_min_max(rect)
         return make_rect(min_pt + delta, max_pt + delta)
+
+
+def rect_mul(rect, scale, name='rect_mul'):
+    with tf.name_scope(name) as scope:
+        min_pt, max_pt = rect_min_max(rect)
+        return make_rect(scale*min_pt, scale*max_pt)
 
 
 def warp_anchor(anchor, warp, name='warp_anchor'):

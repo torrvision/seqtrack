@@ -32,6 +32,7 @@ import os
 import cnnutil
 import geom
 from helpers import merge_dims, diag_conv
+import subimage
 from upsample import upsample
 
 concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
@@ -130,6 +131,7 @@ def pass_depth_wise_norm(feature):
         feature_new.append((feature[:,:,:,c] - mean) / (tf.sqrt(var)+1e-5))
     return tf.stack(feature_new, 3)
 
+
 def process_target_with_box(img, box, o):
     ''' Crop target image x with box y.
     Box y coordinate is in image-centric space.
@@ -149,13 +151,11 @@ def process_target_with_box(img, box, o):
     #                                          box_ind=[0],
     #                                          crop_size=[o.frmsz/o.search_scale]*2)) # target size
     # return tf.concat(crop, 0)
-    batch_len = tf.shape(img)[0]
     crop_size = (o.frmsz - 1) * o.target_scale / o.search_scale + 1
     # Check that target_scale / search_scale * (frame_size-1) is an integer.
     assert (crop_size - 1) * o.search_scale == (o.frmsz - 1) * o.target_scale
     # TODO: Set extrapolation_value.
-    crop = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
-        box_ind=tf.range(batch_len),
+    crop = subimage.crop_and_extract(img, box,
         crop_size=[crop_size]*2,
         extrapolation_value=128)
     return crop
@@ -237,10 +237,8 @@ def process_search_with_box(img, box, o):
     box = scale_rectangle_size(o.search_scale, box)
     box_val = geom.rect_intersect(box, geom.unit_rect())
 
-    batch_len = tf.shape(img)[0]
     # TODO: Set extrapolation_value.
-    search = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
-        box_ind=tf.range(batch_len),
+    search = subimage.crop_and_extract(img, box,
         crop_size=[o.frmsz]*2,
         extrapolation_value=128)
     return search, box, box_val
@@ -920,21 +918,23 @@ class Nornn(object):
         s_recon = []
         flow = []
 
+        x0_valid = subimage.from_size(x0, inputs['im_shape'])
         # Some pre-processing.
-        target_curr = process_target_with_box(x0, y0, o)
+        target_curr = process_target_with_box(x0_valid, y0, o)
         with tf.variable_scope(o.cnn_model):
             target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr = y[:, t]
+            x_curr_valid = subimage.from_size(x_curr, inputs['im_shape'])
 
             # target and search images
             #target_curr = process_target_with_box(x_prev, y_prev, o)
             #target_curr = tf.cond(is_training, # TODO: check the condition being passed.
             #                      lambda: process_target_with_box(x_prev, y_prev, o),
             #                      lambda: process_target_with_box(x0, y0, o))
-            search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
+            search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr_valid, y_prev, o)
 
             #if self.stn:
             #    with tf.variable_scope('stn_localization', reuse=(t > 0)):
@@ -970,7 +970,7 @@ class Nornn(object):
                 boxreg_inputs = []
                 if self.boxreg_imgpair: # Add raw image pair. # TODO: Try diff image pair.
                     #search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
-                    search_prev, _, _ = process_search_with_box(x0, y0, o)
+                    search_prev, _, _ = process_search_with_box(x0_valid, y0, o)
                     img_pair = tf.concat([search_prev, search_curr], 3)
                     boxreg_inputs.append(img_pair)
                 if self.boxreg_hmap: # Add hmap estimate.
@@ -1009,11 +1009,11 @@ class Nornn(object):
             y_curr_pred = enforce_inside_box(y_curr_pred)
 
             # Get image-centric outputs. Some are used for visualization purpose.
-            hmap_curr_pred = to_image_centric_hmap(hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o)
+            # hmap_curr_pred = to_image_centric_hmap(hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o)
 
             # Outputs.
             y_pred.append(y_curr_pred)
-            hmap_pred.append(hmap_curr_pred)
+            # hmap_pred.append(hmap_curr_pred)
             y_pred_oc.append(y_curr_pred_oc)
             hmap_pred_oc.append(hmap_curr_pred_oc)
             box_s_raw.append(box_s_raw_curr)
@@ -1035,7 +1035,7 @@ class Nornn(object):
                              lambda: y_curr_pred)
 
         y_pred        = tf.stack(y_pred, axis=1)
-        hmap_pred     = tf.stack(hmap_pred, axis=1)
+        # hmap_pred     = tf.stack(hmap_pred, axis=1)
         y_pred_oc     = tf.stack(y_pred_oc, axis=1)
         hmap_pred_oc  = tf.stack(hmap_pred_oc, axis=1)
         box_s_raw     = tf.stack(box_s_raw, axis=1)
@@ -1047,7 +1047,8 @@ class Nornn(object):
         flow          = tf.stack(flow, axis=1) if self.boxreg_flow else None
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
-                   'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
+                   # 'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
+                   'hmap':      {'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
                    'box_s_raw': box_s_raw,
                    'box_s_val': box_s_val,
                    'target':    target,

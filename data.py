@@ -493,8 +493,11 @@ class Data_ILSVRC(object):
         self.dstype      = dstype
         self.path_data   = o.path_data
         self.trainsplit  = o.trainsplit # 0, 1, 2, 3, or 9 for all
-        self.datadirname = 'Data_frmsz{}'.format(o.frmsz) \
-                                if o.useresizedimg else 'Data'
+        # JV: No longer needed.
+        # self.datadirname = 'Data_frmsz{}'.format(o.frmsz) \
+        #                         if o.useresizedimg else 'Data'
+        self.datadirname = 'Data_{}_{}'.format(o.max_width, o.max_height) \
+                               if o.useresizedimg else 'Data'
 
         self.videos = None
         # Number of frames in each snippet.

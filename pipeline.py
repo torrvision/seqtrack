@@ -122,13 +122,14 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
         coord.request_stop()
 
 
-def load_images(example, capacity=32, num_threads=1, image_size=[None, None, None],
+def load_images(example, image_size, capacity=32, num_threads=1,
         name='load_images'):
     '''Creates a queue of sequences with images loaded.
     See the package example.
 
     Args:
         example: Dictionary of input tensors.
+        image_size: [height, width, channels]
 
     Returns:
         Dictionary of output tensors.
@@ -142,6 +143,7 @@ def load_images(example, capacity=32, num_threads=1, image_size=[None, None, Non
     The output dictionary has fields::
 
         'images'         # Tensor with shape [n, h, w, 3] containing images.
+        'images_shape'   # Tensor with shape [2] containing image sizes.
         'labels'         # Tensor with shape [n, 4] containing rectangles.
         'label_is_valid' # Tensor with shape [n] containing booleans.
 
@@ -152,14 +154,25 @@ def load_images(example, capacity=32, num_threads=1, image_size=[None, None, Non
     with tf.name_scope(name) as scope:
         # Create queue to write images to.
         queue = tf.FIFOQueue(capacity=capacity,
-                             dtypes=[tf.uint8, tf.float32, tf.bool],
-                             names=['images', 'labels', 'label_is_valid'],
+                             dtypes=[tf.uint8, tf.int32, tf.float32, tf.bool],
+                             names=['images', 'images_shape', 'labels', 'label_is_valid'],
                              name='image_queue')
         example = dict(example)
         # Read files from disk.
         file_contents = tf.map_fn(tf.read_file, example['image_files'], dtype=tf.string)
         # Decode images.
         images = tf.map_fn(tf.image.decode_jpeg, file_contents, dtype=tf.uint8)
+        # Store original image shape (height, width).
+        example['images_shape'] = tf.shape(images)[-3:-1]
+        # TODO: Provide options for padding? Must match crop_and_resize in model.
+        pad_value = 128
+        # images -= pad_value
+        # images = tf.add(images, -pad_value)
+        images = tf.cast(tf.to_int32(images) - pad_value, tf.uint8)
+        images = tf.image.pad_to_bounding_box(images, 0, 0, image_size[0], image_size[1])
+        # images += pad_value
+        # images = tf.add(images, pad_value)
+        images = tf.cast(tf.to_int32(images) + pad_value, tf.uint8)
         # Replace files with images.
         del example['image_files']
         example['images'] = images
@@ -173,6 +186,7 @@ def load_images(example, capacity=32, num_threads=1, image_size=[None, None, Non
         # TODO: It does not seem possible to preserve this through the FIFOQueue?
         # Let at least the sequence length remain dynamic.
         dequeue['images'].set_shape([None] + image_size)
+        dequeue['images_shape'].set_shape([2])
         dequeue['labels'].set_shape(example['labels'].shape)
         dequeue['label_is_valid'].set_shape(example['label_is_valid'].shape)
         return dequeue
@@ -185,12 +199,14 @@ def batch(example, batch_size=1, capacity=32, num_threads=1, sequence_length=Non
     The input dictionary has fields::
 
         'images'         # Tensor with shape [n, h, w, 3] containing images.
+        'images_shape'   # Tensor with shape [2] containing image sizes.
         'labels'         # Tensor with shape [n, 4] containing rectangles.
         'label_is_valid' # Tensor with shape [n] containing booleans.
 
     The output dictionary has fields::
 
         'images'         # Tensor with shape [b, n_max, h, w, 3] containing images.
+        'images_shape'   # Tensor with shape [b, 2] containing image sizes.
         'labels'         # Tensor with shape [b, n_max, 4] containing rectangles.
         'label_is_valid' # Tensor with shape [b, n_max] containing booleans.
         'num_frames'     # Tensor with shape [b] containing the sequence length.

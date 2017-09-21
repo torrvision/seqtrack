@@ -158,3 +158,10 @@ def to_nested_tuple(tensor, value):
         # TODO: Assert tensor is tf.Tensor?
         # TODO: Assert value is np.array?
         return tensor, value
+
+
+def most_specific_shape(x):
+    static = x.shape.as_list()
+    dynamic = tf.unstack(tf.shape(x))
+    assert len(static) == len(dynamic)
+    return [s or d for s, d in zip(static, dynamic)]

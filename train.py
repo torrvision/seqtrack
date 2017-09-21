@@ -16,9 +16,11 @@ import threading
 
 import draw
 import evaluate
+import geom
 import helpers
 import pipeline
 import sample
+import subimage
 import visualize
 
 from model import convert_rec_to_heatmap, to_object_centric_coordinate
@@ -92,13 +94,18 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 capacity=4, num_threads=1)
         example = _make_placeholders(o, default=from_queue)
 
+    # Place to feed inputs instead of using queues.
+    example_feed = dict(example) # TODO: Deep copy?
     # data augmentation
     example = _perform_data_augmentation(example, o)
 
     # Always use same statistics for whitening (not set dependent).
     stat = datasets['train'].stat
-    # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(_whiten(_guard_labels(example), o, stat=stat))
+    example_preproc = _whiten(_guard_labels(example), o, stat=stat)
+    # TODO: Take sub-image outside of model? Nested dictionary is a bit messy?
+    # example_preproc['x0'] = subimage.from_size(example_preproc['x0'], example_preproc['im_shape'])
+    # example_preproc['x']  = subimage.from_size(example_preproc['x'],  example_preproc['im_shape'])
+    model = create_model(example_preproc)
     loss_var, model.gt = get_loss(example, model.outputs, model.gt, o)
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
@@ -417,7 +424,8 @@ def _make_input_pipeline(o, dtype=tf.float32,
     with tf.name_scope(name) as scope:
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
         images = pipeline.load_images(files, capacity=load_capacity,
-                num_threads=num_load_threads, image_size=[o.frmsz, o.frmsz, 3])
+            num_threads=num_load_threads,
+            image_size=[o.max_height, o.max_width, 3])
         images_batch = pipeline.batch(images,
             batch_size=o.batchsz, sequence_length=o.ntimesteps+1,
             capacity=batch_capacity, num_threads=num_batch_threads)
@@ -427,10 +435,14 @@ def _make_input_pipeline(o, dtype=tf.float32,
         images_batch['images'].set_shape([None, o.ntimesteps+1, None, None, None])
         images_batch['labels'].set_shape([None, o.ntimesteps+1, None])
         # Cast type of images.
+        # TODO: Better to use tf.image.convert_image_dtype? or do this later?
+        # Casting to float without normalizing to range [0, 1] is inconsistent
+        # with functions in tf.image.
         images_batch['images'] = tf.cast(images_batch['images'], o.dtype)
         # Put in format expected by model.
         # is_valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
         example_batch = {
+            'im_shape':   images_batch['images_shape'],
             'x0_raw':     images_batch['images'][:, 0],
             'y0':         images_batch['labels'][:, 0],
             'x_raw':      images_batch['images'][:, 1:],
@@ -442,13 +454,21 @@ def _make_input_pipeline(o, dtype=tf.float32,
 
 def _make_placeholders(o, default=None):
     shapes = {
-        'x0_raw':     [None, o.frmsz, o.frmsz, 3],
+        'im_shape':   [None, 2],
+        'x0_raw':     [None, o.max_height, o.max_width, 3],
         'y0':         [None, 4],
-        'x_raw':      [None, o.ntimesteps, o.frmsz, o.frmsz, 3],
+        'x_raw':      [None, o.ntimesteps, o.max_height, o.max_width, 3],
         'y':          [None, o.ntimesteps, 4],
         'y_is_valid': [None, o.ntimesteps],
     }
-    dtype = lambda k: tf.bool if k.endswith('_is_valid') else o.dtype
+    dtypes = {
+        'im_shape':   tf.int32,
+        'x0_raw':     o.dtype,
+        'y0':         o.dtype,
+        'x_raw':      o.dtype,
+        'y':          o.dtype,
+        'y_is_valid': tf.bool,
+    }
 
     if default is not None:
         assert(set(default.keys()) == set(shapes.keys()))
@@ -457,7 +477,7 @@ def _make_placeholders(o, default=None):
             for k in shapes.keys()}
     else:
         example = {
-            k: tf.placeholder(dtype(k), shapes[k], name='placeholder_'+k)
+            k: tf.placeholder(dtypes[k], shapes[k], name='placeholder_'+k)
             for k in EXAMPLE_KEYS}
     # Add a placeholder for models that use ground-truth during training.
     example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
@@ -651,12 +671,13 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
 def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
     with tf.name_scope(name) as scope:
         y_gt    = {'ic': None, 'oc': None}
-        hmap_gt = {'ic': None, 'oc': None}
+        # hmap_gt = {'ic': None, 'oc': None}
+        hmap_gt = {'oc': None}
 
         y_gt['ic'] = example['y']
         y_gt['oc'] = to_object_centric_coordinate(example['y'], outputs['box_s_raw'], outputs['box_s_val'], o)
         hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, Gaussian=True)
-        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, Gaussian=True)
+        # hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, Gaussian=True)
 
         assert(y_gt['ic'].get_shape().as_list()[1] == o.ntimesteps)
 
@@ -745,7 +766,8 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
                 tf.summary.scalar(name, loss, collections=summaries_collections)
 
         gt['y']    = {'ic': y_gt['ic'],    'oc': y_gt['oc']}
-        gt['hmap'] = {'ic': hmap_gt['ic'], 'oc': hmap_gt['oc']} # for visualization in summary.
+        # gt['hmap'] = {'ic': hmap_gt['ic'], 'oc': hmap_gt['oc']} # for visualization in summary.
+        gt['hmap'] = {'oc': hmap_gt['oc']} # for visualization in summary.
         return tf.reduce_sum(losses.values(), name=scope), gt
 
 def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
@@ -755,21 +777,23 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         # example['y']       -- [b, t, 4]
         # model.outputs['y'] -- [b, t, 4]
         # Just do the first example in the batch.
-        image = (1.0/255)*example['x_raw'][0][::time_stride]
-        y_gt   = example['y'][0][::time_stride]
-        y_pred = model.outputs['y']['ic'][0][::time_stride]
-        # TODO: Do not use model.state here. Breaks encapsulation.
-        # JV: Use new model state format.
-        # image  = tf.concat((tf.expand_dims(model.state['x'][0][0], 0),  image), 0) # add init frame
-        # y_gt   = tf.concat((tf.expand_dims(model.state['y'][0][0], 0),   y_gt), 0) # add init y_gt
-        # y_pred = tf.concat((tf.expand_dims(model.state['y'][0][0], 0), y_pred), 0) # add init y_gt for pred too
-        image  = tf.concat((tf.expand_dims(model.state_init['x'][0], 0),  image), 0) # add init frame
-        y_gt   = tf.concat((tf.expand_dims(model.state_init['y'][0], 0),   y_gt), 0) # add init y_gt
-        y_pred = tf.concat((tf.expand_dims(model.state_init['y'][0], 0), y_pred), 0) # add init y_gt for pred too
+        image_first  = subimage.from_size(tf.expand_dims(example['x0_raw'][0], 0), example['im_shape'][0])
+        image_rest   = subimage.from_size(example['x_raw'][0][::time_stride], example['im_shape'][0])
+        y_gt_first   = tf.expand_dims(example['y0'][0], 0)
+        y_gt_rest    = example['y'][0][::time_stride]
+        y_pred_first = tf.expand_dims(example['y0'][0], 0)
+        y_pred_rest  = model.outputs['y']['ic'][0][::time_stride]
+
+        image  = {k: tf.concat((image_first[k], image_rest[k]), 0) for k in ['image', 'viewport']}
+        y_gt   = tf.concat((y_gt_first,   y_gt_rest),   0)
+        y_pred = tf.concat((y_pred_first, y_pred_rest), 0)
+
         y = tf.stack([y_gt, y_pred], axis=1)
-        coords = tf.unstack(y, axis=2)
-        boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
-        return tf.image.draw_bounding_boxes(image, boxes, name=scope)
+        # Move from viewport coords to canvas coords.
+        viewport = tf.expand_dims(image['viewport'], axis=1)
+        y = geom.crop_rect(y, geom.crop_inverse(viewport))
+        boxes = geom.rect_to_tf_box(y)
+        return tf.image.draw_bounding_boxes((1./255)*image['image'], boxes, name=scope)
 
 def _draw_heatmap(model, pred, perspective, time_stride=1, name='draw_heatmap'):
     with tf.name_scope(name) as scope:

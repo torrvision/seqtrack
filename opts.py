@@ -30,6 +30,8 @@ class Opts(object):
         self.dataset            = '' # (bouncing_mnist, etc.)
         self.trainsplit         = 9 # 0,1,2,3 or 9 for all train sets
         self.frmsz              = 241
+        self.max_width          = 640
+        self.max_height         = 360
         self.useresizedimg      = True
         self.use_queues         = False
         self.heatmap_stride     = 1
