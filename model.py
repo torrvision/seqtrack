@@ -589,15 +589,21 @@ def pass_rnn(x, state, cell, o, skip=False):
             #ct = (ft * c_prev) + (it * ct_tilda)
             #ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') + slim.conv2d(h_prev, scope='ho'))
             #ht = ot * tf.nn.tanh(ct)
-            it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
-                    tf.add_n([slim.conv2d(h_prev[:,s], scope='hi_{}'.format(s)) for s in skip_state]))
-            ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
-                    tf.add_n([slim.conv2d(h_prev[:,s], scope='hf_{}'.format(s)) for s in skip_state]))
-            ct_tilda = tf.nn.tanh(slim.conv2d(x, scope='xc') +
-                    tf.add_n([slim.conv2d(h_prev[:,s], scope='hc_{}'.format(s)) for s in skip_state]))
+            #it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='hi_{}'.format(s)) for s in skip_state]))
+            #ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='hf_{}'.format(s)) for s in skip_state]))
+            #ct_tilda = tf.nn.tanh(slim.conv2d(x, scope='xc') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='hc_{}'.format(s)) for s in skip_state]))
+            #ct = (tf.reduce_sum(tf.expand_dims(ft, 1) * c_prev, 1)) + (it * ct_tilda)
+            #ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='ho_{}'.format(s)) for s in skip_state]))
+            #ht = ot * tf.nn.tanh(ct)
+            it = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='i'))
+            ft = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='f'))
+            ct_tilda = tf.nn.tanh(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='c'))
             ct = (tf.reduce_sum(tf.expand_dims(ft, 1) * c_prev, 1)) + (it * ct_tilda)
-            ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
-                    tf.add_n([slim.conv2d(h_prev[:,s], scope='ho_{}'.format(s)) for s in skip_state]))
+            ot = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='o'))
             ht = ot * tf.nn.tanh(ct)
         output = ht
         state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht,1)], 1)
@@ -613,12 +619,16 @@ def pass_rnn(x, state, cell, o, skip=False):
             #zt = tf.nn.sigmoid(slim.conv2d(x, scope='xz') + slim.conv2d(h_prev, scope='hz'))
             #h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') + slim.conv2d(rt * h_prev, scope='hh'))
             #ht = zt * h_prev + (1-zt) * h_tilda
-            rt = tf.nn.sigmoid(slim.conv2d(x, scope='xr') +
-                    tf.add_n([slim.conv2d(h_prev[:,s], scope='hr_{}'.format(s)) for s in skip_state]))
-            zt = tf.nn.sigmoid(slim.conv2d(x, scope='xz') +
-                    tf.add_n([slim.conv2d(h_prev[:,s], scope='hz_{}'.format(s)) for s in skip_state]))
-            h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') +
-                    tf.add_n([slim.conv2d(rt * h_prev[:,s], scope='hh_{}'.format(s)) for s in skip_state]))
+            #rt = tf.nn.sigmoid(slim.conv2d(x, scope='xr') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='hr_{}'.format(s)) for s in skip_state]))
+            #zt = tf.nn.sigmoid(slim.conv2d(x, scope='xz') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='hz_{}'.format(s)) for s in skip_state]))
+            #h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') +
+            #        tf.add_n([slim.conv2d(rt * h_prev[:,s], scope='hh_{}'.format(s)) for s in skip_state]))
+            #ht = tf.reduce_sum(tf.expand_dims(zt, 1) * h_prev, 1) + (1-zt) * h_tilda
+            rt = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='r'))
+            zt = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='z'))
+            h_tilda = tf.nn.tanh(slim.conv2d(tf.concat([x]+[rt * h_prev[:,s] for s in skip_state],-1), scope='h'))
             ht = tf.reduce_sum(tf.expand_dims(zt, 1) * h_prev, 1) + (1-zt) * h_tilda
         output = ht
         state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht, 1)], 1)
