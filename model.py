@@ -550,7 +550,8 @@ def get_rectangles_from_hmap(hmap_oc_fg, box_s_raw, box_s_val, o, y_ref):
 def get_initial_rnn_state(cell_type, cell_size, num_layers=1):
     if cell_type == 'lstm':
         state = [{'h': None, 'c': None} for l in range(num_layers)]
-    elif cell_type == 'gru':
+    #elif cell_type == 'gru':
+    elif cell_type in ['gru', 'gau']:
         state = [{'h': None} for l in range(num_layers)]
     else:
         assert False, 'Not available cell type.'
@@ -630,6 +631,19 @@ def pass_rnn(x, state, cell, o, skip=False):
             zt = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='z'))
             h_tilda = tf.nn.tanh(slim.conv2d(tf.concat([x]+[rt * h_prev[:,s] for s in skip_state],-1), scope='h'))
             ht = tf.reduce_sum(tf.expand_dims(zt, 1) * h_prev, 1) + (1-zt) * h_tilda
+        output = ht
+        state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht, 1)], 1)
+    elif cell == 'gau':
+        h_prev = state['h']
+        with slim.arg_scope([slim.conv2d],
+                num_outputs=h_prev.shape.as_list()[-1],
+                kernel_size=3,
+                activation_fn=None,
+                weights_regularizer=slim.l2_regularizer(o.wd)):
+            xh = tf.concat([x]+[h_prev[:,s] for s in skip_state],-1)
+            ht = tf.nn.tanh(slim.conv2d(xh, scope='f')) + tf.nn.sigmoid(slim.conv2d(xh, scope='g'))
+            ht = slim.conv2d(ht, kernel_size=1, scope='1x1')
+            ht = ht + x # final residual connection.
         output = ht
         state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht, 1)], 1)
     else:
