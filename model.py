@@ -670,6 +670,7 @@ class Nornn(object):
                  coarse_hmap=False,
                  bnorm_xcorr=False,
                  bnorm_deconv=False,
+                 interm_supervision=False,
                  rnn_cell_type='gru',
                  rnn_num_layers=0,
                  rnn_residual=False,
@@ -690,6 +691,7 @@ class Nornn(object):
         self.coarse_hmap       = coarse_hmap
         self.bnorm_xcorr       = bnorm_xcorr
         self.bnorm_deconv      = bnorm_deconv
+        self.interm_supervision= interm_supervision
         self.rnn_cell_type     = rnn_cell_type
         self.rnn_num_layers    = rnn_num_layers
         self.rnn_residual      = rnn_residual
@@ -851,6 +853,14 @@ class Nornn(object):
                 scoremap = slim.conv2d(scoremap, scope='conv2')
             return scoremap
 
+        def pass_interm_supervision(x, o):
+            with slim.arg_scope([slim.conv2d],
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                dim = x.shape.as_list()[-1]
+                x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='conv1')
+                x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='conv2')
+            return x
+
         def pass_deconvolution(x, is_training, o):
             ''' Upsampling layers.
             The last layer should not have an activation!
@@ -946,8 +956,8 @@ class Nornn(object):
         hmap_pred = []
         # Case of object-centric approach.
         y_pred_oc = []
-        hmap_gt_oc = []
         hmap_pred_oc = []
+        hmap_interm = []
         box_s_raw = []
         box_s_val = []
         target = []
@@ -987,6 +997,10 @@ class Nornn(object):
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
+
+            if self.interm_supervision:
+                with tf.variable_scope('interm_supervision', reuse=(t > 0)):
+                    hmap_interm_curr = pass_interm_supervision(scoremap, o)
 
             for l in range(self.rnn_num_layers):
                 with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
@@ -1052,6 +1066,7 @@ class Nornn(object):
             hmap_pred.append(hmap_curr_pred)
             y_pred_oc.append(y_curr_pred_oc)
             hmap_pred_oc.append(hmap_curr_pred_oc)
+            hmap_interm.append(hmap_interm_curr if self.interm_supervision else None)
             box_s_raw.append(box_s_raw_curr)
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
@@ -1074,6 +1089,7 @@ class Nornn(object):
         hmap_pred     = tf.stack(hmap_pred, axis=1)
         y_pred_oc     = tf.stack(y_pred_oc, axis=1)
         hmap_pred_oc  = tf.stack(hmap_pred_oc, axis=1)
+        hmap_interm   = tf.stack(hmap_interm, axis=1) if self.interm_supervision else None
         box_s_raw     = tf.stack(box_s_raw, axis=1)
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
@@ -1084,6 +1100,7 @@ class Nornn(object):
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
                    'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
+                   'hmap_interm': hmap_interm,
                    'box_s_raw': box_s_raw,
                    'box_s_val': box_s_val,
                    'target':    target,
