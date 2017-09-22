@@ -48,9 +48,14 @@ def parse_arguments():
 
     parser.add_argument(
             '--frmsz', help='size of a square image', type=int, default=241)
+    parser.add_argument(
+            '--max_height', help='maximum image height', type=int, default=241)
+    parser.add_argument(
+            '--max_width', help='maximum image width', type=int, default=241)
     # NOTE: (NL) any reason to have two arguments for this option?
     parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)
+    parser.add_argument('--no_distort_image', dest='distort_image', action='store_false')
     parser.add_argument(
             '--use_queues', help='enable queues for asynchronous data loading',
             action='store_true')

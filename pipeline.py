@@ -122,8 +122,8 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
         coord.request_stop()
 
 
-def load_images(example, canvas_shape, capacity=32, num_threads=1,
-        name='load_images'):
+def load_images(example, canvas_shape, pad=False, pad_value=128,
+        capacity=32, num_threads=1, name='load_images'):
     '''Creates a queue of sequences with images loaded.
     See the package example.
 
@@ -163,17 +163,19 @@ def load_images(example, canvas_shape, capacity=32, num_threads=1,
         # Decode images.
         images = tf.map_fn(tf.image.decode_jpeg, file_contents, dtype=tf.uint8)
         # Store original image shape (height, width).
-        example['image_shape'] = tf.unstack(tf.shape(images))[-3:-1]
-        # TODO: Provide options for padding? Must match crop_and_resize in model.
-        pad_value = 128
-        # images -= pad_value
-        # images = tf.add(images, -pad_value)
-        images = tf.cast(tf.to_int32(images) - pad_value, tf.uint8)
+        im_height, im_width = tf.unstack(tf.shape(images))[-3:-1]
+        example['image_shape'] = tf.stack((im_height, im_width))
         canvas_height, canvas_width = canvas_shape
-        images = tf.image.pad_to_bounding_box(images, 0, 0, canvas_height, canvas_width)
-        # images += pad_value
-        # images = tf.add(images, pad_value)
-        images = tf.cast(tf.to_int32(images) + pad_value, tf.uint8)
+        if pad:
+            # JV: Use tf.pad instead to avoid casting and arithmetic.
+            # NOTE: tf.pad has constant_values argument since version 1.3
+            # # images = tf.cast(tf.to_int32(images) - pad_value, tf.uint8)
+            # images = tf.to_int32(images) - pad_value
+            # images = tf.image.pad_to_bounding_box(images, 0, 0, canvas_height, canvas_width)
+            # # images = tf.cast(tf.to_int32(images) + pad_value, tf.uint8)
+            # images = tf.cast(images + pad_value, tf.uint8)
+            paddings = [[0, 0], [0, canvas_height-im_height], [0, canvas_width-im_width], [0, 0]]
+            images = tf.pad(images, paddings, mode='CONSTANT', constant_values=pad_value)
         # Replace files with images.
         del example['image_files']
         example['images'] = images

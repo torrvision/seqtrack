@@ -496,8 +496,13 @@ class Data_ILSVRC(object):
         # JV: No longer needed.
         # self.datadirname = 'Data_frmsz{}'.format(o.frmsz) \
         #                         if o.useresizedimg else 'Data'
-        self.datadirname = 'Data_{}_{}'.format(o.max_width, o.max_height) \
-                               if o.useresizedimg else 'Data'
+        if o.distort_image:
+            self.datadirname = 'Data_frmsz{}'.format(o.frmsz) \
+                if o.useresizedimg else 'Data'
+            assert (o.max_width, o.max_height) == (o.frmsz, o.frmsz)
+        else:
+            self.datadirname = 'Data_{}_{}'.format(o.max_width, o.max_height) \
+                if o.useresizedimg else 'Data'
 
         self.videos = None
         # Number of frames in each snippet.

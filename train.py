@@ -424,8 +424,8 @@ def _make_input_pipeline(o, dtype=tf.float32,
         name='pipeline'):
     with tf.name_scope(name) as scope:
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
-        images = pipeline.load_images(files, capacity=load_capacity,
-            num_threads=num_load_threads,
+        images = pipeline.load_images(files, pad=(not o.distort_image), pad_value=128,
+            capacity=load_capacity, num_threads=num_load_threads,
             canvas_shape=(o.max_height, o.max_width))
         images_batch = pipeline.batch(images,
             batch_size=o.batchsz, sequence_length=o.ntimesteps+1,
