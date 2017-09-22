@@ -33,22 +33,53 @@ def createScalarMap(name='hot', vmin=-10, vmax=10):
     cNorm  = colors.Normalize(vmin=vmin, vmax=vmax)
     return cmx.ScalarMappable(norm=cNorm, cmap=cm)
 
-def load_image(fname, size=None, resize=False):
+def load_image(fname, size=None, method=None, resize=False):
+    '''
+    Args:
+        size: (width, height)
+        method: stretch or fit
+    '''
     im = Image.open(fname)
     if im.mode != 'RGB':
         im = im.convert('RGB')
+
     if size is not None:
         size = tuple(size)
-        if im.size != size:
-            if resize:
-                im = im.resize(size)
-            else:
-                pdb.set_trace()
-                raise ValueError('size does not match')
+        if method == 'stretch':
+            if im.size != size:
+                if resize:
+                    im = im.resize(size)
+                else:
+                    raise ValueError('wrong size: expect {} == {}'.format(im.size, size))
+        elif method == 'fit':
+            if not all(np.array(im.size) <= np.array(size)):
+                if resize:
+                    actual_size = np.asfarray(im.size)
+                    max_size = np.asfarray(size)
+                    scale = np.amin(max_size / actual_size)
+                    im = im.resize(tuple(np.round(scale * max_size).astype(np.int)))
+                else:
+                    raise ValueError('wrong size: expect {} <= {}'.format(im.size, size))
+        else:
+            raise ValueError('unknown method: {}'.format(method))
     return im
 
 def im_to_arr(x, dtype=np.float32):
     return np.array(x, dtype=dtype)
+
+def pad_image_to(images, size, pad_value=0):
+    '''
+    Args:
+        images: [..., height, width, channels]
+        size: (width, height)
+    '''
+    width, height = size
+    im_shape = list(np.shape(images))
+    pad_shape = im_shape[:-3] + [height, width] + im_shape[-1:]
+    return np.pad(images,
+                  [(0, pad-im) for im, pad in zip(im_shape, pad_shape)],
+                  mode='constant',
+                  constant_values=pad_value)
 
 def pad_to(x, n, axis=0, mode='constant'):
     width = [(0, 0) for s in x.shape]

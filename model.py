@@ -37,7 +37,7 @@ from upsample import upsample
 
 concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
 
-def convert_rec_to_heatmap(rec, o, min_size=None, Gaussian=False):
+def convert_rec_to_heatmap(rec, o, image_size=None, min_size=None, Gaussian=False):
     '''Create heatmap from rectangle
     Args:
         rec: [batchsz x ntimesteps x 4] ground-truth rectangle labels
@@ -48,32 +48,46 @@ def convert_rec_to_heatmap(rec, o, min_size=None, Gaussian=False):
         # JV: This causes a seg-fault in save when two loss functions are constructed?!
         # masks = []
         # for t in range(o.ntimesteps):
-        #     masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
+        #     masks.append(get_masks_from_rectangles(rec[:,t], size, o, kind='bg'))
         # return tf.stack(masks, axis=1, name=scope)
         rec, unmerge = merge_dims(rec, 0, 2)
-        masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size, Gaussian=Gaussian)
+        masks = get_masks_from_rectangles(rec, o, image_size=image_size, kind='bg', min_size=min_size, Gaussian=Gaussian)
         return unmerge(masks, 0)
 
-def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, Gaussian=False, name='mask'):
+def get_masks_from_rectangles(rec, o, image_size=None, kind='fg', typecast=True, min_size=None, Gaussian=False, name='mask'):
+    '''
+    Args:
+        image_size: (height, width)
+    '''
     with tf.name_scope(name) as scope:
+        if image_size is None:
+            image_size = (o.frmsz, o.frmsz)
+        im_height, im_width = image_size
         # create mask using rec; typically rec=y_prev
         # rec -- [b, 4]
-        rec *= float(o.frmsz)
+        # JV: Support different width and height.
+        # rec *= float(o.frmsz)
+        rec = geom.rect_mul(rec, [float(im_width), float(im_height)])
         # x1, y1, x2, y2 -- [b]
         x1, y1, x2, y2 = tf.unstack(rec, axis=1)
         if min_size is not None:
             x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, min_size=min_size)
-        # grid_x -- [1, frmsz]
-        # grid_y -- [frmsz, 1]
-        grid_x = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 0)
-        grid_y = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 1)
+        # JV: Support different width and height.
+        # # grid_x -- [1, frmsz]
+        # # grid_y -- [frmsz, 1]
+        # grid_x = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 0)
+        # grid_y = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 1)
+        # grid_x -- [1, im_width]
+        # grid_y -- [im_height, 1]
+        grid_x = tf.expand_dims(tf.cast(tf.range(im_width), o.dtype) + 0.5, 0)
+        grid_y = tf.expand_dims(tf.cast(tf.range(im_height), o.dtype) + 0.5, 1)
         # resize tensors so that they can be compared
         # x1, y1, x2, y2 -- [b, 1, 1]
         x1 = tf.expand_dims(tf.expand_dims(x1, -1), -1)
         x2 = tf.expand_dims(tf.expand_dims(x2, -1), -1)
         y1 = tf.expand_dims(tf.expand_dims(y1, -1), -1)
         y2 = tf.expand_dims(tf.expand_dims(y2, -1), -1)
-        # masks -- [b, frmsz, frmsz]
+        # masks -- [b, im_height, im_width]
         if not Gaussian:
             masks = tf.logical_and(
                 tf.logical_and(tf.less_equal(x1, grid_x),
@@ -358,7 +372,8 @@ def to_object_centric_coordinate(y, box_s_raw, box_s_val, o):
     y_oc = tf.stack([x1_oc, y1_oc, x2_oc, y2_oc], coord_axis)
     return y_oc
 
-def to_image_centric_hmap(hmap_pred_oc, box_s_raw, box_s_val, o):
+# def to_image_centric_hmap(hmap_pred_oc, box_s_raw, box_s_val, o):
+def to_image_centric_hmap(hmap_pred_oc, box_s_raw, viewport, o):
     ''' Convert object-centric hmap to image-centric hmap.
     Input hmap is assumed to be softmax-ed (i.e., range [0,1]) and foreground only.
     '''
@@ -392,12 +407,17 @@ def to_image_centric_hmap(hmap_pred_oc, box_s_raw, box_s_val, o):
     #     hmap_pred.append(hmap)
     # return tf.stack(hmap_pred, 0)
 
-    inv_box_s = geom.crop_inverse(box_s_raw)
+    # Given search/viewport (box_s_raw) and viewport/image (viewport).
+    # Want image/search.
+    # search/image = crop(search/viewport, image/viewport)
+    inv_box = geom.crop_inverse(geom.crop_rect(box_s_raw, geom.crop_inverse(viewport)))
     batch_len = tf.shape(hmap_pred_oc)[0]
     # TODO: Set extrapolation_value.
-    hmap_pred_ic = tf.image.crop_and_resize(hmap_pred_oc, geom.rect_to_tf_box(inv_box_s),
+    hmap_pred_ic = tf.image.crop_and_resize(
+        hmap_pred_oc,
+        geom.rect_to_tf_box(inv_box),
         box_ind=tf.range(batch_len),
-        crop_size=[o.frmsz]*2,
+        crop_size=[o.max_height, o.max_width],
         extrapolation_value=None)
     return hmap_pred_ic
 
@@ -657,7 +677,8 @@ class Nornn(object):
         self.rnn_skip          = rnn_skip
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
-        self.image_size   = (o.frmsz, o.frmsz)
+        self.image_width  = o.max_width
+        self.image_height = o.max_height
         self.sequence_len = o.ntimesteps
         self.batch_size   = None # Batch size of model instance, or None if dynamic.
 
@@ -1009,11 +1030,11 @@ class Nornn(object):
             y_curr_pred = enforce_inside_box(y_curr_pred)
 
             # Get image-centric outputs. Some are used for visualization purpose.
-            # hmap_curr_pred = to_image_centric_hmap(hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o)
+            hmap_curr_pred = to_image_centric_hmap(hmap_curr_pred_oc_fg, box_s_raw_curr, x0_valid['viewport'], o)
 
             # Outputs.
             y_pred.append(y_curr_pred)
-            # hmap_pred.append(hmap_curr_pred)
+            hmap_pred.append(hmap_curr_pred)
             y_pred_oc.append(y_curr_pred_oc)
             hmap_pred_oc.append(hmap_curr_pred_oc)
             box_s_raw.append(box_s_raw_curr)
@@ -1035,7 +1056,7 @@ class Nornn(object):
                              lambda: y_curr_pred)
 
         y_pred        = tf.stack(y_pred, axis=1)
-        # hmap_pred     = tf.stack(hmap_pred, axis=1)
+        hmap_pred     = tf.stack(hmap_pred, axis=1)
         y_pred_oc     = tf.stack(y_pred_oc, axis=1)
         hmap_pred_oc  = tf.stack(hmap_pred_oc, axis=1)
         box_s_raw     = tf.stack(box_s_raw, axis=1)
@@ -1047,8 +1068,7 @@ class Nornn(object):
         flow          = tf.stack(flow, axis=1) if self.boxreg_flow else None
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
-                   # 'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
-                   'hmap':      {'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
+                   'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
                    'box_s_raw': box_s_raw,
                    'box_s_val': box_s_val,
                    'target':    target,
@@ -1104,7 +1124,8 @@ class RNN_dual_mix(object):
         self.keep_prob     = keep_prob
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
-        self.image_size   = (o.frmsz, o.frmsz)
+        self.image_width  = o.frmsz
+        self.image_height = o.frmsz
         self.sequence_len = o.ntimesteps
         self.batch_size   = o.batchsz
 
@@ -1624,7 +1645,8 @@ def rnn_conv_asymm(example, o,
     model.outputs = outputs
     model.state   = state
     # Properties of instantiated model:
-    model.image_size   = (o.frmsz, o.frmsz)
+    model.image_width  = o.frmsz
+    model.image_height = o.frmsz
     model.sequence_len = o.ntimesteps # Static length of unrolled RNN.
     model.batch_size   = None # Model accepts variable batch size.
     return model
@@ -1700,7 +1722,8 @@ def rnn_multi_res(example, o,
     model.outputs = outputs
     model.state   = state
     # Properties of instantiated model:
-    model.image_size   = (o.frmsz, o.frmsz)
+    model.image_width  = o.frmsz
+    model.image_height = o.frmsz
     model.sequence_len = o.ntimesteps # Static length of unrolled RNN.
     model.batch_size   = None # Model accepts variable batch size.
     return model

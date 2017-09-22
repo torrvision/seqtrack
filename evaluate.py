@@ -7,7 +7,7 @@ from progressbar import ProgressBar, Bar, Counter, ETA, Percentage # pip install
 
 import draw
 import data
-from helpers import load_image, im_to_arr, pad_to, to_nested_tuple
+from helpers import load_image, im_to_arr, pad_image_to, pad_to, to_nested_tuple
 
 
 def track(sess, inputs, model, sequence, use_gt):
@@ -28,9 +28,15 @@ def track(sess, inputs, model, sequence, use_gt):
     # TODO: Variable batch size.
     # TODO: Run on a batch of sequences for speed.
 
-    first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
+    first_image = load_image(sequence['image_files'][0],
+                             (model.image_width, model.image_height),
+                             method='fit', resize=True)
+    im_width, im_height = first_image.size
+    first_image = pad_image_to(im_to_arr(first_image),
+                               (model.image_width, model.image_height),
+                               pad_value=128)
     first_label = sequence['labels'][0]
-    first_image = _single_to_batch(im_to_arr(first_image), model.batch_size)
+    first_image = _single_to_batch(first_image, model.batch_size)
     first_label = _single_to_batch(first_label, model.batch_size)
 
     sequence_len = len(sequence['image_files'])
@@ -45,21 +51,24 @@ def track(sess, inputs, model, sequence, use_gt):
         rem = sequence_len - start
         # Feed the next `chunk_len` frames into the model.
         chunk_len = min(rem, model.sequence_len)
-        images = map(lambda x: load_image(x, model.image_size, resize=True),
-                     sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
-        images = np.array(map(im_to_arr, images))
+        # Create single array of all images.
+        images = map(lambda x: im_to_arr(load_image(x, (model.image_width, model.image_height),
+                                                    method='fit', resize=True)),
+                     sequence['image_files'][start:start+chunk_len])
+        images = pad_image_to(images, (model.image_width, model.image_height), pad_value=128)
         images = _single_to_batch(pad_to(images, model.sequence_len), model.batch_size)
         y_gt = np.array(sequence['labels'][start:start+chunk_len])
         y_gt = _single_to_batch(pad_to(y_gt, model.sequence_len), model.batch_size)
         is_valid = np.array(sequence['label_is_valid'][start:start+chunk_len])
         is_valid = _single_to_batch(pad_to(is_valid, model.sequence_len), model.batch_size)
         feed_dict = {
-            inputs['x_raw']:  images,
-            inputs['x0_raw']: first_image,
-            inputs['y0']:     first_label,
-            inputs['y']:      y_gt,
+            inputs['im_shape']:   [[im_height, im_width]],
+            inputs['x_raw']:      images,
+            inputs['x0_raw']:     first_image,
+            inputs['y0']:         first_label,
+            inputs['y']:          y_gt,
             inputs['y_is_valid']: is_valid,
-            inputs['use_gt']: use_gt,
+            inputs['use_gt']:     use_gt,
         }
         if start > 1:
             # This is not the first chunk.
@@ -74,7 +83,7 @@ def track(sess, inputs, model, sequence, use_gt):
         # Take first element of batch and first `chunk_len` elements of output.
         y_pred = y_pred[0][:chunk_len]
         y_pred_chunks.append(y_pred)
-        hmap_pred = hmap_pred[0][:chunk_len]
+        hmap_pred = hmap_pred[0][:chunk_len, :im_height, :im_width]
         hmap_pred_chunks.append(hmap_pred)
 
     # Concatenate the results for all chunks.

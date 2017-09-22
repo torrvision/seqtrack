@@ -25,6 +25,8 @@ def from_size(im, size):
     '''
     canvas_height, canvas_width = most_specific_shape(im)[-3:-1]
     canvas_size = tf.stack((canvas_width, canvas_height), axis=-1)
+    # Convert from yx to xy.
+    # (Rectangles operate in xy.)
     image_height, image_width = tf.unstack(size, axis=-1)
     size = tf.stack((image_width, image_height), axis=-1)
     rel_size = tf.to_float(size) * (1./tf.to_float(canvas_size))
