@@ -641,7 +641,7 @@ def pass_rnn(x, state, cell, o, skip=False):
                 activation_fn=None,
                 weights_regularizer=slim.l2_regularizer(o.wd)):
             xh = tf.concat([x]+[h_prev[:,s] for s in skip_state],-1)
-            ht = tf.nn.tanh(slim.conv2d(xh, scope='f')) + tf.nn.sigmoid(slim.conv2d(xh, scope='g'))
+            ht = tf.nn.tanh(slim.conv2d(xh, scope='f')) * tf.nn.sigmoid(slim.conv2d(xh, scope='g'))
             ht = slim.conv2d(ht, kernel_size=1, scope='1x1')
             ht = ht + x # final residual connection.
         output = ht
