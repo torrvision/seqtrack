@@ -46,6 +46,11 @@ def crop_rect(rects, window_rect):
     out_max = (rects_max - window_min) / window_size
     return make_rect(out_min, out_max)
 
+def crop_image_viewport(viewport, rect):
+    '''Crop an image viewport to a rectangle within the existing viewport.'''
+    # rect/canvas = crop(rect/viewport, inv(viewport/canvas))
+    return crop_rect(rect, crop_inverse(viewport))
+
 def crop_inverse(rect):
     rect_min, rect_max = rect_min_max(rect)
     # TODO: Support reversed rectangle.
