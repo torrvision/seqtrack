@@ -160,6 +160,9 @@ def parse_arguments():
             '--sampler_params', help='JSON string specifying sampler',
             type=json.loads, default={'kind': 'regular', 'freq': 10})
     parser.add_argument(
+            '--motion_params', help='JSON string specifying motion augmentation',
+            type=json.loads, default={})
+    parser.add_argument(
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker',
             type=str, default=['ILSVRC-train'])
     parser.add_argument(

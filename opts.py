@@ -96,6 +96,7 @@ class Opts(object):
         self.eval_datasets      = ['ILSVRC-train']
         self.eval_samplers      = ['train']
         self.max_eval_videos    = 100
+        self.motion_params      = {}
 
         #----------------------------------------------------------------------
         # save (save training results), load (test), resume (keep training)
