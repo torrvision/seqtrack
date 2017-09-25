@@ -658,19 +658,9 @@ class Nornn(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
-                 boxreg=False,
-                 boxreg_stop_grad=False,
-                 boxreg_regularize=False,
-                 boxreg_imgpair=False,
-                 boxreg_hmap=False,
-                 boxreg_hmap_clean=False,
-                 boxreg_mask=False,
-                 boxreg_flow=False,
-                 num_target_scale=1, # odd number, e.g., {1, 3, 5}
-                 score_combine_mode='add', # {'add', 'weight'}
+                 scale_target_num=1, # odd number, e.g., {1, 3, 5}
+                 scale_target_mode='add', # {'add', 'weight'}
                  divide_target=False,
-                 stn=False,
-                 coarse_hmap=False,
                  bnorm_xcorr=False,
                  bnorm_deconv=False,
                  interm_supervision=False,
@@ -679,22 +669,17 @@ class Nornn(object):
                  rnn_residual=False,
                  rnn_skip=False,
                  rnn_skip_support=1,
+                 coarse_hmap=False,
+                 boxreg=False,
+                 boxreg_delta=False,
+                 boxreg_stop_grad=False,
+                 boxreg_regularize=False,
                  ):
         # model parameters
         self.feat_act          = feat_act
-        self.boxreg            = boxreg
-        self.boxreg_stop_grad  = boxreg_stop_grad
-        self.boxreg_regularize = boxreg_regularize
-        self.boxreg_imgpair    = boxreg_imgpair
-        self.boxreg_hmap       = boxreg_hmap
-        self.boxreg_hmap_clean = boxreg_hmap_clean
-        self.boxreg_mask       = boxreg_mask
-        self.boxreg_flow       = boxreg_flow
-        self.num_target_scale  = num_target_scale
-        self.score_combine_mode= score_combine_mode
+        self.scale_target_num  = scale_target_num
+        self.scale_target_mode= scale_target_mode
         self.divide_target     = divide_target
-        self.stn               = stn
-        self.coarse_hmap       = coarse_hmap
         self.bnorm_xcorr       = bnorm_xcorr
         self.bnorm_deconv      = bnorm_deconv
         self.interm_supervision= interm_supervision
@@ -703,6 +688,11 @@ class Nornn(object):
         self.rnn_residual      = rnn_residual
         self.rnn_skip          = rnn_skip
         self.rnn_skip_support  = rnn_skip_support
+        self.coarse_hmap       = coarse_hmap
+        self.boxreg            = boxreg
+        self.boxreg_delta      = boxreg_delta
+        self.boxreg_stop_grad  = boxreg_stop_grad
+        self.boxreg_regularize = boxreg_regularize
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -792,7 +782,7 @@ class Nornn(object):
             # NOTE: To confirm the feature in this module, there should be
             # enough training pairs different in scale during training -> data augmentation.
             targets = []
-            scales = range(dims[1]-(self.num_target_scale/2)*2, dims[1]+(self.num_target_scale/2)*2+1, 2)
+            scales = range(dims[1]-(self.scale_target_num/2)*2, dims[1]+(self.scale_target_num/2)*2+1, 2)
             for s in scales:
                 targets.append(tf.image.resize_images(target, [s, s],
                                                       method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
@@ -819,14 +809,14 @@ class Nornn(object):
                             targets.append(target * tf.expand_dims(tf.cast(mask, tf.float32), -1))
                             weights.append(float(patchsz[n])/height)
 
-            # cross-correlation. (`num_target_scale` # of scoremaps)
+            # cross-correlation. (`scale_target_num` # of scoremaps)
             scoremap = []
             for k in range(len(targets)):
                 scoremap.append(diag_conv(search, targets[k], strides=[1, 1, 1, 1], padding='SAME'))
 
-            if self.score_combine_mode == 'add':
+            if self.scale_target_mode == 'add':
                 scoremap = tf.add_n(scoremap)
-            elif self.score_combine_mode == 'weight':
+            elif self.scale_target_mode == 'weight':
                 scoremap = tf.concat(scoremap, -1)
                 dims_combine = scoremap.shape.as_list()
                 with slim.arg_scope([slim.conv2d],
@@ -997,13 +987,6 @@ class Nornn(object):
             #                      lambda: process_target_with_box(x0, y0, o))
             search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
 
-            #if self.stn:
-            #    with tf.variable_scope('stn_localization', reuse=(t > 0)):
-            #        theta = pass_stn_localization(target_curr)
-            #        size = target_curr.shape.as_list()
-            #        target_curr = transformer(target_curr, theta, size[1:3])
-            #        target_curr.set_shape(size)
-
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
                 #target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
                 if t == 0:
@@ -1107,6 +1090,7 @@ class Nornn(object):
                    'box_s_val': box_s_val,
                    'target':    target,
                    'search':    search,
+                   'boxreg_delta': self.boxreg_delta,
                    }
         # JV: Use two separate state variables.
         # state = {}
