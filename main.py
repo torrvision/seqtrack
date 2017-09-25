@@ -159,6 +159,7 @@ def parse_arguments():
     parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
             type=json.loads, default={'kind': 'regular', 'freq': 10})
+    parser.add_argument('--augment_motion', help='enable motion augmentation?', action='store_true')
     parser.add_argument(
             '--motion_params', help='JSON string specifying motion augmentation',
             type=json.loads, default={})

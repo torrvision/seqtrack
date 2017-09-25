@@ -658,7 +658,8 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
         for sequence in sequences:
             # JV: Add motion augmentation.
             # yield sequence
-            sequence = motion.augment(sequence, rand=generator, **o.motion_params)
+            if o.augment_motion:
+                sequence = motion.augment(sequence, rand=generator, **o.motion_params)
             yield sequence
 
 def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
