@@ -666,7 +666,7 @@ class Nornn(object):
                  boxreg_hmap_clean=False,
                  boxreg_mask=False,
                  boxreg_flow=False,
-                 num_target_scale=1,
+                 num_target_scale=1, # odd number, e.g., {1, 3, 5}
                  score_combine_mode='add', # {'add', 'weight'}
                  divide_target=False,
                  stn=False,
@@ -980,9 +980,6 @@ class Nornn(object):
         box_s_val = []
         target = []
         search = []
-        s_prev = []
-        s_recon = []
-        flow = []
 
         # Some pre-processing.
         target_curr = process_target_with_box(x0, y0, o)
@@ -1046,6 +1043,7 @@ class Nornn(object):
                 # 1. Enable/disable `boxreg_stop_grad`.
                 # 2. Perform convolution on scoremap. Effect of batchnorm and relu (possibly after RNN).
                 # 3. Combine with scoremap. Simple concat for now.
+                # (additionally, flow, flow-unsupervised, flow-part)
                 if self.boxreg_stop_grad:
                     scoremap = tf.stop_gradient(tf.identity(scoremap))
                 with tf.variable_scope('conv_boxreg_branch', reuse=(t > 0)):
@@ -1061,40 +1059,6 @@ class Nornn(object):
                 if self.boxreg_regularize:
                     y_curr_pred = regularize_scale(y_prev, y_curr_pred, y0, 0.5, 1.0)
 
-                ## Create inputs to regression network.
-                #boxreg_inputs = []
-                #if self.boxreg_imgpair: # Add raw image pair. # TODO: Try diff image pair.
-                #    #search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
-                #    search_prev, _, _ = process_search_with_box(x0, y0, o)
-                #    img_pair = tf.concat([search_prev, search_curr], 3)
-                #    boxreg_inputs.append(img_pair)
-                #if self.boxreg_hmap: # Add hmap estimate.
-                #    boxreg_inputs.append(hmap_curr_pred_oc_fg)
-                #if self.boxreg_hmap_clean: # Add hmap clean. Use argmax & y0_size.
-                #    y_tmp_oc, _ = get_rectangles_from_hmap(
-                #            hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
-                #    hmap_clean = get_masks_from_rectangles(y_tmp_oc, o, Gaussian=True)
-                #    boxreg_inputs.append(hmap_clean)
-                #if self.boxreg_mask: # Add target_mask to inputs.
-                #    target_mask, _, _ = process_search_with_box(
-                #        get_masks_from_rectangles(y_prev, o), y_prev, o)
-                #    boxreg_inputs.append(target_mask)
-                #if self.boxreg_flow: # Add optical flow to inputs.
-                #    with tf.variable_scope('cnn_flow', reuse=(t > 0)):
-                #        search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
-                #        img_pair = tf.concat([search_prev, search_curr], 3)
-                #        flow_feat = pass_cnn(img_pair, o, is_training, 'relu')
-                #    with tf.variable_scope('deconvolution_flow', reuse=(t > 0)):
-                #        flow_curr_pred_oc = pass_deconvolution(flow_feat, o)
-                #        search_recon = spatial_transform_by_flow(search_curr, flow_curr_pred_oc)
-                #    # NOTE: Consider passing only flow of target (perhaps by masking).
-                #    boxreg_inputs.append(flow_curr_pred_oc)
-                #boxreg_inputs = tf.concat(boxreg_inputs, 3)
-                #boxreg_inputs = tf.stop_gradient(boxreg_inputs)
-                ## Box regression.
-                #with tf.variable_scope('regress_box', reuse=(t > 0)):
-                #    y_curr_pred_oc = pass_regress_box(boxreg_inputs, is_training)
-                #    y_curr_pred = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
             else: # argmax to find center (then use x0's box)
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
@@ -1115,9 +1079,6 @@ class Nornn(object):
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
-            s_prev.append(search_prev if self.boxreg_flow else None)
-            s_recon.append(search_recon if self.boxreg_flow else None)
-            flow.append(flow_curr_pred_oc if self.boxreg_flow else None)
 
             # Update for next time-step.
             x_prev = x_curr
@@ -1138,9 +1099,6 @@ class Nornn(object):
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
-        s_prev        = tf.stack(s_prev, axis=1) if self.boxreg_flow else None
-        s_recon       = tf.stack(s_recon, axis=1) if self.boxreg_flow else None
-        flow          = tf.stack(flow, axis=1) if self.boxreg_flow else None
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
                    'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
@@ -1149,9 +1107,6 @@ class Nornn(object):
                    'box_s_val': box_s_val,
                    'target':    target,
                    'search':    search,
-                   's_prev':    s_prev,
-                   's_recon':   s_recon,
-                   'flow':      flow,
                    }
         # JV: Use two separate state variables.
         # state = {}
