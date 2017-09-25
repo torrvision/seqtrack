@@ -664,7 +664,8 @@ class Nornn(object):
                  boxreg_hmap_clean=False,
                  boxreg_mask=False,
                  boxreg_flow=False,
-                 resize_target=False,
+                 num_target_scale=1,
+                 score_combine_mode='add', # {'add', 'weight'}
                  divide_target=False,
                  stn=False,
                  coarse_hmap=False,
@@ -685,7 +686,8 @@ class Nornn(object):
         self.boxreg_hmap_clean = boxreg_hmap_clean
         self.boxreg_mask       = boxreg_mask
         self.boxreg_flow       = boxreg_flow
-        self.resize_target     = resize_target
+        self.num_target_scale  = num_target_scale
+        self.score_combine_mode= score_combine_mode
         self.divide_target     = divide_target
         self.stn               = stn
         self.coarse_hmap       = coarse_hmap
@@ -779,21 +781,18 @@ class Nornn(object):
             ''' Perform cross-correlation (convolution) to find the target object.
             I use channel-wise convolution, instead of normal convolution.
             '''
-            targets, weights = [], [] # without `weighted` average, training fails.
-            targets.append(target); weights.append(1.0)
+            dims = target.shape.as_list()
+            assert dims[1] % 2 == 1, 'target size has to be odd number.'
 
-            if self.resize_target:
-                # NOTE: To confirm the feature in this module, there should be
-                # enough training pairs different in scale during training -> data augmentation.
-                height = target.shape.as_list()[1]
-                scales = [0.8, 1.2] # TODO: 1) more scales, 2) conv before/after resize - Relu okay?
-                for s in scales:
-                    targets.append(tf.image.resize_images(target,
-                                                          [int(height*s)]*2,
-                                                          method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
-                                                          align_corners=True))
-                    #weights.append(1.0 - abs(1.0 - s))
-                    weights.append(1.0)
+            # multi-scale targets.
+            # NOTE: To confirm the feature in this module, there should be
+            # enough training pairs different in scale during training -> data augmentation.
+            targets = []
+            scales = range(dims[1]-(self.num_target_scale/2)*2, dims[1]+(self.num_target_scale/2)*2+1, 2)
+            for s in scales:
+                targets.append(tf.image.resize_images(target, [s, s],
+                                                      method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
+                                                      align_corners=True))
 
             if self.divide_target:
                 assert False, 'Do not use it now.'
@@ -816,28 +815,23 @@ class Nornn(object):
                             targets.append(target * tf.expand_dims(tf.cast(mask, tf.float32), -1))
                             weights.append(float(patchsz[n])/height)
 
-            # TODO: Need investigate more.
-            #weights = [w/sum(weights) for w in weights]
-            assert(len(weights)==len(targets))
-
-            # JV: Remove dependence on explicit batch size.
-            # scoremap = []
-            # for b in range(o.batchsz):
-            #     scoremap_each = []
-            #     for k in range(len(targets)):
-            #         scoremap_each.append(weights[k] *
-            #                              tf.nn.depthwise_conv2d(tf.expand_dims(search[b], 0),
-            #                                                     tf.expand_dims(targets[k][b], 3),
-            #                                                     strides=[1,1,1,1],
-            #                                                     padding='SAME'))
-            #     scoremap.append(tf.add_n(scoremap_each))
-            # scoremap = tf.concat(scoremap, 0)
+            # cross-correlation. (`num_target_scale` # of scoremaps)
             scoremap = []
             for k in range(len(targets)):
-                scoremap.append(weights[k] * diag_conv(search, targets[k],
-                                                       strides=[1, 1, 1, 1],
-                                                       padding='SAME'))
-            scoremap = tf.add_n(scoremap)
+                scoremap.append(diag_conv(search, targets[k], strides=[1, 1, 1, 1], padding='SAME'))
+
+            if self.score_combine_mode == 'add':
+                scoremap = tf.add_n(scoremap)
+            elif self.score_combine_mode == 'weight':
+                scoremap = tf.concat(scoremap, -1)
+                dims_combine = scoremap.shape.as_list()
+                with slim.arg_scope([slim.conv2d],
+                        kernel_size=1,
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    scoremap = slim.conv2d(scoremap, num_outputs=dims_combine[-1], scope='combine_scoremap1')
+                    scoremap = slim.conv2d(scoremap, num_outputs=dims[-1], scope='combine_scoremap2')
+            else:
+                assert False, 'Wrong combine mode for multi-scoremap.'
 
             # After cross-correlation, put some convolutions (separately from deconv).
             bnorm_args = {} if not self.bnorm_xcorr else {
