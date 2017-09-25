@@ -658,16 +658,9 @@ class Nornn(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
-                 boxreg=False,
-                 boxreg_imgpair=False,
-                 boxreg_hmap=False,
-                 boxreg_hmap_clean=False,
-                 boxreg_mask=False,
-                 boxreg_flow=False,
-                 resize_target=False,
+                 scale_target_num=1, # odd number, e.g., {1, 3, 5}
+                 scale_target_mode='add', # {'add', 'weight'}
                  divide_target=False,
-                 stn=False,
-                 coarse_hmap=False,
                  bnorm_xcorr=False,
                  bnorm_deconv=False,
                  interm_supervision=False,
@@ -676,19 +669,17 @@ class Nornn(object):
                  rnn_residual=False,
                  rnn_skip=False,
                  rnn_skip_support=1,
+                 coarse_hmap=False,
+                 boxreg=False,
+                 boxreg_delta=False,
+                 boxreg_stop_grad=False,
+                 boxreg_regularize=False,
                  ):
         # model parameters
         self.feat_act          = feat_act
-        self.boxreg            = boxreg
-        self.boxreg_imgpair    = boxreg_imgpair
-        self.boxreg_hmap       = boxreg_hmap
-        self.boxreg_hmap_clean = boxreg_hmap_clean
-        self.boxreg_mask       = boxreg_mask
-        self.boxreg_flow       = boxreg_flow
-        self.resize_target     = resize_target
+        self.scale_target_num  = scale_target_num
+        self.scale_target_mode= scale_target_mode
         self.divide_target     = divide_target
-        self.stn               = stn
-        self.coarse_hmap       = coarse_hmap
         self.bnorm_xcorr       = bnorm_xcorr
         self.bnorm_deconv      = bnorm_deconv
         self.interm_supervision= interm_supervision
@@ -697,6 +688,11 @@ class Nornn(object):
         self.rnn_residual      = rnn_residual
         self.rnn_skip          = rnn_skip
         self.rnn_skip_support  = rnn_skip_support
+        self.coarse_hmap       = coarse_hmap
+        self.boxreg            = boxreg
+        self.boxreg_delta      = boxreg_delta
+        self.boxreg_stop_grad  = boxreg_stop_grad
+        self.boxreg_regularize = boxreg_regularize
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -779,21 +775,18 @@ class Nornn(object):
             ''' Perform cross-correlation (convolution) to find the target object.
             I use channel-wise convolution, instead of normal convolution.
             '''
-            targets, weights = [], [] # without `weighted` average, training fails.
-            targets.append(target); weights.append(1.0)
+            dims = target.shape.as_list()
+            assert dims[1] % 2 == 1, 'target size has to be odd number.'
 
-            if self.resize_target:
-                # NOTE: To confirm the feature in this module, there should be
-                # enough training pairs different in scale during training -> data augmentation.
-                height = target.shape.as_list()[1]
-                scales = [0.8, 1.2] # TODO: 1) more scales, 2) conv before/after resize - Relu okay?
-                for s in scales:
-                    targets.append(tf.image.resize_images(target,
-                                                          [int(height*s)]*2,
-                                                          method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
-                                                          align_corners=True))
-                    #weights.append(1.0 - abs(1.0 - s))
-                    weights.append(1.0)
+            # multi-scale targets.
+            # NOTE: To confirm the feature in this module, there should be
+            # enough training pairs different in scale during training -> data augmentation.
+            targets = []
+            scales = range(dims[1]-(self.scale_target_num/2)*2, dims[1]+(self.scale_target_num/2)*2+1, 2)
+            for s in scales:
+                targets.append(tf.image.resize_images(target, [s, s],
+                                                      method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
+                                                      align_corners=True))
 
             if self.divide_target:
                 assert False, 'Do not use it now.'
@@ -816,28 +809,23 @@ class Nornn(object):
                             targets.append(target * tf.expand_dims(tf.cast(mask, tf.float32), -1))
                             weights.append(float(patchsz[n])/height)
 
-            # TODO: Need investigate more.
-            #weights = [w/sum(weights) for w in weights]
-            assert(len(weights)==len(targets))
-
-            # JV: Remove dependence on explicit batch size.
-            # scoremap = []
-            # for b in range(o.batchsz):
-            #     scoremap_each = []
-            #     for k in range(len(targets)):
-            #         scoremap_each.append(weights[k] *
-            #                              tf.nn.depthwise_conv2d(tf.expand_dims(search[b], 0),
-            #                                                     tf.expand_dims(targets[k][b], 3),
-            #                                                     strides=[1,1,1,1],
-            #                                                     padding='SAME'))
-            #     scoremap.append(tf.add_n(scoremap_each))
-            # scoremap = tf.concat(scoremap, 0)
+            # cross-correlation. (`scale_target_num` # of scoremaps)
             scoremap = []
             for k in range(len(targets)):
-                scoremap.append(weights[k] * diag_conv(search, targets[k],
-                                                       strides=[1, 1, 1, 1],
-                                                       padding='SAME'))
-            scoremap = tf.add_n(scoremap)
+                scoremap.append(diag_conv(search, targets[k], strides=[1, 1, 1, 1], padding='SAME'))
+
+            if self.scale_target_mode == 'add':
+                scoremap = tf.add_n(scoremap)
+            elif self.scale_target_mode == 'weight':
+                scoremap = tf.concat(scoremap, -1)
+                dims_combine = scoremap.shape.as_list()
+                with slim.arg_scope([slim.conv2d],
+                        kernel_size=1,
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    scoremap = slim.conv2d(scoremap, num_outputs=dims_combine[-1], scope='combine_scoremap1')
+                    scoremap = slim.conv2d(scoremap, num_outputs=dims[-1], scope='combine_scoremap2')
+            else:
+                assert False, 'Wrong combine mode for multi-scoremap.'
 
             # After cross-correlation, put some convolutions (separately from deconv).
             bnorm_args = {} if not self.bnorm_xcorr else {
@@ -903,24 +891,44 @@ class Nornn(object):
                     assert False, 'Not available option.'
             return x
 
+        def pass_conv_boxreg_branch(x, o, is_training):
+            dims = x.shape.as_list()
+            with slim.arg_scope([slim.conv2d],
+                    kernel_size=1,
+                    normalizer_fn=slim.batch_norm,
+                    normalizer_params={'is_training': is_training, 'fused': True},
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.conv2d(x, num_outputs=dims[-1], scope='conv1')
+                x = slim.conv2d(x, num_outputs=dims[-1], scope='conv2')
+            return x
+
         def pass_regress_box(x, is_training):
             ''' Regress output rectangle.
             '''
-            # TODO: Batch norm or dropout.
+            dims = x.shape.as_list()
             with slim.arg_scope([slim.conv2d, slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 with slim.arg_scope([slim.conv2d],
                         normalizer_fn=slim.batch_norm,
                         normalizer_params={'is_training': is_training, 'fused': True}):
-                    x = slim.conv2d(x, 32, 5, 2, scope='conv1')
+                    x = slim.conv2d(x, dims[-1]*2, 5, 2, scope='conv1')
                     x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                    x = slim.conv2d(x, 64, 5, 2, scope='conv2')
+                    x = slim.conv2d(x, dims[-1]*4, 5, 2, scope='conv2')
                     x = slim.max_pool2d(x, 2, 2, scope='pool2')
-                    x = slim.conv2d(x, 128, 5, 2, scope='conv3')
+                    x = slim.conv2d(x, dims[-1]*8, 5, 2, scope='conv3')
                     x = slim.flatten(x)
                     x = slim.fully_connected(x, 4096, scope='fc1')
                     x = slim.fully_connected(x, 4096, scope='fc2')
                     x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
+                    #x = slim.conv2d(x, 32, 5, 2, scope='conv1')
+                    #x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                    #x = slim.conv2d(x, 64, 5, 2, scope='conv2')
+                    #x = slim.max_pool2d(x, 2, 2, scope='pool2')
+                    #x = slim.conv2d(x, 128, 5, 2, scope='conv3')
+                    #x = slim.flatten(x)
+                    #x = slim.fully_connected(x, 4096, scope='fc1')
+                    #x = slim.fully_connected(x, 4096, scope='fc2')
+                    #x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
         # Inputs to the model.
@@ -962,9 +970,6 @@ class Nornn(object):
         box_s_val = []
         target = []
         search = []
-        s_prev = []
-        s_recon = []
-        flow = []
 
         # Some pre-processing.
         target_curr = process_target_with_box(x0, y0, o)
@@ -981,13 +986,6 @@ class Nornn(object):
             #                      lambda: process_target_with_box(x_prev, y_prev, o),
             #                      lambda: process_target_with_box(x0, y0, o))
             search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
-
-            #if self.stn:
-            #    with tf.variable_scope('stn_localization', reuse=(t > 0)):
-            #        theta = pass_stn_localization(target_curr)
-            #        size = target_curr.shape.as_list()
-            #        target_curr = transformer(target_curr, theta, size[1:3])
-            #        target_curr.set_shape(size)
 
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
                 #target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
@@ -1016,46 +1014,39 @@ class Nornn(object):
                 hmap_curr_pred_oc_fg = tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], -1)
 
             if self.boxreg: # regress box from `scoremap`.
-                # Create inputs to regression network.
-                boxreg_inputs = []
-                if self.boxreg_imgpair: # Add raw image pair. # TODO: Try diff image pair.
-                    #search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
-                    search_prev, _, _ = process_search_with_box(x0, y0, o)
-                    img_pair = tf.concat([search_prev, search_curr], 3)
-                    boxreg_inputs.append(img_pair)
-                if self.boxreg_hmap: # Add hmap estimate.
-                    boxreg_inputs.append(hmap_curr_pred_oc_fg)
-                if self.boxreg_hmap_clean: # Add hmap clean. Use argmax & y0_size.
-                    y_tmp_oc, _ = get_rectangles_from_hmap(
-                            hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
-                    hmap_clean = get_masks_from_rectangles(y_tmp_oc, o, Gaussian=True)
-                    boxreg_inputs.append(hmap_clean)
-                if self.boxreg_mask: # Add target_mask to inputs.
-                    target_mask, _, _ = process_search_with_box(
-                        get_masks_from_rectangles(y_prev, o), y_prev, o)
-                    boxreg_inputs.append(target_mask)
-                if self.boxreg_flow: # Add optical flow to inputs.
-                    with tf.variable_scope('cnn_flow', reuse=(t > 0)):
-                        search_prev, _, _ = process_search_with_box(x_prev, y_prev, o)
-                        img_pair = tf.concat([search_prev, search_curr], 3)
-                        flow_feat = pass_cnn(img_pair, o, is_training, 'relu')
-                    with tf.variable_scope('deconvolution_flow', reuse=(t > 0)):
-                        flow_curr_pred_oc = pass_deconvolution(flow_feat, o)
-                        search_recon = spatial_transform_by_flow(search_curr, flow_curr_pred_oc)
-                    # NOTE: Consider passing only flow of target (perhaps by masking).
-                    boxreg_inputs.append(flow_curr_pred_oc)
-                boxreg_inputs = tf.concat(boxreg_inputs, 3)
-                boxreg_inputs = tf.stop_gradient(boxreg_inputs)
-                # Box regression.
+                assert self.coarse_hmap, 'Do not up-sample scoremap in the case of box-regression.'
+
+                # CNN processing target-in-search raw image pair.
+                search_0, _, _ = process_search_with_box(x0, y0, o)
+                search_pair = tf.concat([search_0, search_curr], 3)
+                with tf.variable_scope('process_search_pair', reuse=(t > 0)):
+                    search_pair_feat = pass_cnn(search_pair, o, is_training, 'relu')
+
+                # Create input to box-regression network.
+                # 1. Enable/disable `boxreg_stop_grad`.
+                # 2. Perform convolution on scoremap. Effect of batchnorm and relu (possibly after RNN).
+                # 3. Combine with scoremap. Simple concat for now.
+                # (additionally, flow, flow-unsupervised, flow-part)
+                if self.boxreg_stop_grad:
+                    scoremap = tf.stop_gradient(tf.identity(scoremap))
+                with tf.variable_scope('conv_boxreg_branch', reuse=(t > 0)):
+                    scoremap = pass_conv_boxreg_branch(scoremap, o, is_training)
+                boxreg_inputs = tf.concat([search_pair_feat, scoremap], -1)
+
+                # Box regression. # TODO: Try delta output.
                 with tf.variable_scope('regress_box', reuse=(t > 0)):
                     y_curr_pred_oc = pass_regress_box(boxreg_inputs, is_training)
                     y_curr_pred = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
+
+                # Regularize box scale manually.
+                if self.boxreg_regularize:
+                    y_curr_pred = regularize_scale(y_prev, y_curr_pred, y0, 0.5, 1.0)
+
             else: # argmax to find center (then use x0's box)
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
 
             # Post-processing.
-            y_curr_pred = regularize_scale(y_prev, y_curr_pred, y0)
             y_curr_pred = enforce_inside_box(y_curr_pred)
 
             # Get image-centric outputs. Some are used for visualization purpose.
@@ -1071,9 +1062,6 @@ class Nornn(object):
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
-            s_prev.append(search_prev if self.boxreg_flow else None)
-            s_recon.append(search_recon if self.boxreg_flow else None)
-            flow.append(flow_curr_pred_oc if self.boxreg_flow else None)
 
             # Update for next time-step.
             x_prev = x_curr
@@ -1094,9 +1082,6 @@ class Nornn(object):
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
-        s_prev        = tf.stack(s_prev, axis=1) if self.boxreg_flow else None
-        s_recon       = tf.stack(s_recon, axis=1) if self.boxreg_flow else None
-        flow          = tf.stack(flow, axis=1) if self.boxreg_flow else None
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
                    'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
@@ -1105,9 +1090,7 @@ class Nornn(object):
                    'box_s_val': box_s_val,
                    'target':    target,
                    'search':    search,
-                   's_prev':    s_prev,
-                   's_recon':   s_recon,
-                   'flow':      flow,
+                   'boxreg_delta': self.boxreg_delta,
                    }
         # JV: Use two separate state variables.
         # state = {}

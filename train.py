@@ -672,6 +672,12 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
         hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, Gaussian=True)
         hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, Gaussian=True)
 
+        # Regress displacement rather than absolute location. Update y_gt.
+        if outputs['boxreg_delta']:
+            y_gt['ic'] = y_gt['ic'] - tf.concat([tf.expand_dims(example['y0'],1), y_gt['ic'][:,:o.ntimesteps-1]],1) 
+            delta0 = y_gt['oc'][:,0] - tf.stack([0.5 - 1./o.search_scale/2., 0.5 + 1./o.search_scale/2.]*2)
+            y_gt['oc'] = tf.concat([tf.expand_dims(delta0,1), y_gt['oc'][:,1:]-y_gt['oc'][:,:o.ntimesteps-1]], 1)
+
         assert(y_gt['ic'].get_shape().as_list()[1] == o.ntimesteps)
 
         if outputs['hmap_interm'] is not None:
@@ -778,7 +784,7 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
             for name, loss in losses.iteritems():
                 tf.summary.scalar(name, loss, collections=summaries_collections)
 
-        gt['y']    = {'ic': y_gt['ic'],    'oc': y_gt['oc']}
+        #gt['y']    = {'ic': y_gt['ic'],    'oc': y_gt['oc']}
         gt['hmap'] = {'ic': hmap_gt['ic'], 'oc': hmap_gt['oc']} # for visualization in summary.
         return tf.reduce_sum(losses.values(), name=scope), gt
 
