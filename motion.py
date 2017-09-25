@@ -21,9 +21,9 @@ def augment(sequence,
             min_diam=0.1,
             max_diam=0.5,
             # Motion augmentation:
-            translate_kind='laplace',  # laplace or normal
+            translate_kind='normal',   # normal, laplace
             translate_amount=0.0,      # Default is none.
-            scale_kind='laplace',      # laplace or normal
+            scale_kind='normal',       # normal, laplace
             scale_exp_amount=1.0,      # Default is none.
             keep_original_motion=True, # Add motion or over-ride?
             ):
