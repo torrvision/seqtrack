@@ -550,7 +550,8 @@ def get_rectangles_from_hmap(hmap_oc_fg, box_s_raw, box_s_val, o, y_ref):
 def get_initial_rnn_state(cell_type, cell_size, num_layers=1):
     if cell_type == 'lstm':
         state = [{'h': None, 'c': None} for l in range(num_layers)]
-    elif cell_type == 'gru':
+    #elif cell_type == 'gru':
+    elif cell_type in ['gru', 'gau']:
         state = [{'h': None} for l in range(num_layers)]
     else:
         assert False, 'Not available cell type.'
@@ -570,46 +571,81 @@ def pass_rnn(x, state, cell, o, skip=False):
     # 2. (LSTM) Try LSTM architecture as defined in "An Empirical Exploration of-".
     # 2. Try channel-wise convolution.
 
+    # skip state indicating which state will be connected to.
+    if skip:
+        skip_state = range(state['h'].shape.as_list()[1]) # All states (dense). # TODO: sparse skip. stride?
+    else:
+        skip_state = [-1] # only previous state.
+
     if cell == 'lstm':
-        if skip:
-            h_prev, c_prev = tf.reduce_sum(state['h'], 1), tf.reduce_sum(state['c'], 1)
-        else:
-            h_prev, c_prev = state['h'], state['c']
+        h_prev, c_prev = state['h'], state['c']
         with slim.arg_scope([slim.conv2d],
-                #num_outputs=2,
                 num_outputs=h_prev.shape.as_list()[-1],
                 kernel_size=3,
                 activation_fn=None,
                 weights_regularizer=slim.l2_regularizer(o.wd)):
-            it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') + slim.conv2d(h_prev, scope='hi'))
-            ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') + slim.conv2d(h_prev, scope='hf'))
-            ct_tilda = tf.nn.tanh(slim.conv2d(x, scope='xc') + slim.conv2d(h_prev, scope='hc'))
-            ct = (ft * c_prev) + (it * ct_tilda)
-            ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') + slim.conv2d(h_prev, scope='ho'))
+            #it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') + slim.conv2d(h_prev, scope='hi'))
+            #ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') + slim.conv2d(h_prev, scope='hf'))
+            #ct_tilda = tf.nn.tanh(slim.conv2d(x, scope='xc') + slim.conv2d(h_prev, scope='hc'))
+            #ct = (ft * c_prev) + (it * ct_tilda)
+            #ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') + slim.conv2d(h_prev, scope='ho'))
+            #ht = ot * tf.nn.tanh(ct)
+            #it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='hi_{}'.format(s)) for s in skip_state]))
+            #ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='hf_{}'.format(s)) for s in skip_state]))
+            #ct_tilda = tf.nn.tanh(slim.conv2d(x, scope='xc') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='hc_{}'.format(s)) for s in skip_state]))
+            #ct = (tf.reduce_sum(tf.expand_dims(ft, 1) * c_prev, 1)) + (it * ct_tilda)
+            #ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='ho_{}'.format(s)) for s in skip_state]))
+            #ht = ot * tf.nn.tanh(ct)
+            it = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='i'))
+            ft = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='f'))
+            ct_tilda = tf.nn.tanh(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='c'))
+            ct = (tf.reduce_sum(tf.expand_dims(ft, 1) * c_prev, 1)) + (it * ct_tilda)
+            ot = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='o'))
             ht = ot * tf.nn.tanh(ct)
         output = ht
-        if skip: # Pop the oldest state and push the current state.
-            state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht,1)], 1)
-            state['c'] = tf.concat([state['c'][:,1:], tf.expand_dims(ct,1)], 1)
-        else:
-            state['h'], state['c'] = ht, ct
+        state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht,1)], 1)
+        state['c'] = tf.concat([state['c'][:,1:], tf.expand_dims(ct,1)], 1)
     elif cell == 'gru':
-        h_prev = tf.reduce_sum(state['h'], 1) if skip else state['h']
+        h_prev = state['h']
         with slim.arg_scope([slim.conv2d],
-                #num_outputs=2,
                 num_outputs=h_prev.shape.as_list()[-1],
                 kernel_size=3,
                 activation_fn=None,
                 weights_regularizer=slim.l2_regularizer(o.wd)):
-            rt = tf.nn.sigmoid(slim.conv2d(x, scope='xr') + slim.conv2d(h_prev, scope='hr'))
-            zt = tf.nn.sigmoid(slim.conv2d(x, scope='xz') + slim.conv2d(h_prev, scope='hz'))
-            h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') + slim.conv2d(rt * h_prev, scope='hh'))
-            ht = zt * h_prev + (1-zt) * h_tilda
+            #rt = tf.nn.sigmoid(slim.conv2d(x, scope='xr') + slim.conv2d(h_prev, scope='hr'))
+            #zt = tf.nn.sigmoid(slim.conv2d(x, scope='xz') + slim.conv2d(h_prev, scope='hz'))
+            #h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') + slim.conv2d(rt * h_prev, scope='hh'))
+            #ht = zt * h_prev + (1-zt) * h_tilda
+            #rt = tf.nn.sigmoid(slim.conv2d(x, scope='xr') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='hr_{}'.format(s)) for s in skip_state]))
+            #zt = tf.nn.sigmoid(slim.conv2d(x, scope='xz') +
+            #        tf.add_n([slim.conv2d(h_prev[:,s], scope='hz_{}'.format(s)) for s in skip_state]))
+            #h_tilda = tf.nn.tanh(slim.conv2d(x, scope='xh') +
+            #        tf.add_n([slim.conv2d(rt * h_prev[:,s], scope='hh_{}'.format(s)) for s in skip_state]))
+            #ht = tf.reduce_sum(tf.expand_dims(zt, 1) * h_prev, 1) + (1-zt) * h_tilda
+            rt = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='r'))
+            zt = tf.nn.sigmoid(slim.conv2d(tf.concat([x]+[h_prev[:,s] for s in skip_state],-1), scope='z'))
+            h_tilda = tf.nn.tanh(slim.conv2d(tf.concat([x]+[rt * h_prev[:,s] for s in skip_state],-1), scope='h'))
+            ht = tf.reduce_sum(tf.expand_dims(zt, 1) * h_prev, 1) + (1-zt) * h_tilda
         output = ht
-        if skip: # Pop the oldest state and push the current state.
-            state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht, 1)], 1)
-        else:
-            state['h'] = ht
+        state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht, 1)], 1)
+    elif cell == 'gau':
+        h_prev = state['h']
+        with slim.arg_scope([slim.conv2d],
+                num_outputs=h_prev.shape.as_list()[-1],
+                kernel_size=3,
+                activation_fn=None,
+                weights_regularizer=slim.l2_regularizer(o.wd)):
+            xh = tf.concat([x]+[h_prev[:,s] for s in skip_state],-1)
+            ht = tf.nn.tanh(slim.conv2d(xh, scope='f')) * tf.nn.sigmoid(slim.conv2d(xh, scope='g'))
+            ht = slim.conv2d(ht, kernel_size=1, scope='1x1')
+            ht = ht + x # final residual connection.
+        output = ht
+        state['h'] = tf.concat([state['h'][:,1:], tf.expand_dims(ht, 1)], 1)
     else:
         assert False, 'Not available cell type.'
     return output, state
@@ -634,10 +670,12 @@ class Nornn(object):
                  coarse_hmap=False,
                  bnorm_xcorr=False,
                  bnorm_deconv=False,
+                 interm_supervision=False,
                  rnn_cell_type='gru',
                  rnn_num_layers=0,
                  rnn_residual=False,
                  rnn_skip=False,
+                 rnn_skip_support=1,
                  ):
         # model parameters
         self.feat_act          = feat_act
@@ -653,10 +691,12 @@ class Nornn(object):
         self.coarse_hmap       = coarse_hmap
         self.bnorm_xcorr       = bnorm_xcorr
         self.bnorm_deconv      = bnorm_deconv
+        self.interm_supervision= interm_supervision
         self.rnn_cell_type     = rnn_cell_type
         self.rnn_num_layers    = rnn_num_layers
         self.rnn_residual      = rnn_residual
         self.rnn_skip          = rnn_skip
+        self.rnn_skip_support  = rnn_skip_support
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -813,6 +853,14 @@ class Nornn(object):
                 scoremap = slim.conv2d(scoremap, scope='conv2')
             return scoremap
 
+        def pass_interm_supervision(x, o):
+            with slim.arg_scope([slim.conv2d],
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                dim = x.shape.as_list()[-1]
+                x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='conv1')
+                x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='conv2')
+            return x
+
         def pass_deconvolution(x, is_training, o):
             ''' Upsampling layers.
             The last layer should not have an activation!
@@ -890,10 +938,8 @@ class Nornn(object):
         y  = enforce_inside_box(y)
 
         # RNN cell states
-        cell_size = tf.stack([tf.shape(x0)[0], o.ntimesteps, 31, 31, 256] if self.rnn_skip else
-                             [tf.shape(x0)[0], 31, 31, 256])
         rnn_state_init = get_initial_rnn_state(cell_type=self.rnn_cell_type,
-                                               cell_size=cell_size,
+                                               cell_size=[tf.shape(x0)[0], self.rnn_skip_support, 31, 31, 256],
                                                num_layers=self.rnn_num_layers)
 
         # Add identity op to ensure that we can feed state here.
@@ -910,8 +956,8 @@ class Nornn(object):
         hmap_pred = []
         # Case of object-centric approach.
         y_pred_oc = []
-        hmap_gt_oc = []
         hmap_pred_oc = []
+        hmap_interm = []
         box_s_raw = []
         box_s_val = []
         target = []
@@ -951,6 +997,10 @@ class Nornn(object):
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
+
+            if self.interm_supervision:
+                with tf.variable_scope('interm_supervision', reuse=(t > 0)):
+                    hmap_interm_curr = pass_interm_supervision(scoremap, o)
 
             for l in range(self.rnn_num_layers):
                 with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
@@ -1016,6 +1066,7 @@ class Nornn(object):
             hmap_pred.append(hmap_curr_pred)
             y_pred_oc.append(y_curr_pred_oc)
             hmap_pred_oc.append(hmap_curr_pred_oc)
+            hmap_interm.append(hmap_interm_curr if self.interm_supervision else None)
             box_s_raw.append(box_s_raw_curr)
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
@@ -1038,6 +1089,7 @@ class Nornn(object):
         hmap_pred     = tf.stack(hmap_pred, axis=1)
         y_pred_oc     = tf.stack(y_pred_oc, axis=1)
         hmap_pred_oc  = tf.stack(hmap_pred_oc, axis=1)
+        hmap_interm   = tf.stack(hmap_interm, axis=1) if self.interm_supervision else None
         box_s_raw     = tf.stack(box_s_raw, axis=1)
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
@@ -1048,6 +1100,7 @@ class Nornn(object):
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
                    'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
+                   'hmap_interm': hmap_interm,
                    'box_s_raw': box_s_raw,
                    'box_s_val': box_s_val,
                    'target':    target,

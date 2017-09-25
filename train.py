@@ -673,6 +673,14 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
 
         assert(y_gt['ic'].get_shape().as_list()[1] == o.ntimesteps)
 
+        if outputs['hmap_interm'] is not None:
+            pred_size = outputs['hmap_interm'].shape.as_list()[2:4]
+            hmap_interm_gt, unmerge = merge_dims(hmap_gt['oc'], 0, 2)
+            hmap_interm_gt = tf.image.resize_images(hmap_interm_gt, pred_size,
+                    method=tf.image.ResizeMethod.BILINEAR,
+                    align_corners=True)
+            hmap_interm_gt = unmerge(hmap_interm_gt, axis=0)
+
         if 'oc' in outputs['hmap']:
             # Resize GT heatmap to match size of prediction if necessary.
             pred_size = outputs['hmap']['oc'].shape.as_list()[2:4]
@@ -744,6 +752,18 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
             if 'ce_balanced' in o.losses:
                 losses['ce_balanced'] = tf.reduce_mean(
                         tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
+
+            if outputs['hmap_interm'] is not None:
+                hmap_gt_valid   = tf.boolean_mask(hmap_interm_gt, example['y_is_valid'])
+                hmap_pred_valid = tf.boolean_mask(outputs['hmap_interm'], example['y_is_valid'])
+                # Flatten to feed into softmax_cross_entropy_with_logits.
+                hmap_gt_valid, unmerge = merge_dims(hmap_gt_valid, 0, 3)
+                hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
+                loss_ce_interm = tf.nn.softmax_cross_entropy_with_logits(
+                        labels=hmap_gt_valid,
+                        logits=hmap_pred_valid)
+                loss_ce_interm = unmerge(loss_ce_interm, 0)
+                losses['ce_interm'] = tf.reduce_mean(loss_ce_interm)
 
         # Reconstruction loss using generalized Charbonnier penalty
         if 'recon' in o.losses:
