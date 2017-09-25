@@ -137,7 +137,7 @@ def augment(sequence,
         if viewport is not None:
             break
     if viewport is None:
-        print 'exhausted attempts: {}'.format(max_attempts)
+        # print 'exhausted attempts: {}'.format(max_attempts)
         return sequence
 
     output = dict(sequence)
