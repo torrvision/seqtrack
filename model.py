@@ -658,6 +658,7 @@ class Nornn(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
+                 gated_cross_correlation=False,
                  scale_target_num=1, # odd number, e.g., {1, 3, 5}
                  scale_target_mode='add', # {'add', 'weight'}
                  divide_target=False,
@@ -677,6 +678,7 @@ class Nornn(object):
                  ):
         # model parameters
         self.feat_act          = feat_act
+        self.gated_cross_correlation = gated_cross_correlation
         self.scale_target_num  = scale_target_num
         self.scale_target_mode= scale_target_mode
         self.divide_target     = divide_target
@@ -725,18 +727,19 @@ class Nornn(object):
             # corners of before/after convolutions match! If training example
             # pairs are centered, it may not need to be this way though.
             # TODO: Try DenseNet! Diverse feature, lower parameters, data augmentation effect.
+            conv_out = []
             if o.cnn_model == 'custom':
                 with slim.arg_scope([slim.conv2d],
                         normalizer_fn=slim.batch_norm,
                         normalizer_params={'is_training': is_training, 'fused': True},
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    x = slim.conv2d(x, 16, 11, stride=2, scope='conv1')
+                    x = slim.conv2d(x, 16, 11, stride=2, scope='conv1'); conv_out.append(x)
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
-                    x = slim.conv2d(x, 32, 5, stride=1, scope='conv2')
+                    x = slim.conv2d(x, 32, 5, stride=1, scope='conv2'); conv_out.append(x)
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
-                    x = slim.conv2d(x, 64, 3, stride=1, scope='conv3')
-                    x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
-                    x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
+                    x = slim.conv2d(x, 64, 3, stride=1, scope='conv3'); conv_out.append(x)
+                    x = slim.conv2d(x, 128, 3, stride=1, scope='conv4'); conv_out.append(x)
+                    x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5'); conv_out.append(x)
             elif o.cnn_model =='siamese': # exactly same as Siamese
                 with slim.arg_scope([slim.conv2d],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -769,7 +772,8 @@ class Nornn(object):
                     x = slim.conv2d(x, 512, [3, 3], activation_fn=get_act(act), scope='conv5/conv5_3')
             else:
                 assert False, 'Model not available'
-            return x
+            #return x
+            return conv_out
 
         def pass_cross_correlation(search, target, o):
             ''' Perform cross-correlation (convolution) to find the target object.
@@ -840,6 +844,48 @@ class Nornn(object):
                 scoremap = slim.conv2d(scoremap, scope='conv1')
                 scoremap = slim.conv2d(scoremap, scope='conv2')
             return scoremap
+
+        def transform_feature(x):
+            ''' Resize and conv with tanh, except for the last one since already applied.
+            '''
+            dims = x[-1].shape.as_list() # size based on the last output.
+            for l in range(len(x)-1):
+                with slim.arg_scope([slim.conv2d],
+                        num_outputs=dims[-1],
+                        kernel_size=3,
+                        activation_fn=tf.nn.tanh,
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    x[l] = slim.conv2d(tf.image.resize_images(x[l], dims[1:3], align_corners=True),
+                                       scope='feature_{}'.format(l))
+            return x
+
+        def pass_gated_activation_fusion(scoremap):
+            ''' Following Wavenet's Gated Activation Unit.
+            '''
+            dims = scoremap[0].shape.as_list()
+
+            # gated activation fusion
+            scoremap_fuse = []
+            with slim.arg_scope([slim.conv2d],
+                    num_outputs=dims[-1],
+                    kernel_size=1,
+                    activation_fn=None,
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                for l in range(len(scoremap)):
+                    scoremap_fuse.append(
+                            tf.nn.tanh(slim.conv2d(scoremap[l], scope='filter{}'.format(l))) *
+                            tf.nn.sigmoid(slim.conv2d(scoremap[l], scope='gate{}'.format(l))))
+            scoremap_fuse = tf.add_n(scoremap_fuse)
+
+            # 1x1 conv
+            with slim.arg_scope([slim.conv2d],
+                    num_outputs=dims[-1],
+                    kernel_size=1,
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                scoremap_fuse = slim.conv2d(scoremap_fuse, scope='conv1')
+                scoremap_fuse = slim.conv2d(scoremap_fuse, scope='conv2')
+
+            return scoremap_fuse
 
         def pass_interm_supervision(x, o):
             with slim.arg_scope([slim.conv2d],
@@ -975,6 +1021,8 @@ class Nornn(object):
         target_curr = process_target_with_box(x0, y0, o)
         with tf.variable_scope(o.cnn_model):
             target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
+            if self.gated_cross_correlation:
+                target_feat = transform_feature(target_feat)
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
@@ -992,9 +1040,21 @@ class Nornn(object):
                 if t == 0:
                     scope.reuse_variables() # two Siamese CNNs shared.
                 search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
+                if self.gated_cross_correlation:
+                    search_feat = transform_feature(search_feat)
 
-            with tf.variable_scope('cross_correlation', reuse=(t > 0)):
-                scoremap = pass_cross_correlation(search_feat, target_feat, o)
+            if self.gated_cross_correlation:
+                # TODO: Try not share parameters between multiple cross-correlations.
+                scoremap = []
+                with tf.variable_scope('cross_correlation', reuse=(t > 0)) as scope:
+                    for l in range(len(search_feat)):
+                        scoremap.append(pass_cross_correlation(search_feat[l], target_feat[l], o))
+                        scope.reuse_variables()
+                with tf.variable_scope('gated_activation_fusion', reuse=(t > 0)):
+                    scoremap = pass_gated_activation_fusion(scoremap)
+            else:
+                with tf.variable_scope('cross_correlation', reuse=(t > 0)):
+                    scoremap = pass_cross_correlation(search_feat[-1], target_feat[-1], o)
 
             if self.interm_supervision:
                 with tf.variable_scope('interm_supervision', reuse=(t > 0)):
