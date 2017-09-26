@@ -101,6 +101,12 @@ def rect_translate(rect, delta, name='rect_translate'):
         return make_rect(min_pt + delta, max_pt + delta)
 
 
+def rect_mul(rect, scale, name='rect_mul'):
+    with tf.name_scope(name) as scope:
+        min_pt, max_pt = rect_min_max(rect)
+        return make_rect(min_pt * scale, max_pt * scale)
+
+
 def warp_anchor(anchor, warp, name='warp_anchor'):
     # Supports broadcasting.
     with tf.name_scope(name) as scope:

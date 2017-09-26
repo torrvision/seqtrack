@@ -24,7 +24,7 @@ import visualize
 from model import convert_rec_to_heatmap, to_object_centric_coordinate
 from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
 
-EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
+EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid', 'aspect']
 
 
 def train(create_model, datasets, eval_sets, o, use_queues=False):
@@ -58,6 +58,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         'y0'         # Position of target in first image, shape [b, 4]
         'x'          # Input images, shape [b, n, h, w, 3]
         'y_is_valid' # Booleans indicating presence of frame, shape [b, n]
+        'aspect'     # Aspect ratio (width/height) of original image, shape [b]
 
     and the output dictionary has fields::
 
@@ -436,6 +437,7 @@ def _make_input_pipeline(o, dtype=tf.float32,
             'x_raw':      images_batch['images'][:, 1:],
             'y':          images_batch['labels'][:, 1:],
             'y_is_valid': images_batch['label_is_valid'][:, 1:],
+            'aspect':     images_batch['aspect'],
         }
         return example_batch, feed_loop
 
@@ -447,6 +449,7 @@ def _make_placeholders(o, default=None):
         'x_raw':      [None, o.ntimesteps, o.frmsz, o.frmsz, 3],
         'y':          [None, o.ntimesteps, 4],
         'y_is_valid': [None, o.ntimesteps],
+        'aspect':     [None],
     }
     dtype = lambda k: tf.bool if k.endswith('_is_valid') else o.dtype
 
@@ -841,12 +844,14 @@ def _load_sequence(seq, o):
         'image_files'    # Tensor with shape [n] containing strings.
         'labels'         # Tensor with shape [n, 4] containing rectangles.
         'label_is_valid' # Tensor with shape [n] containing booleans.
+        'aspect'         # Tensor with shape [] containing aspect ratio.
     Example has keys:
         'x0_raw'     # First image in sequence, shape [h, w, 3]
         'y0'         # Position of target in first image, shape [4]
         'x_raw'      # Input images, shape [n-1, h, w, 3]
         'y'          # Position of target in following frames, shape [n-1, 4]
         'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
+        'aspect'     # Aspect ratio of original image.
     '''
     seq_len = len(seq['image_files'])
     assert(len(seq['labels']) == seq_len)
@@ -862,6 +867,7 @@ def _load_sequence(seq, o):
         'x_raw':      np.array(images[1:]),
         'y':          np.array(seq['labels'][1:]),
         'y_is_valid': np.array(seq['label_is_valid'][1:]),
+        'aspect':     seq['aspect'],
     }
 
 def _load_batch(seqs, o):

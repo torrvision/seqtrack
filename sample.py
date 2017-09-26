@@ -106,11 +106,12 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
             num_labels = sum(1 for x in label_is_valid if x)
             if num_labels < 2:
                 continue
+            width, height = dataset.original_image_size[video]
             yield {
                 'image_files':    [dataset.image_file(video, t) for t in frames],
                 'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
                 'label_is_valid': label_is_valid,
-                'original_image_size': dataset.original_image_size[video],
+                'aspect':         float(width) / float(height),
                 'video_name':     video + '-{}'.format(cnt) if len(trajectories) > 1 else video,
             }
 

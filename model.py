@@ -130,25 +130,29 @@ def pass_depth_wise_norm(feature):
         feature_new.append((feature[:,:,:,c] - mean) / (tf.sqrt(var)+1e-5))
     return tf.stack(feature_new, 3)
 
-def process_target_with_box(img, box, o):
+def process_target_with_box(img, box, o, aspect=None):
     ''' Crop target image x with box y.
     Box y coordinate is in image-centric space.
     '''
     with tf.control_dependencies(
             [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0)]):
         box = tf.identity(box)
+
+    if aspect is not None:
+        # stretch = tf.stack([aspect, tf.ones_like(aspect)], axis=-1)
+        stretch = tf.stack([tf.pow(aspect, 0.5), tf.pow(aspect, -0.5)], axis=-1)
+        # Find w, h such that w/h = aspect, (w+h)/2 = 1.
+        # w = aspect*h, (1+aspect)*h = 2, h = 2/(1+aspect)
+        # and w = 2*aspect/(1+aspect) = 2/(1+1/aspect)
+        # stretch = tf.stack([2./(1. + 1./aspect), 2./(1. + aspect)], axis=-1)
+        box = geom.rect_mul(box, stretch)
     # JV: Take a different rectange at the same position.
     box = modify_aspect_ratio(box, o.aspect_method)
+    if aspect is not None:
+        box = geom.rect_mul(box, 1./stretch)
+
     box = scale_rectangle_size(o.target_scale, box)
-    # JV: Remove dependence on explicit batch size.
-    # crop = []
-    # for b in range(o.batchsz):
-    #     cropbox = tf.expand_dims(tf.stack([box[b,1], box[b,0], box[b,3], box[b,2]], 0), 0)
-    #     crop.append(tf.image.crop_and_resize(tf.expand_dims(img[b],0),
-    #                                          boxes=cropbox,
-    #                                          box_ind=[0],
-    #                                          crop_size=[o.frmsz/o.search_scale]*2)) # target size
-    # return tf.concat(crop, 0)
+
     batch_len = tf.shape(img)[0]
     crop_size = (o.frmsz - 1) * o.target_scale / o.search_scale + 1
     # Check that target_scale / search_scale * (frame_size-1) is an integer.
@@ -160,7 +164,7 @@ def process_target_with_box(img, box, o):
         extrapolation_value=128)
     return crop
 
-def process_search_with_box(img, box, o):
+def process_search_with_box(img, box, o, aspect=None):
     ''' Crop search image x with box y.
     '''
     # NOTE: Input box might be `line at the side` or `dot at the corner` of frame.
@@ -173,67 +177,13 @@ def process_search_with_box(img, box, o):
              ]):
         box = tf.identity(box)
 
-    # JV: Remove dependence on explicit batch size.
-    # search = []
-    # box_s_raw = []
-    # box_s_val = []
-    # for b in range(o.batchsz):
-    #     x1 = box[b,0]
-    #     y1 = box[b,1]
-    #     x2 = box[b,2]
-    #     y2 = box[b,3]
-    #     # search size: `search_scale` times bigger than object.
-    #     w_margin = ((x2 - x1) * float(o.search_scale - 1)) * 0.5
-    #     h_margin = ((y2 - y1) * float(o.search_scale - 1)) * 0.5
-    #     # NOTE: Both s_raw or s_val can have size of 0.
-    #     # search box (raw)
-    #     x1_s_raw = x1 - w_margin # can be outside of [0,1]
-    #     y1_s_raw = y1 - h_margin
-    #     x2_s_raw = x2 + w_margin
-    #     y2_s_raw = y2 + h_margin
-    #     # search box (valid)
-    #     # NOTE: when box_s_raw is completely outside of frame, by doing below
-    #     # it should/will be either `dot at the corner` or `line at the side`.
-    #     x1_s_val = tf.clip_by_value(x1_s_raw, 0.0, 1.0)
-    #     y1_s_val = tf.clip_by_value(y1_s_raw, 0.0, 1.0)
-    #     x2_s_val = tf.clip_by_value(x2_s_raw, 0.0, 1.0)
-    #     y2_s_val = tf.clip_by_value(y2_s_raw, 0.0, 1.0)
-    #     # crop (only within valid region)
-    #     s_val_h = tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32)
-    #     s_val_w = tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32)
-    #     s_val_h = tf.maximum(s_val_h, 1) # to prevent assertion error.
-    #     s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
-    #     crop_val = tf.image.crop_to_bounding_box(
-    #             image=img[b],
-    #             offset_height=tf.cast(y1_s_val*(o.frmsz-1), tf.int32),
-    #             offset_width =tf.cast(x1_s_val*(o.frmsz-1), tf.int32),
-    #             target_height=s_val_h,
-    #             target_width =s_val_w)
-    #     # pad crop so that it preserves aspect ratio.
-    #     s_raw_h = tf.cast((y2_s_raw-y1_s_raw)*o.frmsz, tf.int32)
-    #     s_raw_w = tf.cast((x2_s_raw-x1_s_raw)*o.frmsz, tf.int32)
-    #     s_raw_h = tf.maximum(s_raw_h, 1) # to prevent assertion error.
-    #     s_raw_w = tf.maximum(s_raw_w, 1) # to prevent assertion error.
-    #     crop_pad = tf.image.pad_to_bounding_box(
-    #             image=crop_val,
-    #             offset_height=tf.cast((y1_s_val-y1_s_raw)*(o.frmsz-1), tf.int32),
-    #             offset_width =tf.cast((x1_s_val-x1_s_raw)*(o.frmsz-1), tf.int32),
-    #             target_height=s_raw_h,
-    #             target_width =s_raw_w)
-    #     # resize to 241 x 241
-    #     crop_res = tf.image.resize_images(crop_pad, [o.frmsz, o.frmsz])
-
-    #     # outputs we need.
-    #     search.append(crop_res)
-    #     box_s_raw.append(tf.stack([x1_s_raw, y1_s_raw, x2_s_raw, y2_s_raw], 0))
-    #     box_s_val.append(tf.stack([x1_s_val, y1_s_val, x2_s_val, y2_s_val], 0))
-
-    # search = tf.stack(search, 0)
-    # box_s_raw = tf.stack(box_s_raw, 0)
-    # box_s_val = tf.stack(box_s_val, 0)
-    # return search, box_s_raw, box_s_val
-
+    if aspect is not None:
+        stretch = tf.stack([tf.pow(aspect, 0.5), tf.pow(aspect, -0.5)], axis=-1)
+        box = geom.rect_mul(box, stretch)
     box = modify_aspect_ratio(box, o.aspect_method)
+    if aspect is not None:
+        box = geom.rect_mul(box, 1./stretch)
+
     box = scale_rectangle_size(o.search_scale, box)
     box_val = geom.rect_intersect(box, geom.unit_rect())
 
@@ -972,7 +922,7 @@ class Nornn(object):
         search = []
 
         # Some pre-processing.
-        target_curr = process_target_with_box(x0, y0, o)
+        target_curr = process_target_with_box(x0, y0, o, aspect=inputs['aspect'])
         with tf.variable_scope(o.cnn_model):
             target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
 
@@ -985,7 +935,7 @@ class Nornn(object):
             #target_curr = tf.cond(is_training, # TODO: check the condition being passed.
             #                      lambda: process_target_with_box(x_prev, y_prev, o),
             #                      lambda: process_target_with_box(x0, y0, o))
-            search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
+            search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o, aspect=inputs['aspect'])
 
             with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
                 #target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
@@ -1017,7 +967,7 @@ class Nornn(object):
                 assert self.coarse_hmap, 'Do not up-sample scoremap in the case of box-regression.'
 
                 # CNN processing target-in-search raw image pair.
-                search_0, _, _ = process_search_with_box(x0, y0, o)
+                search_0, _, _ = process_search_with_box(x0, y0, o, aspect=inputs['aspect'])
                 search_pair = tf.concat([search_0, search_curr], 3)
                 with tf.variable_scope('process_search_pair', reuse=(t > 0)):
                     search_pair_feat = pass_cnn(search_pair, o, is_training, 'relu')
