@@ -32,7 +32,7 @@ class Opts(object):
         self.frmsz              = 241
         self.useresizedimg      = True
         self.use_queues         = False
-        self.heatmap_stride     = 1
+        self.heatmap_params     = {}
 
         #----------------------------------------------------------------------
         # model - general

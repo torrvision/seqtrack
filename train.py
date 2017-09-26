@@ -658,8 +658,8 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
 
         y_gt['ic'] = example['y']
         y_gt['oc'] = to_object_centric_coordinate(example['y'], outputs['box_s_raw'], outputs['box_s_val'], o)
-        hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, Gaussian=True)
-        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, Gaussian=True)
+        hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, **o.heatmap_params)
+        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, **o.heatmap_params)
 
         # Regress displacement rather than absolute location. Update y_gt.
         if outputs['boxreg_delta']:

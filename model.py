@@ -36,7 +36,7 @@ from upsample import upsample
 
 concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
 
-def convert_rec_to_heatmap(rec, o, min_size=None, Gaussian=False):
+def convert_rec_to_heatmap(rec, o, min_size=None, mode='box', Gaussian=False, radius_pos=0.1, sigma=0.3):
     '''Create heatmap from rectangle
     Args:
         rec: [batchsz x ntimesteps x 4] ground-truth rectangle labels
@@ -50,10 +50,11 @@ def convert_rec_to_heatmap(rec, o, min_size=None, Gaussian=False):
         #     masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
         # return tf.stack(masks, axis=1, name=scope)
         rec, unmerge = merge_dims(rec, 0, 2)
-        masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size, Gaussian=Gaussian)
+        masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size,
+            mode=mode, Gaussian=Gaussian, radius_pos=radius_pos, sigma=sigma)
         return unmerge(masks, 0)
 
-def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, Gaussian=False, name='mask'):
+def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, mode='box', Gaussian=False, radius_pos=0.2, sigma=0.3, name='mask'):
     with tf.name_scope(name) as scope:
         # create mask using rec; typically rec=y_prev
         # rec -- [b, 4]
@@ -72,21 +73,29 @@ def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, G
         x2 = tf.expand_dims(tf.expand_dims(x2, -1), -1)
         y1 = tf.expand_dims(tf.expand_dims(y1, -1), -1)
         y2 = tf.expand_dims(tf.expand_dims(y2, -1), -1)
+        x_center = (x1 + x2) / 2.0
+        y_center = (y1 + y2) / 2.0
+        width, height = x2 - x1, y2 - y1
         # masks -- [b, frmsz, frmsz]
-        if not Gaussian:
-            masks = tf.logical_and(
-                tf.logical_and(tf.less_equal(x1, grid_x),
-                               tf.less_equal(grid_x, x2)),
-                tf.logical_and(tf.less_equal(y1, grid_y),
-                               tf.less_equal(grid_y, y2)))
-        else: # TODO: Need debug this properly.
-            x_center = (x1 + x2) / 2.0
-            y_center = (y1 + y2) / 2.0
-            width, height = x2 - x1, y2 - y1
-            x_sigma = width * 0.3 # TODO: can be better..
-            y_sigma = height * 0.3
-            masks = tf.exp(-( tf.square(grid_x - x_center) / (2 * tf.square(x_sigma)) +
-                              tf.square(grid_y - y_center) / (2 * tf.square(y_sigma)) ))
+        if mode == 'box':
+            if not Gaussian:
+                masks = tf.logical_and(
+                    tf.logical_and(tf.less_equal(x1, grid_x),
+                                   tf.less_equal(grid_x, x2)),
+                    tf.logical_and(tf.less_equal(y1, grid_y),
+                                   tf.less_equal(grid_y, y2)))
+            else: # TODO: Need debug this properly.
+                x_sigma = width * sigma # TODO: can be better..
+                y_sigma = height * sigma
+                masks = tf.exp(-( tf.square(grid_x - x_center) / (2 * tf.square(x_sigma)) +
+                                  tf.square(grid_y - y_center) / (2 * tf.square(y_sigma)) ))
+        elif mode == 'center':
+            obj_diam = 0.5 * (width + height)
+            r = tf.sqrt(tf.square(grid_x - x_center) + tf.square(grid_y - y_center)) / obj_diam
+            if not Gaussian:
+                masks = tf.less_equal(r, radius_pos)
+            else:
+                masks = tf.exp(-0.5 * tf.square(r) / tf.square(sigma))
 
         if kind == 'fg': # only foreground mask
             masks = tf.expand_dims(masks, 3) # to have channel dim
