@@ -22,6 +22,7 @@ def track(sess, inputs, model, sequence, use_gt):
     sequence['image_files']    -- List of strings of length n.
     sequence['labels']         -- Numpy array of shape [n, 4]
     sequence['label_is_valid'] -- List of booleans of length n.
+    sequence['aspect']         -- Aspect ratio of original image.
     sequence['original_image_size'] -- (width, height) tuple.
         Required to compute IOU, etc. with correct aspect ratio.
     '''
@@ -54,12 +55,13 @@ def track(sess, inputs, model, sequence, use_gt):
         is_valid = np.array(sequence['label_is_valid'][start:start+chunk_len])
         is_valid = _single_to_batch(pad_to(is_valid, model.sequence_len), model.batch_size)
         feed_dict = {
-            inputs['x_raw']:  images,
-            inputs['x0_raw']: first_image,
-            inputs['y0']:     first_label,
-            inputs['y']:      y_gt,
+            inputs['x_raw']:      images,
+            inputs['x0_raw']:     first_image,
+            inputs['y0']:         first_label,
+            inputs['y']:          y_gt,
             inputs['y_is_valid']: is_valid,
-            inputs['use_gt']: use_gt,
+            inputs['aspect']:     _single_to_batch(sequence['aspect'], model.batch_size),
+            inputs['use_gt']:     use_gt,
         }
         if start > 1:
             # This is not the first chunk.

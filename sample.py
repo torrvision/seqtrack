@@ -108,11 +108,12 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
                 continue
             width, height = dataset.original_image_size[video]
             yield {
-                'image_files':    [dataset.image_file(video, t) for t in frames],
-                'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
-                'label_is_valid': label_is_valid,
-                'aspect':         float(width) / float(height),
-                'video_name':     video + '-{}'.format(cnt) if len(trajectories) > 1 else video,
+                'image_files':         [dataset.image_file(video, t) for t in frames],
+                'labels':              [trajectory.get(t, _invalid_rect()) for t in frames],
+                'label_is_valid':      label_is_valid,
+                'aspect':              float(width) / float(height),
+                'original_image_size': dataset.original_image_size[video],
+                'video_name':          video + '-{}'.format(cnt) if len(trajectories) > 1 else video,
             }
 
 def _invalid_rect():
