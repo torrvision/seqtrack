@@ -658,6 +658,8 @@ class Nornn(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
+                 target_estimate=False,
+                 target_estimate_combine='gau', # {'gau', 'concat', 'add'}
                  scale_target_num=1, # odd number, e.g., {1, 3, 5}
                  scale_target_mode='add', # {'add', 'weight'}
                  divide_target=False,
@@ -677,6 +679,8 @@ class Nornn(object):
                  ):
         # model parameters
         self.feat_act          = feat_act
+        self.target_estimate   = target_estimate
+        self.target_estimate_combine = target_estimate_combine
         self.scale_target_num  = scale_target_num
         self.scale_target_mode= scale_target_mode
         self.divide_target     = divide_target
@@ -841,6 +845,35 @@ class Nornn(object):
                 scoremap = slim.conv2d(scoremap, scope='conv2')
             return scoremap
 
+        def combine_scoremaps(scoremap_init, scoremap_curr, mode, o):
+            dims = scoremap_init.shape.as_list()
+
+            if mode == 'add':
+                scoremap = scoremap_init + scoremap_curr
+            elif mode == 'concat':
+                scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
+            if mode == 'gau':
+                with slim.arg_scope([slim.conv2d],
+                        num_outputs=dims[-1],
+                        kernel_size=3,
+                        activation_fn=None,
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    scoremap = tf.nn.tanh(slim.conv2d(scoremap_init, scope='filter_init')) * \
+                               tf.nn.sigmoid(slim.conv2d(scoremap_init, scope='gate_init')) + \
+                               tf.nn.tanh(slim.conv2d(scoremap_curr, scope='filter_curr')) * \
+                               tf.nn.sigmoid(slim.conv2d(scoremap_curr, scope='gate_curr'))
+            else:
+                assert False, 'Not available scoremap combine mode.'
+
+            with slim.arg_scope([slim.conv2d],
+                    num_outputs=dims[-1],
+                    kernel_size=3,
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                scoremap = slim.conv2d(scoremap, scope='conv1')
+                scoremap = slim.conv2d(scoremap, scope='conv2')
+
+            return scoremap
+
         def pass_interm_supervision(x, o):
             with slim.arg_scope([slim.conv2d],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -972,29 +1005,34 @@ class Nornn(object):
         search = []
 
         # Some pre-processing.
-        target_curr = process_target_with_box(x0, y0, o)
+        target_init = process_target_with_box(x0, y0, o)
         with tf.variable_scope(o.cnn_model):
-            target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
+            target_init_feat = pass_cnn(target_init, o, is_training, self.feat_act) # TODO: Try RSZ target.
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr = y[:, t]
 
             # target and search images
-            #target_curr = process_target_with_box(x_prev, y_prev, o)
+            target_curr = process_target_with_box(x_prev, y_prev, o)
             #target_curr = tf.cond(is_training, # TODO: check the condition being passed.
             #                      lambda: process_target_with_box(x_prev, y_prev, o),
             #                      lambda: process_target_with_box(x0, y0, o))
             search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
 
-            with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
-                #target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
-                if t == 0:
-                    scope.reuse_variables() # two Siamese CNNs shared.
-                search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
+            with tf.variable_scope(o.cnn_model, reuse=True) as scope:
+                target_curr_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
+                search_feat      = pass_cnn(search_curr, o, is_training, self.feat_act)
 
-            with tf.variable_scope('cross_correlation', reuse=(t > 0)):
-                scoremap = pass_cross_correlation(search_feat, target_feat, o)
+            with tf.variable_scope('cross_correlation_init', reuse=(t > 0)):
+                scoremap_init = pass_cross_correlation(search_feat, target_init_feat, o)
+
+            if self.target_estimate:
+                with tf.variable_scope('cross_correlation_curr', reuse=(t > 0)):
+                    scoremap_curr = pass_cross_correlation(search_feat, target_curr_feat, o)
+
+                with tf.variable_scope('combine_scoremaps', reuse=(t > 0)):
+                    scoremap = combine_scoremaps(scoremap_init, scoremap_curr, self.target_estimate_combine,o)
 
             if self.interm_supervision:
                 with tf.variable_scope('interm_supervision', reuse=(t > 0)):
