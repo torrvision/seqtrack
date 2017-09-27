@@ -1033,9 +1033,14 @@ class Nornn(object):
                     scoremap = pass_conv_boxreg_branch(scoremap, o, is_training)
                 boxreg_inputs = tf.concat([search_pair_feat, scoremap], -1)
 
-                # Box regression. # TODO: Try delta output.
+                # Box regression.
                 with tf.variable_scope('regress_box', reuse=(t > 0)):
-                    y_curr_pred_oc = pass_regress_box(boxreg_inputs, is_training)
+                    if self.boxreg_delta:
+                        y_curr_pred_oc_delta = pass_regress_box(boxreg_inputs, is_training)
+                        y_curr_pred_oc = y_curr_pred_oc_delta + \
+                                         tf.stack([0.5 - 1./o.search_scale/2., 0.5 + 1./o.search_scale/2.]*2)
+                    else:
+                        y_curr_pred_oc = pass_regress_box(boxreg_inputs, is_training)
                     y_curr_pred = to_image_centric_coordinate(y_curr_pred_oc, box_s_raw_curr, o)
 
                 # Regularize box scale manually.
@@ -1055,7 +1060,7 @@ class Nornn(object):
             # Outputs.
             y_pred.append(y_curr_pred)
             hmap_pred.append(hmap_curr_pred)
-            y_pred_oc.append(y_curr_pred_oc)
+            y_pred_oc.append(y_curr_pred_oc_delta if self.boxreg_delta else y_curr_pred_oc)
             hmap_pred_oc.append(hmap_curr_pred_oc)
             hmap_interm.append(hmap_interm_curr if self.interm_supervision else None)
             box_s_raw.append(box_s_raw_curr)
