@@ -659,7 +659,7 @@ class Nornn(object):
                  summaries_collections=None,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
                  target_estimate=False,
-                 target_estimate_combine='gau', # {'gau', 'concat', 'add'}
+                 target_estimate_combine='concat_gau', # {'add', 'concat', 'gau_sum', 'concat_gau'}
                  scale_target_num=1, # odd number, e.g., {1, 3, 5}
                  scale_target_mode='add', # {'add', 'weight'}
                  divide_target=False,
@@ -852,7 +852,7 @@ class Nornn(object):
                 scoremap = scoremap_init + scoremap_curr
             elif mode == 'concat':
                 scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
-            if mode == 'gau':
+            elif mode == 'gau_sum':
                 with slim.arg_scope([slim.conv2d],
                         num_outputs=dims[-1],
                         kernel_size=3,
@@ -862,6 +862,15 @@ class Nornn(object):
                                tf.nn.sigmoid(slim.conv2d(scoremap_init, scope='gate_init')) + \
                                tf.nn.tanh(slim.conv2d(scoremap_curr, scope='filter_curr')) * \
                                tf.nn.sigmoid(slim.conv2d(scoremap_curr, scope='gate_curr'))
+            elif mode == 'concat_gau':
+                scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
+                with slim.arg_scope([slim.conv2d],
+                        num_outputs=dims[-1],
+                        kernel_size=3,
+                        activation_fn=None,
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    scoremap = tf.nn.tanh(slim.conv2d(scoremap, scope='filter')) * \
+                               tf.nn.sigmoid(slim.conv2d(scoremap, scope='gate'))
             else:
                 assert False, 'Not available scoremap combine mode.'
 
