@@ -3,7 +3,7 @@ import numpy as np
 import sys
 import os
 import time
-from progressbar import ProgressBar, Bar, Counter, ETA, Percentage # pip install progressbar
+import progressbar
 
 import draw
 import data
@@ -102,6 +102,18 @@ def _single_to_batch(x, batch_size):
     return pad_to(x, batch_size)
 
 
+def _make_progress_bar():
+    return progressbar.ProgressBar(widgets=[
+        progressbar.SimpleProgress(format='sequence %(value_s)s/%(max_value_s)s'), ' ',
+        '(', progressbar.Percentage(), ') ',
+        progressbar.Bar(), ' ',
+        progressbar.Timer(), ' (', progressbar.ETA(format_finished='ETA: Complete'), ')',
+    ])
+    # pbar = ProgressBar(maxval=len(sequences),
+    #         widgets=['sequence ', Counter(), '/{} ('.format(len(sequences)),
+    #             Percentage(), ') ', Bar(), ' ', ETA()]).start()
+
+
 def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False, save_frames=False):
     '''
     Args:
@@ -111,10 +123,8 @@ def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False, save_
     '''
     sequences = list(sequences)
     sequence_results = []
-    pbar = ProgressBar(maxval=len(sequences),
-            widgets=['sequence ', Counter(), '/{} ('.format(len(sequences)),
-                Percentage(), ') ', Bar(), ' ', ETA()]).start()
-    for i, sequence in enumerate(sequences):
+    bar = _make_progress_bar()
+    for i, sequence in enumerate(bar(sequences)):
         if len(sequence['image_files']) < 2:
             continue
         is_valid = sequence['label_is_valid']
@@ -123,7 +133,6 @@ def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False, save_
         if num_valid < 1:
             continue
         #print 'sequence {} of {}'.format(i+1, len(sequences))
-        pbar.update(i+1)
         pred, hmap_pred = track(sess, inputs, model, sequence, use_gt)
         if visualize:
             visualize(sequence['video_name'], sequence, pred, hmap_pred, save_frames)
@@ -132,7 +141,6 @@ def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False, save_
         pred = _unnormalize_rect(pred, sequence['original_image_size'])
         gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
         sequence_results.append(evaluate_track(pred, gt, is_valid))
-    pbar.finish()
 
     results = {}
     assert(len(sequence_results) > 0)
