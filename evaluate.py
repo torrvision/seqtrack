@@ -126,7 +126,7 @@ def evaluate(sess, inputs, model, sequences, visualize=None, use_gt=False, save_
         pbar.update(i+1)
         pred, hmap_pred = track(sess, inputs, model, sequence, use_gt)
         if visualize:
-            visualize(sequence['video_name'], sequence, pred, hmap_pred, model.image_size, save_frames)
+            visualize(sequence['video_name'], sequence, pred, hmap_pred, save_frames)
         gt = np.array(sequence['labels'])
         # Convert to original image co-ordinates.
         pred = _unnormalize_rect(pred, sequence['original_image_size'])
