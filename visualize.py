@@ -44,10 +44,10 @@ class VideoFileWriter:
                 rect_pred = _rect_to_int_list(_unnormalize_rect(rects_pred[t-1], im.size))
                 draw.rectangle(rect_pred, outline=color_pred)
                 # draw heatmap
-                hmap_pred = Image.fromarray(np.uint8(255*cm.hot(hmaps_pred[t-1,:,:,0])))
+                hmap_pred = Image.fromarray(cm.hot(hmaps_pred[t-1,:,:,0], bytes=True)).convert('RGB')
                 if hmap_pred.size != im.size: # i.e., OTB
                     hmap_pred = hmap_pred.resize(im.size)
-                im = Image.blend(im.convert('RGBA'), hmap_pred.convert('RGBA'), 0.5)
+                im = Image.blend(im, hmap_pred, 0.5)
                 #im.show()
             im.save(os.path.join(sequence_dir, self.pattern % t))
         args = ['ffmpeg', '-loglevel', 'error',
