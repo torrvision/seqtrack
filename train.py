@@ -315,7 +315,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     for eval_id, sampler in eval_sets.iteritems():
                         vis_dir = os.path.join(o.path_output, iter_id, eval_id)
                         if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
-                        visualizer = visualize.VideoFileWriter(vis_dir)
+                        # visualizer = visualize.VideoFileWriter(vis_dir)
                         # Run the tracker on a full epoch.
                         print 'evaluation: {}'.format(eval_id)
                         eval_sequences = sampler()
@@ -332,7 +332,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                             iter_id+'.json')
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model, eval_sequences,
-                                visualize=visualizer.visualize if o.save_videos else None,
+                                # visualize=visualizer.visualize if o.save_videos else None,
+                                visualize=True, vis_dir=vis_dir,
                                 use_gt=o.use_gt_eval,
                                 save_frames=o.save_frames),
                             makedir=True)

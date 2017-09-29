@@ -89,6 +89,7 @@ def im_to_arr(x, dtype=np.float32):
     return np.array(x, dtype=dtype)
 
 def pad_to(x, n, axis=0, mode='constant'):
+    x = np.asarray(x)
     width = [(0, 0) for s in x.shape]
     width[axis] = (0, n - x.shape[axis])
     return np.pad(x, width, mode=mode)
