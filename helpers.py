@@ -7,6 +7,8 @@ import os
 from PIL import Image
 import tensorflow as tf
 
+import geom_np
+
 def get_time():
     dt = datetime.datetime.now()
     time = '{0:04d}{1:02d}{2:02d}_h{3:02d}m{4:02d}s{5:02d}'.format(
@@ -47,10 +49,47 @@ def load_image(fname, size=None, resize=False):
                 raise ValueError('size does not match')
     return im
 
+def crop_and_resize(src, box, size, pad_value):
+    '''
+    Args:
+        src: PIL image
+        size: (width, height)
+    '''
+    assert len(pad_value) == 3
+    # Valid region in original image.
+    src_valid = geom_np.rect_intersect(box, geom_np.unit_rect())
+    # Valid region in box.
+    box_valid = geom_np.crop_rect(src_valid, box)
+    src_valid_pix = np.rint(geom_np.rect_mul(src_valid, src.size)).astype(np.int)
+    box_valid_pix = np.rint(geom_np.rect_mul(box_valid, size)).astype(np.int)
+
+    out = Image.new('RGB', size, pad_value)
+    src_valid_pix_size = geom_np.rect_size(src_valid_pix)
+    box_valid_pix_size = geom_np.rect_size(box_valid_pix)
+    if all(src_valid_pix_size >= 1) and all(box_valid_pix_size >= 1):
+        # Resize to final size in output image.
+        src_valid_im = src.crop(src_valid_pix)
+        out_valid_im = src_valid_im.resize(box_valid_pix_size)
+        out.paste(out_valid_im, box_valid_pix)
+    return out
+
+def load_image_viewport(fname, viewport, size, pad_value=None):
+    '''
+    Args:
+        size: (width, height)
+    '''
+    if pad_value is None:
+        pad_value = (128, 128, 128)
+    im = Image.open(fname)
+    if im.mode != 'RGB':
+        im = im.convert('RGB')
+    return crop_and_resize(im, viewport, size, pad_value)
+
 def im_to_arr(x, dtype=np.float32):
     return np.array(x, dtype=dtype)
 
 def pad_to(x, n, axis=0, mode='constant'):
+    x = np.asarray(x)
     width = [(0, 0) for s in x.shape]
     width[axis] = (0, n - x.shape[axis])
     return np.pad(x, width, mode=mode)
@@ -133,3 +172,28 @@ def diag_conv(x, f, strides, padding, **kwargs):
     # [ho, wo, b*c] -> [ho, wo, b, c] -> [b, ho, wo, c]
     x = tf.transpose(restore(x, axis=2), [2, 0, 1, 3])
     return x
+
+
+def to_nested_tuple(tensor, value):
+    if isinstance(tensor, dict) or isinstance(tensor, list) or isinstance(tensor, tuple):
+        # Recurse on collection.
+        if isinstance(tensor, dict):
+            assert isinstance(value, dict)
+            assert set(tensor.keys()) == set(value.keys())
+            keys = sorted(tensor.keys()) # Not necessary but may as well.
+            pairs = [(tensor[k], value[k]) for k in keys]
+        else:
+            assert isinstance(value, list) or isinstance(value, tuple)
+            assert len(tensor) == len(value)
+            pairs = zip(tensor, value)
+        pairs = map(lambda pair: to_nested_tuple(*pair), pairs)
+        # Convert from list of tuples to tuple of lists.
+        if len(pairs) == 0:
+            import pdb ; pdb.set_trace()
+        tensor, value = zip(*pairs)
+        # Convert from lists to tuples.
+        return tuple(tensor), tuple(value)
+    else:
+        # TODO: Assert tensor is tf.Tensor?
+        # TODO: Assert value is np.array?
+        return tensor, value

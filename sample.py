@@ -7,6 +7,9 @@ import pdb
 import math
 import os
 
+import geom_np
+
+
 def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=None,
            kind=None, ntimesteps=None, freq=10, min_freq=10, max_freq=60):
     '''
@@ -38,7 +41,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
     def _select_frames(is_valid, valid_frames):
         if kind == 'sampling':
             k = min(len(valid_frames), ntimesteps+1)
-            return sorted(generator.sample(valid_frames, k))
+            return sorted(generator.choice(valid_frames, k, replace=False))
         elif kind == 'freq-range-fit':
             # TODO: The scope of this sampler should include
             # choosing objects within videos.
@@ -84,7 +87,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
     assert((ntimesteps is None) == (kind == 'full'))
     videos = list(dataset.videos) # copy
     if max_videos is not None and len(videos) > max_videos:
-        videos = generator.sample(videos, max_videos)
+        videos = generator.choice(videos, max_videos, replace=False)
     else:
         if shuffle:
             generator.shuffle(videos)
@@ -92,7 +95,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
     for video in videos:
         trajectories = dataset.tracks[video]
         if max_objects is not None and len(trajectories) > max_objects:
-            trajectories = generator.sample(trajectories, max_objects)
+            trajectories = generator.choice(trajectories, max_objects, replace=False)
         # Do not shuffle objects within a sequence.
         # Assume that if the sampler is used for SGD, then max_objects = 1.
 
@@ -106,12 +109,15 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
             num_labels = sum(1 for x in label_is_valid if x)
             if num_labels < 2:
                 continue
+            width, height = dataset.original_image_size[video]
             yield {
-                'image_files':    [dataset.image_file(video, t) for t in frames],
-                'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
-                'label_is_valid': label_is_valid,
+                'image_files':         [dataset.image_file(video, t) for t in frames],
+                'viewports':           [geom_np.unit_rect() for _ in frames],
+                'labels':              [trajectory.get(t, _invalid_rect()) for t in frames],
+                'label_is_valid':      label_is_valid,
+                'aspect':              float(width) / float(height),
                 'original_image_size': dataset.original_image_size[video],
-                'video_name':     video + '-{}'.format(cnt) if len(trajectories) > 1 else video,
+                'video_name':          video + '-{}'.format(cnt) if len(trajectories) > 1 else video,
             }
 
 def _invalid_rect():

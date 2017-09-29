@@ -44,7 +44,7 @@ def crop_inverse(rect, name='crop_inverse'):
         # inv_max = inv_min + 1 / rect_size
         # u_max = u_min + 1 / x_size
         # v_max = v_min + 1 / y_size
-        return make_rect(inv_min, inv_max, name='scope')
+        return make_rect(inv_min, inv_max, name=scope)
 
 
 def rect_min_max(rect, name='rect_min_max'):
@@ -101,10 +101,10 @@ def rect_translate(rect, delta, name='rect_translate'):
         return make_rect(min_pt + delta, max_pt + delta)
 
 
-def rect_scale(rect, scale, name='rect_scale'):
+def rect_mul(rect, scale, name='rect_mul'):
     with tf.name_scope(name) as scope:
         min_pt, max_pt = rect_min_max(rect)
-        return make_rect(scale * min_pt, scale * max_pt)
+        return make_rect(min_pt * scale, max_pt * scale)
 
 
 def warp_anchor(anchor, warp, name='warp_anchor'):

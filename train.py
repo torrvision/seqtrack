@@ -3,6 +3,7 @@ import sys
 import csv
 import itertools
 import json
+import math
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
@@ -17,14 +18,15 @@ import threading
 import draw
 import evaluate
 import helpers
+import motion
 import pipeline
 import sample
 import visualize
 
 from model import convert_rec_to_heatmap, to_object_centric_coordinate
-from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
+from helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_dims
 
-EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
+EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid', 'aspect']
 
 
 def train(create_model, datasets, eval_sets, o, use_queues=False):
@@ -58,6 +60,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         'y0'         # Position of target in first image, shape [b, 4]
         'x'          # Input images, shape [b, n, h, w, 3]
         'y_is_valid' # Booleans indicating presence of frame, shape [b, n]
+        'aspect'     # Aspect ratio (width/height) of original image, shape [b]
 
     and the output dictionary has fields::
 
@@ -197,7 +200,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
     # Use a separate random number generator for each sampler.
     sequences = {mode: iter_examples(datasets[mode], o,
-                                     generator=random.Random(o.seed_global),
+                                     generator=np.random.RandomState(o.seed_global),
                                      num_epochs=None)
                  for mode in modes}
 
@@ -313,16 +316,25 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     for eval_id, sampler in eval_sets.iteritems():
                         vis_dir = os.path.join(o.path_output, iter_id, eval_id)
                         if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
-                        visualizer = visualize.VideoFileWriter(vis_dir)
+                        # visualizer = visualize.VideoFileWriter(vis_dir)
                         # Run the tracker on a full epoch.
                         print 'evaluation: {}'.format(eval_id)
                         eval_sequences = sampler()
+                        # eval_sequences = [
+                        #     motion.augment(sequence, rand=np.random,
+                        #         translate_kind='laplace',
+                        #         translate_amount=0.1,
+                        #         scale_kind='laplace',
+                        #         scale_exp_amount=math.exp(math.log(1.01)/30.))
+                        #     for sequence in eval_sequences
+                        # ]
                         # Cache the results.
                         result_file = os.path.join(o.path_output, 'assess', eval_id,
                             iter_id+'.json')
                         result = cache_json(result_file,
-                            lambda: evaluate.evaluate(sess, example, model,
-                                eval_sequences, visualize=visualizer.visualize if o.save_videos else None,
+                            lambda: evaluate.evaluate(sess, example, model, eval_sequences,
+                                # visualize=visualizer.visualize if o.save_videos else None,
+                                visualize=True, vis_dir=vis_dir,
                                 use_gt=o.use_gt_eval,
                                 save_frames=o.save_frames),
                             makedir=True)
@@ -436,6 +448,7 @@ def _make_input_pipeline(o, dtype=tf.float32,
             'x_raw':      images_batch['images'][:, 1:],
             'y':          images_batch['labels'][:, 1:],
             'y_is_valid': images_batch['label_is_valid'][:, 1:],
+            'aspect':     images_batch['aspect'],
         }
         return example_batch, feed_loop
 
@@ -447,6 +460,7 @@ def _make_placeholders(o, default=None):
         'x_raw':      [None, o.ntimesteps, o.frmsz, o.frmsz, 3],
         'y':          [None, o.ntimesteps, 4],
         'y_is_valid': [None, o.ntimesteps],
+        'aspect':     [None],
     }
     dtype = lambda k: tf.bool if k.endswith('_is_valid') else o.dtype
 
@@ -646,6 +660,10 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
                                   shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
                                   **o.sampler_params)
         for sequence in sequences:
+            # JV: Add motion augmentation.
+            # yield sequence
+            if o.augment_motion:
+                sequence = motion.augment(sequence, rand=generator, **o.motion_params)
             yield sequence
 
 def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
@@ -655,10 +673,24 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
 
         y_gt['ic'] = example['y']
         y_gt['oc'] = to_object_centric_coordinate(example['y'], outputs['box_s_raw'], outputs['box_s_val'], o)
-        hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, Gaussian=True)
-        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, Gaussian=True)
+        hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, **o.heatmap_params)
+        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, **o.heatmap_params)
+
+        # Regress displacement rather than absolute location. Update y_gt.
+        if outputs['boxreg_delta']:
+            y_gt['ic'] = y_gt['ic'] - tf.concat([tf.expand_dims(example['y0'],1), y_gt['ic'][:,:o.ntimesteps-1]],1) 
+            delta0 = y_gt['oc'][:,0] - tf.stack([0.5 - 1./o.search_scale/2., 0.5 + 1./o.search_scale/2.]*2)
+            y_gt['oc'] = tf.concat([tf.expand_dims(delta0,1), y_gt['oc'][:,1:]-y_gt['oc'][:,:o.ntimesteps-1]], 1)
 
         assert(y_gt['ic'].get_shape().as_list()[1] == o.ntimesteps)
+
+        if outputs['hmap_interm'] is not None:
+            pred_size = outputs['hmap_interm'].shape.as_list()[2:4]
+            hmap_interm_gt, unmerge = merge_dims(hmap_gt['oc'], 0, 2)
+            hmap_interm_gt = tf.image.resize_images(hmap_interm_gt, pred_size,
+                    method=tf.image.ResizeMethod.BILINEAR,
+                    align_corners=True)
+            hmap_interm_gt = unmerge(hmap_interm_gt, axis=0)
 
         if 'oc' in outputs['hmap']:
             # Resize GT heatmap to match size of prediction if necessary.
@@ -732,6 +764,18 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
                 losses['ce_balanced'] = tf.reduce_mean(
                         tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
 
+            if outputs['hmap_interm'] is not None:
+                hmap_gt_valid   = tf.boolean_mask(hmap_interm_gt, example['y_is_valid'])
+                hmap_pred_valid = tf.boolean_mask(outputs['hmap_interm'], example['y_is_valid'])
+                # Flatten to feed into softmax_cross_entropy_with_logits.
+                hmap_gt_valid, unmerge = merge_dims(hmap_gt_valid, 0, 3)
+                hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
+                loss_ce_interm = tf.nn.softmax_cross_entropy_with_logits(
+                        labels=hmap_gt_valid,
+                        logits=hmap_pred_valid)
+                loss_ce_interm = unmerge(loss_ce_interm, 0)
+                losses['ce_interm'] = tf.reduce_mean(loss_ce_interm)
+
         # Reconstruction loss using generalized Charbonnier penalty
         if 'recon' in o.losses:
             alpha = 0.25
@@ -744,7 +788,7 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
             for name, loss in losses.iteritems():
                 tf.summary.scalar(name, loss, collections=summaries_collections)
 
-        gt['y']    = {'ic': y_gt['ic'],    'oc': y_gt['oc']}
+        #gt['y']    = {'ic': y_gt['ic'],    'oc': y_gt['oc']}
         gt['hmap'] = {'ic': hmap_gt['ic'], 'oc': hmap_gt['oc']} # for visualization in summary.
         return tf.reduce_sum(losses.values(), name=scope), gt
 
@@ -758,9 +802,14 @@ def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
         image = (1.0/255)*example['x_raw'][0][::time_stride]
         y_gt   = example['y'][0][::time_stride]
         y_pred = model.outputs['y']['ic'][0][::time_stride]
-        image  = tf.concat((tf.expand_dims(model.state['x'][0][0], 0),  image), 0) # add init frame
-        y_gt   = tf.concat((tf.expand_dims(model.state['y'][0][0], 0),   y_gt), 0) # add init y_gt
-        y_pred = tf.concat((tf.expand_dims(model.state['y'][0][0], 0), y_pred), 0) # add init y_gt for pred too
+        # TODO: Do not use model.state here. Breaks encapsulation.
+        # JV: Use new model state format.
+        # image  = tf.concat((tf.expand_dims(model.state['x'][0][0], 0),  image), 0) # add init frame
+        # y_gt   = tf.concat((tf.expand_dims(model.state['y'][0][0], 0),   y_gt), 0) # add init y_gt
+        # y_pred = tf.concat((tf.expand_dims(model.state['y'][0][0], 0), y_pred), 0) # add init y_gt for pred too
+        image  = tf.concat((tf.expand_dims(model.state_init['x'][0], 0),  image), 0) # add init frame
+        y_gt   = tf.concat((tf.expand_dims(model.state_init['y'][0], 0),   y_gt), 0) # add init y_gt
+        y_pred = tf.concat((tf.expand_dims(model.state_init['y'][0], 0), y_pred), 0) # add init y_gt for pred too
         y = tf.stack([y_gt, y_pred], axis=1)
         coords = tf.unstack(y, axis=2)
         boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
@@ -810,27 +859,35 @@ def _load_sequence(seq, o):
         'image_files'    # Tensor with shape [n] containing strings.
         'labels'         # Tensor with shape [n, 4] containing rectangles.
         'label_is_valid' # Tensor with shape [n] containing booleans.
+        'aspect'         # Tensor with shape [] containing aspect ratio.
     Example has keys:
         'x0_raw'     # First image in sequence, shape [h, w, 3]
         'y0'         # Position of target in first image, shape [4]
         'x_raw'      # Input images, shape [n-1, h, w, 3]
         'y'          # Position of target in following frames, shape [n-1, 4]
         'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
+        'aspect'     # Aspect ratio of original image.
     '''
     seq_len = len(seq['image_files'])
     assert(len(seq['labels']) == seq_len)
     assert(len(seq['label_is_valid']) == seq_len)
     assert(seq['label_is_valid'][0] == True)
-    # TODO: Use o.dtype here? Numpy complains.
-    f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
-                            dtype=np.float32)
-    images = map(f, seq['image_files'])
+    # f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
+    #                         dtype=np.float32)
+    images = [
+        im_to_arr(load_image_viewport(
+            seq['image_files'][t],
+            seq['viewports'][t],
+            size=(o.frmsz, o.frmsz)))
+        for t in range(seq_len)
+    ]
     return {
         'x0_raw':     np.array(images[0]),
         'y0':         np.array(seq['labels'][0]),
         'x_raw':      np.array(images[1:]),
         'y':          np.array(seq['labels'][1:]),
         'y_is_valid': np.array(seq['label_is_valid'][1:]),
+        'aspect':     seq['aspect'],
     }
 
 def _load_batch(seqs, o):
