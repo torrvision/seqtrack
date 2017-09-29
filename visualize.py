@@ -7,13 +7,15 @@ import subprocess
 import tempfile
 import matplotlib.cm as cm
 
+from helpers import load_image_viewport
+
 
 class VideoFileWriter:
     def __init__(self, root, pattern='%06d.jpeg'):
         self.root    = root
         self.pattern = pattern
 
-    def visualize(self, sequence_name, sequence, rects_pred, hmaps_pred, save_frames):
+    def visualize(self, sequence_name, sequence, rects_pred, hmaps_pred, image_size, save_frames):
         if not save_frames:
             sequence_dir = tempfile.mkdtemp()
         else:
@@ -27,9 +29,13 @@ class VideoFileWriter:
         color_pred = ImageColor.getrgb('yellow')
         color_gt = ImageColor.getrgb('blue')
         for t in range(sequence_len):
-            im = Image.open(sequence['image_files'][t])
-            if im.mode != 'RGB':
-                im = im.convert('RGB')
+            # JV: Load image at specified resolution accounting for viewport.
+            # im = Image.open(sequence['image_files'][t])
+            # if im.mode != 'RGB':
+            #     im = im.convert('RGB')
+            im = load_image_viewport(sequence['image_files'][t],
+                                     sequence['viewports'][t],
+                                     image_size)
             draw = ImageDraw.Draw(im)
             if is_valid_gt[t]:
                 rect_gt = _rect_to_int_list(_unnormalize_rect(rects_gt[t], im.size))
