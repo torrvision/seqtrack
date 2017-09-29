@@ -658,6 +658,7 @@ class Nornn(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
+                 stn=False,
                  target_estimate=False,
                  target_estimate_combine='concat_gau', # {'add', 'concat', 'gau_sum', 'concat_gau'}
                  scale_target_num=1, # odd number, e.g., {1, 3, 5}
@@ -679,6 +680,7 @@ class Nornn(object):
                  ):
         # model parameters
         self.feat_act          = feat_act
+        self.stn               = stn
         self.target_estimate   = target_estimate
         self.target_estimate_combine = target_estimate_combine
         self.scale_target_num  = scale_target_num
@@ -706,17 +708,33 @@ class Nornn(object):
     def _load_model(self, inputs, o):
 
         def pass_stn_localization(x):
-            ''' Localization network in Spatial Transformer Network
+            ''' Localization network in Spatial Transformer Network.
+            The official IC-STN code is also considered in designing the network.
             '''
-            with slim.arg_scope([slim.fully_connected],
-                    activation_fn=tf.nn.tanh,
-                    weights_initializer=tf.zeros_initializer,
+            dims = x.shape.as_list()
+            with slim.arg_scope([slim.conv2d, slim.fully_connected],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.conv2d(x, dims[-1]*9,     9, 4, padding='VALID', scope='conv1')
+                x = slim.conv2d(x, dims[-1]*9*7,   7, 3, padding='VALID', scope='conv2')
+                x = slim.conv2d(x, dims[-1]*9*7*5, 5, 2, padding='VALID', scope='conv3')
+                assert x.shape.as_list()[1] == 1, 'You changed something (search_scale, frmsz, etc)? then re-design network!'
                 x = slim.flatten(x)
-                x = slim.fully_connected(x, 1024, scope='fc1')
+                x = slim.fully_connected(x, 512, scope='fc1')
                 b_init = np.array([[1., 0, 0], [0, 1., 0]]).astype('float32').flatten() # identity at start.
-                x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
+                x = slim.fully_connected(x, 6,
+                        activation_fn=None,
+                        weights_initializer=tf.zeros_initializer,
+                        biases_initializer=tf.constant_initializer(b_init), scope='fc2')
             return x
+            #with slim.arg_scope([slim.fully_connected],
+            #        activation_fn=tf.nn.tanh,
+            #        weights_initializer=tf.zeros_initializer,
+            #        weights_regularizer=slim.l2_regularizer(o.wd)):
+            #    x = slim.flatten(x)
+            #    x = slim.fully_connected(x, 1024, scope='fc1')
+            #    b_init = np.array([[1., 0, 0], [0, 1., 0]]).astype('float32').flatten() # identity at start.
+            #    x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
+            #return x
 
         def pass_cnn(x, o, is_training, act):
             ''' Fully convolutional cnn.
@@ -1032,18 +1050,29 @@ class Nornn(object):
             x_curr = x[:, t]
             y_curr = y[:, t]
 
-            # target and search images
-            target_curr = process_target_with_box(x_prev, y_prev, o)
-            #target_curr = tf.cond(is_training, # TODO: check the condition being passed.
-            #                      lambda: process_target_with_box(x_prev, y_prev, o),
-            #                      lambda: process_target_with_box(x0, y0, o))
+            # search image
             search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
 
             with tf.variable_scope(o.cnn_model, reuse=True) as scope:
-                target_curr_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
-                search_feat      = pass_cnn(search_curr, o, is_training, self.feat_act)
+                search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
 
             if self.target_estimate:
+                # (new) target image
+                target_curr = process_target_with_box(x_prev, y_prev, o)
+
+                # NOTE: localization network may need to be re-designed if,
+                # - changes of where to apply STN (i.e., either before or after cnn)
+                # - changes of anything that affects target size (e.g., search_scale, frmsz)
+                if self.stn:
+                    with tf.variable_scope('stn_localization', reuse=(t > 0)):
+                        theta = pass_stn_localization(target_curr)
+                        dims = target_curr.shape.as_list()
+                        target_curr = transformer(target_curr, theta, dims[1:3])
+                        target_curr.set_shape(dims)
+
+                with tf.variable_scope(o.cnn_model, reuse=True) as scope:
+                    target_curr_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
+
                 with tf.variable_scope('cross_correlation', reuse=(t > 0)) as scope:
                     scoremap_init = pass_cross_correlation(search_feat, target_init_feat, o)
                     scope.reuse_variables()
