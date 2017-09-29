@@ -1034,14 +1034,14 @@ class Nornn(object):
                 search_feat      = pass_cnn(search_curr, o, is_training, self.feat_act)
 
             with tf.variable_scope('cross_correlation_init', reuse=(t > 0)):
-                scoremap_init = pass_cross_correlation(search_feat, target_init_feat, o)
+                scoremap = pass_cross_correlation(search_feat, target_init_feat, o)
 
             if self.target_estimate:
                 with tf.variable_scope('cross_correlation_curr', reuse=(t > 0)):
                     scoremap_curr = pass_cross_correlation(search_feat, target_curr_feat, o)
 
                 with tf.variable_scope('combine_scoremaps', reuse=(t > 0)):
-                    scoremap = combine_scoremaps(scoremap_init, scoremap_curr, self.target_estimate_combine,o)
+                    scoremap = combine_scoremaps(scoremap, scoremap_curr, self.target_estimate_combine, o)
 
             if self.interm_supervision:
                 with tf.variable_scope('interm_supervision', reuse=(t > 0)):
@@ -1112,7 +1112,7 @@ class Nornn(object):
             hmap_interm.append(hmap_interm_curr if self.interm_supervision else None)
             box_s_raw.append(box_s_raw_curr)
             box_s_val.append(box_s_val_curr)
-            target.append(target_curr) # To visualize what network sees.
+            target.append(target_curr if self.target_estimate else target_init) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
 
             # Update for next time-step.
