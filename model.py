@@ -871,6 +871,16 @@ class Nornn(object):
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     scoremap = tf.nn.tanh(slim.conv2d(scoremap, scope='filter')) * \
                                tf.nn.sigmoid(slim.conv2d(scoremap, scope='gate'))
+            elif mode == 'share_gau_sum':
+                with slim.arg_scope([slim.conv2d],
+                        num_outputs=dims[-1],
+                        kernel_size=3,
+                        activation_fn=None,
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    scoremap = tf.nn.tanh(slim.conv2d(scoremap_init, scope='filter')) * \
+                               tf.nn.sigmoid(slim.conv2d(scoremap_init, scope='gate')) + \
+                               tf.nn.tanh(slim.conv2d(scoremap_curr, scope='filter', reuse=True)) * \
+                               tf.nn.sigmoid(slim.conv2d(scoremap_curr, scope='gate', reuse=True))
             else:
                 assert False, 'Not available scoremap combine mode.'
 
@@ -1033,15 +1043,17 @@ class Nornn(object):
                 target_curr_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
                 search_feat      = pass_cnn(search_curr, o, is_training, self.feat_act)
 
-            with tf.variable_scope('cross_correlation_init', reuse=(t > 0)):
-                scoremap = pass_cross_correlation(search_feat, target_init_feat, o)
-
             if self.target_estimate:
-                with tf.variable_scope('cross_correlation_curr', reuse=(t > 0)):
+                with tf.variable_scope('cross_correlation', reuse=(t > 0)) as scope:
+                    scoremap_init = pass_cross_correlation(search_feat, target_init_feat, o)
+                    scope.reuse_variables()
                     scoremap_curr = pass_cross_correlation(search_feat, target_curr_feat, o)
 
                 with tf.variable_scope('combine_scoremaps', reuse=(t > 0)):
-                    scoremap = combine_scoremaps(scoremap, scoremap_curr, self.target_estimate_combine, o)
+                    scoremap = combine_scoremaps(scoremap_init, scoremap_curr, self.target_estimate_combine, o)
+            else:
+                with tf.variable_scope('cross_correlation', reuse=(t > 0)):
+                    scoremap = pass_cross_correlation(search_feat, target_init_feat, o)
 
             if self.interm_supervision:
                 with tf.variable_scope('interm_supervision', reuse=(t > 0)):
