@@ -635,6 +635,7 @@ class Nornn(object):
     '''
     def __init__(self, inputs, o,
                  summaries_collections=None,
+                 conv1_stride=2,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
                  scale_target_num=1, # odd number, e.g., {1, 3, 5}
                  scale_target_mode='add', # {'add', 'weight'}
@@ -657,6 +658,7 @@ class Nornn(object):
                  boxreg_regularize=False,
                  ):
         # model parameters
+        self.conv1_stride      = conv1_stride
         self.feat_act          = feat_act
         self.scale_target_num  = scale_target_num
         self.scale_target_mode= scale_target_mode
@@ -714,7 +716,7 @@ class Nornn(object):
                         normalizer_fn=slim.batch_norm,
                         normalizer_params={'is_training': is_training, 'fused': True},
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    x = slim.conv2d(x, 16, 11, stride=2, scope='conv1')
+                    x = slim.conv2d(x, 16, 11, stride=self.conv1_stride, scope='conv1')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
                     x = slim.conv2d(x, 32, 5, stride=1, scope='conv2')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
@@ -724,7 +726,7 @@ class Nornn(object):
             elif o.cnn_model =='siamese': # exactly same as Siamese
                 with slim.arg_scope([slim.conv2d],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    x = slim.conv2d(x, 96, 11, stride=2, scope='conv1')
+                    x = slim.conv2d(x, 96, 11, stride=self.conv1_stride, scope='conv1')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
                     x = slim.conv2d(x, 256, 5, stride=1, scope='conv2')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
