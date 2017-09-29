@@ -3,6 +3,7 @@ import sys
 import csv
 import itertools
 import json
+import math
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
@@ -17,12 +18,13 @@ import threading
 import draw
 import evaluate
 import helpers
+import motion
 import pipeline
 import sample
 import visualize
 
 from model import convert_rec_to_heatmap, to_object_centric_coordinate
-from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
+from helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_dims
 
 EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
 
@@ -197,7 +199,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
     # Use a separate random number generator for each sampler.
     sequences = {mode: iter_examples(datasets[mode], o,
-                                     generator=random.Random(o.seed_global),
+                                     generator=np.random.RandomState(o.seed_global),
                                      num_epochs=None)
                  for mode in modes}
 
@@ -313,16 +315,25 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     for eval_id, sampler in eval_sets.iteritems():
                         vis_dir = os.path.join(o.path_output, iter_id, eval_id)
                         if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
-                        visualizer = visualize.VideoFileWriter(vis_dir)
+                        # visualizer = visualize.VideoFileWriter(vis_dir)
                         # Run the tracker on a full epoch.
                         print 'evaluation: {}'.format(eval_id)
                         eval_sequences = sampler()
+                        # eval_sequences = [
+                        #     motion.augment(sequence, rand=np.random,
+                        #         translate_kind='laplace',
+                        #         translate_amount=0.1,
+                        #         scale_kind='laplace',
+                        #         scale_exp_amount=math.exp(math.log(1.01)/30.))
+                        #     for sequence in eval_sequences
+                        # ]
                         # Cache the results.
                         result_file = os.path.join(o.path_output, 'assess', eval_id,
                             iter_id+'.json')
                         result = cache_json(result_file,
-                            lambda: evaluate.evaluate(sess, example, model,
-                                eval_sequences, visualize=visualizer.visualize if o.save_videos else None,
+                            lambda: evaluate.evaluate(sess, example, model, eval_sequences,
+                                # visualize=visualizer.visualize if o.save_videos else None,
+                                visualize=True, vis_dir=vis_dir,
                                 use_gt=o.use_gt_eval,
                                 save_frames=o.save_frames),
                             makedir=True)
@@ -646,6 +657,10 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
                                   shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
                                   **o.sampler_params)
         for sequence in sequences:
+            # JV: Add motion augmentation.
+            # yield sequence
+            if o.augment_motion:
+                sequence = motion.augment(sequence, rand=generator, **o.motion_params)
             yield sequence
 
 def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
@@ -658,7 +673,21 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
         hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, Gaussian=True)
         hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, Gaussian=True)
 
+        # Regress displacement rather than absolute location. Update y_gt.
+        if outputs['boxreg_delta']:
+            y_gt['ic'] = y_gt['ic'] - tf.concat([tf.expand_dims(example['y0'],1), y_gt['ic'][:,:o.ntimesteps-1]],1) 
+            delta0 = y_gt['oc'][:,0] - tf.stack([0.5 - 1./o.search_scale/2., 0.5 + 1./o.search_scale/2.]*2)
+            y_gt['oc'] = tf.concat([tf.expand_dims(delta0,1), y_gt['oc'][:,1:]-y_gt['oc'][:,:o.ntimesteps-1]], 1)
+
         assert(y_gt['ic'].get_shape().as_list()[1] == o.ntimesteps)
+
+        if outputs['hmap_interm'] is not None:
+            pred_size = outputs['hmap_interm'].shape.as_list()[2:4]
+            hmap_interm_gt, unmerge = merge_dims(hmap_gt['oc'], 0, 2)
+            hmap_interm_gt = tf.image.resize_images(hmap_interm_gt, pred_size,
+                    method=tf.image.ResizeMethod.BILINEAR,
+                    align_corners=True)
+            hmap_interm_gt = unmerge(hmap_interm_gt, axis=0)
 
         if 'oc' in outputs['hmap']:
             # Resize GT heatmap to match size of prediction if necessary.
@@ -732,6 +761,18 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
                 losses['ce_balanced'] = tf.reduce_mean(
                         tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
 
+            if outputs['hmap_interm'] is not None:
+                hmap_gt_valid   = tf.boolean_mask(hmap_interm_gt, example['y_is_valid'])
+                hmap_pred_valid = tf.boolean_mask(outputs['hmap_interm'], example['y_is_valid'])
+                # Flatten to feed into softmax_cross_entropy_with_logits.
+                hmap_gt_valid, unmerge = merge_dims(hmap_gt_valid, 0, 3)
+                hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
+                loss_ce_interm = tf.nn.softmax_cross_entropy_with_logits(
+                        labels=hmap_gt_valid,
+                        logits=hmap_pred_valid)
+                loss_ce_interm = unmerge(loss_ce_interm, 0)
+                losses['ce_interm'] = tf.reduce_mean(loss_ce_interm)
+
         # Reconstruction loss using generalized Charbonnier penalty
         if 'recon' in o.losses:
             alpha = 0.25
@@ -744,7 +785,7 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
             for name, loss in losses.iteritems():
                 tf.summary.scalar(name, loss, collections=summaries_collections)
 
-        gt['y']    = {'ic': y_gt['ic'],    'oc': y_gt['oc']}
+        #gt['y']    = {'ic': y_gt['ic'],    'oc': y_gt['oc']}
         gt['hmap'] = {'ic': hmap_gt['ic'], 'oc': hmap_gt['oc']} # for visualization in summary.
         return tf.reduce_sum(losses.values(), name=scope), gt
 
@@ -826,10 +867,15 @@ def _load_sequence(seq, o):
     assert(len(seq['labels']) == seq_len)
     assert(len(seq['label_is_valid']) == seq_len)
     assert(seq['label_is_valid'][0] == True)
-    # TODO: Use o.dtype here? Numpy complains.
-    f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
-                            dtype=np.float32)
-    images = map(f, seq['image_files'])
+    # f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
+    #                         dtype=np.float32)
+    images = [
+        im_to_arr(load_image_viewport(
+            seq['image_files'][t],
+            seq['viewports'][t],
+            size=(o.frmsz, o.frmsz)))
+        for t in range(seq_len)
+    ]
     return {
         'x0_raw':     np.array(images[0]),
         'y0':         np.array(seq['labels'][0]),

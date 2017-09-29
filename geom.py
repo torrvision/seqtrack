@@ -44,7 +44,7 @@ def crop_inverse(rect, name='crop_inverse'):
         # inv_max = inv_min + 1 / rect_size
         # u_max = u_min + 1 / x_size
         # v_max = v_min + 1 / y_size
-        return make_rect(inv_min, inv_max, name='scope')
+        return make_rect(inv_min, inv_max, name=scope)
 
 
 def rect_min_max(rect, name='rect_min_max'):
