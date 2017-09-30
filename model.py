@@ -737,7 +737,6 @@ class Nornn(object):
                         # then 240 / 2 / 24 = 5 gives a template of size 6.
                         kernel_size = (o.frmsz-1) * o.target_scale / o.search_scale / total_stride + 1
                         # (kernel_size-1) == (frmsz-1) * (target_scale / search_scale) / total_stride
-                        print 'target size:', str(kernel_size)
                         assert (kernel_size-1)*total_stride*o.search_scale == (o.frmsz-1)*o.target_scale
                         assert np.all(np.array(kernel_size) % 2 == 1)
                         x = slim.conv2d(x, 256, kernel_size,
