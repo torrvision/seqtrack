@@ -637,6 +637,8 @@ class Nornn(object):
                  summaries_collections=None,
                  conv1_stride=2,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
+                 target_is_vector=False,
+                 join_method='dot', # {'dot', 'concat'}
                  scale_target_num=1, # odd number, e.g., {1, 3, 5}
                  scale_target_mode='add', # {'add', 'weight'}
                  divide_target=False,
@@ -660,6 +662,8 @@ class Nornn(object):
         # model parameters
         self.conv1_stride      = conv1_stride
         self.feat_act          = feat_act
+        self.target_is_vector  = target_is_vector
+        self.join_method       = join_method
         self.scale_target_num  = scale_target_num
         self.scale_target_mode= scale_target_mode
         self.divide_target     = divide_target
@@ -700,7 +704,7 @@ class Nornn(object):
                 x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
             return x
 
-        def pass_cnn(x, o, is_training, act):
+        def pass_cnn(x, o, is_training, act, is_target):
             ''' Fully convolutional cnn.
             Either custom or other popular model.
             Note that Slim pre-defined networks can't be directly used, as they
@@ -722,7 +726,25 @@ class Nornn(object):
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
                     x = slim.conv2d(x, 64, 3, stride=1, scope='conv3')
                     x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
-                    x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
+                    if not self.target_is_vector:
+                        x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
+                    else:
+                        # Use stride 2 at conv5.
+                        x = slim.conv2d(x, 256, 3, stride=2, scope='conv5')
+                        # Total stride is 8 * conv1_stride.
+                        total_stride = self.conv1_stride * 8
+                        # If frmsz = 241, conv1_stride = 3, search_scale = 2*target_scale
+                        # then 240 / 2 / 24 = 5 gives a template of size 6.
+                        kernel_size = (o.frmsz-1) * o.target_scale / o.search_scale / total_stride + 1
+                        # (kernel_size-1) == (frmsz-1) * (target_scale / search_scale) / total_stride
+                        print 'target size:', str(kernel_size)
+                        assert (kernel_size-1)*total_stride*o.search_scale == (o.frmsz-1)*o.target_scale
+                        assert np.all(np.array(kernel_size) % 2 == 1)
+                        x = slim.conv2d(x, 256, kernel_size,
+                            activation_fn=get_act(act),
+                            padding='VALID' if is_target else 'SAME',
+                            scope='conv6')
+
             elif o.cnn_model =='siamese': # exactly same as Siamese
                 with slim.arg_scope([slim.conv2d],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -762,7 +784,7 @@ class Nornn(object):
             I use channel-wise convolution, instead of normal convolution.
             '''
             dims = target.shape.as_list()
-            assert dims[1] % 2 == 1, 'target size has to be odd number.'
+            assert dims[1] % 2 == 1, 'target size has to be odd number: {}'.format(dims[-3:-1])
 
             # multi-scale targets.
             # NOTE: To confirm the feature in this module, there should be
@@ -795,23 +817,36 @@ class Nornn(object):
                             targets.append(target * tf.expand_dims(tf.cast(mask, tf.float32), -1))
                             weights.append(float(patchsz[n])/height)
 
-            # cross-correlation. (`scale_target_num` # of scoremaps)
-            scoremap = []
-            for k in range(len(targets)):
-                scoremap.append(diag_conv(search, targets[k], strides=[1, 1, 1, 1], padding='SAME'))
+            if self.join_method == 'dot':
+                # cross-correlation. (`scale_target_num` # of scoremaps)
+                scoremap = []
+                for k in range(len(targets)):
+                    scoremap.append(diag_conv(search, targets[k], strides=[1, 1, 1, 1], padding='SAME'))
 
-            if self.scale_target_mode == 'add':
-                scoremap = tf.add_n(scoremap)
-            elif self.scale_target_mode == 'weight':
-                scoremap = tf.concat(scoremap, -1)
-                dims_combine = scoremap.shape.as_list()
-                with slim.arg_scope([slim.conv2d],
-                        kernel_size=1,
-                        weights_regularizer=slim.l2_regularizer(o.wd)):
-                    scoremap = slim.conv2d(scoremap, num_outputs=dims_combine[-1], scope='combine_scoremap1')
-                    scoremap = slim.conv2d(scoremap, num_outputs=dims[-1], scope='combine_scoremap2')
+                if self.scale_target_mode == 'add':
+                    scoremap = tf.add_n(scoremap)
+                elif self.scale_target_mode == 'weight':
+                    scoremap = tf.concat(scoremap, -1)
+                    dims_combine = scoremap.shape.as_list()
+                    with slim.arg_scope([slim.conv2d],
+                            kernel_size=1,
+                            weights_regularizer=slim.l2_regularizer(o.wd)):
+                        scoremap = slim.conv2d(scoremap, num_outputs=dims_combine[-1], scope='combine_scoremap1')
+                        scoremap = slim.conv2d(scoremap, num_outputs=dims[-1], scope='combine_scoremap2')
+                else:
+                    assert False, 'Wrong combine mode for multi-scoremap.'
+
+            elif self.join_method == 'concat':
+                target_size = target.shape.as_list()[-3:-1]
+                assert target_size == [1, 1], 'target size: {}'.format(str(target_size))
+                dim = target.shape.as_list()[-1]
+                # Concat and perform 1x1 convolution.
+                # relu(linear(concat(search, target)))
+                # = relu(linear(search) + linear(target))
+                scoremap = tf.nn.relu(slim.conv2d(target, dim, kernel_size=1, activation_fn=None) +
+                                      slim.conv2d(search, dim, kernel_size=1, activation_fn=None))
             else:
-                assert False, 'Wrong combine mode for multi-scoremap.'
+                raise ValueError('unknown join: {}'.format(self.join_method))
 
             # After cross-correlation, put some convolutions (separately from deconv).
             bnorm_args = {} if not self.bnorm_xcorr else {
@@ -957,13 +992,15 @@ class Nornn(object):
         target = []
         search = []
 
+        target_scope = o.cnn_model if self.target_share else o.cnn_model+'_target'
+        search_scope = o.cnn_model if self.target_share else o.cnn_model+'_search'
+
         # Some pre-processing.
         target_curr, box_context = process_target_with_box(x0, y0, o, aspect=inputs['aspect'])
         if self.normalize_input_range:
             target_curr *= 1. / 255.
         if self.target_concat_mask:
-            target_mask_oc = get_masks_from_rectangles(
-                geom.crop_rect(y0, box_context), o,
+            target_mask_oc = get_masks_from_rectangles(geom.crop_rect(y0, box_context), o,
                 output_size=target_curr.shape.as_list()[-3:-1])
             # Magnitude of mask should be similar to colors.
             if not self.normalize_input_range:
@@ -972,9 +1009,8 @@ class Nornn(object):
         else:
             target_input = target_curr
 
-        vs_name = o.cnn_model if self.target_share else o.cnn_model+'_target'
-        with tf.variable_scope(vs_name):
-            target_feat = pass_cnn(target_input, o, is_training, self.feat_act) # TODO: Try RSZ target.
+        with tf.variable_scope(target_scope):
+            target_feat = pass_cnn(target_input, o, is_training, self.feat_act, is_target=True) # TODO: Try RSZ target.
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
@@ -989,13 +1025,12 @@ class Nornn(object):
 
             if self.normalize_input_range:
                 search_curr *= 1. / 255.
-            vs_name = o.cnn_model if self.target_share else o.cnn_model+'_search'
-            with tf.variable_scope(vs_name, reuse=(t > 0 or self.target_share)) as scope:
+            with tf.variable_scope(search_scope, reuse=(t > 0 or self.target_share)) as scope:
                 #target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
                 # JV: Replaced by logic above.
                 # if t == 0:
                 #     scope.reuse_variables() # two Siamese CNNs shared.
-                search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
+                search_feat = pass_cnn(search_curr, o, is_training, self.feat_act, is_target=False)
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
