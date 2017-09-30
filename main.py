@@ -125,7 +125,7 @@ def parse_arguments():
             type=float, default=5.0)
     parser.add_argument(
             '--gt_decay_rate', help='decay rate for gt_ratio',
-            type=float, default=-1e-6)
+            type=float, default=1e-6)
     parser.add_argument(
             '--min_gt_ratio', help='lower bound for gt_ratio',
             type=float, default=0.75)
