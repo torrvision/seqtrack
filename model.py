@@ -965,19 +965,11 @@ class Nornn(object):
         y0 = enforce_inside_box(y0) # In OTB, Panda has GT error (i.e., > 1.0).
         y  = enforce_inside_box(y)
 
-        # RNN cell states
-        rnn_state_init = get_initial_rnn_state(cell_type=self.rnn_cell_type,
-                                               cell_size=[tf.shape(x0)[0], self.rnn_skip_support, 31, 31, 256],
-                                               num_layers=self.rnn_num_layers)
-
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
         y_init = tf.identity(y0) # for `delta` regression type output.
         x_prev = x_init
         y_prev = y_init
-        rnn_state = [{k: tf.identity(rnn_state_init[l][k])
-                     for k in rnn_state_init[l].keys()}
-                     for l in range(len(rnn_state_init))]
 
         # Outputs from the model.
         y_pred = []
@@ -1033,6 +1025,18 @@ class Nornn(object):
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
+
+            if t == 0:
+                # RNN cell states
+                state_dim = scoremap.shape.as_list()[-3:]
+                assert all(state_dim)
+                rnn_state_init = get_initial_rnn_state(
+                    cell_type=self.rnn_cell_type,
+                    cell_size=[tf.shape(x0)[0], self.rnn_skip_support] + state_dim,
+                    num_layers=self.rnn_num_layers)
+                rnn_state = [
+                    {k: tf.identity(rnn_state_init[l][k]) for k in rnn_state_init[l].keys()}
+                    for l in range(len(rnn_state_init))]
 
             if self.interm_supervision:
                 with tf.variable_scope('interm_supervision', reuse=(t > 0)):
