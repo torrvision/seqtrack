@@ -66,7 +66,7 @@ class Opts(object):
         self.wd                 = 0.0 # weight decay for regularization
         self.grad_clip          = False
         self.max_grad_norm      = 5.0
-        self.gt_decay_rate      = -1e-6
+        self.gt_decay_rate      = 1e-6
         self.min_gt_ratio       = 0.75
         self.curriculum_learning= False
         self.pretrained_cl      = None

@@ -345,7 +345,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 start = time.time()
                 feed_dict = {example['use_gt']:      o.use_gt_train,
                              example['is_training']: True,
-                             example['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)}
+                             example['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*global_step),
+                                                         o.min_gt_ratio)}
                 if use_queues:
                     feed_dict.update({queue_index: 0}) # Choose validation queue.
                 else:
