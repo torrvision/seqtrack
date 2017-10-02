@@ -726,31 +726,31 @@ class Nornn(object):
             ''' Upsampling layers.
             The last layer should not have an activation!
             '''
-            # NOTE: Not entirely sure yet if `align_corners` option is required.
-            with slim.arg_scope([slim.conv2d],
-                    weights_regularizer=slim.l2_regularizer(o.wd)):
+            bnorm_args = {} if not self.bnorm_deconv else {
+                'normalizer_fn': slim.batch_norm,
+                'normalizer_params': {'is_training': is_training, 'fused': True},
+            }
+            bnorm_args.update({'weights_regularizer': slim.l2_regularizer(o.wd)})
+
+            with slim.arg_scope([slim.conv2d], **bnorm_args):
                 if o.cnn_model in ['custom', 'siamese']:
-                    if self.coarse_hmap:
-                        # No upsample layers.
-                        dim = x.shape.as_list()[-1]
+                    dim = x.shape.as_list()[-1]
+                    if self.coarse_hmap: # No upsample layers.
                         x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='deconv1')
-                        x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='deconv2')
+                        x = slim.conv2d(x, num_outputs=2, kernel_size=1,
+                                        activation_fn=None,
+                                        normalizer_fn=None,
+                                        scope='deconv2')
                     else:
-                        bnorm_args = {} if not self.bnorm_deconv else {
-                            'normalizer_fn': slim.batch_norm,
-                            'normalizer_params': {'is_training': is_training, 'fused': True},
-                        }
-                        with slim.arg_scope([slim.conv2d], **bnorm_args):
-                            dim = x.shape.as_list()[-1]
-                            x = tf.image.resize_images(x, [(o.frmsz-1)/4+1]*2, align_corners=True)
-                            x = slim.conv2d(x, num_outputs=dim/2, kernel_size=3, scope='deconv1')
-                            x = tf.image.resize_images(x, [(o.frmsz-1)/2+1]*2, align_corners=True)
-                            x = slim.conv2d(x, num_outputs=dim/4, kernel_size=3, scope='deconv2')
-                            x = tf.image.resize_images(x, [o.frmsz]*2, align_corners=True)
-                            x = slim.conv2d(x, num_outputs=2, kernel_size=1,
-                                            activation_fn=None,
-                                            normalizer_fn=None,
-                                            scope='deconv3')
+                        x = tf.image.resize_images(x, [(o.frmsz-1)/4+1]*2, align_corners=True)
+                        x = slim.conv2d(x, num_outputs=dim/2, kernel_size=3, scope='deconv1')
+                        x = tf.image.resize_images(x, [(o.frmsz-1)/2+1]*2, align_corners=True)
+                        x = slim.conv2d(x, num_outputs=dim/4, kernel_size=3, scope='deconv2')
+                        x = tf.image.resize_images(x, [o.frmsz]*2, align_corners=True)
+                        x = slim.conv2d(x, num_outputs=2, kernel_size=1,
+                                        activation_fn=None,
+                                        normalizer_fn=None,
+                                        scope='deconv3')
                 elif o.cnn_model == 'vgg_16':
                     assert False, 'Please update this better before using it..'
                     x = slim.conv2d(x, num_outputs=512, scope='deconv1')
@@ -830,11 +830,11 @@ class Nornn(object):
         # Case of object-centric approach.
         y_pred_oc = []
         hmap_pred_oc = []
-        hmap_interm = []
         box_s_raw = []
         box_s_val = []
         target = []
         search = []
+        hmap_interm = {k: [] for k in ['score']}
 
         # Some pre-processing.
         target_curr = process_target_with_box(x0, y0, o)
@@ -854,6 +854,10 @@ class Nornn(object):
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
 
+            if self.interm_supervision:
+                with tf.variable_scope('interm_supervision', reuse=(t > 0)):
+                    hmap_interm['score'].append(pass_interm_supervision(scoremap, o))
+
             # JV: Define RNN state after obtaining scoremap to get size automatically.
             if t == 0:
                 # RNN cell states
@@ -866,10 +870,6 @@ class Nornn(object):
                 rnn_state = [
                     {k: tf.identity(rnn_state_init[l][k]) for k in rnn_state_init[l].keys()}
                     for l in range(len(rnn_state_init))]
-
-            if self.interm_supervision:
-                with tf.variable_scope('interm_supervision', reuse=(t > 0)):
-                    hmap_interm_curr = pass_interm_supervision(scoremap, o)
 
             for l in range(self.rnn_num_layers):
                 with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
@@ -933,7 +933,6 @@ class Nornn(object):
             hmap_pred.append(hmap_curr_pred)
             y_pred_oc.append(y_curr_pred_oc_delta if self.boxreg_delta else y_curr_pred_oc)
             hmap_pred_oc.append(hmap_curr_pred_oc)
-            hmap_interm.append(hmap_interm_curr if self.interm_supervision else None)
             box_s_raw.append(box_s_raw_curr)
             box_s_val.append(box_s_val_curr)
             target.append(target_curr) # To visualize what network sees.
@@ -952,11 +951,16 @@ class Nornn(object):
         hmap_pred     = tf.stack(hmap_pred, axis=1)
         y_pred_oc     = tf.stack(y_pred_oc, axis=1)
         hmap_pred_oc  = tf.stack(hmap_pred_oc, axis=1)
-        hmap_interm   = tf.stack(hmap_interm, axis=1) if self.interm_supervision else None
         box_s_raw     = tf.stack(box_s_raw, axis=1)
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
+
+        for k in hmap_interm.keys():
+            if not hmap_interm[k]:
+                hmap_interm[k] = None
+            else:
+                hmap_interm[k] = tf.stack(hmap_interm[k], axis=1)
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
                    'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
