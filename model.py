@@ -140,15 +140,6 @@ def process_target_with_box(img, box, o):
     # JV: Take a different rectange at the same position.
     box = modify_aspect_ratio(box, o.aspect_method)
     box = scale_rectangle_size(o.target_scale, box)
-    # JV: Remove dependence on explicit batch size.
-    # crop = []
-    # for b in range(o.batchsz):
-    #     cropbox = tf.expand_dims(tf.stack([box[b,1], box[b,0], box[b,3], box[b,2]], 0), 0)
-    #     crop.append(tf.image.crop_and_resize(tf.expand_dims(img[b],0),
-    #                                          boxes=cropbox,
-    #                                          box_ind=[0],
-    #                                          crop_size=[o.frmsz/o.search_scale]*2)) # target size
-    # return tf.concat(crop, 0)
     batch_len = tf.shape(img)[0]
     crop_size = (o.frmsz - 1) * o.target_scale / o.search_scale + 1
     # Check that target_scale / search_scale * (frame_size-1) is an integer.
@@ -168,70 +159,8 @@ def process_search_with_box(img, box, o):
     # This will make `box_s_raw` and `box_s_val` have width or height of size 0.
     with tf.control_dependencies(
             [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0), # box coordinate range.
-             #tf.assert_greater(box[:,2]-box[:,0], 0.0), # box size range.
-             #tf.assert_greater(box[:,3]-box[:,1], 0.0)
              ]):
         box = tf.identity(box)
-
-    # JV: Remove dependence on explicit batch size.
-    # search = []
-    # box_s_raw = []
-    # box_s_val = []
-    # for b in range(o.batchsz):
-    #     x1 = box[b,0]
-    #     y1 = box[b,1]
-    #     x2 = box[b,2]
-    #     y2 = box[b,3]
-    #     # search size: `search_scale` times bigger than object.
-    #     w_margin = ((x2 - x1) * float(o.search_scale - 1)) * 0.5
-    #     h_margin = ((y2 - y1) * float(o.search_scale - 1)) * 0.5
-    #     # NOTE: Both s_raw or s_val can have size of 0.
-    #     # search box (raw)
-    #     x1_s_raw = x1 - w_margin # can be outside of [0,1]
-    #     y1_s_raw = y1 - h_margin
-    #     x2_s_raw = x2 + w_margin
-    #     y2_s_raw = y2 + h_margin
-    #     # search box (valid)
-    #     # NOTE: when box_s_raw is completely outside of frame, by doing below
-    #     # it should/will be either `dot at the corner` or `line at the side`.
-    #     x1_s_val = tf.clip_by_value(x1_s_raw, 0.0, 1.0)
-    #     y1_s_val = tf.clip_by_value(y1_s_raw, 0.0, 1.0)
-    #     x2_s_val = tf.clip_by_value(x2_s_raw, 0.0, 1.0)
-    #     y2_s_val = tf.clip_by_value(y2_s_raw, 0.0, 1.0)
-    #     # crop (only within valid region)
-    #     s_val_h = tf.cast((y2_s_val-y1_s_val)*o.frmsz, tf.int32)
-    #     s_val_w = tf.cast((x2_s_val-x1_s_val)*o.frmsz, tf.int32)
-    #     s_val_h = tf.maximum(s_val_h, 1) # to prevent assertion error.
-    #     s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
-    #     crop_val = tf.image.crop_to_bounding_box(
-    #             image=img[b],
-    #             offset_height=tf.cast(y1_s_val*(o.frmsz-1), tf.int32),
-    #             offset_width =tf.cast(x1_s_val*(o.frmsz-1), tf.int32),
-    #             target_height=s_val_h,
-    #             target_width =s_val_w)
-    #     # pad crop so that it preserves aspect ratio.
-    #     s_raw_h = tf.cast((y2_s_raw-y1_s_raw)*o.frmsz, tf.int32)
-    #     s_raw_w = tf.cast((x2_s_raw-x1_s_raw)*o.frmsz, tf.int32)
-    #     s_raw_h = tf.maximum(s_raw_h, 1) # to prevent assertion error.
-    #     s_raw_w = tf.maximum(s_raw_w, 1) # to prevent assertion error.
-    #     crop_pad = tf.image.pad_to_bounding_box(
-    #             image=crop_val,
-    #             offset_height=tf.cast((y1_s_val-y1_s_raw)*(o.frmsz-1), tf.int32),
-    #             offset_width =tf.cast((x1_s_val-x1_s_raw)*(o.frmsz-1), tf.int32),
-    #             target_height=s_raw_h,
-    #             target_width =s_raw_w)
-    #     # resize to 241 x 241
-    #     crop_res = tf.image.resize_images(crop_pad, [o.frmsz, o.frmsz])
-
-    #     # outputs we need.
-    #     search.append(crop_res)
-    #     box_s_raw.append(tf.stack([x1_s_raw, y1_s_raw, x2_s_raw, y2_s_raw], 0))
-    #     box_s_val.append(tf.stack([x1_s_val, y1_s_val, x2_s_val, y2_s_val], 0))
-
-    # search = tf.stack(search, 0)
-    # box_s_raw = tf.stack(box_s_raw, 0)
-    # box_s_val = tf.stack(box_s_val, 0)
-    # return search, box_s_raw, box_s_val
 
     box = modify_aspect_ratio(box, o.aspect_method)
     box = scale_rectangle_size(o.search_scale, box)
@@ -272,34 +201,12 @@ def scale_rectangle_size(alpha, rect):
     return geom.make_rect(center-0.5*size, center+0.5*size)
 
 def find_center_in_scoremap(scoremap, o):
-    # JV: Keep trailing dimension for broadcasting.
-    # scoremap = tf.squeeze(scoremap, axis=-1)
-    # assert(len(scoremap.shape.as_list())==3)
     assert len(scoremap.shape.as_list()) == 4
 
     max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
-    #max_loc = tf.equal(scoremap, max_val) # only max.
     with tf.control_dependencies([tf.assert_greater_equal(scoremap, 0.0)]):
-        # JV: Use greater_equal in case scoremap is all zero.
         max_loc = tf.greater_equal(scoremap, max_val*0.95) # values over 95% of max.
-    # NOTE: weighted average based on distance to the center, instead of average.
-    # This is to reguarlize object movement, but it's a hack and will not always work.
-    # Ideally, learning motion dynamics can solve this without this.
-    # Siamese paper seems to put a cosine window on scoremap!
 
-    # JV: Remove dependence on explicit batch size.
-    # dims = scoremap.shape.as_list()[1]
-    # center = []
-    # for b in range(o.batchsz):
-    #     maxlocs = tf.cast(tf.where(max_loc[b]), tf.float32)
-    #     avg_center = tf.reduce_mean(maxlocs, axis=0)
-    #     center.append(tf.cond(tf.less(max_val[b,0,0], o.th_prob_stay), # TODO: test optimal value.
-    #                           lambda: tf.stack([dims/2.]*2),
-    #                           lambda: avg_center))
-    # center = tf.stack(center, 0)
-    # center = tf.stack([center[:,1], center[:,0]], 1) # To make it [x,y] format.
-    # # JV: Use dims - 1 and resize with align_corners=True to preserve alignment.
-    # center = center / (dims - 1) # To keep coordinate in relative scale range [0, 1].
     spatial_dim = scoremap.shape.as_list()[1:3]
     assert all(spatial_dim) # Spatial dimension must be static.
     # Compute center of each pixel in [0, 1] in search area.
@@ -364,36 +271,6 @@ def to_image_centric_hmap(hmap_pred_oc, box_s_raw, box_s_val, o):
     ''' Convert object-centric hmap to image-centric hmap.
     Input hmap is assumed to be softmax-ed (i.e., range [0,1]) and foreground only.
     '''
-    # JV: Remove dependence on explicit batch size.
-    # hmap_pred = []
-    # for b in range(o.batchsz):
-    #     # resize to search (raw). It can become bigger or smaller.
-    #     s_raw_h = tf.cast((box_s_raw[b][3] - box_s_raw[b][1]) * o.frmsz, tf.int32)
-    #     s_raw_w = tf.cast((box_s_raw[b][2] - box_s_raw[b][0]) * o.frmsz, tf.int32)
-    #     s_raw_h = tf.maximum(s_raw_h, 1) # to prevent assertion error.
-    #     s_raw_w = tf.maximum(s_raw_w, 1) # to prevent assertion error.
-    #     s_raw = tf.image.resize_images(hmap_pred_oc[b], [s_raw_h, s_raw_w])
-    #     # crop to extract only valid search area.
-    #     s_val_h = tf.cast((box_s_val[b][3]-box_s_val[b][1])*o.frmsz, tf.int32)
-    #     s_val_w = tf.cast((box_s_val[b][2]-box_s_val[b][0])*o.frmsz, tf.int32)
-    #     s_val_h = tf.maximum(s_val_h, 1) # to prevent assertion error.
-    #     s_val_w = tf.maximum(s_val_w, 1) # to prevent assertion error.
-    #     s_val = tf.image.crop_to_bounding_box(
-    #             image=s_raw,
-    #             offset_height=tf.cast((box_s_val[b][1]-box_s_raw[b][1])*(o.frmsz-1), tf.int32),
-    #             offset_width =tf.cast((box_s_val[b][0]-box_s_raw[b][0])*(o.frmsz-1), tf.int32),
-    #             target_height=s_val_h,
-    #             target_width =s_val_w)
-    #     # pad to reconstruct the original image-centric scale.
-    #     hmap = tf.image.pad_to_bounding_box( # zero padded.
-    #             image=s_val,
-    #             offset_height=tf.cast(box_s_val[b][1]*(o.frmsz-1), tf.int32),
-    #             offset_width =tf.cast(box_s_val[b][0]*(o.frmsz-1), tf.int32),
-    #             target_height=o.frmsz,
-    #             target_width =o.frmsz)
-    #     hmap_pred.append(hmap)
-    # return tf.stack(hmap_pred, 0)
-
     inv_box_s = geom.crop_inverse(box_s_raw)
     batch_len = tf.shape(hmap_pred_oc)[0]
     # TODO: Set extrapolation_value.
@@ -425,8 +302,6 @@ def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.01, global_bound=0.1
     c_curr = tf.stack([(y_curr[:,2] + y_curr[:,0]), (y_curr[:,3] + y_curr[:,1])], 1) / 2.0
 
     # add local bound
-    #w_reg = tf.minimum(tf.maximum(w_curr, w_prev*(1-local_bound)), w_prev*(1+local_bound))
-    #h_reg = tf.minimum(tf.maximum(h_curr, h_prev*(1-local_bound)), h_prev*(1+local_bound))
     w_reg = tf.clip_by_value(w_curr, w_prev*(1-local_bound), w_prev*(1+local_bound))
     h_reg = tf.clip_by_value(h_curr, h_prev*(1-local_bound), h_prev*(1+local_bound))
 
@@ -434,8 +309,6 @@ def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.01, global_bound=0.1
     if y0 is not None:
         w0 = y0[:,2] - y0[:,0]
         h0 = y0[:,3] - y0[:,1]
-        #w_reg = tf.minimum(tf.maximum(w_reg, w0*(1-global_bound)), w0*(1+global_bound))
-        #h_reg = tf.minimum(tf.maximum(h_reg, h0*(1-global_bound)), h0*(1+global_bound))
         w_reg = tf.clip_by_value(w_reg, w0*(1-global_bound), w0*(1+global_bound))
         h_reg = tf.clip_by_value(h_reg, h0*(1-global_bound), h0*(1+global_bound))
 
