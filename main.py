@@ -192,6 +192,9 @@ def parse_arguments():
             '--period_skip', help='until this period skip evaluation',
             type=int, default=10000)
     parser.add_argument(
+            '--period_preview', help='period to update summary preview',
+            type=int, default=100)
+    parser.add_argument(
             '--save_videos', help='create video during evaluation',
             action='store_true')
     parser.add_argument(
