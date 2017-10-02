@@ -160,7 +160,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         if 'target' in model.outputs and 'search' in model.outputs:
             for key in ['target', 'search']:
                 input_image = tf.summary.image('cnn_input_{}'.format(key),
-                    _draw_input_image(model, key, name='draw_{}'.format(key)),
+                    _draw_input_image(model, key, o, name='draw_{}'.format(key)),
                     max_outputs=o.ntimesteps+1, collections=[])
                 image_summaries.append(input_image)
         # Produce an image summary of s_prev and s_recon.
@@ -844,10 +844,21 @@ def _draw_flow_fields(model, key, time_stride=1, name='draw_flow_fields'):
             assert False , 'No available flow fields'
         return input_image
 
-def _draw_input_image(model, key, time_stride=1, name='draw_input_image'):
+def _draw_input_image(model, key, o, time_stride=1, name='draw_input_image'):
     with tf.name_scope(name) as scope:
         input_image = model.outputs[key][0,::time_stride]
-        return input_image
+        if key == 'search':
+            if model.outputs['boxreg_delta']:
+                y_pred_delta = model.outputs['y']['oc'][0][::time_stride]
+                y_pred = y_pred_delta + tf.stack([0.5 - 1./o.search_scale/2., 0.5 + 1./o.search_scale/2.]*2)
+            else:
+                y_pred = model.outputs['y']['oc'][0][::time_stride]
+            coords = tf.unstack(y_pred, axis=1)
+            boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=1)
+            boxes = tf.expand_dims(boxes, 1)
+            return tf.image.draw_bounding_boxes(input_image, boxes, name=scope)
+        else:
+            return input_image
 
 def _draw_memory_state(model, mtype, time_stride=1, name='draw_memory_states'):
     with tf.name_scope(name) as scope:
