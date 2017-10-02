@@ -15,7 +15,8 @@
 import tensorflow as tf
 
 
-def transformer(U, theta, out_size, name='SpatialTransformer', **kwargs):
+#def transformer(U, theta, out_size, name='SpatialTransformer', **kwargs):
+def transformer(U, theta, out_size, transformation_type, name='SpatialTransformer', **kwargs):
     """Spatial Transformer Layer
 
     Implements a spatial transformer layer as described in [1]_.
@@ -140,14 +141,34 @@ def transformer(U, theta, out_size, name='SpatialTransformer', **kwargs):
             grid = tf.concat(axis=0, values=[x_t_flat, y_t_flat, ones])
             return grid
 
-    def _transform(theta, input_dim, out_size):
+    def _transform(theta, input_dim, out_size, transformation_type):
         with tf.variable_scope('_transform'):
             num_batch = tf.shape(input_dim)[0]
             height = tf.shape(input_dim)[1]
             width = tf.shape(input_dim)[2]
             num_channels = tf.shape(input_dim)[3]
+            # NL.
+            #theta = tf.reshape(theta, (-1, 2, 3))
+            #theta = tf.cast(theta, 'float32')
+            dims = theta.shape.as_list()
+            if transformation_type == 'translation':
+                assert dims[-1] == 2
+                theta = tf.stack([
+                    tf.ones(shape=[tf.shape(theta)[0]]), tf.zeros(shape=[tf.shape(theta)[0]]), theta[:,0],
+                    tf.zeros(shape=[tf.shape(theta)[0]]), tf.ones(shape=[tf.shape(theta)[0]]), theta[:,1]], -1)
+            elif transformation_type == 'scale_translation':
+                assert dims[-1] == 3
+                theta = tf.stack([
+                    theta[:,0], tf.zeros(shape=[tf.shape(theta)[0]]), theta[:,1],
+                    tf.zeros(shape=[tf.shape(theta)[0]]), theta[:,0], theta[:,2]], -1)
+            elif transformation_type == 'affine':
+                assert dims[-1] == 6
+                theta = tf.stack([
+                    theta[:,0], theta[:,1], theta[:,2],
+                    theta[:,3], theta[:,4], theta[:,5]], -1)
+            else:
+                assert False, 'Not supported transformation type.'
             theta = tf.reshape(theta, (-1, 2, 3))
-            theta = tf.cast(theta, 'float32')
 
             # grid of (x_t, y_t, 1), eq (1) in ref [1]
             height_f = tf.cast(height, 'float32')
@@ -159,6 +180,10 @@ def transformer(U, theta, out_size, name='SpatialTransformer', **kwargs):
             grid = tf.reshape(grid, [-1])
             grid = tf.tile(grid, tf.stack([num_batch]))
             grid = tf.reshape(grid, tf.stack([num_batch, 3, -1]))
+
+            #NL.
+            # Now, grid is of [batch x 3 x width (or height)^2] size and has
+            # values of x, y in the range [-1, 1] and z = 1.
 
             # Transform A x (x_t, y_t, 1)^T -> (x_s, y_s)
             T_g = tf.matmul(theta, grid)
@@ -176,7 +201,7 @@ def transformer(U, theta, out_size, name='SpatialTransformer', **kwargs):
             return output
 
     with tf.variable_scope(name):
-        output = _transform(theta, U, out_size)
+        output = _transform(theta, U, out_size, transformation_type)
         return output
 
 
