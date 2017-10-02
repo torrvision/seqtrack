@@ -944,23 +944,12 @@ class Nornn(object):
         # TODO: This would better be during loading data.
         y0 = enforce_inside_box(y0) # In OTB, Panda has GT error (i.e., > 1.0).
         y  = enforce_inside_box(y)
-        # JV: Define later to make size automatic.
-        # # RNN cell states
-        # rnn_state_init = get_initial_rnn_state(cell_type=self.rnn_cell_type,
-        #                                        cell_size=[tf.shape(x0)[0], self.rnn_skip_support, 31, 31, 256],
-        #                                        num_layers=self.rnn_num_layers)
 
         # Add identity op to ensure that we can feed state here.
         x_init = tf.identity(x0)
         y_init = tf.identity(y0) # for `delta` regression type output.
         x_prev = x_init
         y_prev = y_init
-
-        # JV: Define later to make size automatic.
-        # rnn_state = [{k: tf.identity(rnn_state_init[l][k])
-        #              for k in rnn_state_init[l].keys()}
-        #              for l in range(len(rnn_state_init))]
-
 
         # Outputs from the model.
         y_pred = []
@@ -977,23 +966,16 @@ class Nornn(object):
         # Some pre-processing.
         target_curr = process_target_with_box(x0, y0, o)
         with tf.variable_scope(o.cnn_model):
-            target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
+            target_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr = y[:, t]
 
-            # target and search images
-            #target_curr = process_target_with_box(x_prev, y_prev, o)
-            #target_curr = tf.cond(is_training, # TODO: check the condition being passed.
-            #                      lambda: process_target_with_box(x_prev, y_prev, o),
-            #                      lambda: process_target_with_box(x0, y0, o))
+            # search image
             search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
 
-            with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
-                #target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
-                if t == 0:
-                    scope.reuse_variables() # two Siamese CNNs shared.
+            with tf.variable_scope(o.cnn_model, reuse=True) as scope:
                 search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
@@ -1002,18 +984,12 @@ class Nornn(object):
             # JV: Define RNN state after obtaining scoremap to get size automatically.
             if t == 0:
                 # RNN cell states
-                # rnn_state_init = get_initial_rnn_state(cell_type=self.rnn_cell_type,
-                #                                        cell_size=[tf.shape(x0)[0], self.rnn_skip_support, 31, 31, 256],
-                #                                        num_layers=self.rnn_num_layers)
                 state_dim = scoremap.shape.as_list()[-3:]
                 assert all(state_dim) # Require that size is static (no None values).
                 rnn_state_init = get_initial_rnn_state(
                     cell_type=self.rnn_cell_type,
                     cell_size=[tf.shape(x0)[0], self.rnn_skip_support] + state_dim,
                     num_layers=self.rnn_num_layers)
-                # rnn_state = [{k: tf.identity(rnn_state_init[l][k])
-                #              for k in rnn_state_init[l].keys()}
-                #              for l in range(len(rnn_state_init))]
                 rnn_state = [
                     {k: tf.identity(rnn_state_init[l][k]) for k in rnn_state_init[l].keys()}
                     for l in range(len(rnn_state_init))]
@@ -1092,7 +1068,6 @@ class Nornn(object):
 
             # Update for next time-step.
             x_prev = x_curr
-            #y_prev = y_curr_pred
             # Scheduled sampling. In case label is invalid, use prediction.
             rand_prob = tf.random_uniform([], minval=0, maxval=1)
             gt_condition = tf.logical_and(use_gt, tf.less_equal(rand_prob, gt_ratio))
@@ -1120,16 +1095,10 @@ class Nornn(object):
                    'boxreg_delta': self.boxreg_delta,
                    }
         # JV: Use two separate state variables.
-        # state = {}
         state_init, state_final = {}, {}
-        # state.update({'x': (x_init, x_prev)})
-        # state.update({'y': (y_init, y_prev)})
         state_init['x'], state_final['x'] = x_init, x_prev
         state_init['y'], state_final['y'] = y_init, y_prev
         # JV: Use nested collection of state.
-        # state.update({'rnn_state_{}_{}'.format(i,k): (rnn_state_init[i][k], rnn_state[i][k])
-        #               for i in range(self.rnn_num_layers)
-        #               for k in rnn_state[i].keys()})
         if rnn_state:
             state_init['rnn'] = rnn_state_init
             state_final['rnn'] = rnn_state
