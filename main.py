@@ -125,7 +125,7 @@ def parse_arguments():
             type=float, default=5.0)
     parser.add_argument(
             '--gt_decay_rate', help='decay rate for gt_ratio',
-            type=float, default=-1e-6)
+            type=float, default=1e-6)
     parser.add_argument(
             '--min_gt_ratio', help='lower bound for gt_ratio',
             type=float, default=0.75)
@@ -159,6 +159,10 @@ def parse_arguments():
     parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
             type=json.loads, default={'kind': 'regular', 'freq': 10})
+    parser.add_argument('--augment_motion', help='enable motion augmentation?', action='store_true')
+    parser.add_argument(
+            '--motion_params', help='JSON string specifying motion augmentation',
+            type=json.loads, default={})
     parser.add_argument(
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker',
             type=str, default=['ILSVRC-train'])
@@ -244,7 +248,7 @@ def main():
     eval_sets = {
         # Give each evaluation set its own random seed.
         d+'-'+s: functools.partial(sampler_presets[s], datasets[d],
-            generator=random.Random(o.seed_global),
+            generator=np.random.RandomState(o.seed_global),
             max_videos=None if d.startswith('OTB-') else o.max_eval_videos,
             shuffle=False if d.startswith('OTB-') else True,
             max_objects=None if d.startswith('OTB-') else 1)

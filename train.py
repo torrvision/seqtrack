@@ -3,6 +3,7 @@ import sys
 import csv
 import itertools
 import json
+import math
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
@@ -17,12 +18,13 @@ import threading
 import draw
 import evaluate
 import helpers
+import motion
 import pipeline
 import sample
 import visualize
 
 from model import convert_rec_to_heatmap, to_object_centric_coordinate
-from helpers import load_image, im_to_arr, pad_to, cache_json, merge_dims
+from helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_dims
 
 EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
 
@@ -197,7 +199,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
     # Use a separate random number generator for each sampler.
     sequences = {mode: iter_examples(datasets[mode], o,
-                                     generator=random.Random(o.seed_global),
+                                     generator=np.random.RandomState(o.seed_global),
                                      num_epochs=None)
                  for mode in modes}
 
@@ -313,16 +315,25 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     for eval_id, sampler in eval_sets.iteritems():
                         vis_dir = os.path.join(o.path_output, iter_id, eval_id)
                         if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
-                        visualizer = visualize.VideoFileWriter(vis_dir)
+                        # visualizer = visualize.VideoFileWriter(vis_dir)
                         # Run the tracker on a full epoch.
                         print 'evaluation: {}'.format(eval_id)
                         eval_sequences = sampler()
+                        # eval_sequences = [
+                        #     motion.augment(sequence, rand=np.random,
+                        #         translate_kind='laplace',
+                        #         translate_amount=0.1,
+                        #         scale_kind='laplace',
+                        #         scale_exp_amount=math.exp(math.log(1.01)/30.))
+                        #     for sequence in eval_sequences
+                        # ]
                         # Cache the results.
                         result_file = os.path.join(o.path_output, 'assess', eval_id,
                             iter_id+'.json')
                         result = cache_json(result_file,
-                            lambda: evaluate.evaluate(sess, example, model,
-                                eval_sequences, visualize=visualizer.visualize if o.save_videos else None,
+                            lambda: evaluate.evaluate(sess, example, model, eval_sequences,
+                                # visualize=visualizer.visualize if o.save_videos else None,
+                                visualize=True, vis_dir=vis_dir,
                                 use_gt=o.use_gt_eval,
                                 save_frames=o.save_frames),
                             makedir=True)
@@ -333,7 +344,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 start = time.time()
                 feed_dict = {example['use_gt']:      o.use_gt_train,
                              example['is_training']: True,
-                             example['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)}
+                             example['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*global_step),
+                                                         o.min_gt_ratio)}
                 if use_queues:
                     feed_dict.update({queue_index: 0}) # Choose validation queue.
                 else:
@@ -646,6 +658,10 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
                                   shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
                                   **o.sampler_params)
         for sequence in sequences:
+            # JV: Add motion augmentation.
+            # yield sequence
+            if o.augment_motion:
+                sequence = motion.augment(sequence, rand=generator, **o.motion_params)
             yield sequence
 
 def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
@@ -852,10 +868,15 @@ def _load_sequence(seq, o):
     assert(len(seq['labels']) == seq_len)
     assert(len(seq['label_is_valid']) == seq_len)
     assert(seq['label_is_valid'][0] == True)
-    # TODO: Use o.dtype here? Numpy complains.
-    f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
-                            dtype=np.float32)
-    images = map(f, seq['image_files'])
+    # f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
+    #                         dtype=np.float32)
+    images = [
+        im_to_arr(load_image_viewport(
+            seq['image_files'][t],
+            seq['viewports'][t],
+            size=(o.frmsz, o.frmsz)))
+        for t in range(seq_len)
+    ]
     return {
         'x0_raw':     np.array(images[0]),
         'y0':         np.array(seq['labels'][0]),
