@@ -658,15 +658,19 @@ class Nornn(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
-                 stn=False,
                  target_estimate=False,
-                 target_estimate_combine='concat_gau', # {'add', 'concat', 'gau_sum', 'concat_gau'}
+                 target_estimate_combine='add', # {'add', 'concat', 'gau_sum', 'concat_gau', 'share_gau_sum'}
+                 stn_on_image=False,
+                 stn_on_feature=False,
+                 stn_transformation='translation', # {'translation', 'scale_translation', 'affine'}
+                 supervision_target_init=False,
+                 supervision_target_curr=False,
+                 supervision_interm=False,
                  scale_target_num=1, # odd number, e.g., {1, 3, 5}
                  scale_target_mode='add', # {'add', 'weight'}
                  divide_target=False,
                  bnorm_xcorr=False,
                  bnorm_deconv=False,
-                 interm_supervision=False,
                  rnn_cell_type='gru',
                  rnn_num_layers=0,
                  rnn_residual=False,
@@ -680,15 +684,19 @@ class Nornn(object):
                  ):
         # model parameters
         self.feat_act          = feat_act
-        self.stn               = stn
         self.target_estimate   = target_estimate
         self.target_estimate_combine = target_estimate_combine
+        self.stn_on_image      = stn_on_image
+        self.stn_on_feature    = stn_on_feature
+        self.stn_transformation= stn_transformation
+        self.supervision_target_init = supervision_target_init
+        self.supervision_target_curr = supervision_target_curr
+        self.supervision_interm= supervision_interm
         self.scale_target_num  = scale_target_num
         self.scale_target_mode= scale_target_mode
         self.divide_target     = divide_target
         self.bnorm_xcorr       = bnorm_xcorr
         self.bnorm_deconv      = bnorm_deconv
-        self.interm_supervision= interm_supervision
         self.rnn_cell_type     = rnn_cell_type
         self.rnn_num_layers    = rnn_num_layers
         self.rnn_residual      = rnn_residual
@@ -699,6 +707,10 @@ class Nornn(object):
         self.boxreg_delta      = boxreg_delta
         self.boxreg_stop_grad  = boxreg_stop_grad
         self.boxreg_regularize = boxreg_regularize
+
+        # Option sanity check
+        assert not (self.stn_on_image and self.stn_on_feature) # Perform STN only once either before or after CNN.
+
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -707,34 +719,117 @@ class Nornn(object):
 
     def _load_model(self, inputs, o):
 
-        def pass_stn_localization(x):
+        def pass_stn_localization(x, y, input_type, is_training):
             ''' Localization network in Spatial Transformer Network.
-            The official IC-STN code is also considered in designing the network.
+            It produces a transformation parameter theta that warps target x.
+            Unlike conventional STN, however, the localization network produces
+            theta conditioned on search y.
+
+            x: either raw image or feature for target.
+            y: either raw image or feature for search.
+
+            Output: transformation parameter theta.
+
+            Avaiable transformations: translation, scale_translation, affine.
+
+            NOTE:
+            The network is designed with `search_scale=4` in mind.
+            You may have to re-design the newtork if any changes are made to
+            target size (e.g., search_scale, frmsz).
             '''
-            dims = x.shape.as_list()
-            with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                    weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = slim.conv2d(x, dims[-1]*9,     9, 4, padding='VALID', scope='conv1')
-                x = slim.conv2d(x, dims[-1]*9*7,   7, 3, padding='VALID', scope='conv2')
-                x = slim.conv2d(x, dims[-1]*9*7*5, 5, 2, padding='VALID', scope='conv3')
-                assert x.shape.as_list()[1] == 1, 'You changed something (search_scale, frmsz, etc)? then re-design network!'
-                x = slim.flatten(x)
-                x = slim.fully_connected(x, 512, scope='fc1')
+
+            assert False, 'whether to condition on y is not proven yet and still under development..'
+
+            # NOTE: Re-design if changes in target size (e.g., search_scale, frmsz)
+            if self.stn_transformation == 'translation':
+                outdim = 2
+                b_init = np.array([0, 0]).astype('float32') # identity at start.
+            elif self.stn_transformation == 'scale_translation':
+                outdim = 3
+                b_init = np.array([1., 0, 0]).astype('float32') # identity at start.
+            elif self.stn_transformation == 'affine':
+                outdim = 6
                 b_init = np.array([[1., 0, 0], [0, 1., 0]]).astype('float32').flatten() # identity at start.
-                x = slim.fully_connected(x, 6,
-                        activation_fn=None,
-                        weights_initializer=tf.zeros_initializer,
-                        biases_initializer=tf.constant_initializer(b_init), scope='fc2')
+            else:
+                assert False, 'Not supported transformation type.'
+
+            with slim.arg_scope([slim.conv2d, slim.fully_connected],
+                    normalizer_fn=slim.batch_norm,
+                    normalizer_params={'is_training': is_training, 'fused': True},
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                if input_type == 'feature':
+                    dims = x.shape.as_list()
+                    x = slim.conv2d(x, dims[-1]*4, 9, 4, padding='VALID', scope='conv1')
+                    assert x.shape.as_list()[1] == 1, 'Something changed (search_scale, frmsz, etc)? Then re-design network!'
+                    x = slim.flatten(x)
+                    x = slim.fully_connected(x, 1024, scope='fc1')
+                    x = slim.fully_connected(x, 1024, scope='fc2')
+                    x = slim.fully_connected(x,
+                            num_outputs=outdim,
+                            #activation_fn=None,
+                            activation_fn=get_act(self.feat_act),
+                            normalizer_fn=None,
+                            weights_initializer=tf.zeros_initializer,
+                            biases_initializer=tf.constant_initializer(b_init), scope='fc3')
+                elif input_type == 'image':
+                    # pad x and combine with y.
+                    box = scale_rectangle_size(o.search_scale, geom.unit_rect())
+                    box = tf.tile(tf.expand_dims(box, 0), [tf.shape(x)[0], 1])
+                    batch_len = tf.shape(x)[0]
+                    x = tf.image.crop_and_resize(x, geom.rect_to_tf_box(box),
+                                                 box_ind=tf.range(batch_len),
+                                                 crop_size=[o.frmsz]*2,
+                                                 extrapolation_value=128)
+                    x = tf.concat([x,y], -1)
+                    dims = x.shape.as_list()
+
+                    x = slim.conv2d(x, dims[-1]*4, 5, 2, padding='VALID', scope='conv1')
+                    x = slim.conv2d(x, dims[-1]*16, 5, 2, padding='VALID', scope='conv2')
+                    x = slim.max_pool2d(x, 2, stride=2, padding='VALID', scope='pool1')
+                    x = slim.conv2d(x, dims[-1]*64, 5, 2, padding='VALID', scope='conv3')
+                    x = slim.max_pool2d(x, 2, stride=2, padding='VALID', scope='pool2')
+                    x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv4')
+                    x = slim.conv2d(x, dims[-1]*256, 3, 1, padding='VALID', scope='conv5')
+                    x = slim.conv2d(x, dims[-1]*512, 3, 1, padding='VALID', scope='conv6')
+                    assert x.shape.as_list()[1] == 1, 'Something changed (search_scale, frmsz, etc)? Then re-design network!'
+                    x = slim.flatten(x)
+                    x = slim.fully_connected(x, 1024, scope='fc1')
+                    x = slim.fully_connected(x, 1024, scope='fc2')
+                    x = slim.fully_connected(x,
+                            num_outputs=outdim,
+                            activation_fn=None,
+                            #activation_fn=tf.nn.tanh,
+                            normalizer_fn=None,
+                            weights_initializer=tf.zeros_initializer,
+                            biases_initializer=tf.constant_initializer(b_init), scope='fc3')
+
+                    #----------------------------------------------------------
+                    # Previously when there is no conditioning variable y.
+                    #----------------------------------------------------------
+                    #x = slim.conv2d(x, dims[-1]*4, 5, 2, padding='VALID', scope='conv1')
+                    #x = slim.conv2d(x, dims[-1]*16, 5, 2, padding='VALID', scope='conv2')
+                    #x = slim.max_pool2d(x, 2, stride=2, padding='VALID', scope='pool1')
+                    #x = slim.conv2d(x, dims[-1]*64, 3, 1, padding='VALID', scope='conv3')
+                    #x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv4')
+                    #x = slim.conv2d(x, dims[-1]*256, 3, 1, padding='VALID', scope='conv5')
+                    #assert x.shape.as_list()[1] == 1, 'Something changed (search_scale, frmsz, etc)? Then re-design network!'
+                    #x = slim.flatten(x)
+                    #x = slim.fully_connected(x, 512, scope='fc1')
+                    #x = slim.fully_connected(x, 512, scope='fc2')
+                    #x = slim.fully_connected(x,
+                    #        num_outputs=outdim,
+                    #        activation_fn=None,
+                    #        #activation_fn=tf.nn.tanh,
+                    #        normalizer_fn=None,
+                    #        weights_initializer=tf.zeros_initializer,
+                    #        biases_initializer=tf.constant_initializer(b_init), scope='fc3')
+
+                    # Debugging.
+                    #x = tf.zeros(shape=[tf.shape(x)[0], 2])
+                    #x = 1.0*tf.ones(shape=[tf.shape(x)[0], 2])
+                else:
+                    assert False, 'wrong input_type for STN.'
             return x
-            #with slim.arg_scope([slim.fully_connected],
-            #        activation_fn=tf.nn.tanh,
-            #        weights_initializer=tf.zeros_initializer,
-            #        weights_regularizer=slim.l2_regularizer(o.wd)):
-            #    x = slim.flatten(x)
-            #    x = slim.fully_connected(x, 1024, scope='fc1')
-            #    b_init = np.array([[1., 0, 0], [0, 1., 0]]).astype('float32').flatten() # identity at start.
-            #    x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
-            #return x
 
         def pass_cnn(x, o, is_training, act):
             ''' Fully convolutional cnn.
@@ -863,14 +958,14 @@ class Nornn(object):
                 scoremap = slim.conv2d(scoremap, scope='conv2')
             return scoremap
 
-        def combine_scoremaps(scoremap_init, scoremap_curr, mode, o):
+        def combine_scoremaps(scoremap_init, scoremap_curr, o):
             dims = scoremap_init.shape.as_list()
 
-            if mode == 'add':
+            if self.target_estimate_combine == 'add':
                 scoremap = scoremap_init + scoremap_curr
-            elif mode == 'concat':
+            elif self.target_estimate_combine == 'concat':
                 scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
-            elif mode == 'gau_sum':
+            elif self.target_estimate_combine == 'gau_sum':
                 with slim.arg_scope([slim.conv2d],
                         num_outputs=dims[-1],
                         kernel_size=3,
@@ -880,7 +975,7 @@ class Nornn(object):
                                tf.nn.sigmoid(slim.conv2d(scoremap_init, scope='gate_init')) + \
                                tf.nn.tanh(slim.conv2d(scoremap_curr, scope='filter_curr')) * \
                                tf.nn.sigmoid(slim.conv2d(scoremap_curr, scope='gate_curr'))
-            elif mode == 'concat_gau':
+            elif self.target_estimate_combine == 'concat_gau':
                 scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
                 with slim.arg_scope([slim.conv2d],
                         num_outputs=dims[-1],
@@ -889,7 +984,7 @@ class Nornn(object):
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     scoremap = tf.nn.tanh(slim.conv2d(scoremap, scope='filter')) * \
                                tf.nn.sigmoid(slim.conv2d(scoremap, scope='gate'))
-            elif mode == 'share_gau_sum':
+            elif self.target_estimate_combine == 'share_gau_sum':
                 with slim.arg_scope([slim.conv2d],
                         num_outputs=dims[-1],
                         kernel_size=3,
@@ -1035,58 +1130,104 @@ class Nornn(object):
         # Case of object-centric approach.
         y_pred_oc = []
         hmap_pred_oc = []
-        hmap_interm = []
         box_s_raw = []
         box_s_val = []
-        target = []
+        target_init_list = []
+        target_curr_list = []
         search = []
-
-        # Some pre-processing.
-        target_init = process_target_with_box(x0, y0, o)
-        with tf.variable_scope(o.cnn_model):
-            target_init_feat = pass_cnn(target_init, o, is_training, self.feat_act) # TODO: Try RSZ target.
+        theta_list = []
+        hmap_interm = {k: [] for k in ['interm', 'target_init', 'target_curr']}
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr = y[:, t]
 
-            # search image
-            search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
+            # (initial) target image.
+            target_init = process_target_with_box(x0, y0, o)
 
-            with tf.variable_scope(o.cnn_model, reuse=True) as scope:
+            # search image and search feature.
+            search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
+            with tf.variable_scope(o.cnn_model, reuse=(t > 0)) as scope:
                 search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
 
             if self.target_estimate:
-                # (new) target image
+                # Extract "target_init" feature.
+                with tf.variable_scope(o.cnn_model, reuse=True):
+                    target_init_feat = pass_cnn(target_init, o, is_training, self.feat_act)
+
+                # Another target image.
                 target_curr = process_target_with_box(x_prev, y_prev, o)
 
-                # NOTE: localization network may need to be re-designed if,
-                # - changes of where to apply STN (i.e., either before or after cnn)
-                # - changes of anything that affects target size (e.g., search_scale, frmsz)
-                if self.stn:
-                    with tf.variable_scope('stn_localization', reuse=(t > 0)):
-                        theta = pass_stn_localization(target_curr)
+                # (optional) STN on target "image" before CNN.
+                if self.stn_on_image:
+                    with tf.variable_scope('stn_on_image', reuse=(t > 0)):
+                        theta = pass_stn_localization(target_curr, 'image', is_training)
                         dims = target_curr.shape.as_list()
-                        target_curr = transformer(target_curr, theta, dims[1:3])
+                        target_curr = transformer(target_curr, theta, dims[1:3], self.stn_transformation)
                         target_curr.set_shape(dims)
 
+                # Extract "target_curr" feature.
                 with tf.variable_scope(o.cnn_model, reuse=True) as scope:
                     target_curr_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
 
+                # (optional) STN on target "feature" after CNN.
+                if self.stn_on_feature:
+                    with tf.variable_scope('stn_on_feature', reuse=(t > 0)):
+                        theta = pass_stn_localization(target_curr_feat, 'feature', is_training)
+                        dims = target_curr_feat.shape.as_list()
+                        target_curr_feat = transformer(target_curr_feat, theta, dims[1:3], self.stn_transformation)
+                        target_curr_feat.set_shape(dims)
+
+                # Perform cross-correlation.
                 with tf.variable_scope('cross_correlation', reuse=(t > 0)) as scope:
                     scoremap_init = pass_cross_correlation(search_feat, target_init_feat, o)
                     scope.reuse_variables()
                     scoremap_curr = pass_cross_correlation(search_feat, target_curr_feat, o)
 
+                # Add intermediate supervisions.
+                with tf.variable_scope('supervision_target', reuse=(t > 0)) as scope:
+                    if self.supervision_target_init and not self.supervision_target_curr:
+                        hmap_interm['target_init'].append(pass_interm_supervision(scoremap_init, o))
+                    elif not self.supervision_target_init and self.supervision_target_curr:
+                        hmap_interm['target_curr'].append(pass_interm_supervision(scoremap_curr, o))
+                    elif self.supervision_target_init and self.supervision_target_curr:
+                        hmap_interm['target_init'].append(pass_interm_supervision(scoremap_init, o))
+                        scope.reuse_variables()
+                        hmap_interm['target_curr'].append(pass_interm_supervision(scoremap_curr, o))
+
+                # Combine multiple scoremaps.
                 with tf.variable_scope('combine_scoremaps', reuse=(t > 0)):
-                    scoremap = combine_scoremaps(scoremap_init, scoremap_curr, self.target_estimate_combine, o)
+                    scoremap = combine_scoremaps(scoremap_init, scoremap_curr, o)
             else:
+                # NOTE: theta is always the same (i.e., always same input; `target_init`). Does it make sense?
+
+                # (optional) STN on target "image" before CNN.
+                if self.stn_on_image:
+                    with tf.variable_scope('stn_on_image', reuse=(t > 0)):
+                        theta = pass_stn_localization(target_init, search_curr, 'image', is_training)
+                        dims = target_init.shape.as_list()
+                        target_init = transformer(target_init, theta, dims[1:3], self.stn_transformation)
+                        target_init.set_shape(dims)
+
+                # Extract target feature.
+                with tf.variable_scope(o.cnn_model, reuse=True):
+                    target_init_feat = pass_cnn(target_init, o, is_training, self.feat_act)
+
+                # (optional) STN on target "feature" after CNN.
+                if self.stn_on_feature:
+                    with tf.variable_scope('stn_on_feature', reuse=(t > 0)):
+                        theta = pass_stn_localization(target_init_feat, 'feature', is_training)
+                        dims = target_init_feat.shape.as_list()
+                        target_init_feat = transformer(target_init_feat, theta, dims[1:3], self.stn_transformation)
+                        target_init_feat.set_shape(dims)
+
+                # Perform cross-correlation.
                 with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                     scoremap = pass_cross_correlation(search_feat, target_init_feat, o)
 
-            if self.interm_supervision:
-                with tf.variable_scope('interm_supervision', reuse=(t > 0)):
-                    hmap_interm_curr = pass_interm_supervision(scoremap, o)
+            if self.supervision_interm:
+                with tf.variable_scope('supervision_interm', reuse=(t > 0)):
+                    hmap_interm['interm'].append(pass_interm_supervision(scoremap, o))
 
             for l in range(self.rnn_num_layers):
                 with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
@@ -1150,11 +1291,12 @@ class Nornn(object):
             hmap_pred.append(hmap_curr_pred)
             y_pred_oc.append(y_curr_pred_oc_delta if self.boxreg_delta else y_curr_pred_oc)
             hmap_pred_oc.append(hmap_curr_pred_oc)
-            hmap_interm.append(hmap_interm_curr if self.interm_supervision else None)
             box_s_raw.append(box_s_raw_curr)
             box_s_val.append(box_s_val_curr)
-            target.append(target_curr if self.target_estimate else target_init) # To visualize what network sees.
+            target_init_list.append(target_init)
+            target_curr_list.append(target_curr if self.target_estimate else None)
             search.append(search_curr) # To visualize what network sees.
+            theta_list.append(theta)
 
             # Update for next time-step.
             x_prev = x_curr
@@ -1170,19 +1312,28 @@ class Nornn(object):
         hmap_pred     = tf.stack(hmap_pred, axis=1)
         y_pred_oc     = tf.stack(y_pred_oc, axis=1)
         hmap_pred_oc  = tf.stack(hmap_pred_oc, axis=1)
-        hmap_interm   = tf.stack(hmap_interm, axis=1) if self.interm_supervision else None
         box_s_raw     = tf.stack(box_s_raw, axis=1)
         box_s_val     = tf.stack(box_s_val, axis=1)
-        target        = tf.stack(target, axis=1)
+        target_init   = tf.stack(target_init_list, axis=1)
+        target_curr   = tf.stack(target_curr_list, axis=1) if self.target_estimate else None
         search        = tf.stack(search, axis=1)
+        theta         = tf.stack(theta_list, axis=1)
+
+        for k in hmap_interm.keys():
+            if not hmap_interm[k]:
+                hmap_interm[k] = None
+            else:
+                hmap_interm[k] = tf.stack(hmap_interm[k], axis=1)
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
                    'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
                    'hmap_interm': hmap_interm,
                    'box_s_raw': box_s_raw,
                    'box_s_val': box_s_val,
-                   'target':    target,
+                   'target_init': target_init,
+                   'target_curr': target_curr,
                    'search':    search,
+                   'theta':     theta,
                    'boxreg_delta': self.boxreg_delta,
                    }
         # JV: Use two separate state variables.
