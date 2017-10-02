@@ -784,24 +784,15 @@ class Nornn(object):
                 with slim.arg_scope([slim.conv2d],
                         normalizer_fn=slim.batch_norm,
                         normalizer_params={'is_training': is_training, 'fused': True}):
-                    x = slim.conv2d(x, dims[-1]*2, 5, 2, scope='conv1')
+                    x = slim.conv2d(x, dims[-1]*2, 5, 2, padding='VALID', scope='conv1')
+                    x = slim.conv2d(x, dims[-1]*4, 5, 2, padding='VALID', scope='conv2')
                     x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                    x = slim.conv2d(x, dims[-1]*4, 5, 2, scope='conv2')
-                    x = slim.max_pool2d(x, 2, 2, scope='pool2')
-                    x = slim.conv2d(x, dims[-1]*8, 5, 2, scope='conv3')
+                    x = slim.conv2d(x, dims[-1]*8, 3, 1, padding='VALID', scope='conv3')
+                    assert x.shape.as_list()[1] == 1
                     x = slim.flatten(x)
-                    x = slim.fully_connected(x, 4096, scope='fc1')
-                    x = slim.fully_connected(x, 4096, scope='fc2')
+                    x = slim.fully_connected(x, 1024, scope='fc1')
+                    x = slim.fully_connected(x, 1024, scope='fc2')
                     x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
-                    #x = slim.conv2d(x, 32, 5, 2, scope='conv1')
-                    #x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                    #x = slim.conv2d(x, 64, 5, 2, scope='conv2')
-                    #x = slim.max_pool2d(x, 2, 2, scope='pool2')
-                    #x = slim.conv2d(x, 128, 5, 2, scope='conv3')
-                    #x = slim.flatten(x)
-                    #x = slim.fully_connected(x, 4096, scope='fc1')
-                    #x = slim.fully_connected(x, 4096, scope='fc2')
-                    #x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
         # Inputs to the model.
