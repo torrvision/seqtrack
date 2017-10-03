@@ -597,10 +597,12 @@ class Nornn(object):
                  rnn_skip=False,
                  rnn_skip_support=1,
                  coarse_hmap=False,
+                 use_hmap_prior=False,
                  boxreg=False,
                  boxreg_delta=False,
                  boxreg_stop_grad=False,
                  boxreg_regularize=False,
+                 light=False,
                  ):
         # model parameters
         self.conv1_stride      = conv1_stride
@@ -622,10 +624,12 @@ class Nornn(object):
         self.rnn_skip          = rnn_skip
         self.rnn_skip_support  = rnn_skip_support
         self.coarse_hmap       = coarse_hmap
+        self.use_hmap_prior    = use_hmap_prior
         self.boxreg            = boxreg
         self.boxreg_delta      = boxreg_delta
         self.boxreg_stop_grad  = boxreg_stop_grad
         self.boxreg_regularize = boxreg_regularize
+        self.light             = light
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
@@ -659,33 +663,51 @@ class Nornn(object):
             # pairs are centered, it may not need to be this way though.
             # TODO: Try DenseNet! Diverse feature, lower parameters, data augmentation effect.
             if o.cnn_model == 'custom':
+                print 'pass_cnn:'
                 with slim.arg_scope([slim.conv2d],
                         normalizer_fn=slim.batch_norm,
                         normalizer_params={'is_training': is_training, 'fused': True},
                         weights_regularizer=slim.l2_regularizer(o.wd)):
                     x = slim.conv2d(x, 16, 11, stride=self.conv1_stride, scope='conv1')
+                    print 'conv1:', x.shape.as_list()
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
+                    print 'pool1:', x.shape.as_list()
                     x = slim.conv2d(x, 32, 5, stride=1, scope='conv2')
+                    print 'conv2:', x.shape.as_list()
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
+                    print 'pool2:', x.shape.as_list()
                     x = slim.conv2d(x, 64, 3, stride=1, scope='conv3')
-                    x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
+                    print 'conv3:', x.shape.as_list()
+                    # x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
+                    x = slim.conv2d(x, 64 if self.light else 128, 3, stride=1, scope='conv4')
+                    print 'conv4:', x.shape.as_list()
                     if not self.target_is_vector:
-                        x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
+                        # x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
+                        x = slim.conv2d(x, 64 if self.light else 256, 3, stride=1,
+                            activation_fn=get_act(act), scope='conv5')
+                        print 'conv5:', x.shape.as_list()
                     else:
                         # Use stride 2 at conv5.
-                        x = slim.conv2d(x, 256, 3, stride=2, scope='conv5')
+                        # x = slim.conv2d(x, 256, 3, stride=2, scope='conv5')
+                        x = slim.conv2d(x, 64 if self.light else 256, 3, stride=2,
+                            activation_fn=get_act(act), scope='conv5')
+                        print 'conv5:', x.shape.as_list()
                         # Total stride is 8 * conv1_stride.
                         total_stride = self.conv1_stride * 8
                         # If frmsz = 241, conv1_stride = 3, search_scale = 2*target_scale
                         # then 240 / 2 / 24 = 5 gives a template of size 6.
                         kernel_size = (o.frmsz-1) * o.target_scale / o.search_scale / total_stride + 1
+                        print 'conv6 kernel size:', kernel_size
+                        assert all(map(lambda x: x > 0, kernel_size))
                         # (kernel_size-1) == (frmsz-1) * (target_scale / search_scale) / total_stride
                         assert (kernel_size-1)*total_stride*o.search_scale == (o.frmsz-1)*o.target_scale
                         assert np.all(np.array(kernel_size) % 2 == 1)
-                        x = slim.conv2d(x, 256, kernel_size,
+                        x = slim.conv2d(x, 64 if self.light else 256, kernel_size,
                             activation_fn=get_act(act),
                             padding='VALID' if is_target else 'SAME',
                             scope='conv6')
+                        print 'conv6:', x.shape.as_list()
+                        assert x.shape.as_list()[-3:-1] == [1, 1]
 
             elif o.cnn_model =='siamese': # exactly same as Siamese
                 with slim.arg_scope([slim.conv2d],
@@ -800,8 +822,11 @@ class Nornn(object):
                     kernel_size=3,
                     weights_regularizer=slim.l2_regularizer(o.wd),
                     **bnorm_args):
+                print 'pass_cross_correlation:'
                 scoremap = slim.conv2d(scoremap, scope='conv1')
+                print 'conv1:', scoremap.shape.as_list()
                 scoremap = slim.conv2d(scoremap, scope='conv2')
+                print 'conv2:', scoremap.shape.as_list()
             return scoremap
 
         def pass_interm_supervision(x, o):
@@ -824,13 +849,16 @@ class Nornn(object):
 
             with slim.arg_scope([slim.conv2d], **bnorm_args):
                 if o.cnn_model in ['custom', 'siamese']:
+                    print 'pass_deconvolution:'
                     dim = x.shape.as_list()[-1]
                     if self.coarse_hmap: # No upsample layers.
                         x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='deconv1')
+                        print 'deconv1:', x.shape.as_list()
                         x = slim.conv2d(x, num_outputs=2, kernel_size=1,
                                         activation_fn=None,
                                         normalizer_fn=None,
                                         scope='deconv2')
+                        print 'deconv2:', x.shape.as_list()
                     else:
                         x = tf.image.resize_images(x, [(o.frmsz-1)/4+1]*2, align_corners=True)
                         x = slim.conv2d(x, num_outputs=dim/2, kernel_size=3, scope='deconv1')
@@ -861,8 +889,24 @@ class Nornn(object):
                     normalizer_fn=slim.batch_norm,
                     normalizer_params={'is_training': is_training, 'fused': True},
                     weights_regularizer=slim.l2_regularizer(o.wd)):
+                print 'pass_conv_boxreg_branch:'
                 x = slim.conv2d(x, num_outputs=dims[-1], scope='conv1')
+                print 'conv1:', x.shape.as_list()
                 x = slim.conv2d(x, num_outputs=dims[-1], scope='conv2')
+                print 'conv2:', x.shape.as_list()
+            return x
+
+        def pass_conv_boxreg_project(x, o, is_training, dim):
+            with slim.arg_scope([slim.conv2d],
+                    kernel_size=1,
+                    normalizer_fn=slim.batch_norm,
+                    normalizer_params={'is_training': is_training, 'fused': True},
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                print 'pass_conv_boxreg_project:'
+                x = slim.conv2d(x, num_outputs=dim, scope='conv1')
+                print 'conv1:', x.shape.as_list()
+                x = slim.conv2d(x, num_outputs=dim, scope='conv2')
+                print 'conv2:', x.shape.as_list()
             return x
 
         def pass_regress_box(x, is_training):
@@ -874,11 +918,28 @@ class Nornn(object):
                 with slim.arg_scope([slim.conv2d],
                         normalizer_fn=slim.batch_norm,
                         normalizer_params={'is_training': is_training, 'fused': True}):
-                    x = slim.conv2d(x, dims[-1]*2, 5, 2, padding='VALID', scope='conv1')
-                    x = slim.conv2d(x, dims[-1]*4, 5, 2, padding='VALID', scope='conv2')
-                    x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                    x = slim.conv2d(x, dims[-1]*8, 3, 1, padding='VALID', scope='conv3')
-                    assert x.shape.as_list()[1] == 1
+                    print 'pass_regress_box:'
+                    if not self.light:
+                        x = slim.conv2d(x, dims[-1]*2, 5, 2, padding='VALID', scope='conv1')
+                        print 'conv1:', x.shape.as_list()
+                        x = slim.conv2d(x, dims[-1]*4, 5, 2, padding='VALID', scope='conv2')
+                        print 'conv2:', x.shape.as_list()
+                        x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                        print 'pool2:', x.shape.as_list()
+                        x = slim.conv2d(x, dims[-1]*8, 3, 1, padding='VALID', scope='conv3')
+                        print 'conv3:', x.shape.as_list()
+                    else:
+                        x = slim.conv2d(x, dims[-1]*2, 3, stride=2, scope='conv1')
+                        print 'conv1:', x.shape.as_list()
+                        x = slim.conv2d(x, dims[-1]*2, 3, stride=2, scope='conv2')
+                        print 'conv2:', x.shape.as_list()
+                        x = slim.conv2d(x, dims[-1]*4, 3, stride=2, scope='conv3')
+                        print 'conv3:', x.shape.as_list()
+                        x = slim.conv2d(x, dims[-1]*4, 3, stride=2, scope='conv4')
+                        print 'conv4:', x.shape.as_list()
+                        x = slim.conv2d(x, dims[-1]*8, 3, padding='VALID', scope='conv5')
+                        print 'conv5:', x.shape.as_list()
+                    assert x.shape.as_list()[-3:-1] == [1, 1]
                     x = slim.flatten(x)
                     x = slim.fully_connected(x, 1024, scope='fc1')
                     x = slim.fully_connected(x, 1024, scope='fc2')
@@ -988,6 +1049,12 @@ class Nornn(object):
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o)
+                if self.use_hmap_prior:
+                    hmap_shape = hmap_curr_pred_oc.shape.as_list()
+                    hmap_prior = tf.get_variable('hmap_prior', hmap_shape[-3:],
+                                                 initializer=tf.zeros_initializer(),
+                                                 regularizer=slim.l2_regularizer(o.wd))
+                    hmap_curr_pred_oc += hmap_prior
                 hmap_curr_pred_oc_fg = tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], -1)
 
             if self.boxreg: # regress box from `scoremap`.
@@ -1009,6 +1076,11 @@ class Nornn(object):
                 with tf.variable_scope('conv_boxreg_branch', reuse=(t > 0)):
                     scoremap = pass_conv_boxreg_branch(scoremap, o, is_training)
                 boxreg_inputs = tf.concat([search_pair_feat, scoremap], -1)
+
+                if self.light:
+                    with tf.variable_scope('conv_boxreg_project', reuse=(t > 0)):
+                        boxreg_inputs = pass_conv_boxreg_project(boxreg_inputs, o, is_training,
+                            dim=scoremap.shape.as_list()[-1])
 
                 # Box regression.
                 with tf.variable_scope('regress_box', reuse=(t > 0)):
