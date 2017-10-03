@@ -47,7 +47,7 @@ def parse_arguments():
             type=int, default=9)
 
     parser.add_argument(
-            '--frmsz', help='size of a square image', type=int, default=241)
+            '--frmsz', help='size of a square image', type=int, default=257)
     # NOTE: (NL) any reason to have two arguments for this option?
     parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)
@@ -69,7 +69,7 @@ def parse_arguments():
             type=str) # example [l1, iou]
     parser.add_argument(
             '--search_scale', help='size of search space relative to target',
-            type=int, default=2)
+            type=int, default=4)
     parser.add_argument(
             '--target_scale', help='size of context relative to target',
             type=int, default=1)
@@ -192,6 +192,9 @@ def parse_arguments():
     parser.add_argument(
             '--period_skip', help='until this period skip evaluation',
             type=int, default=10000)
+    parser.add_argument(
+            '--period_preview', help='period to update summary preview',
+            type=int, default=100)
     parser.add_argument(
             '--save_videos', help='create video during evaluation',
             action='store_true')

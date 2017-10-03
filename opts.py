@@ -29,7 +29,7 @@ class Opts(object):
         # TODO: only params that need to change; otherwise put it in data class
         self.dataset            = '' # (bouncing_mnist, etc.)
         self.trainsplit         = 9 # 0,1,2,3 or 9 for all train sets
-        self.frmsz              = 241
+        self.frmsz              = 257
         self.useresizedimg      = True
         self.use_queues         = False
         self.heatmap_params     = {}
@@ -39,7 +39,7 @@ class Opts(object):
         self.model              = '' # {rnn_basic, rnn_attention_s, rnn_attention_t}
         self.model_params       = {}
         self.losses             = None
-        self.search_scale       = 2 # size of search space relative to target.
+        self.search_scale       = 4 # size of search space relative to target.
         self.target_scale       = 1 # size of context relative to target.
         self.perspective        = 'oc' # ic: image-centric, oc: object-centric
         self.aspect_method      = 'stretch'
