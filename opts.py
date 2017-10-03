@@ -32,7 +32,7 @@ class Opts(object):
         self.frmsz              = 257
         self.useresizedimg      = True
         self.use_queues         = False
-        self.heatmap_params     = {}
+        self.heatmap_params     = {'Gaussian': True}
 
         #----------------------------------------------------------------------
         # model - general
