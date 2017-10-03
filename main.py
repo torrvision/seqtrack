@@ -54,8 +54,9 @@ def parse_arguments():
     parser.add_argument(
             '--use_queues', help='enable queues for asynchronous data loading',
             action='store_true')
-    parser.add_argument('--heatmap_stride', type=int, default=1,
-            help='stride of heatmap at loss')
+    parser.add_argument(
+            '--heatmap_params', help='JSON string specifying heatmap options',
+            type=json.loads, default={'Gaussian': 'true'})
 
     parser.add_argument(
             '--model', help='model!',

@@ -36,7 +36,7 @@ from upsample import upsample
 
 concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
 
-def convert_rec_to_heatmap(rec, o, min_size=None, Gaussian=False):
+def convert_rec_to_heatmap(rec, o, min_size=None, mode='box', Gaussian=False, radius_pos=0.1, sigma=0.3):
     '''Create heatmap from rectangle
     Args:
         rec: [batchsz x ntimesteps x 4] ground-truth rectangle labels
@@ -50,53 +50,82 @@ def convert_rec_to_heatmap(rec, o, min_size=None, Gaussian=False):
         #     masks.append(get_masks_from_rectangles(rec[:,t], o, kind='bg'))
         # return tf.stack(masks, axis=1, name=scope)
         rec, unmerge = merge_dims(rec, 0, 2)
-        masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size, Gaussian=Gaussian)
+        masks = get_masks_from_rectangles(rec, o, kind='bg', min_size=min_size,
+            mode=mode, Gaussian=Gaussian, radius_pos=radius_pos, sigma=sigma)
         return unmerge(masks, 0)
 
-def get_masks_from_rectangles(rec, o, kind='fg', typecast=True, min_size=None, Gaussian=False, name='mask'):
+def get_masks_from_rectangles(rec, o, output_size=None, kind='fg', typecast=True, min_size=None, mode='box', Gaussian=False, radius_pos=0.2, sigma=0.3, name='mask'):
+    '''
+    Args:
+        rec: [..., 4]
+            Rectangles in standard format (xmin, ymin, xmax, ymax).
+        output_size: (height, width)
+            If None, then height = width = o.frmsz.
+
+    Returns:
+        [..., height, width]
+    '''
     with tf.name_scope(name) as scope:
+        if output_size is None:
+            output_size = (o.frmsz, o.frmsz)
+        size_y, size_x = output_size
         # create mask using rec; typically rec=y_prev
-        # rec -- [b, 4]
-        rec *= float(o.frmsz)
-        # x1, y1, x2, y2 -- [b]
+        # rec -- [..., 4]
+        # JV: Allow different output size.
+        # rec *= float(o.frmsz)
+        # TODO: Should this be (size_x, size_y) - 1? (corner alignment)
+        rec = geom.rect_mul(rec, tf.to_float([size_x, size_y]))
+        # x1, y1, x2, y2 -- [...]
         x1, y1, x2, y2 = tf.unstack(rec, axis=1)
         if min_size is not None:
             x1, y1, x2, y2 = enforce_min_size(x1, y1, x2, y2, min_size=min_size)
-        # grid_x -- [1, frmsz]
-        # grid_y -- [frmsz, 1]
-        grid_x = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 0)
-        grid_y = tf.expand_dims(tf.cast(tf.range(o.frmsz), o.dtype), 1)
+        # grid_x -- [1, width]
+        # grid_y -- [height, 1]
+        grid_x = tf.expand_dims(tf.cast(tf.range(size_x), o.dtype), 0)
+        grid_y = tf.expand_dims(tf.cast(tf.range(size_y), o.dtype), 1)
         # resize tensors so that they can be compared
-        # x1, y1, x2, y2 -- [b, 1, 1]
+        # x1, y1, x2, y2 -- [..., 1, 1]
         x1 = tf.expand_dims(tf.expand_dims(x1, -1), -1)
         x2 = tf.expand_dims(tf.expand_dims(x2, -1), -1)
         y1 = tf.expand_dims(tf.expand_dims(y1, -1), -1)
         y2 = tf.expand_dims(tf.expand_dims(y2, -1), -1)
+        x_center = (x1 + x2) / 2.0
+        y_center = (y1 + y2) / 2.0
+        width, height = x2 - x1, y2 - y1
         # masks -- [b, frmsz, frmsz]
-        if not Gaussian:
-            masks = tf.logical_and(
-                tf.logical_and(tf.less_equal(x1, grid_x),
-                               tf.less_equal(grid_x, x2)),
-                tf.logical_and(tf.less_equal(y1, grid_y),
-                               tf.less_equal(grid_y, y2)))
-        else: # TODO: Need debug this properly.
-            x_center = (x1 + x2) / 2.0
-            y_center = (y1 + y2) / 2.0
-            width, height = x2 - x1, y2 - y1
-            x_sigma = width * 0.3 # TODO: can be better..
-            y_sigma = height * 0.3
-            masks = tf.exp(-( tf.square(grid_x - x_center) / (2 * tf.square(x_sigma)) +
-                              tf.square(grid_y - y_center) / (2 * tf.square(y_sigma)) ))
+        if mode == 'box':
+            if not Gaussian:
+                masks = tf.logical_and(
+                    tf.logical_and(tf.less_equal(x1, grid_x),
+                                   tf.less_equal(grid_x, x2)),
+                    tf.logical_and(tf.less_equal(y1, grid_y),
+                                   tf.less_equal(grid_y, y2)))
+            else: # TODO: Need debug this properly.
+                x_sigma = width * sigma # TODO: can be better..
+                y_sigma = height * sigma
+                masks = tf.exp(-( tf.square(grid_x - x_center) / (2 * tf.square(x_sigma)) +
+                                  tf.square(grid_y - y_center) / (2 * tf.square(y_sigma)) ))
+        elif mode == 'center':
+            obj_diam = 0.5 * (width + height)
+            r = tf.sqrt(tf.square(grid_x - x_center) + tf.square(grid_y - y_center)) / obj_diam
+            if not Gaussian:
+                masks = tf.less_equal(r, radius_pos)
+            else:
+                masks = tf.exp(-0.5 * tf.square(r) / tf.square(sigma))
 
         if kind == 'fg': # only foreground mask
-            masks = tf.expand_dims(masks, 3) # to have channel dim
+            # JV: Make this more general.
+            # masks = tf.expand_dims(masks, 3) # to have channel dim
+            masks = tf.expand_dims(masks, -1) # to have channel dim
         elif kind == 'bg': # add background mask
             if not Gaussian:
                 masks_bg = tf.logical_not(masks)
             else:
                 masks_bg = 1.0 - masks
-            masks = concat(
-                    (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
+            # JV: Make this more general.
+            # masks = concat(
+            #         (tf.expand_dims(masks,3), tf.expand_dims(masks_bg,3)), 3)
+            masks = tf.stack([masks, masks_bg], -1)
         if typecast: # type cast so that it can be concatenated with x
             masks = tf.cast(masks, o.dtype)
         return masks
@@ -130,16 +159,29 @@ def pass_depth_wise_norm(feature):
         feature_new.append((feature[:,:,:,c] - mean) / (tf.sqrt(var)+1e-5))
     return tf.stack(feature_new, 3)
 
-def process_target_with_box(img, box, o):
+def process_target_with_box(img, box, o, aspect=None):
     ''' Crop target image x with box y.
     Box y coordinate is in image-centric space.
     '''
     with tf.control_dependencies(
             [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0)]):
         box = tf.identity(box)
+
+    if aspect is not None:
+        # stretch = tf.stack([aspect, tf.ones_like(aspect)], axis=-1)
+        stretch = tf.stack([tf.pow(aspect, 0.5), tf.pow(aspect, -0.5)], axis=-1)
+        # Find w, h such that w/h = aspect, (w+h)/2 = 1.
+        # w = aspect*h, (1+aspect)*h = 2, h = 2/(1+aspect)
+        # and w = 2*aspect/(1+aspect) = 2/(1+1/aspect)
+        # stretch = tf.stack([2./(1. + 1./aspect), 2./(1. + aspect)], axis=-1)
+        box = geom.rect_mul(box, stretch)
     # JV: Take a different rectange at the same position.
     box = modify_aspect_ratio(box, o.aspect_method)
+    if aspect is not None:
+        box = geom.rect_mul(box, 1./stretch)
+
     box = scale_rectangle_size(o.target_scale, box)
+
     batch_len = tf.shape(img)[0]
     crop_size = (o.frmsz - 1) * o.target_scale / o.search_scale + 1
     # Check that target_scale / search_scale * (frame_size-1) is an integer.
@@ -149,9 +191,9 @@ def process_target_with_box(img, box, o):
         box_ind=tf.range(batch_len),
         crop_size=[crop_size]*2,
         extrapolation_value=128)
-    return crop
+    return crop, box
 
-def process_search_with_box(img, box, o):
+def process_search_with_box(img, box, o, aspect=None):
     ''' Crop search image x with box y.
     '''
     # NOTE: Input box might be `line at the side` or `dot at the corner` of frame.
@@ -162,7 +204,13 @@ def process_search_with_box(img, box, o):
              ]):
         box = tf.identity(box)
 
+    if aspect is not None:
+        stretch = tf.stack([tf.pow(aspect, 0.5), tf.pow(aspect, -0.5)], axis=-1)
+        box = geom.rect_mul(box, stretch)
     box = modify_aspect_ratio(box, o.aspect_method)
+    if aspect is not None:
+        box = geom.rect_mul(box, 1./stretch)
+
     box = scale_rectangle_size(o.search_scale, box)
     box_val = geom.rect_intersect(box, geom.unit_rect())
 
@@ -530,12 +578,18 @@ class Nornn(object):
     '''
     def __init__(self, inputs, o,
                  summaries_collections=None,
+                 conv1_stride=2,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
+                 target_is_vector=False,
+                 join_method='dot', # {'dot', 'concat'}
                  scale_target_num=1, # odd number, e.g., {1, 3, 5}
                  scale_target_mode='add', # {'add', 'weight'}
                  divide_target=False,
                  bnorm_xcorr=False,
                  bnorm_deconv=False,
+                 normalize_input_range=False,
+                 target_share=True,
+                 target_concat_mask=False, # can only be True if share is False
                  interm_supervision=False,
                  rnn_cell_type='gru',
                  rnn_num_layers=0,
@@ -549,12 +603,18 @@ class Nornn(object):
                  boxreg_regularize=False,
                  ):
         # model parameters
+        self.conv1_stride      = conv1_stride
         self.feat_act          = feat_act
+        self.target_is_vector  = target_is_vector
+        self.join_method       = join_method
         self.scale_target_num  = scale_target_num
         self.scale_target_mode= scale_target_mode
         self.divide_target     = divide_target
         self.bnorm_xcorr       = bnorm_xcorr
         self.bnorm_deconv      = bnorm_deconv
+        self.normalize_input_range = normalize_input_range
+        self.target_share          = target_share
+        self.target_concat_mask    = target_concat_mask
         self.interm_supervision= interm_supervision
         self.rnn_cell_type     = rnn_cell_type
         self.rnn_num_layers    = rnn_num_layers
@@ -587,7 +647,7 @@ class Nornn(object):
                 x = slim.fully_connected(x, 6, biases_initializer=tf.constant_initializer(b_init),scope='fc2')
             return x
 
-        def pass_cnn(x, o, is_training, act):
+        def pass_cnn(x, o, is_training, act, is_target=False):
             ''' Fully convolutional cnn.
             Either custom or other popular model.
             Note that Slim pre-defined networks can't be directly used, as they
@@ -603,17 +663,34 @@ class Nornn(object):
                         normalizer_fn=slim.batch_norm,
                         normalizer_params={'is_training': is_training, 'fused': True},
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    x = slim.conv2d(x, 16, 11, stride=2, scope='conv1')
+                    x = slim.conv2d(x, 16, 11, stride=self.conv1_stride, scope='conv1')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
                     x = slim.conv2d(x, 32, 5, stride=1, scope='conv2')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
                     x = slim.conv2d(x, 64, 3, stride=1, scope='conv3')
                     x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
-                    x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
+                    if not self.target_is_vector:
+                        x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
+                    else:
+                        # Use stride 2 at conv5.
+                        x = slim.conv2d(x, 256, 3, stride=2, scope='conv5')
+                        # Total stride is 8 * conv1_stride.
+                        total_stride = self.conv1_stride * 8
+                        # If frmsz = 241, conv1_stride = 3, search_scale = 2*target_scale
+                        # then 240 / 2 / 24 = 5 gives a template of size 6.
+                        kernel_size = (o.frmsz-1) * o.target_scale / o.search_scale / total_stride + 1
+                        # (kernel_size-1) == (frmsz-1) * (target_scale / search_scale) / total_stride
+                        assert (kernel_size-1)*total_stride*o.search_scale == (o.frmsz-1)*o.target_scale
+                        assert np.all(np.array(kernel_size) % 2 == 1)
+                        x = slim.conv2d(x, 256, kernel_size,
+                            activation_fn=get_act(act),
+                            padding='VALID' if is_target else 'SAME',
+                            scope='conv6')
+
             elif o.cnn_model =='siamese': # exactly same as Siamese
                 with slim.arg_scope([slim.conv2d],
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    x = slim.conv2d(x, 96, 11, stride=2, scope='conv1')
+                    x = slim.conv2d(x, 96, 11, stride=self.conv1_stride, scope='conv1')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
                     x = slim.conv2d(x, 256, 5, stride=1, scope='conv2')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
@@ -649,7 +726,7 @@ class Nornn(object):
             I use channel-wise convolution, instead of normal convolution.
             '''
             dims = target.shape.as_list()
-            assert dims[1] % 2 == 1, 'target size has to be odd number.'
+            assert dims[1] % 2 == 1, 'target size has to be odd number: {}'.format(dims[-3:-1])
 
             # multi-scale targets.
             # NOTE: To confirm the feature in this module, there should be
@@ -682,23 +759,36 @@ class Nornn(object):
                             targets.append(target * tf.expand_dims(tf.cast(mask, tf.float32), -1))
                             weights.append(float(patchsz[n])/height)
 
-            # cross-correlation. (`scale_target_num` # of scoremaps)
-            scoremap = []
-            for k in range(len(targets)):
-                scoremap.append(diag_conv(search, targets[k], strides=[1, 1, 1, 1], padding='SAME'))
+            if self.join_method == 'dot':
+                # cross-correlation. (`scale_target_num` # of scoremaps)
+                scoremap = []
+                for k in range(len(targets)):
+                    scoremap.append(diag_conv(search, targets[k], strides=[1, 1, 1, 1], padding='SAME'))
 
-            if self.scale_target_mode == 'add':
-                scoremap = tf.add_n(scoremap)
-            elif self.scale_target_mode == 'weight':
-                scoremap = tf.concat(scoremap, -1)
-                dims_combine = scoremap.shape.as_list()
-                with slim.arg_scope([slim.conv2d],
-                        kernel_size=1,
-                        weights_regularizer=slim.l2_regularizer(o.wd)):
-                    scoremap = slim.conv2d(scoremap, num_outputs=dims_combine[-1], scope='combine_scoremap1')
-                    scoremap = slim.conv2d(scoremap, num_outputs=dims[-1], scope='combine_scoremap2')
+                if self.scale_target_mode == 'add':
+                    scoremap = tf.add_n(scoremap)
+                elif self.scale_target_mode == 'weight':
+                    scoremap = tf.concat(scoremap, -1)
+                    dims_combine = scoremap.shape.as_list()
+                    with slim.arg_scope([slim.conv2d],
+                            kernel_size=1,
+                            weights_regularizer=slim.l2_regularizer(o.wd)):
+                        scoremap = slim.conv2d(scoremap, num_outputs=dims_combine[-1], scope='combine_scoremap1')
+                        scoremap = slim.conv2d(scoremap, num_outputs=dims[-1], scope='combine_scoremap2')
+                else:
+                    assert False, 'Wrong combine mode for multi-scoremap.'
+
+            elif self.join_method == 'concat':
+                target_size = target.shape.as_list()[-3:-1]
+                assert target_size == [1, 1], 'target size: {}'.format(str(target_size))
+                dim = target.shape.as_list()[-1]
+                # Concat and perform 1x1 convolution.
+                # relu(linear(concat(search, target)))
+                # = relu(linear(search) + linear(target))
+                scoremap = tf.nn.relu(slim.conv2d(target, dim, kernel_size=1, activation_fn=None) +
+                                      slim.conv2d(search, dim, kernel_size=1, activation_fn=None))
             else:
-                assert False, 'Wrong combine mode for multi-scoremap.'
+                raise ValueError('unknown join: {}'.format(self.join_method))
 
             # After cross-correlation, put some convolutions (separately from deconv).
             bnorm_args = {} if not self.bnorm_xcorr else {
@@ -827,20 +917,45 @@ class Nornn(object):
         search = []
         hmap_interm = {k: [] for k in ['score']}
 
+        target_scope = o.cnn_model if self.target_share else o.cnn_model+'_target'
+        search_scope = o.cnn_model if self.target_share else o.cnn_model+'_search'
+
         # Some pre-processing.
-        target_curr = process_target_with_box(x0, y0, o)
-        with tf.variable_scope(o.cnn_model):
-            target_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
+        target_curr, box_context = process_target_with_box(x0, y0, o, aspect=inputs['aspect'])
+        if self.normalize_input_range:
+            target_curr *= 1. / 255.
+        if self.target_concat_mask:
+            target_mask_oc = get_masks_from_rectangles(geom.crop_rect(y0, box_context), o,
+                output_size=target_curr.shape.as_list()[-3:-1])
+            # Magnitude of mask should be similar to colors.
+            if not self.normalize_input_range:
+                target_mask_oc *= 255.
+            target_input = tf.concat([target_curr, target_mask_oc], axis=-1)
+        else:
+            target_input = target_curr
+
+        with tf.variable_scope(target_scope):
+            target_feat = pass_cnn(target_input, o, is_training, self.feat_act, is_target=True) # TODO: Try RSZ target.
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr = y[:, t]
 
-            # search image
-            search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o)
+            # target and search images
+            #target_curr = process_target_with_box(x_prev, y_prev, o)
+            #target_curr = tf.cond(is_training, # TODO: check the condition being passed.
+            #                      lambda: process_target_with_box(x_prev, y_prev, o),
+            #                      lambda: process_target_with_box(x0, y0, o))
+            search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o, aspect=inputs['aspect'])
 
-            with tf.variable_scope(o.cnn_model, reuse=True) as scope:
-                search_feat = pass_cnn(search_curr, o, is_training, self.feat_act)
+            if self.normalize_input_range:
+                search_curr *= 1. / 255.
+            with tf.variable_scope(search_scope, reuse=(t > 0 or self.target_share)) as scope:
+                #target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
+                # JV: Replaced by logic above.
+                # if t == 0:
+                #     scope.reuse_variables() # two Siamese CNNs shared.
+                search_feat = pass_cnn(search_curr, o, is_training, self.feat_act, is_target=False)
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                 scoremap = pass_cross_correlation(search_feat, target_feat, o)
@@ -879,7 +994,7 @@ class Nornn(object):
                 assert self.coarse_hmap, 'Do not up-sample scoremap in the case of box-regression.'
 
                 # CNN processing target-in-search raw image pair.
-                search_0, _, _ = process_search_with_box(x0, y0, o)
+                search_0, _, _ = process_search_with_box(x0, y0, o, aspect=inputs['aspect'])
                 search_pair = tf.concat([search_0, search_curr], 3)
                 with tf.variable_scope('process_search_pair', reuse=(t > 0)):
                     search_pair_feat = pass_cnn(search_pair, o, is_training, 'relu')
