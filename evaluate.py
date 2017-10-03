@@ -33,6 +33,7 @@ def track(sess, inputs, model, sequence, use_gt,
     sequence['viewports']      -- Numpy array of rectangles [n, 4].
     sequence['labels']         -- Numpy array of shape [n, 4]
     sequence['label_is_valid'] -- List of booleans of length n.
+    sequence['aspect']         -- Aspect ratio of original image.
     sequence['original_image_size'] -- (width, height) tuple.
         Required to compute IOU, etc. with correct aspect ratio.
     '''
@@ -95,6 +96,7 @@ def track(sess, inputs, model, sequence, use_gt,
             inputs['x_raw']:      _single_to_batch(pad_to(images_arr, model.sequence_len), model.batch_size),
             inputs['y']:          _single_to_batch(pad_to(labels, model.sequence_len), model.batch_size),
             inputs['y_is_valid']: _single_to_batch(pad_to(is_valid, model.sequence_len), model.batch_size),
+            inputs['aspect']:     _single_to_batch(sequence['aspect'], model.batch_size),
             inputs['use_gt']:     use_gt,
         }
         if start > 1:
