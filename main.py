@@ -56,7 +56,7 @@ def parse_arguments():
             action='store_true')
     parser.add_argument(
             '--heatmap_params', help='JSON string specifying heatmap options',
-            type=json.loads, default={'Gaussian': 'true'})
+            type=json.loads, default={'Gaussian': True})
 
     parser.add_argument(
             '--model', help='model!',
