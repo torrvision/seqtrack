@@ -621,6 +621,7 @@ class Nornn(object):
                  rnn_skip=False,
                  rnn_skip_support=1,
                  coarse_hmap=False,
+                 use_hmap_prior=False,
                  boxreg=False,
                  boxreg_delta=False,
                  boxreg_stop_grad=False,
@@ -649,6 +650,7 @@ class Nornn(object):
         self.rnn_skip          = rnn_skip
         self.rnn_skip_support  = rnn_skip_support
         self.coarse_hmap       = coarse_hmap
+        self.use_hmap_prior    = use_hmap_prior
         self.boxreg            = boxreg
         self.boxreg_delta      = boxreg_delta
         self.boxreg_stop_grad  = boxreg_stop_grad
@@ -908,7 +910,7 @@ class Nornn(object):
                     x = slim.conv2d(x, dims[-1]*4, 5, 2, padding='VALID', scope='conv2')
                     x = slim.max_pool2d(x, 2, 2, scope='pool1')
                     x = slim.conv2d(x, dims[-1]*8, 3, 1, padding='VALID', scope='conv3')
-                    assert x.shape.as_list()[1] == 1
+                    assert x.shape.as_list()[-3:-1] == [1, 1]
                     x = slim.flatten(x)
                     x = slim.fully_connected(x, 1024, scope='fc1')
                     x = slim.fully_connected(x, 1024, scope='fc2')
@@ -1034,6 +1036,12 @@ class Nornn(object):
 
             with tf.variable_scope('deconvolution', reuse=(t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o)
+                if self.use_hmap_prior:
+                    hmap_shape = hmap_curr_pred_oc.shape.as_list()
+                    hmap_prior = tf.get_variable('hmap_prior', hmap_shape[-3:],
+                                                 initializer=tf.zeros_initializer(),
+                                                 regularizer=slim.l2_regularizer(o.wd))
+                    hmap_curr_pred_oc += hmap_prior
                 hmap_curr_pred_oc_fg = tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], -1)
 
             if self.boxreg: # regress box from `scoremap`.
