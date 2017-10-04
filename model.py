@@ -967,7 +967,9 @@ class Nornn(object):
                         print 'conv3:', x.shape.as_list()
                         x = slim.conv2d(x, dims[-1]*4, 3, stride=2, scope='conv4')
                         print 'conv4:', x.shape.as_list()
-                        x = slim.conv2d(x, dims[-1]*8, 3, padding='VALID', scope='conv5')
+                        kernel_size = x.shape.as_list()[-3:-1]
+                        print 'conv5: kernel size:', kernel_size
+                        x = slim.conv2d(x, dims[-1]*8, kernel_size, padding='VALID', scope='conv5')
                         print 'conv5:', x.shape.as_list()
                     assert x.shape.as_list()[-3:-1] == [1, 1]
                     x = slim.flatten(x)
