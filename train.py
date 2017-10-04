@@ -682,7 +682,7 @@ def compute_scale_classification_gt(example, outputs):
             sc_gt.append(tf.logical_and(tf.greater_equal(sc_ratio, scales[i-1]), tf.less(sc_ratio, scales[i])))
         elif i == len(scales)/2:
             sc_gt.append(tf.logical_and(tf.greater_equal(sc_ratio, scales[i-1]), tf.less(sc_ratio, scales[i+1])))
-        elif i > len(scales)/2:
+        elif i > len(scales)/2 and not i == len(scales)-1:
             sc_gt.append(tf.logical_and(tf.greater_equal(sc_ratio, scales[i]), tf.less(sc_ratio, scales[i+1])))
         elif i == len(scales)-1:
             sc_gt.append(tf.greater_equal(sc_ratio, scales[i]))
