@@ -1072,9 +1072,14 @@ class Nornn(object):
                 # scale-classification network.
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y_prev)
-                target_prev, _, _ = process_image_with_box(x_prev, y_prev,      o, o.frmsz/4+1, o.target_scale*2)
-                target_curr, _, _ = process_image_with_box(x_curr, y_curr_pred, o, o.frmsz/4+1, o.target_scale*2)
-                sc_in = tf.concat([target_prev, target_curr], -1)
+                #target_prev, _, _ = process_image_with_box(x_prev, y_prev,      o, o.frmsz/4+1, o.target_scale*2)
+                #target_curr, _, _ = process_image_with_box(x_curr, y_curr_pred, o, o.frmsz/4+1, o.target_scale*2)
+                #sc_in = tf.concat([target_prev, target_curr], -1)
+                target_init_pad, _, _ = process_image_with_box(x0, y0, o,
+                        crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=2, aspect=inputs['aspect'])
+                target_pred_pad, _, _ = process_image_with_box(x_curr, y_curr_pred, o,
+                        crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=2, aspect=inputs['aspect'])
+                sc_in = tf.concat([target_init_pad, target_pred_pad], -1)
                 with tf.variable_scope('scale_classfication',reuse=(t > 0)):
                     sc_out = pass_scale_classification(sc_in, is_training)
                     sc_out_list.append(sc_out)
