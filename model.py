@@ -159,68 +159,92 @@ def pass_depth_wise_norm(feature):
         feature_new.append((feature[:,:,:,c] - mean) / (tf.sqrt(var)+1e-5))
     return tf.stack(feature_new, 3)
 
-def process_target_with_box(img, box, o, aspect=None):
-    ''' Crop target image x with box y.
-    Box y coordinate is in image-centric space.
-    '''
-    with tf.control_dependencies(
-            [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0)]):
-        box = tf.identity(box)
+def process_image_with_box(img, box, o, crop_size, scale, aspect=None):
+    ''' Crop image using box and scale.
 
+    crop_size: output size after crop-and-resize.
+    scale:     uniform scalar for box.
+    '''
     if aspect is not None:
-        # stretch = tf.stack([aspect, tf.ones_like(aspect)], axis=-1)
         stretch = tf.stack([tf.pow(aspect, 0.5), tf.pow(aspect, -0.5)], axis=-1)
-        # Find w, h such that w/h = aspect, (w+h)/2 = 1.
-        # w = aspect*h, (1+aspect)*h = 2, h = 2/(1+aspect)
-        # and w = 2*aspect/(1+aspect) = 2/(1+1/aspect)
-        # stretch = tf.stack([2./(1. + 1./aspect), 2./(1. + aspect)], axis=-1)
         box = geom.rect_mul(box, stretch)
-    # JV: Take a different rectange at the same position.
     box = modify_aspect_ratio(box, o.aspect_method)
     if aspect is not None:
         box = geom.rect_mul(box, 1./stretch)
 
-    box = scale_rectangle_size(o.target_scale, box)
+    box = scale_rectangle_size(scale, box)
+    box_val = geom.rect_intersect(box,geom.unit_rect())
 
     batch_len = tf.shape(img)[0]
-    crop_size = (o.frmsz - 1) * o.target_scale / o.search_scale + 1
-    # Check that target_scale / search_scale * (frame_size-1) is an integer.
-    assert (crop_size - 1) * o.search_scale == (o.frmsz - 1) * o.target_scale
-    # TODO: Set extrapolation_value.
     crop = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
-        box_ind=tf.range(batch_len),
-        crop_size=[crop_size]*2,
-        extrapolation_value=128)
-    return crop, box
+                                    box_ind=tf.range(batch_len),
+                                    crop_size=[crop_size]*2,
+                                    extrapolation_value=128)
+    return crop, box, box_val
 
-def process_search_with_box(img, box, o, aspect=None):
-    ''' Crop search image x with box y.
-    '''
-    # NOTE: Input box might be `line at the side` or `dot at the corner` of frame.
-    # `enforce_inside_box` function doesn't guarantee that box has width or height > 0.0.
-    # This will make `box_s_raw` and `box_s_val` have width or height of size 0.
-    with tf.control_dependencies(
-            [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0), # box coordinate range.
-             ]):
-        box = tf.identity(box)
-
-    if aspect is not None:
-        stretch = tf.stack([tf.pow(aspect, 0.5), tf.pow(aspect, -0.5)], axis=-1)
-        box = geom.rect_mul(box, stretch)
-    box = modify_aspect_ratio(box, o.aspect_method)
-    if aspect is not None:
-        box = geom.rect_mul(box, 1./stretch)
-
-    box = scale_rectangle_size(o.search_scale, box)
-    box_val = geom.rect_intersect(box, geom.unit_rect())
-
-    batch_len = tf.shape(img)[0]
-    # TODO: Set extrapolation_value.
-    search = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
-        box_ind=tf.range(batch_len),
-        crop_size=[o.frmsz]*2,
-        extrapolation_value=128)
-    return search, box, box_val
+# NL. replace with `process_image_with_box`.
+#def process_target_with_box(img, box, o, aspect=None):
+#    ''' Crop target image x with box y.
+#    Box y coordinate is in image-centric space.
+#    '''
+#    with tf.control_dependencies(
+#            [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0)]):
+#        box = tf.identity(box)
+#
+#    if aspect is not None:
+#        # stretch = tf.stack([aspect, tf.ones_like(aspect)], axis=-1)
+#        stretch = tf.stack([tf.pow(aspect, 0.5), tf.pow(aspect, -0.5)], axis=-1)
+#        # Find w, h such that w/h = aspect, (w+h)/2 = 1.
+#        # w = aspect*h, (1+aspect)*h = 2, h = 2/(1+aspect)
+#        # and w = 2*aspect/(1+aspect) = 2/(1+1/aspect)
+#        # stretch = tf.stack([2./(1. + 1./aspect), 2./(1. + aspect)], axis=-1)
+#        box = geom.rect_mul(box, stretch)
+#    # JV: Take a different rectange at the same position.
+#    box = modify_aspect_ratio(box, o.aspect_method)
+#    if aspect is not None:
+#        box = geom.rect_mul(box, 1./stretch)
+#
+#    box = scale_rectangle_size(o.target_scale, box)
+#
+#    batch_len = tf.shape(img)[0]
+#    crop_size = (o.frmsz - 1) * o.target_scale / o.search_scale + 1
+#    # Check that target_scale / search_scale * (frame_size-1) is an integer.
+#    assert (crop_size - 1) * o.search_scale == (o.frmsz - 1) * o.target_scale
+#    # TODO: Set extrapolation_value.
+#    crop = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
+#        box_ind=tf.range(batch_len),
+#        crop_size=[crop_size]*2,
+#        extrapolation_value=128)
+#    return crop, box
+#
+#def process_search_with_box(img, box, o, aspect=None):
+#    ''' Crop search image x with box y.
+#    '''
+#    # NOTE: Input box might be `line at the side` or `dot at the corner` of frame.
+#    # `enforce_inside_box` function doesn't guarantee that box has width or height > 0.0.
+#    # This will make `box_s_raw` and `box_s_val` have width or height of size 0.
+#    with tf.control_dependencies(
+#            [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0), # box coordinate range.
+#             ]):
+#        box = tf.identity(box)
+#
+#    if aspect is not None:
+#        stretch = tf.stack([tf.pow(aspect, 0.5), tf.pow(aspect, -0.5)], axis=-1)
+#        box = geom.rect_mul(box, stretch)
+#    box = modify_aspect_ratio(box, o.aspect_method)
+#    if aspect is not None:
+#        box = geom.rect_mul(box, 1./stretch)
+#
+#    box = scale_rectangle_size(o.search_scale, box)
+#    box_val = geom.rect_intersect(box, geom.unit_rect())
+#
+#    batch_len = tf.shape(img)[0]
+#    # TODO: Set extrapolation_value.
+#    search = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
+#        box_ind=tf.range(batch_len),
+#        crop_size=[o.frmsz]*2,
+#        extrapolation_value=128)
+#    return search, box, box_val
 
 def modify_aspect_ratio(rect, method='stretch'):
     EPSILON = 1e-3
@@ -602,6 +626,9 @@ class Nornn(object):
                  boxreg_delta=False,
                  boxreg_stop_grad=False,
                  boxreg_regularize=False,
+                 sc=False, # scale classification
+                 sc_num_class=3,
+                 sc_step_size=0.05,
                  light=False,
                  ):
         # model parameters
@@ -629,6 +656,9 @@ class Nornn(object):
         self.boxreg_delta      = boxreg_delta
         self.boxreg_stop_grad  = boxreg_stop_grad
         self.boxreg_regularize = boxreg_regularize
+        self.sc                = sc
+        self.sc_num_class      = sc_num_class
+        self.sc_step_size      = sc_step_size
         self.light             = light
         # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
@@ -946,6 +976,25 @@ class Nornn(object):
                     x = slim.fully_connected(x, 4, activation_fn=None, scope='fc3')
             return x
 
+        def pass_scale_classification(x, is_training):
+            ''' Classification network for scale change.
+            '''
+            dims = x.shape.as_list()
+            with slim.arg_scope([slim.conv2d, slim.fully_connected],
+                    normalizer_fn=slim.batch_norm,
+                    normalizer_params={'is_training': is_training, 'fused': True},
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.conv2d(x, dims[-1]*16, 9, 4, padding='VALID', scope='conv1')
+                x = slim.conv2d(x, dims[-1]*64, 5, 2, padding='VALID', scope='conv2')
+                x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv3')
+                assert x.shape.as_list()[1] == 1
+                x = slim.flatten(x)
+                x = slim.fully_connected(x, 512, scope='fc1')
+                x = slim.fully_connected(x, 512, scope='fc2')
+                x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, scope='fc3')
+            return x
+
         # Inputs to the model.
         x           = inputs['x']  # shape [b, ntimesteps, h, w, 3]
         x0          = inputs['x0'] # shape [b, h, w, 3]
@@ -976,46 +1025,41 @@ class Nornn(object):
         box_s_val = []
         target = []
         search = []
+
         hmap_interm = {k: [] for k in ['score']}
+        sc_out_list = []
 
         target_scope = o.cnn_model if self.target_share else o.cnn_model+'_target'
         search_scope = o.cnn_model if self.target_share else o.cnn_model+'_search'
 
         # Some pre-processing.
-        target_curr, box_context = process_target_with_box(x0, y0, o, aspect=inputs['aspect'])
+        target_init, box_context, _ = process_image_with_box(
+                x0, y0, o, crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
         if self.normalize_input_range:
-            target_curr *= 1. / 255.
+            target_init *= 1. / 255.
         if self.target_concat_mask:
             target_mask_oc = get_masks_from_rectangles(geom.crop_rect(y0, box_context), o,
-                output_size=target_curr.shape.as_list()[-3:-1])
+                output_size=target_init.shape.as_list()[-3:-1])
             # Magnitude of mask should be similar to colors.
             if not self.normalize_input_range:
                 target_mask_oc *= 255.
-            target_input = tf.concat([target_curr, target_mask_oc], axis=-1)
+            target_input = tf.concat([target_init, target_mask_oc], axis=-1)
         else:
-            target_input = target_curr
+            target_input = target_init
 
         with tf.variable_scope(target_scope):
-            target_feat = pass_cnn(target_input, o, is_training, self.feat_act, is_target=True) # TODO: Try RSZ target.
+            target_feat = pass_cnn(target_input, o, is_training, self.feat_act, is_target=True)
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
             y_curr = y[:, t]
 
-            # target and search images
-            #target_curr = process_target_with_box(x_prev, y_prev, o)
-            #target_curr = tf.cond(is_training, # TODO: check the condition being passed.
-            #                      lambda: process_target_with_box(x_prev, y_prev, o),
-            #                      lambda: process_target_with_box(x0, y0, o))
-            search_curr, box_s_raw_curr, box_s_val_curr = process_search_with_box(x_curr, y_prev, o, aspect=inputs['aspect'])
-
+            search_curr, box_s_raw_curr, box_s_val_curr = process_image_with_box(
+                    x_curr, y_prev, o, crop_size=o.frmsz, scale=o.search_scale, aspect=inputs['aspect'])
             if self.normalize_input_range:
                 search_curr *= 1. / 255.
+
             with tf.variable_scope(search_scope, reuse=(t > 0 or self.target_share)) as scope:
-                #target_feat = pass_cnn(target_curr, o, is_training, self.feat_act) # TODO: Try RSZ target.
-                # JV: Replaced by logic above.
-                # if t == 0:
-                #     scope.reuse_variables() # two Siamese CNNs shared.
                 search_feat = pass_cnn(search_curr, o, is_training, self.feat_act, is_target=False)
 
             with tf.variable_scope('cross_correlation', reuse=(t > 0)):
@@ -1026,7 +1070,7 @@ class Nornn(object):
                     hmap_interm['score'].append(pass_interm_supervision(scoremap, o))
 
             # JV: Define RNN state after obtaining scoremap to get size automatically.
-            if t == 0:
+            if t == 0 and self.rnn_num_layers > 0: # NL. Added this condition to not run in case RNN is not enabled.
                 # RNN cell states
                 state_dim = scoremap.shape.as_list()[-3:]
                 assert all(state_dim) # Require that size is static (no None values).
@@ -1061,7 +1105,8 @@ class Nornn(object):
                 assert self.coarse_hmap, 'Do not up-sample scoremap in the case of box-regression.'
 
                 # CNN processing target-in-search raw image pair.
-                search_0, _, _ = process_search_with_box(x0, y0, o, aspect=inputs['aspect'])
+                search_0, _, _ = process_image_with_box(
+                        x0, y0, o, crop_size=o.frmsz, scale=o.search_scale, aspect=inputs['aspect'])
                 search_pair = tf.concat([search_0, search_curr], 3)
                 with tf.variable_scope('process_search_pair', reuse=(t > 0)):
                     search_pair_feat = pass_cnn(search_pair, o, is_training, 'relu')
@@ -1095,7 +1140,22 @@ class Nornn(object):
                 # Regularize box scale manually.
                 if self.boxreg_regularize:
                     y_curr_pred = regularize_scale(y_prev, y_curr_pred, y0, 0.5, 1.0)
+            elif self.sc:
+                # scale-classification network.
+                y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
+                        hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y_prev)
+                target_prev, _, _ = process_image_with_box(x_prev, y_prev,      o, o.frmsz/4+1, o.target_scale*2)
+                target_curr, _, _ = process_image_with_box(x_curr, y_curr_pred, o, o.frmsz/4+1, o.target_scale*2)
+                sc_in = tf.concat([target_prev, target_curr], -1)
+                with tf.variable_scope('scale_classfication',reuse=(t > 0)):
+                    sc_out = pass_scale_classification(sc_in, is_training)
 
+                # compute scale and update box.
+                p_scale = tf.nn.softmax(sc_out)
+                is_max_scale = tf.to_float(tf.equal(p_scale, tf.reduce_max(p_scale, axis=1, keep_dims=True)))
+                scales = (np.arange(self.sc_num_class) - (self.sc_num_class / 2)) * self.sc_step_size + 1
+                scale = tf.reduce_sum(scales * is_max_scale, axis=-1) / tf.reduce_sum(is_max_scale, axis=-1)
+                y_curr_pred = scale_rectangle_size(tf.expand_dims(scale, -1), y_curr_pred)
             else: # argmax to find center (then use x0's box)
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
@@ -1113,8 +1173,9 @@ class Nornn(object):
             hmap_pred_oc.append(hmap_curr_pred_oc)
             box_s_raw.append(box_s_raw_curr)
             box_s_val.append(box_s_val_curr)
-            target.append(target_curr) # To visualize what network sees.
+            target.append(target_init) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
+            sc_out_list.append(sc_out)
 
             # Update for next time-step.
             x_prev = x_curr
@@ -1133,6 +1194,7 @@ class Nornn(object):
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
+        sc_out        = tf.stack(sc_out_list, axis=1)
 
         for k in hmap_interm.keys():
             if not hmap_interm[k]:
@@ -1148,13 +1210,16 @@ class Nornn(object):
                    'target':    target,
                    'search':    search,
                    'boxreg_delta': self.boxreg_delta,
+                   'sc_out': sc_out,
+                   'sc_param': {'scales': scales}
                    }
         # JV: Use two separate state variables.
         state_init, state_final = {}, {}
         state_init['x'], state_final['x'] = x_init, x_prev
         state_init['y'], state_final['y'] = y_init, y_prev
         # JV: Use nested collection of state.
-        if rnn_state:
+        #if rnn_state:
+        if self.rnn_num_layers > 0:
             state_init['rnn'] = rnn_state_init
             state_final['rnn'] = rnn_state
         gt = {}
@@ -1952,7 +2017,7 @@ def load_model(o, model_params=None):
     return model
 
 if __name__ == '__main__':
-    '''Test model 
+    '''Test model
     '''
 
     from opts import Opts
@@ -1966,7 +2031,7 @@ if __name__ == '__main__':
 
     o.losses = ['l1'] # 'l1', 'iou', etc.
 
-    o.model = 'RNN_new' # RNN_basic, RNN_a 
+    o.model = 'RNN_new' # RNN_basic, RNN_a
 
     # data setting (since the model requires stat, I need this to test)
     import data
