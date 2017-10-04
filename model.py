@@ -984,10 +984,12 @@ class Nornn(object):
                     normalizer_fn=slim.batch_norm,
                     normalizer_params={'is_training': is_training, 'fused': True},
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = slim.conv2d(x, dims[-1]*16, 9, 4, padding='VALID', scope='conv1')
-                x = slim.conv2d(x, dims[-1]*64, 5, 2, padding='VALID', scope='conv2')
+                x = slim.conv2d(x, dims[-1]*4,   5, 2, padding='VALID', scope='conv1')
+                x = slim.conv2d(x, dims[-1]*16,  5, 2, padding='VALID', scope='conv2')
                 x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv3')
+                x = slim.conv2d(x, dims[-1]*64,  5, 2, padding='VALID', scope='conv3')
+                x = slim.max_pool2d(x, 2, 2, scope='pool2')
+                x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv4')
                 assert x.shape.as_list()[1] == 1
                 x = slim.flatten(x)
                 x = slim.fully_connected(x, 512, scope='fc1')
@@ -1144,11 +1146,17 @@ class Nornn(object):
                 # scale-classification network.
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y_prev)
-                target_prev, _, _ = process_image_with_box(x_prev, y_prev,      o, o.frmsz/4+1, o.target_scale*2)
-                target_curr, _, _ = process_image_with_box(x_curr, y_curr_pred, o, o.frmsz/4+1, o.target_scale*2)
-                sc_in = tf.concat([target_prev, target_curr], -1)
+                #target_prev, _, _ = process_image_with_box(x_prev, y_prev,      o, o.frmsz/4+1, o.target_scale*2)
+                #target_curr, _, _ = process_image_with_box(x_curr, y_curr_pred, o, o.frmsz/4+1, o.target_scale*2)
+                #sc_in = tf.concat([target_prev, target_curr], -1)
+                target_init_pad, _, _ = process_image_with_box(x0, y0, o,
+                        crop_size=(o.frmsz - 1) * o.target_scale * 2 / o.search_scale + 1, scale=2, aspect=inputs['aspect'])
+                target_pred_pad, _, _ = process_image_with_box(x_curr, y_curr_pred, o,
+                        crop_size=(o.frmsz - 1) * o.target_scale * 2 / o.search_scale + 1, scale=2, aspect=inputs['aspect'])
+                sc_in = tf.concat([target_init_pad, target_pred_pad], -1)
                 with tf.variable_scope('scale_classfication',reuse=(t > 0)):
                     sc_out = pass_scale_classification(sc_in, is_training)
+                    sc_out_list.append(sc_out)
 
                 # compute scale and update box.
                 p_scale = tf.nn.softmax(sc_out)
@@ -1175,7 +1183,6 @@ class Nornn(object):
             box_s_val.append(box_s_val_curr)
             target.append(target_init) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
-            sc_out_list.append(sc_out)
 
             # Update for next time-step.
             x_prev = x_curr
@@ -1194,7 +1201,6 @@ class Nornn(object):
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
-        sc_out        = tf.stack(sc_out_list, axis=1)
 
         for k in hmap_interm.keys():
             if not hmap_interm[k]:
@@ -1210,8 +1216,9 @@ class Nornn(object):
                    'target':    target,
                    'search':    search,
                    'boxreg_delta': self.boxreg_delta,
-                   'sc_out': sc_out,
-                   'sc_param': {'scales': scales}
+                   'sc':           {'out': tf.stack(sc_out_list, axis=1),
+                                    'scales': scales,
+                                    } if self.sc else None
                    }
         # JV: Use two separate state variables.
         state_init, state_final = {}, {}
