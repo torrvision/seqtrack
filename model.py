@@ -1077,6 +1077,7 @@ class Nornn(object):
                 sc_in = tf.concat([target_prev, target_curr], -1)
                 with tf.variable_scope('scale_classfication',reuse=(t > 0)):
                     sc_out = pass_scale_classification(sc_in, is_training)
+                    sc_out_list.append(sc_out)
 
                 # compute scale and update box.
                 p_scale = tf.nn.softmax(sc_out)
@@ -1103,7 +1104,6 @@ class Nornn(object):
             box_s_val.append(box_s_val_curr)
             target.append(target_init) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
-            sc_out_list.append(sc_out)
 
             # Update for next time-step.
             x_prev = x_curr
@@ -1122,7 +1122,6 @@ class Nornn(object):
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
-        sc_out        = tf.stack(sc_out_list, axis=1)
 
         for k in hmap_interm.keys():
             if not hmap_interm[k]:
@@ -1138,8 +1137,9 @@ class Nornn(object):
                    'target':    target,
                    'search':    search,
                    'boxreg_delta': self.boxreg_delta,
-                   'sc_out': sc_out,
-                   'sc_param': {'scales': scales}
+                   'sc':           {'out': tf.stack(sc_out_list, axis=1),
+                                    'scales': scales,
+                                    } if self.sc else None
                    }
         # JV: Use two separate state variables.
         state_init, state_final = {}, {}

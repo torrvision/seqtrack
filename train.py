@@ -667,14 +667,13 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
                 sequence = motion.augment(sequence, rand=generator, **o.motion_params)
             yield sequence
 
-def compute_scale_classification_gt(example, outputs):
+def compute_scale_classification_gt(example, scales):
     import geom
     obj_min, obj_max = geom.rect_min_max(tf.concat([tf.expand_dims(example['y0'],1), example['y']], 1))
     obj_center, obj_size = 0.5 * (obj_min + obj_max), obj_max - obj_min
     diam = tf.reduce_mean(obj_size, axis=-1) # 0.5*(width+height)
     sc_ratio = tf.divide(diam[:, 1:], diam[:, :-1])
     sc_gt = []
-    scales = outputs['sc_param']['scales']
     for i in range(len(scales)):
         if i == 0:
             sc_gt.append(tf.less(sc_ratio, scales[i]))
@@ -699,7 +698,9 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
         y_gt['oc'] = to_object_centric_coordinate(example['y'], outputs['box_s_raw'], outputs['box_s_val'], o)
         hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, **o.heatmap_params)
         hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, **o.heatmap_params)
-        sc_gt = compute_scale_classification_gt(example, outputs)
+        if outputs['sc']:
+            assert 'sc' in o.losses
+            sc_gt = compute_scale_classification_gt(example, outputs['sc']['scales'])
 
         # Regress displacement rather than absolute location. Update y_gt.
         if outputs['boxreg_delta']:
@@ -806,7 +807,7 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
 
         if 'sc' in o.losses:
             sc_gt_valid = tf.boolean_mask(sc_gt, example['y_is_valid'])
-            sc_pred_valid = tf.boolean_mask(outputs['sc_out'], example['y_is_valid'])
+            sc_pred_valid = tf.boolean_mask(outputs['sc']['out'], example['y_is_valid'])
             sc_gt_valid, unmerge = merge_dims(sc_gt_valid, 0, 1)
             sc_pred_valid, _ = merge_dims(sc_pred_valid, 0, 1)
             loss_sc = tf.nn.softmax_cross_entropy_with_logits(
