@@ -1037,8 +1037,10 @@ class Nornn(object):
         search_scope = o.cnn_model if self.target_share else o.cnn_model+'_search'
 
         # Some pre-processing.
-        target_init, box_context, _ = process_image_with_box(
-                x0, y0, o, crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
+        target_size = (o.frmsz - 1) * o.target_scale / o.search_scale + 1
+        assert (target_size-1)*o.search_scale == (o.frmsz-1)*o.target_scale
+        target_init, box_context, _ = process_image_with_box(x0, y0, o,
+            crop_size=target_size, scale=o.target_scale, aspect=inputs['aspect'])
         if self.normalize_input_range:
             target_init *= 1. / 255.
         if self.target_concat_mask:
