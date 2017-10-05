@@ -142,12 +142,21 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
         y1, y2 = yc-ys/2, yc+ys/2
         return x1, y1, x2, y2
 
-def enforce_inside_box(y, name='inside_box'):
+def enforce_inside_box(y, translate=False, name='inside_box'):
     ''' Force the box to be in range [0,1]
     '''
     assert y.shape.as_list()[-1] == 4
     # inside range [0,1]
     with tf.name_scope(name) as scope:
+        if translate:
+            dims = tf.shape(y)
+            y = tf.reshape(y, [-1, dims[-1]])
+            translate_x = tf.maximum(tf.maximum(y[:,0], y[:,2]) - 1, 0) + \
+                          tf.minimum(tf.minimum(y[:,0], y[:,2]) - 0, 0)
+            translate_y = tf.maximum(tf.maximum(y[:,1], y[:,3]) - 1, 0) + \
+                          tf.minimum(tf.minimum(y[:,1], y[:,3]) - 0, 0)
+            y = y - tf.stack([translate_x, translate_y]*2, -1)
+            y = tf.reshape(y, dims)
         y = tf.clip_by_value(y, 0.0, 1.0)
     return y
 
@@ -627,6 +636,7 @@ class Nornn(object):
                  boxreg_stop_grad=False,
                  boxreg_regularize=False,
                  sc=False, # scale classification
+                 sc_score_threshold=0.0,
                  sc_num_class=3,
                  sc_step_size=0.05,
                  ):
@@ -657,6 +667,7 @@ class Nornn(object):
         self.boxreg_stop_grad  = boxreg_stop_grad
         self.boxreg_regularize = boxreg_regularize
         self.sc                = sc
+        self.sc_score_threshold= sc_score_threshold
         self.sc_num_class      = sc_num_class
         self.sc_step_size      = sc_step_size
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
@@ -1098,7 +1109,17 @@ class Nornn(object):
 
                 # compute scale and update box.
                 p_scale = tf.nn.softmax(sc_out)
-                is_max_scale = tf.to_float(tf.equal(p_scale, tf.reduce_max(p_scale, axis=1, keep_dims=True)))
+                is_max_scale = tf.equal(p_scale, tf.reduce_max(p_scale, axis=1, keep_dims=True))
+                if self.sc_score_threshold > 0:
+                    max_score = tf.reduce_max(hmap_curr_pred_oc_fg, axis=(1,2,3))
+                    is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
+                    batchsz = tf.shape(is_pass)[0]
+                    stay = tf.cast(tf.reshape(tf.concat([tf.fill([batchsz, self.sc_num_class/2], 0.0),
+                                                         tf.fill([batchsz, 1], 1.0),
+                                                         tf.fill([batchsz, self.sc_num_class/2], 0.0)], axis=1),
+                                              tf.shape(is_max_scale)), tf.bool)
+                    is_max_scale = tf.where(is_pass, is_max_scale, stay)
+                is_max_scale = tf.to_float(is_max_scale)
                 scales = (np.arange(self.sc_num_class) - (self.sc_num_class / 2)) * self.sc_step_size + 1
                 scale = tf.reduce_sum(scales * is_max_scale, axis=-1) / tf.reduce_sum(is_max_scale, axis=-1)
                 y_curr_pred = scale_rectangle_size(tf.expand_dims(scale, -1), y_curr_pred)
@@ -1107,7 +1128,7 @@ class Nornn(object):
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
 
             # Post-processing.
-            y_curr_pred = enforce_inside_box(y_curr_pred)
+            y_curr_pred = enforce_inside_box(y_curr_pred, translate=True)
 
             # Get image-centric outputs. Some are used for visualization purpose.
             hmap_curr_pred = to_image_centric_hmap(hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o)
