@@ -630,6 +630,7 @@ class Nornn(object):
                  sc_num_class=3,
                  sc_step_size=0.05,
                  ):
+        self.summaries_collections = summaries_collections
         # model parameters
         self.conv1_stride      = conv1_stride
         self.feat_act          = feat_act
@@ -658,7 +659,6 @@ class Nornn(object):
         self.sc                = sc
         self.sc_num_class      = sc_num_class
         self.sc_step_size      = sc_step_size
-        # Ignore sumaries_collections - model does not generate any summaries.
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
@@ -1140,6 +1140,16 @@ class Nornn(object):
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
 
+        # Summaries from within model.
+        if self.use_hmap_prior:
+            with tf.variable_scope('deconvolution', reuse=True):
+                hmap_prior = tf.get_variable('hmap_prior')
+            with tf.name_scope('model_summary'):
+                # Swap channels and (non-existent) batch dimension.
+                hmap_prior = tf.transpose(tf.expand_dims(hmap_prior, 0), [3, 1, 2, 0])
+                tf.summary.image('hmap_prior', hmap_prior, max_outputs=2,
+                    collections=self.summaries_collections)
+
         for k in hmap_interm.keys():
             if not hmap_interm[k]:
                 hmap_interm[k] = None
@@ -1198,7 +1208,7 @@ class RNN_dual_mix(object):
         self.feed_examplar = feed_examplar
         self.dropout_rnn   = dropout_rnn
         self.keep_prob     = keep_prob
-        # Ignore sumaries_collections - model does not generate any summaries.
+        # Ignore summaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
