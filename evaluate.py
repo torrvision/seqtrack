@@ -11,6 +11,7 @@ import time
 import draw
 import data
 from helpers import load_image_viewport, im_to_arr, pad_to, to_nested_tuple
+from helpers import escape_filename
 import visualize as visualize_pkg
 
 FRAME_PATTERN = '%06d.jpeg'
@@ -46,7 +47,7 @@ def track(sess, inputs, model, sequence, use_gt,
         if not save_frames:
             frame_dir = tempfile.mkdtemp()
         else:
-            frame_dir = os.path.join(vis_dir, 'frames', sequence['video_name'])
+            frame_dir = os.path.join(vis_dir, 'frames', escape_filename(sequence['video_name']))
             if not os.path.exists(frame_dir): os.makedirs(frame_dir)
 
     # JV: Use viewport.
@@ -132,7 +133,7 @@ def track(sess, inputs, model, sequence, use_gt,
                           '-i', FRAME_PATTERN,
                           '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
                           os.path.join(os.path.abspath(vis_dir),
-                                       sequence['video_name']+'.mp4')]
+                                       escape_filename(sequence['video_name'])+'.mp4')]
         try:
             p = subprocess.Popen(args, cwd=frame_dir)
             p.wait()

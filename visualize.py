@@ -8,7 +8,7 @@ import tempfile
 import matplotlib.cm as cm
 
 import geom_np
-from helpers import load_image, load_image_viewport
+from helpers import load_image, load_image_viewport, escape_filename
 
 
 COLOR_PRED = ImageColor.getrgb('yellow')
@@ -50,7 +50,7 @@ class VideoFileWriter:
         if not save_frames:
             sequence_dir = tempfile.mkdtemp()
         else:
-            sequence_dir = os.path.join(self.root, 'frames/{}'.format(sequence_name))
+            sequence_dir = os.path.join(self.root, 'frames', escape_filename(sequence_name))
             os.makedirs(sequence_dir)
         # if not os.path.isdir(sequence_dir):
         #     os.makedirs(sequence_dir)
@@ -77,7 +77,8 @@ class VideoFileWriter:
                           '-nostdin', # No interaction with user.
                           '-i', self.pattern,
                           '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-                          os.path.join(os.path.abspath(self.root), sequence_name+'.mp4')]
+                          os.path.join(os.path.abspath(self.root),
+                                       escape_filename(sequence_name)+'.mp4')]
         try:
             p = subprocess.Popen(args, cwd=sequence_dir)
             p.wait()
