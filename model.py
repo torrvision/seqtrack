@@ -73,8 +73,7 @@ def get_masks_from_rectangles(rec, o, output_size=None, kind='fg', typecast=True
         # rec -- [..., 4]
         # JV: Allow different output size.
         # rec *= float(o.frmsz)
-        # TODO: Should this be (size_x, size_y) - 1? (corner alignment)
-        rec = geom.rect_mul(rec, tf.to_float([size_x, size_y]))
+        rec = geom.rect_mul(rec, tf.to_float([size_x - 1, size_y - 1]))
         # x1, y1, x2, y2 -- [...]
         x1, y1, x2, y2 = tf.unstack(rec, axis=1)
         if min_size is not None:
