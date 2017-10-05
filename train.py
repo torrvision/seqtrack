@@ -101,7 +101,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     # Always use same statistics for whitening (not set dependent).
     stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(_whiten(_guard_labels(example), o, stat=stat))
+    model = create_model(_whiten(_guard_labels(example), o, stat=stat),
+                         summaries_collections=['summaries_model'])
     loss_var, model.gt = get_loss(example, model.outputs, model.gt, o)
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
@@ -193,6 +194,9 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 summaries = (global_summaries + tf.get_collection('summaries_' + mode))
                 summary_vars[mode] = tf.summary.merge(summaries)
                 summaries.extend(image_summaries)
+                # Assume that model summaries could contain images.
+                # TODO: Separate model summaries into image and non-image.
+                summaries.extend(tf.get_collection('summaries_model'))
                 summary_vars_with_preview[mode] = tf.summary.merge(summaries)
 
     init_op = tf.global_variables_initializer()

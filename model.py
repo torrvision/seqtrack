@@ -141,12 +141,21 @@ def enforce_min_size(x1, y1, x2, y2, min_size, name='min_size'):
         y1, y2 = yc-ys/2, yc+ys/2
         return x1, y1, x2, y2
 
-def enforce_inside_box(y, name='inside_box'):
+def enforce_inside_box(y, translate=False, name='inside_box'):
     ''' Force the box to be in range [0,1]
     '''
     assert y.shape.as_list()[-1] == 4
     # inside range [0,1]
     with tf.name_scope(name) as scope:
+        if translate:
+            dims = tf.shape(y)
+            y = tf.reshape(y, [-1, dims[-1]])
+            translate_x = tf.maximum(tf.maximum(y[:,0], y[:,2]) - 1, 0) + \
+                          tf.minimum(tf.minimum(y[:,0], y[:,2]) - 0, 0)
+            translate_y = tf.maximum(tf.maximum(y[:,1], y[:,3]) - 1, 0) + \
+                          tf.minimum(tf.minimum(y[:,1], y[:,3]) - 0, 0)
+            y = y - tf.stack([translate_x, translate_y]*2, -1)
+            y = tf.reshape(y, dims)
         y = tf.clip_by_value(y, 0.0, 1.0)
     return y
 
@@ -626,10 +635,12 @@ class Nornn(object):
                  boxreg_stop_grad=False,
                  boxreg_regularize=False,
                  sc=False, # scale classification
+                 sc_score_threshold=0.0,
                  sc_num_class=3,
                  sc_step_size=0.05,
                  light=False,
                  ):
+        self.summaries_collections = summaries_collections
         # model parameters
         self.conv1_stride      = conv1_stride
         self.feat_act          = feat_act
@@ -656,6 +667,7 @@ class Nornn(object):
         self.boxreg_stop_grad  = boxreg_stop_grad
         self.boxreg_regularize = boxreg_regularize
         self.sc                = sc
+        self.sc_score_threshold= sc_score_threshold
         self.sc_num_class      = sc_num_class
         self.sc_step_size      = sc_step_size
         self.light             = light
@@ -1163,7 +1175,17 @@ class Nornn(object):
 
                 # compute scale and update box.
                 p_scale = tf.nn.softmax(sc_out)
-                is_max_scale = tf.to_float(tf.equal(p_scale, tf.reduce_max(p_scale, axis=1, keep_dims=True)))
+                is_max_scale = tf.equal(p_scale, tf.reduce_max(p_scale, axis=1, keep_dims=True))
+                if self.sc_score_threshold > 0:
+                    max_score = tf.reduce_max(hmap_curr_pred_oc_fg, axis=(1,2,3))
+                    is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
+                    batchsz = tf.shape(is_pass)[0]
+                    stay = tf.cast(tf.reshape(tf.concat([tf.fill([batchsz, self.sc_num_class/2], 0.0),
+                                                         tf.fill([batchsz, 1], 1.0),
+                                                         tf.fill([batchsz, self.sc_num_class/2], 0.0)], axis=1),
+                                              tf.shape(is_max_scale)), tf.bool)
+                    is_max_scale = tf.where(is_pass, is_max_scale, stay)
+                is_max_scale = tf.to_float(is_max_scale)
                 scales = (np.arange(self.sc_num_class) - (self.sc_num_class / 2)) * self.sc_step_size + 1
                 scale = tf.reduce_sum(scales * is_max_scale, axis=-1) / tf.reduce_sum(is_max_scale, axis=-1)
                 y_curr_pred = scale_rectangle_size(tf.expand_dims(scale, -1), y_curr_pred)
@@ -1172,7 +1194,7 @@ class Nornn(object):
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
 
             # Post-processing.
-            y_curr_pred = enforce_inside_box(y_curr_pred)
+            y_curr_pred = enforce_inside_box(y_curr_pred, translate=True)
 
             # Get image-centric outputs. Some are used for visualization purpose.
             hmap_curr_pred = to_image_centric_hmap(hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o)
@@ -1204,6 +1226,16 @@ class Nornn(object):
         box_s_val     = tf.stack(box_s_val, axis=1)
         target        = tf.stack(target, axis=1)
         search        = tf.stack(search, axis=1)
+
+        # Summaries from within model.
+        if self.use_hmap_prior:
+            with tf.variable_scope('deconvolution', reuse=True):
+                hmap_prior = tf.get_variable('hmap_prior')
+            with tf.name_scope('model_summary'):
+                # Swap channels and (non-existent) batch dimension.
+                hmap_prior = tf.transpose(tf.expand_dims(hmap_prior, 0), [3, 1, 2, 0])
+                tf.summary.image('hmap_prior', hmap_prior, max_outputs=2,
+                    collections=self.summaries_collections)
 
         for k in hmap_interm.keys():
             if not hmap_interm[k]:
@@ -1263,7 +1295,7 @@ class RNN_dual_mix(object):
         self.feed_examplar = feed_examplar
         self.dropout_rnn   = dropout_rnn
         self.keep_prob     = keep_prob
-        # Ignore sumaries_collections - model does not generate any summaries.
+        # Ignore summaries_collections - model does not generate any summaries.
         self.outputs, self.state, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
