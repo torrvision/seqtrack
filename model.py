@@ -1000,9 +1000,15 @@ class Nornn(object):
                 x = slim.conv2d(x, dims[-1]*4,   5, 2, padding='VALID', scope='conv1')
                 x = slim.conv2d(x, dims[-1]*16,  5, 2, padding='VALID', scope='conv2')
                 x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                x = slim.conv2d(x, dims[-1]*64,  5, 2, padding='VALID', scope='conv3')
-                x = slim.max_pool2d(x, 2, 2, scope='pool2')
-                x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv4')
+                x = slim.conv2d(x, dims[-1]*32,  3, 1, padding='VALID', scope='conv3')
+                x = slim.conv2d(x, dims[-1]*64,  3, 1, padding='VALID', scope='conv4')
+                x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv5')
+                #x = slim.conv2d(x, dims[-1]*4,   5, 2, padding='VALID', scope='conv1')
+                #x = slim.conv2d(x, dims[-1]*16,  5, 2, padding='VALID', scope='conv2')
+                #x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                #x = slim.conv2d(x, dims[-1]*64,  5, 2, padding='VALID', scope='conv3')
+                #x = slim.max_pool2d(x, 2, 2, scope='pool2')
+                #x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv4')
                 assert x.shape.as_list()[1] == 1
                 x = slim.flatten(x)
                 x = slim.fully_connected(x, 512, scope='fc1')
@@ -1161,13 +1167,10 @@ class Nornn(object):
                 # scale-classification network.
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y_prev)
-                #target_prev, _, _ = process_image_with_box(x_prev, y_prev,      o, o.frmsz/4+1, o.target_scale*2)
-                #target_curr, _, _ = process_image_with_box(x_curr, y_curr_pred, o, o.frmsz/4+1, o.target_scale*2)
-                #sc_in = tf.concat([target_prev, target_curr], -1)
                 target_init_pad, _, _ = process_image_with_box(x0, y0, o,
-                        crop_size=(o.frmsz - 1) * o.target_scale * 2 / o.search_scale + 1, scale=2, aspect=inputs['aspect'])
+                        crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
                 target_pred_pad, _, _ = process_image_with_box(x_curr, y_curr_pred, o,
-                        crop_size=(o.frmsz - 1) * o.target_scale * 2 / o.search_scale + 1, scale=2, aspect=inputs['aspect'])
+                        crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
                 sc_in = tf.concat([target_init_pad, target_pred_pad], -1)
                 with tf.variable_scope('scale_classfication',reuse=(t > 0)):
                     sc_out = pass_scale_classification(sc_in, is_training)
