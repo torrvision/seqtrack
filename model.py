@@ -604,6 +604,26 @@ def pass_rnn(x, state, cell, o, skip=False):
         assert False, 'Not available cell type.'
     return output, state
 
+def pass_mrnn(x, state, cell, o):
+    if cell == 'lstm':
+        h_prev, c_prev = state['h'], state['c']
+        with slim.arg_scope([slim.fully_connected],
+                num_outputs=h_prev.shape.as_list()[-1],
+                activation_fn=None,
+                weights_regularizer=slim.l2_regularizer(o.wd)):
+            it = tf.nn.sigmoid(slim.fully_connected(tf.concat([x, h_prev], -1), scope='i'))
+            ft = tf.nn.sigmoid(slim.fully_connected(tf.concat([x, h_prev], -1), scope='f'))
+            ct_tilda = tf.nn.tanh(slim.fully_connected(tf.concat([x, h_prev], -1), scope='c'))
+            ct = (ft * c_prev) + (it * ct_tilda)
+            ot = tf.nn.sigmoid(slim.fully_connected(tf.concat([x, h_prev], -1), scope='o'))
+            ht = ot * tf.nn.tanh(ct)
+        output = ht
+        state['h'] = ht
+        state['c'] = ct
+    else:
+        assert False, 'Not available cell type.'
+    return output, state
+
 
 class Nornn(object):
     '''
@@ -639,6 +659,11 @@ class Nornn(object):
                  sc_score_threshold=0.0,
                  sc_num_class=3,
                  sc_step_size=0.05,
+                 mrnn=False,
+                 mrnn_num_layers=0,
+                 mrnn_residual=False,
+                 mrnn_cell_type='lstm',
+                 mrnn_state_dim=64,
                  ):
         self.summaries_collections = summaries_collections
         # model parameters
@@ -670,6 +695,11 @@ class Nornn(object):
         self.sc_score_threshold= sc_score_threshold
         self.sc_num_class      = sc_num_class
         self.sc_step_size      = sc_step_size
+        self.mrnn              = mrnn
+        self.mrnn_num_layers   = mrnn_num_layers
+        self.mrnn_residual     = mrnn_residual
+        self.mrnn_cell_type    = mrnn_cell_type
+        self.mrnn_state_dim    = mrnn_state_dim
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
@@ -955,6 +985,16 @@ class Nornn(object):
                 x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, scope='fc3')
             return x
 
+        def pass_project_box(x, is_training):
+            with slim.arg_scope([slim.fully_connected],
+                    normalizer_fn=slim.batch_norm,
+                    normalizer_params={'is_training': is_training, 'fused': True},
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.fully_connected(x, 64, scope='fc1')
+                x = slim.fully_connected(x, 64, scope='fc2')
+                x = slim.fully_connected(x, 4, activation_fn=None, normalizer_fn=None, scope='fc3')
+            return x
+
         # Inputs to the model.
         x           = inputs['x']  # shape [b, ntimesteps, h, w, 3]
         x0          = inputs['x0'] # shape [b, h, w, 3]
@@ -1129,6 +1169,31 @@ class Nornn(object):
             else: # argmax to find center (then use x0's box)
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
+
+            # Motion RNN
+            if self.mrnn:
+                if t == 0 and self.mrnn_num_layers > 0:
+                    mrnn_state_init = get_initial_rnn_state(
+                        cell_type=self.mrnn_cell_type,
+                        cell_size=[tf.shape(x0)[0], self.mrnn_state_dim],
+                        num_layers=self.mrnn_num_layers)
+                    mrnn_state = [
+                        {k: tf.identity(mrnn_state_init[l][k]) for k in mrnn_state_init[l].keys()}
+                        for l in range(len(mrnn_state_init))]
+
+                mrnn_in = tf.identity(y_curr_pred)
+                for l in range(self.mrnn_num_layers):
+                    with tf.variable_scope('mrnn_layer{}'.format(l), reuse=(t > 0)):
+                        if self.mrnn_residual:
+                            assert False
+                            scoremap_ori = tf.identity(y_curr_pred)
+                            scoremap, mrnn_state[l] = pass_mrnn(scoremap, mrnn_state[l], self.mrnn_cell_type, o)
+                            scoremap += scoremap_ori
+                        else:
+                            mrnn_in, mrnn_state[l] = pass_mrnn(mrnn_in, mrnn_state[l], self.mrnn_cell_type, o)
+
+                with tf.variable_scope('project_box', reuse=(t > 0)):
+                    y_curr_pred = pass_project_box(mrnn_in, is_training)
 
             # Post-processing.
             y_curr_pred = enforce_inside_box(y_curr_pred, translate=True)

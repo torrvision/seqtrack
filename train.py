@@ -738,6 +738,13 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
 
         losses = dict()
 
+        # loss for motion. TODO: Re-write the function!
+        if 'l1_motion' in o.losses:
+            y_gt_valid   = tf.boolean_mask(y_gt['ic'], example['y_is_valid'])
+            y_pred_valid = tf.boolean_mask(outputs['y']['ic'], example['y_is_valid'])
+            loss_l1 = tf.reduce_mean(tf.abs(y_gt_valid - y_pred_valid), axis=-1)
+            losses['l1_motion'] = tf.reduce_mean(loss_l1)
+
         # l1 distances for left-top and right-bottom
         if 'l1' in o.losses or 'l1_relative' in o.losses:
             y_gt_valid   = tf.boolean_mask(y_gt[o.perspective], example['y_is_valid'])
