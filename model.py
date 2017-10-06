@@ -629,6 +629,7 @@ class Nornn(object):
                  rnn_skip=False,
                  rnn_skip_support=1,
                  coarse_hmap=False,
+                 resize_hmap=False,
                  use_hmap_prior=False,
                  boxreg=False,
                  boxreg_delta=False,
@@ -661,6 +662,7 @@ class Nornn(object):
         self.rnn_skip          = rnn_skip
         self.rnn_skip_support  = rnn_skip_support
         self.coarse_hmap       = coarse_hmap
+        self.resize_hmap       = resize_hmap
         self.use_hmap_prior    = use_hmap_prior
         self.boxreg            = boxreg
         self.boxreg_delta      = boxreg_delta
@@ -1159,8 +1161,16 @@ class Nornn(object):
                 scale = tf.reduce_sum(scales * is_max_scale, axis=-1) / tf.reduce_sum(is_max_scale, axis=-1)
                 y_curr_pred = scale_rectangle_size(tf.expand_dims(scale, -1), y_curr_pred)
             else: # argmax to find center (then use x0's box)
+                # Upsample to compute translation but not to compute loss.
+                hmap_upsample = hmap_curr_pred_oc
+                if self.resize_hmap:
+                    hmap_upsample = tf.image.resize_images(hmap_upsample, [o.frmsz, o.frmsz],
+                        method=tf.image.ResizeMethod.BICUBIC,
+                        align_corners=True)
+                # JV: Interpolate before softmax.
+                hmap_upsample_fg = tf.expand_dims(tf.unstack(tf.nn.softmax(hmap_upsample), axis=-1)[0], -1)
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
-                        hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
+                        hmap_upsample_fg, box_s_raw_curr, box_s_val_curr, o, y0)
 
             # Post-processing.
             y_curr_pred = enforce_inside_box(y_curr_pred, translate=True)
