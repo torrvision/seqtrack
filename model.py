@@ -73,8 +73,7 @@ def get_masks_from_rectangles(rec, o, output_size=None, kind='fg', typecast=True
         # rec -- [..., 4]
         # JV: Allow different output size.
         # rec *= float(o.frmsz)
-        # TODO: Should this be (size_x, size_y) - 1? (corner alignment)
-        rec = geom.rect_mul(rec, tf.to_float([size_x, size_y]))
+        rec = geom.rect_mul(rec, tf.to_float([size_x - 1, size_y - 1]))
         # x1, y1, x2, y2 -- [...]
         x1, y1, x2, y2 = tf.unstack(rec, axis=1)
         if min_size is not None:
@@ -630,6 +629,7 @@ class Nornn(object):
                  rnn_skip=False,
                  rnn_skip_support=1,
                  coarse_hmap=False,
+                 resize_hmap=False,
                  use_hmap_prior=False,
                  boxreg=False,
                  boxreg_delta=False,
@@ -639,6 +639,7 @@ class Nornn(object):
                  sc_score_threshold=0.0,
                  sc_num_class=3,
                  sc_step_size=0.05,
+                 light=False,
                  ):
         self.summaries_collections = summaries_collections
         # model parameters
@@ -661,6 +662,7 @@ class Nornn(object):
         self.rnn_skip          = rnn_skip
         self.rnn_skip_support  = rnn_skip_support
         self.coarse_hmap       = coarse_hmap
+        self.resize_hmap       = resize_hmap
         self.use_hmap_prior    = use_hmap_prior
         self.boxreg            = boxreg
         self.boxreg_delta      = boxreg_delta
@@ -670,6 +672,7 @@ class Nornn(object):
         self.sc_score_threshold= sc_score_threshold
         self.sc_num_class      = sc_num_class
         self.sc_step_size      = sc_step_size
+        self.light             = light
         self.outputs, self.state_init, self.state_final, self.gt, self.dbg = self._load_model(inputs, o)
         self.image_size   = (o.frmsz, o.frmsz)
         self.sequence_len = o.ntimesteps
@@ -711,24 +714,31 @@ class Nornn(object):
                     x = slim.conv2d(x, 32, 5, stride=1, scope='conv2')
                     x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
                     x = slim.conv2d(x, 64, 3, stride=1, scope='conv3')
-                    x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
+                    ## x = slim.conv2d(x, 128, 3, stride=1, scope='conv4')
+                    x = slim.conv2d(x, 64 if self.light else 128, 3, stride=1, scope='conv4')
                     if not self.target_is_vector:
-                        x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
+                        ## x = slim.conv2d(x, 256, 3, stride=1, activation_fn=get_act(act), scope='conv5')
+                        x = slim.conv2d(x, 64 if self.light else 256, 3, stride=1,
+                            activation_fn=get_act(act), scope='conv5')
                     else:
                         # Use stride 2 at conv5.
-                        x = slim.conv2d(x, 256, 3, stride=2, scope='conv5')
+                        ## x = slim.conv2d(x, 256, 3, stride=2, scope='conv5')
+                        x = slim.conv2d(x, 64 if self.light else 256, 3, stride=2, scope='conv5')
                         # Total stride is 8 * conv1_stride.
                         total_stride = self.conv1_stride * 8
                         # If frmsz = 241, conv1_stride = 3, search_scale = 2*target_scale
                         # then 240 / 2 / 24 = 5 gives a template of size 6.
                         kernel_size = (o.frmsz-1) * o.target_scale / o.search_scale / total_stride + 1
+                        # print 'conv6 kernel size:', kernel_size
+                        assert all(map(lambda x: x > 0, kernel_size))
                         # (kernel_size-1) == (frmsz-1) * (target_scale / search_scale) / total_stride
                         assert (kernel_size-1)*total_stride*o.search_scale == (o.frmsz-1)*o.target_scale
                         assert np.all(np.array(kernel_size) % 2 == 1)
-                        x = slim.conv2d(x, 256, kernel_size,
+                        x = slim.conv2d(x, 64 if self.light else 256, kernel_size,
                             activation_fn=get_act(act),
                             padding='VALID' if is_target else 'SAME',
                             scope='conv6')
+                        assert x.shape.as_list()[-3:-1] == [1, 1]
 
             elif o.cnn_model =='siamese': # exactly same as Siamese
                 with slim.arg_scope([slim.conv2d],
@@ -908,6 +918,17 @@ class Nornn(object):
                 x = slim.conv2d(x, num_outputs=dims[-1], scope='conv2')
             return x
 
+        def pass_conv_boxreg_project(x, o, is_training, dim):
+            '''Projects to lower dimension after concat with scoremap.'''
+            with slim.arg_scope([slim.conv2d],
+                    kernel_size=1,
+                    normalizer_fn=slim.batch_norm,
+                    normalizer_params={'is_training': is_training, 'fused': True},
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.conv2d(x, num_outputs=dim, scope='conv1')
+                x = slim.conv2d(x, num_outputs=dim, scope='conv2')
+            return x
+
         def pass_regress_box(x, is_training):
             ''' Regress output rectangle.
             '''
@@ -917,10 +938,18 @@ class Nornn(object):
                 with slim.arg_scope([slim.conv2d],
                         normalizer_fn=slim.batch_norm,
                         normalizer_params={'is_training': is_training, 'fused': True}):
-                    x = slim.conv2d(x, dims[-1]*2, 5, 2, padding='VALID', scope='conv1')
-                    x = slim.conv2d(x, dims[-1]*4, 5, 2, padding='VALID', scope='conv2')
-                    x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                    x = slim.conv2d(x, dims[-1]*8, 3, 1, padding='VALID', scope='conv3')
+                    if not self.light:
+                        x = slim.conv2d(x, dims[-1]*2, 5, 2, padding='VALID', scope='conv1')
+                        x = slim.conv2d(x, dims[-1]*4, 5, 2, padding='VALID', scope='conv2')
+                        x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                        x = slim.conv2d(x, dims[-1]*8, 3, 1, padding='VALID', scope='conv3')
+                    else:
+                        x = slim.conv2d(x, dims[-1]*2, 3, stride=2, scope='conv1')
+                        x = slim.conv2d(x, dims[-1]*2, 3, stride=2, scope='conv2')
+                        x = slim.conv2d(x, dims[-1]*4, 3, stride=2, scope='conv3')
+                        x = slim.conv2d(x, dims[-1]*4, 3, stride=2, scope='conv4')
+                        kernel_size = x.shape.as_list()[-3:-1]
+                        x = slim.conv2d(x, dims[-1]*8, kernel_size, padding='VALID', scope='conv5')
                     assert x.shape.as_list()[-3:-1] == [1, 1]
                     x = slim.flatten(x)
                     x = slim.fully_connected(x, 1024, scope='fc1')
@@ -1084,6 +1113,11 @@ class Nornn(object):
                     scoremap = pass_conv_boxreg_branch(scoremap, o, is_training)
                 boxreg_inputs = tf.concat([search_pair_feat, scoremap], -1)
 
+                if self.light:
+                    with tf.variable_scope('conv_boxreg_project', reuse=(t > 0)):
+                        boxreg_inputs = pass_conv_boxreg_project(boxreg_inputs, o, is_training,
+                            dim=scoremap.shape.as_list()[-1])
+
                 # Box regression.
                 with tf.variable_scope('regress_box', reuse=(t > 0)):
                     if self.boxreg_delta:
@@ -1127,8 +1161,16 @@ class Nornn(object):
                 scale = tf.reduce_sum(scales * is_max_scale, axis=-1) / tf.reduce_sum(is_max_scale, axis=-1)
                 y_curr_pred = scale_rectangle_size(tf.expand_dims(scale, -1), y_curr_pred)
             else: # argmax to find center (then use x0's box)
+                # Upsample to compute translation but not to compute loss.
+                hmap_upsample = hmap_curr_pred_oc
+                if self.resize_hmap:
+                    hmap_upsample = tf.image.resize_images(hmap_upsample, [o.frmsz, o.frmsz],
+                        method=tf.image.ResizeMethod.BICUBIC,
+                        align_corners=True)
+                # JV: Interpolate before softmax.
+                hmap_upsample_fg = tf.expand_dims(tf.unstack(tf.nn.softmax(hmap_upsample), axis=-1)[0], -1)
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
-                        hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
+                        hmap_upsample_fg, box_s_raw_curr, box_s_val_curr, o, y0)
 
             # Post-processing.
             y_curr_pred = enforce_inside_box(y_curr_pred, translate=True)
