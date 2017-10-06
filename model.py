@@ -631,6 +631,7 @@ class Nornn(object):
                  rnn_skip_support=1,
                  coarse_hmap=False,
                  use_hmap_prior=False,
+                 use_cosine_penalty=False,
                  boxreg=False,
                  boxreg_delta=False,
                  boxreg_stop_grad=False,
@@ -662,6 +663,7 @@ class Nornn(object):
         self.rnn_skip_support  = rnn_skip_support
         self.coarse_hmap       = coarse_hmap
         self.use_hmap_prior    = use_hmap_prior
+        self.use_cosine_penalty= use_cosine_penalty
         self.boxreg            = boxreg
         self.boxreg_delta      = boxreg_delta
         self.boxreg_stop_grad  = boxreg_stop_grad
@@ -1062,6 +1064,13 @@ class Nornn(object):
                                                  regularizer=slim.l2_regularizer(o.wd))
                     hmap_curr_pred_oc += hmap_prior
                 hmap_curr_pred_oc_fg = tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], -1)
+                hmap_curr_pred_oc_fg_original = tf.identity(hmap_curr_pred_oc_fg)
+                if self.use_cosine_penalty:
+                    hann_1d = np.expand_dims(np.hanning(hmap_curr_pred_oc_fg.shape.as_list()[1]), axis=0)
+                    penalty = np.expand_dims(np.transpose(hann_1d) * hann_1d, -1)
+                    #penalty = penalty / np.sum(penalty)
+                    window_influence = 0.1
+                    hmap_curr_pred_oc_fg = (1-window_influence) * hmap_curr_pred_oc_fg + window_influence * penalty
 
             if self.boxreg: # regress box from `scoremap`.
                 assert self.coarse_hmap, 'Do not up-sample scoremap in the case of box-regression.'
@@ -1114,7 +1123,7 @@ class Nornn(object):
                 p_scale = tf.nn.softmax(sc_out)
                 is_max_scale = tf.equal(p_scale, tf.reduce_max(p_scale, axis=1, keep_dims=True))
                 if self.sc_score_threshold > 0:
-                    max_score = tf.reduce_max(hmap_curr_pred_oc_fg, axis=(1,2,3))
+                    max_score = tf.reduce_max(hmap_curr_pred_oc_fg_original, axis=(1,2,3))
                     is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
                     batchsz = tf.shape(is_pass)[0]
                     stay = tf.cast(tf.reshape(tf.concat([tf.fill([batchsz, self.sc_num_class/2], 0.0),
