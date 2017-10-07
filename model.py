@@ -1357,8 +1357,9 @@ class Nornn(object):
         state_init, state_final = {}, {}
         state_init['x'], state_final['x'] = x_init, x_prev
         state_init['y'], state_final['y'] = y_init, y_prev
-        state_init['max_score_A0'], state_final['max_score_A0'] = max_score_A0_init, max_score_A0_prev
-        state_init['target_curr'], state_final['target_curr'] = target_curr_init, target_curr_prev
+        if self.new_target:
+            state_init['max_score_A0'], state_final['max_score_A0'] = max_score_A0_init, max_score_A0_prev
+            state_init['target_curr'], state_final['target_curr'] = target_curr_init, target_curr_prev
         # JV: Use nested collection of state.
         #if rnn_state:
         if self.rnn_num_layers > 0:
