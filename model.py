@@ -983,7 +983,8 @@ class Nornn(object):
                 x = slim.flatten(x)
                 x = slim.fully_connected(x, 512, scope='fc1')
                 x = slim.fully_connected(x, 512, scope='fc2')
-                x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, scope='fc3')
+                #x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, scope='fc3')
+                x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, normalizer_fn=None, scope='fc3')
             return x
 
         # Inputs to the model.
