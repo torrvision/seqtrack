@@ -159,35 +159,20 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                     max_outputs=o.ntimesteps+1, collections=[])
                 image_summaries.append(hmap)
         # Produce an image summary of target and search images (input to CNNs).
-        if 'target' in model.outputs and 'search' in model.outputs:
-            for key in ['target', 'search']:
+        for key in ['search', 'target_init', 'target_curr']:
+            if key in model.outputs:
+                if model.outputs[key] is None: continue
                 input_image = tf.summary.image('cnn_input_{}'.format(key),
                     _draw_input_image(model, key, o, name='draw_{}'.format(key)),
                     max_outputs=o.ntimesteps+1, collections=[])
                 image_summaries.append(input_image)
-        # Produce an image summary of s_prev and s_recon.
-        if 's_prev' in model.outputs and 's_recon' in model.outputs:
-            if model.outputs['s_recon'] is not None:
-                for key in ['s_prev', 's_recon']:
-                    input_image = tf.summary.image('flow_{}'.format(key),
-                        _draw_input_image(model, key, name='draw_{}'.format(key)),
-                        max_outputs=o.ntimesteps+1, collections=[])
-                    image_summaries.append(input_image)
-        # Produce an image summary of flow.
-        if 'flow' in model.outputs:
-            if model.outputs['flow'] is not None:
-                for key in ['u', 'v']:
-                    flow_fields = tf.summary.image('flow_{}'.format(key),
-                        _draw_flow_fields(model, key, name='draw_{}'.format(key)),
-                        max_outputs=o.ntimesteps+1, collections=[])
-                    image_summaries.append(flow_fields)
-        # Produce an image summary of the LSTM memory states (h or c).
-        if hasattr(model, 'memory'):
-            for mtype in model.memory.keys():
-                if model.memory[mtype][0] is not None:
-                    image_summaries.append(
-                        tf.summary.image(mtype, _draw_memory_state(model, mtype),
-                        max_outputs=o.ntimesteps+1, collections=[]))
+        ## Produce an image summary of target and search images (input to CNNs).
+        #if 'target' in model.outputs and 'search' in model.outputs:
+        #    for key in ['target', 'search']:
+        #        input_image = tf.summary.image('cnn_input_{}'.format(key),
+        #            _draw_input_image(model, key, o, name='draw_{}'.format(key)),
+        #            max_outputs=o.ntimesteps+1, collections=[])
+        #        image_summaries.append(input_image)
         for mode in modes:
             with tf.name_scope(mode):
                 # Merge summaries with any that are specific to the mode.
@@ -795,6 +780,23 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
             if 'ce_balanced' in o.losses:
                 losses['ce_balanced'] = tf.reduce_mean(
                         tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
+
+        # TODO: Make it neat if things work well.
+        if outputs['hmap_A0'] is not None:
+            hmap_gt_valid   = tf.boolean_mask(hmap_gt[o.perspective], example['y_is_valid'])
+            hmap_pred_valid = tf.boolean_mask(outputs['hmap_A0'], example['y_is_valid'])
+            # hmap is [valid_images, height, width, 2]
+            count = tf.reduce_sum(hmap_gt_valid, axis=(1, 2), keep_dims=True)
+            class_weight = 0.5 / tf.cast(count+1, tf.float32)
+            weight = tf.reduce_sum(hmap_gt_valid * class_weight, axis=-1)
+            # Flatten to feed into softmax_cross_entropy_with_logits.
+            hmap_gt_valid, unmerge = merge_dims(hmap_gt_valid, 0, 3)
+            hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
+            loss_ce = tf.nn.softmax_cross_entropy_with_logits(
+                    labels=hmap_gt_valid,
+                    logits=hmap_pred_valid)
+            loss_ce = unmerge(loss_ce, 0)
+            losses['ce_A0'] = tf.reduce_mean(loss_ce)
 
         for key in outputs['hmap_interm']:
             if outputs['hmap_interm'][key] is not None:

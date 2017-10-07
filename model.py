@@ -612,6 +612,10 @@ class Nornn(object):
                  summaries_collections=None,
                  conv1_stride=2,
                  feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
+                 new_target=False,
+                 new_target_combine='add', # {'add', 'concat', 'gau_sum', concat_gau', 'share_gau_sum'}
+                 supervision_score_A0=False,
+                 supervision_score_At=False,
                  target_is_vector=False,
                  join_method='dot', # {'dot', 'concat'}
                  scale_target_num=1, # odd number, e.g., {1, 3, 5}
@@ -639,13 +643,17 @@ class Nornn(object):
                  sc=False, # scale classification
                  sc_score_threshold=0.0,
                  sc_num_class=3,
-                 sc_step_size=0.05,
+                 sc_step_size=0.03,
                  light=False,
                  ):
         self.summaries_collections = summaries_collections
         # model parameters
         self.conv1_stride      = conv1_stride
         self.feat_act          = feat_act
+        self.new_target        = new_target
+        self.new_target_combine= new_target_combine
+        self.supervision_score_A0 = supervision_score_A0
+        self.supervision_score_At = supervision_score_At
         self.target_is_vector  = target_is_vector
         self.join_method       = join_method
         self.scale_target_num  = scale_target_num
@@ -859,6 +867,54 @@ class Nornn(object):
                 scoremap = slim.conv2d(scoremap, scope='conv2')
             return scoremap
 
+        def combine_scoremaps(scoremap_init, scoremap_curr, o):
+            dims = scoremap_init.shape.as_list()
+
+            if self.new_target_combine == 'add':
+                scoremap = scoremap_init + scoremap_curr
+            elif self.new_target_combine == 'concat':
+                scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
+            elif self.new_target_combine == 'gau_sum':
+                with slim.arg_scope([slim.conv2d],
+                        num_outputs=dims[-1],
+                        kernel_size=3,
+                        activation_fn=None,
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    scoremap = tf.nn.tanh(slim.conv2d(scoremap_init, scope='filter_init')) * \
+                               tf.nn.sigmoid(slim.conv2d(scoremap_init, scope='gate_init')) + \
+                               tf.nn.tanh(slim.conv2d(scoremap_curr, scope='filter_curr')) * \
+                               tf.nn.sigmoid(slim.conv2d(scoremap_curr, scope='gate_curr'))
+            elif self.new_target_combine == 'concat_gau':
+                scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
+                with slim.arg_scope([slim.conv2d],
+                        num_outputs=dims[-1],
+                        kernel_size=3,
+                        activation_fn=None,
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    scoremap = tf.nn.tanh(slim.conv2d(scoremap, scope='filter')) * \
+                               tf.nn.sigmoid(slim.conv2d(scoremap, scope='gate'))
+            elif self.new_target_combine == 'share_gau_sum':
+                with slim.arg_scope([slim.conv2d],
+                        num_outputs=dims[-1],
+                        kernel_size=3,
+                        activation_fn=None,
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    scoremap = tf.nn.tanh(slim.conv2d(scoremap_init, scope='filter')) * \
+                               tf.nn.sigmoid(slim.conv2d(scoremap_init, scope='gate')) + \
+                               tf.nn.tanh(slim.conv2d(scoremap_curr, scope='filter', reuse=True)) * \
+                               tf.nn.sigmoid(slim.conv2d(scoremap_curr, scope='gate', reuse=True))
+            else:
+                assert False, 'Not available scoremap combine mode.'
+
+            with slim.arg_scope([slim.conv2d],
+                    num_outputs=dims[-1],
+                    kernel_size=3,
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                scoremap = slim.conv2d(scoremap, scope='conv1')
+                scoremap = slim.conv2d(scoremap, scope='conv2')
+
+            return scoremap
+
         def pass_interm_supervision(x, o):
             with slim.arg_scope([slim.conv2d],
                     weights_regularizer=slim.l2_regularizer(o.wd)):
@@ -1013,12 +1069,15 @@ class Nornn(object):
         # Case of object-centric approach.
         y_pred_oc = []
         hmap_pred_oc = []
+        hmap_pred_oc_A0 = []
         box_s_raw = []
         box_s_val = []
-        target = []
+        #target = []
+        target_init_list = []
+        target_curr_list = []
         search = []
 
-        hmap_interm = {k: [] for k in ['score']}
+        hmap_interm = {k: [] for k in ['score', 'score_A0', 'score_At']}
         sc_out_list = []
 
         target_scope = o.cnn_model if self.target_share else o.cnn_model+'_target'
@@ -1042,7 +1101,14 @@ class Nornn(object):
             target_input = target_init
 
         with tf.variable_scope(target_scope):
-            target_feat = pass_cnn(target_input, o, is_training, self.feat_act, is_target=True)
+            target_init_feat = pass_cnn(target_input, o, is_training, self.feat_act, is_target=True)
+
+        if self.new_target:
+            batchsz = tf.shape(x)[0]
+            max_score_A0_init = tf.fill([batchsz], 1.0)
+            max_score_A0_prev = tf.identity(max_score_A0_init)
+            target_curr_init = target_init
+            target_curr_prev = tf.identity(target_curr_init)
 
         for t in range(o.ntimesteps):
             x_curr = x[:, t]
@@ -1056,8 +1122,42 @@ class Nornn(object):
             with tf.variable_scope(search_scope, reuse=(t > 0 or self.target_share)) as scope:
                 search_feat = pass_cnn(search_curr, o, is_training, self.feat_act, is_target=False)
 
-            with tf.variable_scope('cross_correlation', reuse=(t > 0)):
-                scoremap = pass_cross_correlation(search_feat, target_feat, o)
+            if self.new_target:
+                target_curr, _, _ = process_image_with_box(x_prev, y_prev, o,
+                    crop_size=target_size, scale=o.target_scale, aspect=inputs['aspect'])
+
+                update_target = tf.greater_equal(max_score_A0_prev, 0.9) # TODO: threshold val.
+                target_curr = tf.where(update_target, target_curr, target_curr_prev)
+                target_curr_prev = target_curr
+
+                with tf.variable_scope(target_scope, reuse=True):
+                    target_curr_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
+
+                with tf.variable_scope('cross_correlation', reuse=(t > 0)) as scope:
+                    scoremap_init = pass_cross_correlation(search_feat, target_init_feat, o)
+                    scope.reuse_variables()
+                    scoremap_curr = pass_cross_correlation(search_feat, target_curr_feat, o)
+
+                # Compute max(score_A0), which wile be used for a decision threshold.
+                with tf.variable_scope('deconvolution', reuse=(t > 0)):
+                    hmap_curr_pred_oc_A0 = pass_deconvolution(scoremap_init, is_training, o)
+                    max_score_A0_prev = tf.reduce_max(tf.nn.softmax(hmap_curr_pred_oc_A0)[:,:,:,0], axis=(1,2))
+
+                with tf.variable_scope('supervision_scores', reuse=(t > 0)) as scope:
+                    if self.supervision_score_A0 and not self.supervision_score_At:
+                        hmap_interm['score_A0'].append(pass_interm_supervision(scoremap_init, o))
+                    elif not self.supervision_score_A0 and self.supervision_score_At:
+                        hmap_interm['score_At'].append(pass_interm_supervision(scoremap_curr, o))
+                    elif self.supervision_score_A0 and self.supervision_score_At:
+                        hmap_interm['score_A0'].append(pass_interm_supervision(scoremap_init, o))
+                        scope.reuse_variables()
+                        hmap_interm['score_At'].append(pass_interm_supervision(scoremap_curr, o))
+
+                with tf.variable_scope('combine_scoremaps', reuse=(t > 0)):
+                    scoremap = combine_scoremaps(scoremap_init, scoremap_curr, o)
+            else:
+                with tf.variable_scope('cross_correlation', reuse=(t > 0)):
+                    scoremap = pass_cross_correlation(search_feat, target_init_feat, o)
 
             if self.interm_supervision:
                 with tf.variable_scope('interm_supervision', reuse=(t > 0)):
@@ -1085,7 +1185,7 @@ class Nornn(object):
                     else:
                         scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
 
-            with tf.variable_scope('deconvolution', reuse=(t > 0)):
+            with tf.variable_scope('deconvolution', reuse=(True if self.new_target else t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o)
                 if self.use_hmap_prior:
                     hmap_shape = hmap_curr_pred_oc.shape.as_list()
@@ -1193,9 +1293,12 @@ class Nornn(object):
             hmap_pred.append(hmap_curr_pred)
             y_pred_oc.append(y_curr_pred_oc_delta if self.boxreg_delta else y_curr_pred_oc)
             hmap_pred_oc.append(hmap_curr_pred_oc)
+            hmap_pred_oc_A0.append(hmap_curr_pred_oc_A0 if self.new_target else None)
             box_s_raw.append(box_s_raw_curr)
             box_s_val.append(box_s_val_curr)
-            target.append(target_init) # To visualize what network sees.
+            #target.append(target_init) # To visualize what network sees.
+            target_init_list.append(target_init) # To visualize what network sees.
+            target_curr_list.append(target_curr if self.new_target else None) # To visualize what network sees.
             search.append(search_curr) # To visualize what network sees.
 
             # Update for next time-step.
@@ -1211,9 +1314,12 @@ class Nornn(object):
         hmap_pred     = tf.stack(hmap_pred, axis=1)
         y_pred_oc     = tf.stack(y_pred_oc, axis=1)
         hmap_pred_oc  = tf.stack(hmap_pred_oc, axis=1)
+        hmap_pred_oc_A0 = tf.stack(hmap_pred_oc_A0, axis=1) if self.new_target else None
         box_s_raw     = tf.stack(box_s_raw, axis=1)
         box_s_val     = tf.stack(box_s_val, axis=1)
-        target        = tf.stack(target, axis=1)
+        #target        = tf.stack(target, axis=1)
+        target_init   = tf.stack(target_init_list, axis=1)
+        target_curr   = tf.stack(target_curr_list, axis=1) if self.new_target else None
         search        = tf.stack(search, axis=1)
 
         # Summaries from within model.
@@ -1234,10 +1340,13 @@ class Nornn(object):
 
         outputs = {'y':         {'ic': y_pred,    'oc': y_pred_oc}, # NOTE: Do not use 'ic' to compute loss.
                    'hmap':      {'ic': hmap_pred, 'oc': hmap_pred_oc}, # NOTE: hmap_pred_oc is no softmax yet.
+                   'hmap_A0': hmap_pred_oc_A0,
                    'hmap_interm': hmap_interm,
                    'box_s_raw': box_s_raw,
                    'box_s_val': box_s_val,
-                   'target':    target,
+                   #'target':    target,
+                   'target_init': target_init,
+                   'target_curr': target_curr,
                    'search':    search,
                    'boxreg_delta': self.boxreg_delta,
                    'sc':           {'out': tf.stack(sc_out_list, axis=1),
@@ -1248,6 +1357,8 @@ class Nornn(object):
         state_init, state_final = {}, {}
         state_init['x'], state_final['x'] = x_init, x_prev
         state_init['y'], state_final['y'] = y_init, y_prev
+        state_init['max_score_A0'], state_final['max_score_A0'] = max_score_A0_init, max_score_A0_prev
+        state_init['target_curr'], state_final['target_curr'] = target_curr_init, target_curr_prev
         # JV: Use nested collection of state.
         #if rnn_state:
         if self.rnn_num_layers > 0:
