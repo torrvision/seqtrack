@@ -611,7 +611,7 @@ class Nornn(object):
     def __init__(self, inputs, o,
                  summaries_collections=None,
                  conv1_stride=2,
-                 feat_act='linear', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
+                 feat_act='tanh', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
                  new_target=False,
                  new_target_combine='add', # {'add', 'concat', 'gau_sum', concat_gau', 'share_gau_sum'}
                  supervision_score_A0=False,
@@ -622,12 +622,11 @@ class Nornn(object):
                  scale_target_mode='add', # {'add', 'weight'}
                  divide_target=False,
                  bnorm_xcorr=False,
-                 bnorm_deconv=False,
                  normalize_input_range=False,
                  target_share=True,
                  target_concat_mask=False, # can only be True if share is False
                  interm_supervision=False,
-                 rnn_cell_type='gru',
+                 rnn_cell_type='lstm',
                  rnn_num_layers=0,
                  rnn_residual=False,
                  rnn_skip=False,
@@ -641,7 +640,7 @@ class Nornn(object):
                  boxreg_stop_grad=False,
                  boxreg_regularize=False,
                  sc=False, # scale classification
-                 sc_score_threshold=0.0,
+                 sc_score_threshold=0.9,
                  sc_num_class=3,
                  sc_step_size=0.03,
                  light=False,
@@ -660,7 +659,6 @@ class Nornn(object):
         self.scale_target_mode= scale_target_mode
         self.divide_target     = divide_target
         self.bnorm_xcorr       = bnorm_xcorr
-        self.bnorm_deconv      = bnorm_deconv
         self.normalize_input_range = normalize_input_range
         self.target_share          = target_share
         self.target_concat_mask    = target_concat_mask
@@ -927,13 +925,10 @@ class Nornn(object):
             ''' Upsampling layers.
             The last layer should not have an activation!
             '''
-            bnorm_args = {} if not self.bnorm_deconv else {
-                'normalizer_fn': slim.batch_norm,
-                'normalizer_params': {'is_training': is_training, 'fused': True},
-            }
-            bnorm_args.update({'weights_regularizer': slim.l2_regularizer(o.wd)})
-
-            with slim.arg_scope([slim.conv2d], **bnorm_args):
+            with slim.arg_scope([slim.conv2d],
+                    normalizer_fn=slim.batch_norm,
+                    normalizer_params={'is_training': is_training, 'fused': True},
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
                 if o.cnn_model in ['custom', 'siamese']:
                     dim = x.shape.as_list()[-1]
                     if self.coarse_hmap: # No upsample layers.
@@ -1029,17 +1024,10 @@ class Nornn(object):
                 x = slim.conv2d(x, dims[-1]*32,  3, 1, padding='VALID', scope='conv3')
                 x = slim.conv2d(x, dims[-1]*64,  3, 1, padding='VALID', scope='conv4')
                 x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv5')
-                #x = slim.conv2d(x, dims[-1]*4,   5, 2, padding='VALID', scope='conv1')
-                #x = slim.conv2d(x, dims[-1]*16,  5, 2, padding='VALID', scope='conv2')
-                #x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                #x = slim.conv2d(x, dims[-1]*64,  5, 2, padding='VALID', scope='conv3')
-                #x = slim.max_pool2d(x, 2, 2, scope='pool2')
-                #x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv4')
                 assert x.shape.as_list()[1] == 1
                 x = slim.flatten(x)
                 x = slim.fully_connected(x, 512, scope='fc1')
                 x = slim.fully_connected(x, 512, scope='fc2')
-                #x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, scope='fc3')
                 x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, normalizer_fn=None, scope='fc3')
             return x
 
@@ -1258,8 +1246,9 @@ class Nornn(object):
                 p_scale = tf.nn.softmax(sc_out)
                 is_max_scale = tf.equal(p_scale, tf.reduce_max(p_scale, axis=1, keep_dims=True))
                 if self.sc_score_threshold > 0:
-                    max_score = tf.reduce_max(hmap_curr_pred_oc_fg_original, axis=(1,2,3))
-                    is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
+                    #max_score = tf.reduce_max(hmap_curr_pred_oc_fg_original, axis=(1,2,3))
+                    #is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
+                    is_pass = tf.greater_equal(max_score_A0_prev, self.sc_score_threshold)
                     batchsz = tf.shape(is_pass)[0]
                     stay = tf.cast(tf.reshape(tf.concat([tf.fill([batchsz, self.sc_num_class/2], 0.0),
                                                          tf.fill([batchsz, 1], 1.0),
