@@ -865,7 +865,7 @@ class Nornn(object):
                 scoremap = slim.conv2d(scoremap, scope='conv2')
             return scoremap
 
-        def combine_scoremaps(scoremap_init, scoremap_curr, o):
+        def combine_scoremaps(scoremap_init, scoremap_curr, o, is_training):
             dims = scoremap_init.shape.as_list()
 
             if self.new_target_combine == 'add':
@@ -907,6 +907,8 @@ class Nornn(object):
             with slim.arg_scope([slim.conv2d],
                     num_outputs=dims[-1],
                     kernel_size=3,
+                    normalizer_fn=slim.batch_norm,
+                    normalizer_params={'is_training': is_training, 'fused': True},
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 scoremap = slim.conv2d(scoremap, scope='conv1')
                 scoremap = slim.conv2d(scoremap, scope='conv2')
@@ -1142,7 +1144,7 @@ class Nornn(object):
                         hmap_interm['score_At'].append(pass_interm_supervision(scoremap_curr, o))
 
                 with tf.variable_scope('combine_scoremaps', reuse=(t > 0)):
-                    scoremap = combine_scoremaps(scoremap_init, scoremap_curr, o)
+                    scoremap = combine_scoremaps(scoremap_init, scoremap_curr, o, is_training)
             else:
                 with tf.variable_scope('cross_correlation', reuse=(t > 0)):
                     scoremap = pass_cross_correlation(search_feat, target_init_feat, o)
