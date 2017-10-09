@@ -1248,9 +1248,9 @@ class Nornn(object):
                 p_scale = tf.nn.softmax(sc_out)
                 is_max_scale = tf.equal(p_scale, tf.reduce_max(p_scale, axis=1, keep_dims=True))
                 if self.sc_score_threshold > 0:
-                    #max_score = tf.reduce_max(hmap_curr_pred_oc_fg_original, axis=(1,2,3))
-                    #is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
-                    is_pass = tf.greater_equal(max_score_A0_prev, self.sc_score_threshold)
+                    max_score = tf.reduce_max(hmap_curr_pred_oc_fg_original, axis=(1,2,3))
+                    is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
+                    #is_pass = tf.greater_equal(max_score_A0_prev, self.sc_score_threshold)
                     batchsz = tf.shape(is_pass)[0]
                     stay = tf.cast(tf.reshape(tf.concat([tf.fill([batchsz, self.sc_num_class/2], 0.0),
                                                          tf.fill([batchsz, 1], 1.0),
