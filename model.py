@@ -907,8 +907,6 @@ class Nornn(object):
             with slim.arg_scope([slim.conv2d],
                     num_outputs=dims[-1],
                     kernel_size=3,
-                    normalizer_fn=slim.batch_norm,
-                    normalizer_params={'is_training': is_training, 'fused': True},
                     weights_regularizer=slim.l2_regularizer(o.wd)):
                 scoremap = slim.conv2d(scoremap, scope='conv1')
                 scoremap = slim.conv2d(scoremap, scope='conv2')
