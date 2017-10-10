@@ -21,8 +21,11 @@ fi
 mkdir -p "$dst"
 
 # Create directory structure.
-(cd "$src" && find . -type d) | \
+( cd "$src" && find . -type d ) | \
     xargs -I{} mkdir -p "$dst/{}"
 # Resize images.
-(cd "$src" && find . -type f -iname '*.gif' -o -iname '*.jpg' -o -iname '*.png' -o -iname '*.jpeg') | \
+( cd "$src" && find . -type f -iname '*.gif' -o -iname '*.jpg' -o -iname '*.png' -o -iname '*.jpeg' ) | \
     xargs -n 1 -P 16 -I{} convert "$src/{}" -resize "$size" "$dst/{}"
+# Copy other files.
+( cd "$src" && find . -type f -not \( -iname '*.gif' -o -iname '*.jpg' -o -iname '*.png' -o -iname '*.jpeg' \) ) | \
+    xargs -n 1 -P 16 -I{} cp "$src/{}" "$dst/{}"
