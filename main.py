@@ -36,9 +36,19 @@ def parse_arguments():
             '--tfdb', help='run tensorflow debugger',
             action='store_true')
 
+    ## parser.add_argument(
+    ##         '--dataset', help='specify the name of dataset',
+    ##         type=str, default='')
     parser.add_argument(
-            '--dataset', help='specify the name of dataset',
-            type=str, default='')
+            '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker (list)',
+            type=str, default=['ILSVRC-train', 'OTB-50'])
+    parser.add_argument(
+            '--eval_samplers', nargs='+', help='',
+            type=str, default=['full'])
+    parser.add_argument(
+            '--max_eval_videos', help='max number of videos to evaluate; not applied to OTB',
+            type=int, default=100)
+
     parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
             type=int, default=9)
@@ -164,15 +174,6 @@ def parse_arguments():
     parser.add_argument(
             '--motion_params', help='JSON string specifying motion augmentation',
             type=json.loads, default={})
-    parser.add_argument(
-            '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker',
-            type=str, default=['ILSVRC-train'])
-    parser.add_argument(
-            '--eval_samplers', nargs='+', help='',
-            type=str, default=['train'])
-    parser.add_argument(
-            '--max_eval_videos', help='max number of videos to evaluate; not applied to OTB',
-            type=int, default=100)
 
     parser.add_argument(
             '--path_data_home', help='location of datasets',
@@ -224,12 +225,23 @@ def main():
     o.initialize()
 
     # datasets = data.load_data(o)
-    datasets = {
+    datasets = {}
+    datasets['vot2013'] = data.CSV('vot2013', o)
+    datasets['vot2014'] = data.CSV('vot2014', o)
+    datasets['vot2016'] = data.CSV('vot2016', o)
+    datasets['vot2017'] = data.CSV('vot2017', o)
+    datasets['tc']      = data.CSV('tc', o)
+    datasets['dtb70']   = data.CSV('dtb70', o)
+    datasets['nuspro']  = data.CSV('nuspro', o)
+    datasets['uav123']  = data.CSV('uav123', o)
+    datasets['otb50']   = data.CSV('otb50', o)
+    datasets['otb100']  = data.CSV('otb100', o)
+    datasets.update({
         'ILSVRC-train': data.Data_ILSVRC('train', o),
         'ILSVRC-val':   data.Data_ILSVRC('val', o),
         'OTB-50':       data.Data_OTB('OTB-50', o),
         'OTB-100':      data.Data_OTB('OTB-100', o),
-    }
+    })
 
     # These are the possible choices for evaluation sampler.
     # No need to specify `shuffle`, `max_videos`, `max_objects` here,
