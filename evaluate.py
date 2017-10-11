@@ -104,7 +104,8 @@ def track(sess, inputs, model, sequence, use_gt,
             # This is not the first chunk.
             # Add the previous state to the feed dictionary.
             tensor, value = to_nested_tuple(model.state_init, prev_state)
-            feed_dict[tensor] = value
+            if tensor is not None: # Function returns None if empty.
+                feed_dict[tensor] = value
         # Get output and final state.
         y_pred, prev_state, hmap_pred = sess.run(
             [model.outputs['y']['ic'], model.state_final, model.outputs['hmap']['ic']],
