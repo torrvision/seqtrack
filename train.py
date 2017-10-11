@@ -26,7 +26,7 @@ import visualize
 from model import convert_rec_to_heatmap, to_object_centric_coordinate
 from helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_dims
 
-EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid']
+EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid', 'aspect']
 
 
 def train(create_model, datasets, eval_sets, o, use_queues=False):
@@ -60,6 +60,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         'y0'         # Position of target in first image, shape [b, 4]
         'x'          # Input images, shape [b, n, h, w, 3]
         'y_is_valid' # Booleans indicating presence of frame, shape [b, n]
+        'aspect'     # Aspect ratio (width/height) of original image, shape [b]
 
     and the output dictionary has fields::
 
@@ -100,7 +101,8 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     # Always use same statistics for whitening (not set dependent).
     stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(_whiten(_guard_labels(example), o, stat=stat))
+    model = create_model(_whiten(_guard_labels(example), o, stat=stat),
+                         summaries_collections=['summaries_model'])
     loss_var, model.gt = get_loss(example, model.outputs, model.gt, o)
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
@@ -160,7 +162,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
         if 'target' in model.outputs and 'search' in model.outputs:
             for key in ['target', 'search']:
                 input_image = tf.summary.image('cnn_input_{}'.format(key),
-                    _draw_input_image(model, key, name='draw_{}'.format(key)),
+                    _draw_input_image(model, key, o, name='draw_{}'.format(key)),
                     max_outputs=o.ntimesteps+1, collections=[])
                 image_summaries.append(input_image)
         # Produce an image summary of s_prev and s_recon.
@@ -192,6 +194,9 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
                 summaries = (global_summaries + tf.get_collection('summaries_' + mode))
                 summary_vars[mode] = tf.summary.merge(summaries)
                 summaries.extend(image_summaries)
+                # Assume that model summaries could contain images.
+                # TODO: Separate model summaries into image and non-image.
+                summaries.extend(tf.get_collection('summaries_model'))
                 summary_vars_with_preview[mode] = tf.summary.merge(summaries)
 
     init_op = tf.global_variables_initializer()
@@ -448,6 +453,7 @@ def _make_input_pipeline(o, dtype=tf.float32,
             'x_raw':      images_batch['images'][:, 1:],
             'y':          images_batch['labels'][:, 1:],
             'y_is_valid': images_batch['label_is_valid'][:, 1:],
+            'aspect':     images_batch['aspect'],
         }
         return example_batch, feed_loop
 
@@ -459,6 +465,7 @@ def _make_placeholders(o, default=None):
         'x_raw':      [None, o.ntimesteps, o.frmsz, o.frmsz, 3],
         'y':          [None, o.ntimesteps, 4],
         'y_is_valid': [None, o.ntimesteps],
+        'aspect':     [None],
     }
     dtype = lambda k: tf.bool if k.endswith('_is_valid') else o.dtype
 
@@ -664,6 +671,28 @@ def iter_examples(dataset, o, generator=None, num_epochs=None):
                 sequence = motion.augment(sequence, rand=generator, **o.motion_params)
             yield sequence
 
+def compute_scale_classification_gt(example, scales):
+    import geom
+    obj_min, obj_max = geom.rect_min_max(tf.concat([tf.expand_dims(example['y0'],1), example['y']], 1))
+    obj_center, obj_size = 0.5 * (obj_min + obj_max), obj_max - obj_min
+    diam = tf.reduce_mean(obj_size, axis=-1) # 0.5*(width+height)
+    sc_ratio = tf.divide(diam[:, 1:], diam[:, :-1])
+    sc_gt = []
+    for i in range(len(scales)):
+        if i == 0:
+            sc_gt.append(tf.less(sc_ratio, scales[i]))
+        elif i < len(scales)/2:
+            sc_gt.append(tf.logical_and(tf.greater_equal(sc_ratio, scales[i-1]), tf.less(sc_ratio, scales[i])))
+        elif i == len(scales)/2:
+            sc_gt.append(tf.logical_and(tf.greater_equal(sc_ratio, scales[i-1]), tf.less(sc_ratio, scales[i+1])))
+        elif i > len(scales)/2 and not i == len(scales)-1:
+            sc_gt.append(tf.logical_and(tf.greater_equal(sc_ratio, scales[i]), tf.less(sc_ratio, scales[i+1])))
+        elif i == len(scales)-1:
+            sc_gt.append(tf.greater_equal(sc_ratio, scales[i]))
+        else:
+            assert False
+    return tf.stack(sc_gt, -1)
+
 def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
     with tf.name_scope(name) as scope:
         y_gt    = {'ic': None, 'oc': None}
@@ -671,8 +700,11 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
 
         y_gt['ic'] = example['y']
         y_gt['oc'] = to_object_centric_coordinate(example['y'], outputs['box_s_raw'], outputs['box_s_val'], o)
-        hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, Gaussian=True)
-        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, Gaussian=True)
+        hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, **o.heatmap_params)
+        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, **o.heatmap_params)
+        if outputs['sc']:
+            assert 'sc' in o.losses
+            sc_gt = compute_scale_classification_gt(example, outputs['sc']['scales'])
 
         # Regress displacement rather than absolute location. Update y_gt.
         if outputs['boxreg_delta']:
@@ -682,13 +714,15 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
 
         assert(y_gt['ic'].get_shape().as_list()[1] == o.ntimesteps)
 
-        if outputs['hmap_interm'] is not None:
-            pred_size = outputs['hmap_interm'].shape.as_list()[2:4]
-            hmap_interm_gt, unmerge = merge_dims(hmap_gt['oc'], 0, 2)
-            hmap_interm_gt = tf.image.resize_images(hmap_interm_gt, pred_size,
-                    method=tf.image.ResizeMethod.BILINEAR,
-                    align_corners=True)
-            hmap_interm_gt = unmerge(hmap_interm_gt, axis=0)
+        for key in outputs['hmap_interm']:
+            if outputs['hmap_interm'][key] is not None:
+                pred_size = outputs['hmap_interm'][key].shape.as_list()[2:4]
+                hmap_interm_gt, unmerge = merge_dims(hmap_gt['oc'], 0, 2)
+                hmap_interm_gt = tf.image.resize_images(hmap_interm_gt, pred_size,
+                        method=tf.image.ResizeMethod.BILINEAR,
+                        align_corners=True)
+                hmap_interm_gt = unmerge(hmap_interm_gt, axis=0)
+                break
 
         if 'oc' in outputs['hmap']:
             # Resize GT heatmap to match size of prediction if necessary.
@@ -762,9 +796,10 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
                 losses['ce_balanced'] = tf.reduce_mean(
                         tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
 
-            if outputs['hmap_interm'] is not None:
+        for key in outputs['hmap_interm']:
+            if outputs['hmap_interm'][key] is not None:
                 hmap_gt_valid   = tf.boolean_mask(hmap_interm_gt, example['y_is_valid'])
-                hmap_pred_valid = tf.boolean_mask(outputs['hmap_interm'], example['y_is_valid'])
+                hmap_pred_valid = tf.boolean_mask(outputs['hmap_interm'][key], example['y_is_valid'])
                 # Flatten to feed into softmax_cross_entropy_with_logits.
                 hmap_gt_valid, unmerge = merge_dims(hmap_gt_valid, 0, 3)
                 hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
@@ -772,7 +807,18 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
                         labels=hmap_gt_valid,
                         logits=hmap_pred_valid)
                 loss_ce_interm = unmerge(loss_ce_interm, 0)
-                losses['ce_interm'] = tf.reduce_mean(loss_ce_interm)
+                losses['ce_{}'.format(key)] = tf.reduce_mean(loss_ce_interm)
+
+        if 'sc' in o.losses:
+            sc_gt_valid = tf.boolean_mask(sc_gt, example['y_is_valid'])
+            sc_pred_valid = tf.boolean_mask(outputs['sc']['out'], example['y_is_valid'])
+            sc_gt_valid, unmerge = merge_dims(sc_gt_valid, 0, 1)
+            sc_pred_valid, _ = merge_dims(sc_pred_valid, 0, 1)
+            loss_sc = tf.nn.softmax_cross_entropy_with_logits(
+                    labels=sc_gt_valid,
+                    logits=sc_pred_valid)
+            loss_sc = unmerge(loss_sc, 0)
+            losses['sc'] = tf.reduce_mean(loss_sc)
 
         # Reconstruction loss using generalized Charbonnier penalty
         if 'recon' in o.losses:
@@ -841,10 +887,21 @@ def _draw_flow_fields(model, key, time_stride=1, name='draw_flow_fields'):
             assert False , 'No available flow fields'
         return input_image
 
-def _draw_input_image(model, key, time_stride=1, name='draw_input_image'):
+def _draw_input_image(model, key, o, time_stride=1, name='draw_input_image'):
     with tf.name_scope(name) as scope:
         input_image = model.outputs[key][0,::time_stride]
-        return input_image
+        if key == 'search':
+            if model.outputs['boxreg_delta']:
+                y_pred_delta = model.outputs['y']['oc'][0][::time_stride]
+                y_pred = y_pred_delta + tf.stack([0.5 - 1./o.search_scale/2., 0.5 + 1./o.search_scale/2.]*2)
+            else:
+                y_pred = model.outputs['y']['oc'][0][::time_stride]
+            coords = tf.unstack(y_pred, axis=1)
+            boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=1)
+            boxes = tf.expand_dims(boxes, 1)
+            return tf.image.draw_bounding_boxes(input_image, boxes, name=scope)
+        else:
+            return input_image
 
 def _draw_memory_state(model, mtype, time_stride=1, name='draw_memory_states'):
     with tf.name_scope(name) as scope:
@@ -857,12 +914,14 @@ def _load_sequence(seq, o):
         'image_files'    # Tensor with shape [n] containing strings.
         'labels'         # Tensor with shape [n, 4] containing rectangles.
         'label_is_valid' # Tensor with shape [n] containing booleans.
+        'aspect'         # Tensor with shape [] containing aspect ratio.
     Example has keys:
         'x0_raw'     # First image in sequence, shape [h, w, 3]
         'y0'         # Position of target in first image, shape [4]
         'x_raw'      # Input images, shape [n-1, h, w, 3]
         'y'          # Position of target in following frames, shape [n-1, 4]
         'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
+        'aspect'     # Aspect ratio of original image.
     '''
     seq_len = len(seq['image_files'])
     assert(len(seq['labels']) == seq_len)
@@ -883,6 +942,7 @@ def _load_sequence(seq, o):
         'x_raw':      np.array(images[1:]),
         'y':          np.array(seq['labels'][1:]),
         'y_is_valid': np.array(seq['label_is_valid'][1:]),
+        'aspect':     seq['aspect'],
     }
 
 def _load_batch(seqs, o):

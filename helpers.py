@@ -199,3 +199,7 @@ def to_nested_tuple(tensor, value):
         # TODO: Assert tensor is tf.Tensor?
         # TODO: Assert value is np.array?
         return tensor, value
+
+
+def escape_filename(s):
+    return s.replace('/', '_')

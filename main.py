@@ -47,15 +47,16 @@ def parse_arguments():
             type=int, default=9)
 
     parser.add_argument(
-            '--frmsz', help='size of a square image', type=int, default=241)
+            '--frmsz', help='size of a square image', type=int, default=257)
     # NOTE: (NL) any reason to have two arguments for this option?
     parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)
     parser.add_argument(
             '--use_queues', help='enable queues for asynchronous data loading',
             action='store_true')
-    parser.add_argument('--heatmap_stride', type=int, default=1,
-            help='stride of heatmap at loss')
+    parser.add_argument(
+            '--heatmap_params', help='JSON string specifying heatmap options',
+            type=json.loads, default={'Gaussian': True})
 
     parser.add_argument(
             '--model', help='model!',
@@ -68,7 +69,7 @@ def parse_arguments():
             type=str) # example [l1, iou]
     parser.add_argument(
             '--search_scale', help='size of search space relative to target',
-            type=int, default=2)
+            type=int, default=4)
     parser.add_argument(
             '--target_scale', help='size of context relative to target',
             type=int, default=1)
@@ -192,6 +193,9 @@ def parse_arguments():
             '--period_skip', help='until this period skip evaluation',
             type=int, default=10000)
     parser.add_argument(
+            '--period_preview', help='period to update summary preview',
+            type=int, default=100)
+    parser.add_argument(
             '--save_videos', help='create video during evaluation',
             action='store_true')
     parser.add_argument(
@@ -248,7 +252,7 @@ def main():
     eval_sets = {
         # Give each evaluation set its own random seed.
         d+'-'+s: functools.partial(sampler_presets[s], datasets[d],
-            generator=random.Random(o.seed_global),
+            generator=np.random.RandomState(o.seed_global),
             max_videos=None if d.startswith('OTB-') else o.max_eval_videos,
             shuffle=False if d.startswith('OTB-') else True,
             max_objects=None if d.startswith('OTB-') else 1)

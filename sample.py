@@ -86,20 +86,38 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
 
     assert((ntimesteps is None) == (kind == 'full'))
     videos = list(dataset.videos) # copy
-    if max_videos is not None and len(videos) > max_videos:
-        videos = generator.choice(videos, max_videos, replace=False)
-    else:
-        if shuffle:
-            generator.shuffle(videos)
 
+    ## JV: Shuffle all videos even if max_videos specified.
+    ## if max_videos is not None and len(videos) > max_videos:
+    ##     videos = generator.choice(videos, max_videos, replace=False)
+    ## else:
+    ##     if shuffle:
+    ##         generator.shuffle(videos)
+    if not shuffle and (max_videos is not None and max_videos < len(videos)):
+        raise ValueError('enable shuffle or remove limit on number of videos')
+    if shuffle:
+        generator.shuffle(videos)
+
+    num_videos = 0
     for video in videos:
-        trajectories = dataset.tracks[video]
-        if max_objects is not None and len(trajectories) > max_objects:
-            trajectories = generator.choice(trajectories, max_objects, replace=False)
-        # Do not shuffle objects within a sequence.
-        # Assume that if the sampler is used for SGD, then max_objects = 1.
+        if max_videos is not None and not num_videos < max_videos:
+            break
 
-        for cnt, trajectory in enumerate(trajectories):
+        ## JV: Shuffle all trajectories even if max_objects specified.
+        ## trajectories = dataset.tracks[video]
+        ## if max_objects is not None and len(trajectories) > max_objects:
+        ##     trajectories = generator.choice(trajectories, max_objects, replace=False)
+        # Construct (index, trajectory) pairs.
+        trajectories = list(enumerate(dataset.tracks[video]))
+        if max_objects is not None and len(trajectories) > max_objects:
+            generator.shuffle(trajectories)
+
+        ## for cnt, trajectory in enumerate(trajectories):
+        num_objects = 0
+        for cnt, trajectory in trajectories:
+            if max_objects is not None and not num_objects < max_objects:
+                break
+
             frame_is_valid = [(t in trajectory) for t in range(dataset.video_length[video])]
             frames = _select_frames(frame_is_valid, trajectory.keys())
             if not frames:
@@ -109,14 +127,21 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
             num_labels = sum(1 for x in label_is_valid if x)
             if num_labels < 2:
                 continue
+            width, height = dataset.original_image_size[video]
             yield {
-                'image_files':    [dataset.image_file(video, t) for t in frames],
-                'viewports':      [geom_np.unit_rect() for _ in frames],
-                'labels':         [trajectory.get(t, _invalid_rect()) for t in frames],
-                'label_is_valid': label_is_valid,
+                'image_files':         [dataset.image_file(video, t) for t in frames],
+                'viewports':           [geom_np.unit_rect() for _ in frames],
+                'labels':              [trajectory.get(t, _invalid_rect()) for t in frames],
+                'label_is_valid':      label_is_valid,
+                'aspect':              float(width) / float(height),
                 'original_image_size': dataset.original_image_size[video],
-                'video_name':     video + '-{}'.format(cnt) if len(trajectories) > 1 else video,
+                'video_name':          video + '-{}'.format(cnt) if len(trajectories) > 1 else video,
             }
+            num_objects += 1
+
+        if num_objects > 0:
+            num_videos += 1
+
 
 def _invalid_rect():
     return [float('nan')] * 4
