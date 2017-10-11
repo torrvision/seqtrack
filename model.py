@@ -1342,8 +1342,8 @@ class Nornn(object):
                                     'scales': scales,
                                     } if self.sc else None
                    }
-        # JV: Use two separate state variables.
         state_init, state_final = {}, {}
+        # TODO: JV: From evaluate_test, it seems that 'x' may not be required?
         state_init['x'], state_final['x'] = x_init, x_prev
         state_init['y'], state_final['y'] = y_init, y_prev
         if self.new_target:
