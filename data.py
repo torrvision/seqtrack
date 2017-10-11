@@ -71,7 +71,7 @@ class Data_ILSVRC(object):
         self._update_videos()
         self._update_video_length()
         self._update_tracks(o)
-        self._update_stat(o)
+        ## self._update_stat(o)
 
     def _parsexml(self, xmlfile):
         with open(xmlfile) as f:
@@ -188,64 +188,64 @@ class Data_ILSVRC(object):
                            for video, track_list in info['tracks'].iteritems()}
             self.original_image_size = info['original_image_size']
 
-    def _update_stat(self, o):
-        def create_stat_pixelwise(): # NOTE: obsolete
-            stat = dict.fromkeys({'mean', 'std'}, None)
-            mean = []
-            std = []
-            for i, video in enumerate(self.videos):
-                print 'computing mean and std in snippet of {}, {}/{}'.format(
-                        self.dstype, i+1, len(self.videos))
-                imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
-                xs = []
-                for j in imglist:
-                    # NOTE: perform resize image!
-                    xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
-                        (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
-                xs = np.asarray(xs)
-                mean.append(np.mean(xs, axis=0))
-                std.append(np.std(xs, axis=0))
-            mean = np.mean(np.asarray(mean), axis=0)
-            std = np.mean(np.asarray(std), axis=0)
-            stat['mean'] = mean
-            stat['std'] = std
-            return stat
+    ## def _update_stat(self, o):
+    ##     def create_stat_pixelwise(): # NOTE: obsolete
+    ##         stat = dict.fromkeys({'mean', 'std'}, None)
+    ##         mean = []
+    ##         std = []
+    ##         for i, video in enumerate(self.videos):
+    ##             print 'computing mean and std in snippet of {}, {}/{}'.format(
+    ##                     self.dstype, i+1, len(self.videos))
+    ##             imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
+    ##             xs = []
+    ##             for j in imglist:
+    ##                 # NOTE: perform resize image!
+    ##                 xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
+    ##                     (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+    ##             xs = np.asarray(xs)
+    ##             mean.append(np.mean(xs, axis=0))
+    ##             std.append(np.std(xs, axis=0))
+    ##         mean = np.mean(np.asarray(mean), axis=0)
+    ##         std = np.mean(np.asarray(std), axis=0)
+    ##         stat['mean'] = mean
+    ##         stat['std'] = std
+    ##         return stat
 
-        def create_stat_global():
-            stat = dict.fromkeys({'mean', 'std'}, None)
-            means = []
-            stds = []
-            for i, video in enumerate(self.videos):
-                print 'computing mean and std in snippet of {}, {}/{}'.format(
-                        self.dstype, i+1, len(self.videos))
-                imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
-                xs = []
-                # for j in imglist:
-                #     # NOTE: perform resize image!
-                #     xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
-                #         (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
-                # Lazy method: Read a single image, do not resize.
-                xs.append(cv2.imread(imglist[len(imglist)/2])[:,:,(2,1,0)])
-                means.append(np.mean(xs))
-                stds.append(np.std(xs))
-            mean = np.mean(means)
-            std = np.mean(stds)
-            stat['mean'] = mean
-            stat['std'] = std
-            return stat
+    ##     def create_stat_global():
+    ##         stat = dict.fromkeys({'mean', 'std'}, None)
+    ##         means = []
+    ##         stds = []
+    ##         for i, video in enumerate(self.videos):
+    ##             print 'computing mean and std in snippet of {}, {}/{}'.format(
+    ##                     self.dstype, i+1, len(self.videos))
+    ##             imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
+    ##             xs = []
+    ##             # for j in imglist:
+    ##             #     # NOTE: perform resize image!
+    ##             #     xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
+    ##             #         (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+    ##             # Lazy method: Read a single image, do not resize.
+    ##             xs.append(cv2.imread(imglist[len(imglist)/2])[:,:,(2,1,0)])
+    ##             means.append(np.mean(xs))
+    ##             stds.append(np.std(xs))
+    ##         mean = np.mean(means)
+    ##         std = np.mean(stds)
+    ##         stat['mean'] = mean
+    ##         stat['std'] = std
+    ##         return stat
 
-        if self.stat is None:
-            if self.dstype == 'train':
-                filename = os.path.join(o.path_stat, 
-                    'meanstd_{}_frmsz_{}_train_{}.npy'.format(o.dataset, o.frmsz, self.trainsplit))
-            else:
-                filename = os.path.join(o.path_stat,
-                    'meanstd_{}_frmsz_{}_{}.npy'.format(o.dataset, o.frmsz, self.dstype))
-            if os.path.exists(filename):
-                self.stat = np.load(filename).tolist()
-            else:
-                self.stat = create_stat_global() 
-                np.save(filename, self.stat)
+    ##     if self.stat is None:
+    ##         if self.dstype == 'train':
+    ##             filename = os.path.join(o.path_stat, 
+    ##                 'meanstd_{}_frmsz_{}_train_{}.npy'.format(o.dataset, o.frmsz, self.trainsplit))
+    ##         else:
+    ##             filename = os.path.join(o.path_stat,
+    ##                 'meanstd_{}_frmsz_{}_{}.npy'.format(o.dataset, o.frmsz, self.dstype))
+    ##         if os.path.exists(filename):
+    ##             self.stat = np.load(filename).tolist()
+    ##         else:
+    ##             self.stat = create_stat_global() 
+    ##             np.save(filename, self.stat)
 
 
 class Data_OTB(object):
@@ -382,22 +382,31 @@ class Data_OTB(object):
 class Union:
 
     def __init__(self, datasets):
-        pass
+        '''
+        Args:
+            datasets: Dictionary that maps name (string) to dataset.
+        '''
+        assert all('/' not in name for name in datasets.keys())
+        assert all(' ' not in name for name in datasets.keys())
+        self.datasets = datasets
+        # Copy all fields.
+        self.videos              = []
+        self.video_length        = {}
+        # self.image_size          = {}
+        self.original_image_size = {}
+        self.tracks              = {}
+        for dataset_name, dataset in datasets.items():
+            for video in dataset.videos:
+                new_video = dataset_name + '/' + video
+                self.videos.append(new_video)
+                self.video_length[new_video]        = dataset.video_length[video]
+                # self.image_size[new_video]          = dataset.image_size[video]
+                self.original_image_size[new_video] = dataset.original_image_size[video]
+                self.tracks[new_video]              = dataset.tracks[video]
 
-    def videos(self):
-        pass
-
-    def video_length(self, video):
-        pass
-
-    def image_file(self, video, frame_number):
-        pass
-
-    def original_image_size(self, video):
-        pass
-
-    def video_tracks(self, video):
-        pass
+    def image_file(self, video, frame):
+        dataset_name, old_video = video.split('/', 1)
+        return self.datasets[dataset_name].image_file(old_video, frame)
 
 
 class CSV:

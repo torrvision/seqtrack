@@ -29,7 +29,7 @@ from helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_di
 EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid', 'aspect']
 
 
-def train(create_model, datasets, eval_sets, o, use_queues=False):
+def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
     '''Trains a network.
 
     Args:
@@ -99,7 +99,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     example = _perform_data_augmentation(example, o)
 
     # Always use same statistics for whitening (not set dependent).
-    stat = datasets['train'].stat
+    ## stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
     model = create_model(_whiten(_guard_labels(example), o, stat=stat),
                          summaries_collections=['summaries_model'])
@@ -635,7 +635,7 @@ def _guard_labels(unsafe):
 def _whiten(example_raw, o, stat=None, name='whiten'):
     with tf.name_scope(name) as scope:
         # Normalize mean and variance.
-        assert(stat is not None)
+        ## assert(stat is not None)
         # TODO: Check that this does not create two variables:
         mean = tf.constant(stat['mean'] if stat else 0.0, o.dtype, name='mean')
         std = tf.constant(stat['std'] if stat else 1.0,  o.dtype, name='std')

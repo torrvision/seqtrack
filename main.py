@@ -40,8 +40,11 @@ def parse_arguments():
     ##         '--dataset', help='specify the name of dataset',
     ##         type=str, default='')
     parser.add_argument(
+            '--train_datasets', help='specify the datasets to use',
+            type=str, nargs='+', default=['ILSVRC-train'])
+    parser.add_argument(
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker (list)',
-            type=str, default=['ILSVRC-train', 'OTB-50'])
+            type=str, default=['ILSVRC-val', 'OTB-50'])
     parser.add_argument(
             '--eval_samplers', nargs='+', help='',
             type=str, default=['full'])
@@ -226,22 +229,17 @@ def main():
 
     # datasets = data.load_data(o)
     datasets = {}
-    datasets['vot2013'] = data.CSV('vot2013', o)
-    datasets['vot2014'] = data.CSV('vot2014', o)
-    datasets['vot2016'] = data.CSV('vot2016', o)
-    datasets['vot2017'] = data.CSV('vot2017', o)
-    datasets['tc']      = data.CSV('tc', o)
-    datasets['dtb70']   = data.CSV('dtb70', o)
-    datasets['nuspro']  = data.CSV('nuspro', o)
-    datasets['uav123']  = data.CSV('uav123', o)
-    datasets['otb50']   = data.CSV('otb50', o)
-    datasets['otb100']  = data.CSV('otb100', o)
+    datasets = {name: data.CSV(name, o) for name in [
+        'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123', 'otb50', 'otb100'
+    ]}
     datasets.update({
         'ILSVRC-train': data.Data_ILSVRC('train', o),
         'ILSVRC-val':   data.Data_ILSVRC('val', o),
         'OTB-50':       data.Data_OTB('OTB-50', o),
         'OTB-100':      data.Data_OTB('OTB-100', o),
     })
+
+    train_dataset = data.Union({name: datasets[name] for name in o.train_datasets})
 
     # These are the possible choices for evaluation sampler.
     # No need to specify `shuffle`, `max_videos`, `max_objects` here,
@@ -279,7 +277,7 @@ def main():
     # TODO: Set model_opts from command-line or JSON file?
     m = model.load_model(o, model_params=o.model_params)
 
-    train.train(m, {'train': datasets['ILSVRC-train'], 'val': datasets['ILSVRC-val']},
+    train.train(m, {'train': train_dataset, 'val': datasets['ILSVRC-val']},
                 eval_sets, o, use_queues=o.use_queues)
 
 
