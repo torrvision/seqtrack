@@ -626,8 +626,9 @@ class Nornn(object):
                  target_share=True,
                  target_concat_mask=False, # can only be True if share is False
                  interm_supervision=False,
+                 rnn=False,
                  rnn_cell_type='lstm',
-                 rnn_num_layers=0,
+                 rnn_num_layers=1,
                  rnn_residual=False,
                  rnn_skip=False,
                  rnn_skip_support=1,
@@ -662,6 +663,7 @@ class Nornn(object):
         self.target_share          = target_share
         self.target_concat_mask    = target_concat_mask
         self.interm_supervision= interm_supervision
+        self.rnn               = rnn
         self.rnn_cell_type     = rnn_cell_type
         self.rnn_num_layers    = rnn_num_layers
         self.rnn_residual      = rnn_residual
@@ -958,6 +960,15 @@ class Nornn(object):
                     assert False, 'Not available option.'
             return x
 
+        def pass_conv_after_rnn(x, o):
+            with slim.arg_scope([slim.conv2d],
+                    kernel_size=3,
+                    num_outputs=x.shape.as_list()[-1],
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x = slim.conv2d(x, scope='conv1')
+                x = slim.conv2d(x, scope='conv2')
+            return x
+
         def pass_conv_boxreg_branch(x, o, is_training):
             dims = x.shape.as_list()
             with slim.arg_scope([slim.conv2d],
@@ -1158,26 +1169,30 @@ class Nornn(object):
                     hmap_interm['score'].append(pass_interm_supervision(scoremap, o))
 
             # JV: Define RNN state after obtaining scoremap to get size automatically.
-            if t == 0 and self.rnn_num_layers > 0: # NL. Added this condition to not run in case RNN is not enabled.
-                # RNN cell states
-                state_dim = scoremap.shape.as_list()[-3:]
-                assert all(state_dim) # Require that size is static (no None values).
-                rnn_state_init = get_initial_rnn_state(
-                    cell_type=self.rnn_cell_type,
-                    cell_size=[tf.shape(x0)[0], self.rnn_skip_support] + state_dim,
-                    num_layers=self.rnn_num_layers)
-                rnn_state = [
-                    {k: tf.identity(rnn_state_init[l][k]) for k in rnn_state_init[l].keys()}
-                    for l in range(len(rnn_state_init))]
+            if self.rnn:
+                if t == 0:
+                    # RNN cell states
+                    state_dim = scoremap.shape.as_list()[-3:]
+                    assert all(state_dim) # Require that size is static (no None values).
+                    rnn_state_init = get_initial_rnn_state(
+                        cell_type=self.rnn_cell_type,
+                        cell_size=[tf.shape(x0)[0], self.rnn_skip_support] + state_dim,
+                        num_layers=self.rnn_num_layers)
+                    rnn_state = [
+                        {k: tf.identity(rnn_state_init[l][k]) for k in rnn_state_init[l].keys()}
+                        for l in range(len(rnn_state_init))]
 
-            for l in range(self.rnn_num_layers):
-                with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
-                    if self.rnn_residual:
-                        scoremap_ori = tf.identity(scoremap)
-                        scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
-                        scoremap += scoremap_ori
-                    else:
-                        scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
+                for l in range(self.rnn_num_layers):
+                    with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
+                        if self.rnn_residual:
+                            scoremap_ori = tf.identity(scoremap)
+                            scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
+                            scoremap += scoremap_ori
+                        else:
+                            scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
+
+                with tf.variable_scope('convolutions_after_rnn', reuse=(t > 0)):
+                    scoremap = pass_conv_after_rnn(scoremap, o)
 
             with tf.variable_scope('deconvolution', reuse=(True if self.new_target else t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o)
@@ -1352,8 +1367,7 @@ class Nornn(object):
             state_init['max_score_A0'], state_final['max_score_A0'] = max_score_A0_init, max_score_A0_prev
             state_init['target_curr'], state_final['target_curr'] = target_curr_init, target_curr_prev
         # JV: Use nested collection of state.
-        #if rnn_state:
-        if self.rnn_num_layers > 0:
+        if self.rnn:
             state_init['rnn'] = rnn_state_init
             state_final['rnn'] = rnn_state
         gt = {}
