@@ -641,6 +641,8 @@ class Nornn(object):
                  boxreg_stop_grad=False,
                  boxreg_regularize=False,
                  sc=False, # scale classification
+                 sc_light=False,
+                 sc_pass_hmap=False,
                  sc_score_threshold=0.9,
                  sc_num_class=3,
                  sc_step_size=0.03,
@@ -679,6 +681,8 @@ class Nornn(object):
         self.boxreg_stop_grad  = boxreg_stop_grad
         self.boxreg_regularize = boxreg_regularize
         self.sc                = sc
+        self.sc_light          = sc_light
+        self.sc_pass_hmap      = sc_pass_hmap
         self.sc_score_threshold= sc_score_threshold
         self.sc_num_class      = sc_num_class
         self.sc_step_size      = sc_step_size
@@ -1029,17 +1033,30 @@ class Nornn(object):
                     normalizer_fn=slim.batch_norm,
                     normalizer_params={'is_training': is_training, 'fused': True},
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                x = slim.conv2d(x, dims[-1]*4,   5, 2, padding='VALID', scope='conv1')
-                x = slim.conv2d(x, dims[-1]*16,  5, 2, padding='VALID', scope='conv2')
-                x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                x = slim.conv2d(x, dims[-1]*32,  3, 1, padding='VALID', scope='conv3')
-                x = slim.conv2d(x, dims[-1]*64,  3, 1, padding='VALID', scope='conv4')
-                x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv5')
-                assert x.shape.as_list()[1] == 1
-                x = slim.flatten(x)
-                x = slim.fully_connected(x, 512, scope='fc1')
-                x = slim.fully_connected(x, 512, scope='fc2')
-                x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, normalizer_fn=None, scope='fc3')
+                if self.sc_light:
+                    x = slim.conv2d(x, 16,  5, 2, padding='VALID', scope='conv1')
+                    x = slim.conv2d(x, 32,  5, 2, padding='VALID', scope='conv2')
+                    x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                    x = slim.conv2d(x, 64,  3, 1, padding='VALID', scope='conv3')
+                    x = slim.conv2d(x, 128, 3, 1, padding='VALID', scope='conv4')
+                    x = slim.conv2d(x, 256, 3, 1, padding='VALID', scope='conv5')
+                    assert x.shape.as_list()[1] == 1
+                    x = slim.flatten(x)
+                    x = slim.fully_connected(x, 256, scope='fc1')
+                    x = slim.fully_connected(x, 256, scope='fc2')
+                    x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, normalizer_fn=None, scope='fc3')
+                else:
+                    x = slim.conv2d(x, dims[-1]*4,   5, 2, padding='VALID', scope='conv1')
+                    x = slim.conv2d(x, dims[-1]*16,  5, 2, padding='VALID', scope='conv2')
+                    x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                    x = slim.conv2d(x, dims[-1]*32,  3, 1, padding='VALID', scope='conv3')
+                    x = slim.conv2d(x, dims[-1]*64,  3, 1, padding='VALID', scope='conv4')
+                    x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv5')
+                    assert x.shape.as_list()[1] == 1
+                    x = slim.flatten(x)
+                    x = slim.fully_connected(x, 512, scope='fc1')
+                    x = slim.fully_connected(x, 512, scope='fc2')
+                    x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, normalizer_fn=None, scope='fc3')
             return x
 
         # Inputs to the model.
@@ -1272,6 +1289,10 @@ class Nornn(object):
                 target_pred_pad, _, _ = process_image_with_box(x_curr, y_curr_pred, o,
                         crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
                 sc_in = tf.concat([target_init_pad, target_pred_pad], -1)
+                if self.sc_pass_hmap:
+                    hmap_crop, _, _ = process_image_with_box(hmap_curr_pred_oc_fg, y_curr_pred, o,
+                        crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
+                    sc_in = tf.concat([sc_in, hmap_crop*255], -1)
                 with tf.variable_scope('scale_classfication',reuse=(t > 0)):
                     sc_out = pass_scale_classification(sc_in, is_training)
                     sc_out_list.append(sc_out)
