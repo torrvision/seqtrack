@@ -413,7 +413,7 @@ class CSV:
 
     def __init__(self, name, o):
         # Video name is directory of image file.
-        fname = os.path.join(o.path_data_home, name+'.csv')
+        fname = os.path.join(o.path_data_home, 'csv', name+'.csv')
         with open(fname, 'r') as csv_file:
             reader = csv.DictReader(csv_file)
             rects = {}
@@ -453,10 +453,10 @@ class CSV:
         self.format_str = format_str
         self.dataset_path = dataset_path
         if o.useresizedimg:
-            self.image_dir = os.path.join(o.path_data_home, 'images_frmsz{}'.format(o.frmsz))
+            self.image_dir = os.path.join(o.path_data_home, 'csv', 'images_frmsz{}'.format(o.frmsz))
         else:
             # TODO: Use something different here?
-            self.image_dir = os.path.join(o.path_data_home, 'images')
+            self.image_dir = os.path.join(o.path_data_home, 'csv', 'images')
 
     @staticmethod
     def _row_to_rect(row):
