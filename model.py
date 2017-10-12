@@ -603,6 +603,31 @@ def pass_rnn(x, state, cell, o, skip=False):
         assert False, 'Not available cell type.'
     return output, state
 
+def perturb_scoremap(scoremap, perturb_prob=0.0):
+    '''Before passing scoremap to RNN, perturb it and simulate noisy likely
+    situations, to prevent RNN from learning to produce always input.
+
+    perturbation types: noise, suppression, duplicate.
+    '''
+    scoremap_perturb = tf.identity(scoremap)
+    # Add gaussian noise.
+    scoremap_perturb += 0.5 * tf.random_normal(shape=tf.shape(scoremap))
+    # Suppression.
+    scoremap_perturb *= tf.random_uniform(shape=[tf.shape(scoremap)[0]], minval=0.5, maxval=1)
+    # Duplication (by adding a rolled scoremap).
+    def _spatial_roll(x):
+        amount = np.random.randint(0, x.shape.as_list()[1], size=2)
+        x = tf.concat([x[:,amount[0]:], x[:,:amount[0]]], axis=1)
+        x = tf.concat([x[:,:,amount[1]:], x[:,:,:amount[1]]], axis=2)
+        return x
+    scoremap_perturb += _spatial_roll(scoremap_perturb)
+
+    # Sampling.
+    prob = tf.random_uniform(shape=[tf.shape(scoremap)[0]], minval=0, maxval=1)
+    use_perturb = tf.less(prob, perturb_prob)
+    scoremap_out = tf.where(use_perturb, scoremap_perturb, scoremap)
+    return scoremap_out
+
 
 class Nornn(object):
     '''
@@ -632,6 +657,7 @@ class Nornn(object):
                  rnn_residual=False,
                  rnn_skip=False,
                  rnn_skip_support=1,
+                 rnn_perturb_prob=0.0,
                  coarse_hmap=False,
                  use_hmap_prior=False,
                  use_cosine_penalty=False,
@@ -1186,10 +1212,14 @@ class Nornn(object):
                     with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
                         if self.rnn_residual:
                             scoremap_ori = tf.identity(scoremap)
-                            scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
+                            scoremap, rnn_state[l] = pass_rnn(
+                                tf.cond(is_training, lambda: perturb_scoremap(scoremap, self.rnn_perturb_prob), lambda: scoremap),
+                                rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
                             scoremap += scoremap_ori
                         else:
-                            scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
+                            scoremap, rnn_state[l] = pass_rnn(
+                                tf.cond(is_training, lambda: perturb_scoremap(scoremap, self.rnn_perturb_prob), lambda: scoremap),
+                                rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
 
                 with tf.variable_scope('convolutions_after_rnn', reuse=(t > 0)):
                     scoremap = pass_conv_after_rnn(scoremap, o)
