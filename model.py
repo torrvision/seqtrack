@@ -632,7 +632,6 @@ class Nornn(object):
                  rnn_skip=False,
                  rnn_skip_support=1,
                  coarse_hmap=False,
-                 resize_hmap=False,
                  use_hmap_prior=False,
                  use_cosine_penalty=False,
                  boxreg=False,
@@ -669,7 +668,6 @@ class Nornn(object):
         self.rnn_skip          = rnn_skip
         self.rnn_skip_support  = rnn_skip_support
         self.coarse_hmap       = coarse_hmap
-        self.resize_hmap       = resize_hmap
         self.use_hmap_prior    = use_hmap_prior
         self.use_cosine_penalty= use_cosine_penalty
         self.boxreg            = boxreg
@@ -1126,10 +1124,18 @@ class Nornn(object):
                     scope.reuse_variables()
                     scoremap_curr = pass_cross_correlation(search_feat, target_curr_feat, o)
 
-                # Compute max(score_A0), which wile be used for a decision threshold.
+                # Deconvolution branch from "score_init".
                 with tf.variable_scope('deconvolution', reuse=(t > 0)):
                     hmap_curr_pred_oc_A0 = pass_deconvolution(scoremap_init, is_training, o)
-                    max_score_A0_prev = tf.reduce_max(tf.nn.softmax(hmap_curr_pred_oc_A0)[:,:,:,0], axis=(1,2))
+                    if self.coarse_hmap:
+                        # Upsample to compute translation but not to compute loss.
+                        hmap_upsample = tf.image.resize_images(hmap_curr_pred_oc_A0, [o.frmsz, o.frmsz],
+                            method=tf.image.ResizeMethod.BICUBIC, align_corners=True)
+                        hmap_curr_pred_oc_fg_A0 = tf.expand_dims(tf.unstack(tf.nn.softmax(hmap_upsample), axis=-1)[0], -1)
+                    else:
+                        hmap_curr_pred_oc_fg_A0 = tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc_A0)[:,:,:,0], -1)
+                    # max score will be used to make a decision about updating target.
+                    max_score_A0_prev = tf.reduce_max(hmap_curr_pred_oc_fg_A0, axis=(1,2,3))
 
                 with tf.variable_scope('supervision_scores', reuse=(t > 0)) as scope:
                     if self.supervision_score_A0 and not self.supervision_score_At:
@@ -1181,8 +1187,13 @@ class Nornn(object):
                                                  initializer=tf.zeros_initializer(),
                                                  regularizer=slim.l2_regularizer(o.wd))
                     hmap_curr_pred_oc += hmap_prior
-                hmap_curr_pred_oc_fg = tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], -1)
-                hmap_curr_pred_oc_fg_original = tf.identity(hmap_curr_pred_oc_fg)
+                if self.coarse_hmap:
+                    # Upsample to compute translation but not to compute loss.
+                    hmap_upsample = tf.image.resize_images(hmap_curr_pred_oc, [o.frmsz, o.frmsz],
+                        method=tf.image.ResizeMethod.BICUBIC, align_corners=True)
+                    hmap_curr_pred_oc_fg = tf.expand_dims(tf.unstack(tf.nn.softmax(hmap_upsample), axis=-1)[0], -1)
+                else:
+                    hmap_curr_pred_oc_fg = tf.expand_dims(tf.nn.softmax(hmap_curr_pred_oc)[:,:,:,0], -1)
                 if self.use_cosine_penalty:
                     hann_1d = np.expand_dims(np.hanning(hmap_curr_pred_oc_fg.shape.as_list()[1]), axis=0)
                     penalty = np.expand_dims(np.transpose(hann_1d) * hann_1d, -1)
@@ -1246,9 +1257,8 @@ class Nornn(object):
                 p_scale = tf.nn.softmax(sc_out)
                 is_max_scale = tf.equal(p_scale, tf.reduce_max(p_scale, axis=1, keep_dims=True))
                 if self.sc_score_threshold > 0:
-                    max_score = tf.reduce_max(hmap_curr_pred_oc_fg_original, axis=(1,2,3))
+                    max_score = tf.reduce_max(hmap_curr_pred_oc_fg, axis=(1,2,3))
                     is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
-                    #is_pass = tf.greater_equal(max_score_A0_prev, self.sc_score_threshold)
                     batchsz = tf.shape(is_pass)[0]
                     stay = tf.cast(tf.reshape(tf.concat([tf.fill([batchsz, self.sc_num_class/2], 0.0),
                                                          tf.fill([batchsz, 1], 1.0),
@@ -1260,16 +1270,8 @@ class Nornn(object):
                 scale = tf.reduce_sum(scales * is_max_scale, axis=-1) / tf.reduce_sum(is_max_scale, axis=-1)
                 y_curr_pred = scale_rectangle_size(tf.expand_dims(scale, -1), y_curr_pred)
             else: # argmax to find center (then use x0's box)
-                # Upsample to compute translation but not to compute loss.
-                hmap_upsample = hmap_curr_pred_oc
-                if self.resize_hmap:
-                    hmap_upsample = tf.image.resize_images(hmap_upsample, [o.frmsz, o.frmsz],
-                        method=tf.image.ResizeMethod.BICUBIC,
-                        align_corners=True)
-                # JV: Interpolate before softmax.
-                hmap_upsample_fg = tf.expand_dims(tf.unstack(tf.nn.softmax(hmap_upsample), axis=-1)[0], -1)
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
-                        hmap_upsample_fg, box_s_raw_curr, box_s_val_curr, o, y0)
+                    hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
 
             # Post-processing.
             y_curr_pred = enforce_inside_box(y_curr_pred, translate=True)
