@@ -229,17 +229,24 @@ def main():
 
     # datasets = data.load_data(o)
     datasets = {}
-    datasets = {name: data.CSV(name, o) for name in [
+    datasets.update({name: data.CSV(name, o) for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123', 'otb50', 'otb100'
-    ]}
+    ]})
     datasets.update({
         'ILSVRC-train': data.Data_ILSVRC('train', o),
         'ILSVRC-val':   data.Data_ILSVRC('val', o),
         'OTB-50':       data.Data_OTB('OTB-50', o),
         'OTB-100':      data.Data_OTB('OTB-100', o),
     })
+    # Add some pre-defined unions.
+    datasets['vot'] = data.Concat({name: datasets[name] for name in [
+        'vot2013', 'vot2014', 'vot2016', 'vot2017']})
+    datasets['pool574'] = data.Concat({name: datasets[name] for name in [
+        'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro']})
+    datasets['pool697'] = data.Concat({name: datasets[name] for name in [
+        'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123']})
 
-    train_dataset = data.Union({name: datasets[name] for name in o.train_datasets})
+    train_dataset = data.Concat({name: datasets[name] for name in o.train_datasets})
 
     # These are the possible choices for evaluation sampler.
     # No need to specify `shuffle`, `max_videos`, `max_objects` here,
