@@ -630,7 +630,7 @@ class Nornn(object):
                  rnn_cell_type='lstm',
                  rnn_num_layers=1,
                  rnn_residual=False,
-                 rnn_dropout_prob=0.0, # sampling rate of batch-wise dropout. Different from keep_prob.
+                 rnn_perturb_prob=0.0, # sampling rate of batch-wise scoremap perturbation.
                  rnn_skip=False,
                  rnn_skip_support=1,
                  coarse_hmap=False,
@@ -668,7 +668,7 @@ class Nornn(object):
         self.rnn_cell_type     = rnn_cell_type
         self.rnn_num_layers    = rnn_num_layers
         self.rnn_residual      = rnn_residual
-        self.rnn_dropout_prob  = rnn_dropout_prob
+        self.rnn_perturb_prob  = rnn_perturb_prob
         self.rnn_skip          = rnn_skip
         self.rnn_skip_support  = rnn_skip_support
         self.coarse_hmap       = coarse_hmap
@@ -1187,7 +1187,7 @@ class Nornn(object):
                 # Apply probabilsitic dropout to scoremap before passing it to RNN.
                 scoremap_dropout = tf.layers.dropout(scoremap, rate=0.5, training=is_training)
                 prob = tf.random_uniform(shape=[tf.shape(scoremap)[0]], minval=0, maxval=1)
-                use_dropout = tf.logical_and(is_training, tf.less(prob, self.rnn_dropout_prob)) # apply batch-wise.
+                use_dropout = tf.logical_and(is_training, tf.less(prob, self.rnn_perturb_prob)) # apply batch-wise.
                 scoremap = tf.where(use_dropout, scoremap_dropout, scoremap)
 
                 for l in range(self.rnn_num_layers):
