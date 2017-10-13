@@ -23,17 +23,11 @@ A dataset object has the following properties:
 
 import pdb
 import numpy as np
-import cPickle as pickle
-import gzip
-import json
 
-# packages for bouncing mnist
-import h5py
-import scipy.ndimage as spn
-import os
-
+import csv
 import glob
 import itertools
+import os
 import random
 import xmltodict
 import cv2
@@ -43,455 +37,10 @@ import draw
 import helpers
 
 
-class Data_moving_mnist(object):
-    '''
-    The main routine to generate moving mnist is derived from 
-    "RATM: Recurrent Attentive Tracking Model"
-    '''
-    def __init__(self, o):
-        #self.datafile = o.path_data+'/'+o.dataset+'/mnist.pkl.gz' 
-        self.datafile = o.path_data + '/mnist.pkl.gz'
-        self.frmsz = o.frmsz
-        self.ninchannel = o.ninchannel
-        self.outdim = o.outdim
-
-        self.data = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.nexps = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.idx_shuffle = dict.fromkeys({'train', 'val', 'test'}, None)
-
-        self._load_data()
-        self._update_idx_shuffle(['train', 'val', 'test'])
-
-    def _load_data(self):
-        with gzip.open(self.datafile, 'rb') as f:
-             rawdata = pickle.load(f)
-        for p, part in enumerate(('train', 'val', 'test')):
-            self.data[part] = {}
-            self.data[part]['images'] = rawdata[p][0].reshape(-1, 28, 28)
-            self.data[part]['targets'] = rawdata[p][1]
-            self.nexps[part] = self.data[part]['images'].shape[0]
-
-    def _update_idx_shuffle(self, dstypes):
-        for dstype in dstypes:
-            if dstype in self.nexps and self.nexps[dstype] is not None:
-                self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
-
-    def get_batch(self, ib, o, dstype, shuffle_local=False):
-        '''
-        Everytime this function is called, create the batch number of moving 
-        mnist sets. If this process has randomness, no other data augmentation 
-        technique is applied for now. 
-        '''
-        data = self.data[dstype]
-        if shuffle_local: # used for evaluation during train
-            idx = np.random.permutation(self.nexps[dstype])[(ib*o.batchsz):(ib+1)*o.batchsz]
-        else:
-            idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
-
-        # the following is a modified version from RATM data preparation
-        vids = np.zeros((o.batchsz, o.ntimesteps+1, self.frmsz, self.frmsz), 
-                dtype=np.float32)
-        pos_init = np.random.randint(self.frmsz-28, size=(o.batchsz,2))
-        pos = np.zeros((o.batchsz, o.ntimesteps+1, 2), dtype=np.int32)
-        pos[:,0] = pos_init
-
-        posmax = self.frmsz-29
-
-        d = np.random.randint(low=-15, high=15, size=(o.batchsz,2))
-
-        for t in range(o.ntimesteps+1):
-            dtm1 = d
-            d = np.random.randint(low=-15, high=15, size=(o.batchsz,2))
-            for i in range(o.batchsz):
-                '''
-                vids[i,t,
-                        pos[i,t,0]:pos[i,t,0]+28,
-                        pos[i,t,1]:pos[i,t,1]+28] = \
-                                data['images'][idx[i]]
-                '''
-                # This makes pos -> (x,y) instead of (y,x)
-                vids[i,t,
-                        pos[i,t,1]:pos[i,t,1]+28,
-                        pos[i,t,0]:pos[i,t,0]+28] = \
-                                data['images'][idx[i]]
-            if t < o.ntimesteps+1-1:
-                pos[:,t+1] = pos[:,t]+.1*d+.9*dtm1
-
-                # check for proposer position (reflect if necessary)
-                reflectidx = np.where(pos[:,t+1] > posmax)
-                pos[:,t+1][reflectidx] = (posmax - 
-                        (pos[:,t+1][reflectidx] % posmax))
-                reflectidx = np.where(pos[:,t+1] < 0)
-                pos[:,t+1][reflectidx] = -pos[:,t+1][reflectidx]
-
-        # TODO: variable length inputs for
-        # 1. online learning, 2. arbitrary training sequences 
-        inputs_valid = np.ones((o.batchsz, o.ntimesteps+1), dtype=np.bool)
-
-        inputs_HW = np.ones((o.batchsz, 2), dtype=np.float32) * self.frmsz
-
-        # Add fixed sized window to make label 4 dimension. [only moving_mnist]
-        pos = np.concatenate((pos, pos+28), axis=2)
-
-        # relative scale of label
-        pos = pos / float(o.frmsz)
-
-        # add one more dimension to data for placeholder tensor shape
-        vids = np.expand_dims(vids, axis=4)
-
-        batch = {
-                'inputs': vids,
-                'inputs_valid': inputs_valid, 
-                'inputs_HW': inputs_HW, 
-                'labels': pos,
-                'digits': data['targets'][idx],
-                'idx': idx
-                }
-        return batch
-
-    def update_epoch_begin(self, dstype):
-        # may no need dstype, as this shuffles train data only.
-        self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
-
-
-class Data_bouncing_mnist(object):
-    '''
-    The main routine to generate bouncing mnist is derived from 
-    "First Step toward Model-Free, Anonymous Object Tracking with 
-    Recurrent Neural Networks"
-    
-    The original code is written quite poorly, and is not suitable for direct
-    use (e.g., the data loading and splits are mixed, only batch loading, etc.)
-    so I made changes in quite many places.
-    '''
-
-    def __init__(self, o):
-        #self.data_path = os.path.join(o.path_base, 'data/bouncing_mnist')
-        self.data_path = o.path_data
-        self._set_default_params(o)
-
-        self.data = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.nexps = dict.fromkeys({'train', 'val', 'test'}, None)
-        self.idx_shuffle = dict.fromkeys({'train', 'val', 'test'}, None)
-
-        #self.data, self.label = None, None
-        self._load_data()
-        self._update_idx_shuffle(['train', 'val', 'test'])
-
-    def _set_default_params(self, o):
-        # following paper's default parameter settings
-        # TODO: remember some variables might need to set optional..
-        self.num_digits_ = 1 
-        self.frmsz = o.frmsz
-        self.scale_range = 0.1 
-        self.buff = True
-        self.step_length_ = 0.1
-        self.digit_size_ = 28
-        self.frame_size_ = self.frmsz ** 2
-        self.dataset_size_ = 10000  # Size is relevant only for val/test sets.
-        #self.row_ = 0 # NL: should not use it!!!
-        self.clutter_size_min_ = 5
-        self.clutter_size_max_ = 10
-        self.num_clutters_ = 20
-        self.face_intensity_min = 64
-        self.face_intensity_max = 255
-        self.acc_scale = 0.1 
-        self.vel_scale = 1
-        #self.indices_ = np.arange(self.data.shape[0]) # changed to idx_shuffle
-        #np.random.shuffle(self.indices_) 
-        self.num_clutterPack = 10000
-        self.clutterpack_exists = os.path.exists(os.path.join(
-            self.data_path, 'ClutterPackLarge.hdf5'))
-        if not self.clutterpack_exists:
-            self._InitClutterPack()
-        f = h5py.File(os.path.join(self.data_path,'ClutterPackLarge.hdf5'), 'r')
-        self.clutterPack = f['clutterIMG'][:]
-        self.buff_ptr = 0
-        self.buff_size = 2000
-        self.buff_cap = 0
-        self.buff_data = np.zeros((self.buff_size, o.ntimesteps+1, 
-            self.frmsz, self.frmsz), dtype=np.float32)
-        self.buff_label = np.zeros((self.buff_size, o.ntimesteps+1, 4))
-        self.clutter_move = 1 
-        self.with_clutters = 1 
-
-    def _load_data(self):
-        f = h5py.File(os.path.join(self.data_path, 'mnist.h5'))
-        # f has 'train' and 'test' and each has 'inputs' and 'targets'
-        for dstype in ['train', 'test']:
-            self.data[dstype] = dict.fromkeys({'images', 'targets'}, None) 
-            self.data[dstype]['images'] = np.asarray(
-                    f['{}/inputs'.format(dstype)].value)
-            self.data[dstype]['targets'] = np.asarray(
-                    f['{}/targets'.format(dstype)].value)
-            self.nexps[dstype] = self.data[dstype]['images'].shape[0]
-        f.close()
-
-        # TODO: from the original code, they further separate train/test by
-        # actual digits, as the following: 
-        '''
-        if run_flag == 'train':
-            idx = np.where(self.label<5)[0]
-            self.data = self.data[idx]
-        if run_flag == 'test':
-            idx = np.where(self.label>4)[0]
-            self.data = self.data[idx]
-        '''
-
-    def _GetRandomTrajectory(
-            self, batch_size, o,
-            image_size_=None, object_size_=None, step_length_=None):
-        if image_size_ is None:
-            image_size_ = self.frmsz
-        if object_size_ is None:
-            object_size_ = self.digit_size_
-        if step_length_ is None:
-            step_length_ = self.step_length_
-        length = o.ntimesteps+1
-        canvas_size = image_size_ - object_size_
-
-        # Initial position uniform random inside the box.
-        y = np.random.rand(batch_size)
-        x = np.random.rand(batch_size)
-
-        # Choose a random velocity.
-        theta = np.random.rand(batch_size) * 2 * np.pi
-        start_vel = np.random.normal(0, self.vel_scale)
-        v_y = start_vel * np.sin(theta)
-        v_x = start_vel * np.cos(theta)
-
-        start_y = np.zeros((length, batch_size))
-        start_x = np.zeros((length, batch_size))
-        for i in range(length):
-            # Take a step along velocity.
-            y += v_y * step_length_
-            x += v_x * step_length_
-
-            v_y += 0 if self.acc_scale == 0 else np.random.normal(0, self.acc_scale, v_y.shape)
-            v_x += 0 if self.acc_scale == 0 else np.random.normal(0, self.acc_scale, v_x.shape)
-
-            # Bounce off edges.
-            for j in range(batch_size):
-                if x[j] <= 0:
-                    x[j] = 0
-                    v_x[j] = -v_x[j]
-                if x[j] >= 1.0:
-                    x[j] = 1.0
-                    v_x[j] = -v_x[j]
-                if y[j] <= 0:
-                    y[j] = 0
-                    v_y[j] = -v_y[j]
-                if y[j] >= 1.0:
-                    y[j] = 1.0
-                    v_y[j] = -v_y[j]
-                start_y[i, :] = y
-                start_x[i, :] = x
-
-        # Scale to the size of the canvas.
-        start_y = (canvas_size * start_y).astype(np.int32)
-        start_x = (canvas_size * start_x).astype(np.int32)
-        return start_y, start_x
-
-    def _Overlap(self, a, b):
-        """ Put b on top of a."""
-        b = np.where(b > (np.max(b) / 4), b, 0)
-        t = min(np.shape(a))
-        b = b[:t, :t]
-        return np.select([b == 0, b != 0], [a, b])
-        #return b
-
-    def _InitClutterPack(self, num_clutterPack = None, image_size_ = None, num_clutters_ = None):
-        if num_clutterPack is None :
-            num_clutterPack = self.num_clutterPack
-        if image_size_ is None :
-            image_size_ = self.frmsz * 2
-        if num_clutters_ is None :
-            num_clutters_ = self.num_clutters_ * 4
-        clutterIMG = np.zeros((num_clutterPack, image_size_, image_size_))
-        for i in xrange(num_clutterPack):
-            #clutterIMG[i] = self._GetClutter(image_size_, num_clutters_)
-            clutterIMG[i] = self._GetClutter(image_size_, num_clutters_, 
-                    dstype='train') # TODO: this should be fine
-        f = h5py.File(os.path.join(self.data_path,'ClutterPackLarge.hdf5', 'w'))
-        f.create_dataset('clutterIMG', data=clutterIMG)
-        f.close()
-            
-    def _GetFakeClutter(self):
-        if self.clutterpack_exists:
-            return self.clutterPack[np.random.randint(0, len(self.clutterPack))]
-    
-    def _GetClutter(self, image_size_ = None, num_clutters_ = None, fake = False, dstype=None):
-        data_all = self.data[dstype]
-
-        if image_size_ is None :
-            image_size_ = self.frmsz
-        if num_clutters_ is None :
-            num_clutters_ = self.num_clutters_
-        if fake and self.clutterpack_exists:
-            return self._GetFakeClutter()
-        clutter = np.zeros((image_size_, image_size_), dtype=np.float32)
-        for i in range(num_clutters_):
-            sample_index = np.random.randint(data_all['images'].shape[0])
-            size = np.random.randint(self.clutter_size_min_, self.clutter_size_max_)
-            left = np.random.randint(0, self.digit_size_ - size)
-            top = np.random.randint(0, self.digit_size_ - size)
-            clutter_left = np.random.randint(0, image_size_ - size)
-            clutter_top = np.random.randint(0, image_size_ - size)
-            single_clutter = np.zeros_like(clutter)
-            single_clutter[clutter_top:clutter_top+size, clutter_left:clutter_left+size] = data_all['images'][np.random.randint(data_all['images'].shape[0]), top:top+size, left:left+size] / 255.0 * np.random.uniform(self.face_intensity_min, self.face_intensity_max)
-            clutter = self._Overlap(clutter, single_clutter)
-        return clutter
-
-    def _getBuff(self):
-        #print 'getBuff ',
-        idx = np.random.randint(0, self.buff_cap)
-        return self.buff_data[idx], self.buff_label[idx]
-
-    def _setBuff(self, data, label):
-        self.buff_data[self.buff_ptr]=data
-        self.buff_label[self.buff_ptr]=label
-        if self.buff_cap < self.buff_size:
-            self.buff_cap += 1
-        self.buff_ptr += 1
-        self.buff_ptr = self.buff_ptr % self.buff_size
-
-    def _update_idx_shuffle(self, dstypes):
-        for dstype in dstypes:
-            if dstype in self.nexps and self.nexps[dstype] is not None:
-                self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
-
-    def get_batch(self, ib, o, dstype, verbose=False, count=1, shuffle_local=False):
-        '''Here in this function also made several changes in several places.
-        '''
-        data_all = self.data[dstype]
-        if shuffle_local: # used for evaluation during train
-            idx = np.random.permutation(self.nexps[dstype])[(ib*o.batchsz):(ib+1)*o.batchsz]
-        else:
-            idx = self.idx_shuffle[dstype][(ib*o.batchsz):(ib+1)*o.batchsz] 
-        
-        data = np.zeros((o.batchsz, o.ntimesteps+1, self.frmsz, self.frmsz), dtype=np.float32)
-        label = np.zeros((o.batchsz, o.ntimesteps+1, 4), dtype=np.float32)
-
-        start_y, start_x = self._GetRandomTrajectory(o.batchsz * self.num_digits_, o)
-        window_y, window_x = self._GetRandomTrajectory(o.batchsz * 1, o, self.frmsz*2, object_size_=self.frmsz, step_length_ = 1e-2)
-        # TODO: change data to real image or cluttered background
-
-        for j in range(o.batchsz): 
-            if np.random.random()<0.7 and self.buff and self.buff_cap > self.buff_size/2.0:
-                data[j], label[j] = self._getBuff()
-                continue
-            else:
-                clutter = self._GetClutter(fake=True, dstype=dstype)
-                clutter_bg = self._GetClutter(fake=True, dstype=dstype)
-                wc = np.random.ranf() < self.with_clutters
-                cm = np.random.ranf() < self.clutter_move
-                if wc:
-                    if cm:
-                        for i in range(o.ntimesteps+1):
-                            wx = window_x[i,j]
-                            wy = window_y[i,j]
-                            data[j, i] = self._Overlap(clutter_bg[wy:wy+self.frmsz, wx:wx+self.frmsz], data[j, i])
-                    else:
-                        for i in range(o.ntimesteps+1):
-                            wx = window_x[0, j]
-                            wy = window_y[0, j]
-                            data[j, i] = self._Overlap(clutter_bg[wy:wy+self.frmsz, wx:wx+self.frmsz], data[j, i])
-                for n in range(self.num_digits_):
-                    #ind = self.indices_[self.row_]
-                    ind = idx[j]
-                    ''' NL: no need this 
-                    self.row_ += 1
-                    if self.row_ == data_all['images'].shape[0]:
-                        self.row_ = 0
-                        #np.random.shuffle(self.indices_)
-                        np.random.shuffle(idx_shuffle)
-                    '''
-                    if count == 2:
-                        digit_image = np.zeros((data_all['images'].shape[1], data_all['images'].shape[2]))
-                        digit_image[:18, :18] = self._Overlap(digit_image[:18, :18], np.maximum.reduceat(np.maximum.reduceat(data_all['images'][ind], np.cast[int](np.arange(1, 28, 1.5))), np.cast[int](np.arange(1, 28, 1.5)), axis=1))
-                        digit_image[10:, 10:] = self._Overlap(digit_image[10:, 10:], np.maximum.reduceat(np.maximum.reduceat(data_all['images'][np.random.randint(data_all['images'].shape[0])], np.cast[int](np.arange(0, 27, 1.5))), np.cast[int](np.arange(0, 27, 1.5)), axis=1))
-                    else:
-                        digit_image = data_all['images'][ind, :, :] / 255.0 * np.random.uniform(self.face_intensity_min, self.face_intensity_max)
-                    bak_digit_image = digit_image 
-                    digit_size_ = self.digit_size_
-                    for i in range(o.ntimesteps+1):
-                        scale_factor = np.exp((np.random.random_sample()-0.5)*self.scale_range)
-                        scale_image = spn.zoom(digit_image, scale_factor)
-                        digit_size_ = digit_size_ * scale_factor 
-                        top    = start_y[i, j * self.num_digits_ + n]
-                        left   = start_x[i, j * self.num_digits_ + n]
-                        if digit_size_!=np.shape(scale_image)[0]:
-                            digit_size_ = np.shape(scale_image)[0]
-                        bottom = top  + digit_size_
-                        right  = left + digit_size_
-                        if right>self.frmsz or bottom>self.frmsz:
-                            scale_image = bak_digit_image
-                            bottom = top  + self.digit_size_
-                            right  = left + self.digit_size_
-                            digit_size_ = self.digit_size_
-                        digit_image = scale_image
-                        digit_image_nonzero = np.where(digit_image > (np.max(digit_image) / 4), digit_image, 0).nonzero()
-                        # NL: (y,x) -> (x,y)
-                        #label_offset = np.array([digit_image_nonzero[0].min(), digit_image_nonzero[1].min(), digit_image_nonzero[0].max(), digit_image_nonzero[1].max()])
-                        label_offset = np.array([digit_image_nonzero[1].min(), digit_image_nonzero[0].min(), digit_image_nonzero[1].max(), digit_image_nonzero[0].max()])
- 
-                        wy=window_y[i, j]
-                        wx=window_x[i, j]
-                        data[j, i, top:bottom, left:right] = self._Overlap(data[j, i, top:bottom, left:right], scale_image)
-                        data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.frmsz, wx:wx+self.frmsz])
-                        # NL: (y,x) -> (x,y)
-                        #label[j, i] = label_offset + np.array([top, left, top, left])
-                        label[j, i] = label_offset + np.array([left, top, left, top])
-                if wc:
-                    if cm:
-                        for i in range(o.ntimesteps+1):
-                            wx = window_x[i,j]
-                            wy = window_y[i,j]
-                            data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.frmsz, wx:wx+self.frmsz])
-                    else:
-                        for i in range(o.ntimesteps+1):
-                            wx = window_x[0,j]
-                            wy = window_y[0,j]
-                            data[j, i] = self._Overlap(data[j, i], clutter[wy:wy+self.frmsz, wx:wx+self.frmsz])
-                if self.buff:
-                    self._setBuff(data[j], label[j])
-
-        # TODO: variable length inputs for
-        # 1. online learning, 2. arbitrary training sequences 
-        inputs_valid = np.ones((o.batchsz, o.ntimesteps+1), dtype=np.bool)
-
-        inputs_HW = np.ones((o.batchsz, 2), dtype=np.float32) * self.frmsz
-
-        # relative scale of label
-        label = label / o.frmsz
-
-        # add one more dimension to data for placeholder tensor shape
-        data = np.expand_dims(data, axis=4)
-
-        batch = {
-                'inputs': data,
-                'inputs_valid': inputs_valid, 
-                'inputs_HW': inputs_HW,
-                'labels': label,
-                'digits': data_all['targets'][idx],
-                'idx': idx
-                }
-
-        return batch
-
-    def get_image(self, idx, dstype):
-        #NOTE: This method can't give you all images in a sequence! (not useful)
-        return self.data[dstype]['images'][idx]
-
-    def update_epoch_begin(self, dstype):
-        # may no need dstype, as this shuffles train data only.
-        self.idx_shuffle[dstype] = np.random.permutation(self.nexps[dstype])
-
-
 class Data_ILSVRC(object):
     def __init__(self, dstype, o):
         self.dstype      = dstype
-        self.path_data   = o.path_data
+        self.path_data   = os.path.join(o.path_data_home, 'ILSVRC')
         self.trainsplit  = o.trainsplit # 0, 1, 2, 3, or 9 for all
         self.datadirname = 'Data_frmsz{}'.format(o.frmsz) \
                                 if o.useresizedimg else 'Data'
@@ -522,7 +71,7 @@ class Data_ILSVRC(object):
         self._update_videos()
         self._update_video_length()
         self._update_tracks(o)
-        self._update_stat(o)
+        ## self._update_stat(o)
 
     def _parsexml(self, xmlfile):
         with open(xmlfile) as f:
@@ -639,64 +188,64 @@ class Data_ILSVRC(object):
                            for video, track_list in info['tracks'].iteritems()}
             self.original_image_size = info['original_image_size']
 
-    def _update_stat(self, o):
-        def create_stat_pixelwise(): # NOTE: obsolete
-            stat = dict.fromkeys({'mean', 'std'}, None)
-            mean = []
-            std = []
-            for i, video in enumerate(self.videos):
-                print 'computing mean and std in snippet of {}, {}/{}'.format(
-                        self.dstype, i+1, len(self.videos))
-                imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
-                xs = []
-                for j in imglist:
-                    # NOTE: perform resize image!
-                    xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
-                        (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
-                xs = np.asarray(xs)
-                mean.append(np.mean(xs, axis=0))
-                std.append(np.std(xs, axis=0))
-            mean = np.mean(np.asarray(mean), axis=0)
-            std = np.mean(np.asarray(std), axis=0)
-            stat['mean'] = mean
-            stat['std'] = std
-            return stat
+    ## def _update_stat(self, o):
+    ##     def create_stat_pixelwise(): # NOTE: obsolete
+    ##         stat = dict.fromkeys({'mean', 'std'}, None)
+    ##         mean = []
+    ##         std = []
+    ##         for i, video in enumerate(self.videos):
+    ##             print 'computing mean and std in snippet of {}, {}/{}'.format(
+    ##                     self.dstype, i+1, len(self.videos))
+    ##             imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
+    ##             xs = []
+    ##             for j in imglist:
+    ##                 # NOTE: perform resize image!
+    ##                 xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
+    ##                     (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+    ##             xs = np.asarray(xs)
+    ##             mean.append(np.mean(xs, axis=0))
+    ##             std.append(np.std(xs, axis=0))
+    ##         mean = np.mean(np.asarray(mean), axis=0)
+    ##         std = np.mean(np.asarray(std), axis=0)
+    ##         stat['mean'] = mean
+    ##         stat['std'] = std
+    ##         return stat
 
-        def create_stat_global():
-            stat = dict.fromkeys({'mean', 'std'}, None)
-            means = []
-            stds = []
-            for i, video in enumerate(self.videos):
-                print 'computing mean and std in snippet of {}, {}/{}'.format(
-                        self.dstype, i+1, len(self.videos))
-                imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
-                xs = []
-                # for j in imglist:
-                #     # NOTE: perform resize image!
-                #     xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
-                #         (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
-                # Lazy method: Read a single image, do not resize.
-                xs.append(cv2.imread(imglist[len(imglist)/2])[:,:,(2,1,0)])
-                means.append(np.mean(xs))
-                stds.append(np.std(xs))
-            mean = np.mean(means)
-            std = np.mean(stds)
-            stat['mean'] = mean
-            stat['std'] = std
-            return stat
+    ##     def create_stat_global():
+    ##         stat = dict.fromkeys({'mean', 'std'}, None)
+    ##         means = []
+    ##         stds = []
+    ##         for i, video in enumerate(self.videos):
+    ##             print 'computing mean and std in snippet of {}, {}/{}'.format(
+    ##                     self.dstype, i+1, len(self.videos))
+    ##             imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
+    ##             xs = []
+    ##             # for j in imglist:
+    ##             #     # NOTE: perform resize image!
+    ##             #     xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
+    ##             #         (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
+    ##             # Lazy method: Read a single image, do not resize.
+    ##             xs.append(cv2.imread(imglist[len(imglist)/2])[:,:,(2,1,0)])
+    ##             means.append(np.mean(xs))
+    ##             stds.append(np.std(xs))
+    ##         mean = np.mean(means)
+    ##         std = np.mean(stds)
+    ##         stat['mean'] = mean
+    ##         stat['std'] = std
+    ##         return stat
 
-        if self.stat is None:
-            if self.dstype == 'train':
-                filename = os.path.join(o.path_stat, 
-                    'meanstd_{}_frmsz_{}_train_{}.npy'.format(o.dataset, o.frmsz, self.trainsplit))
-            else:
-                filename = os.path.join(o.path_stat,
-                    'meanstd_{}_frmsz_{}_{}.npy'.format(o.dataset, o.frmsz, self.dstype))
-            if os.path.exists(filename):
-                self.stat = np.load(filename).tolist()
-            else:
-                self.stat = create_stat_global() 
-                np.save(filename, self.stat)
+    ##     if self.stat is None:
+    ##         if self.dstype == 'train':
+    ##             filename = os.path.join(o.path_stat, 
+    ##                 'meanstd_{}_frmsz_{}_train_{}.npy'.format(o.dataset, o.frmsz, self.trainsplit))
+    ##         else:
+    ##             filename = os.path.join(o.path_stat,
+    ##                 'meanstd_{}_frmsz_{}_{}.npy'.format(o.dataset, o.frmsz, self.dstype))
+    ##         if os.path.exists(filename):
+    ##             self.stat = np.load(filename).tolist()
+    ##         else:
+    ##             self.stat = create_stat_global() 
+    ##             np.save(filename, self.stat)
 
 
 class Data_OTB(object):
@@ -830,29 +379,104 @@ class Data_OTB(object):
             self.tracks              = info['tracks']
 
 
-def get_masks_from_rectangles(rec, o):
-    # create mask using rec; typically rec=y_prev
-    x1 = rec[:,0] * o.frmsz
-    y1 = rec[:,1] * o.frmsz
-    x2 = rec[:,2] * o.frmsz
-    y2 = rec[:,3] * o.frmsz
-    grid_x, grid_y = np.meshgrid(np.arange(o.frmsz), np.arange(o.frmsz))
-    # resize tensors so that they can be compared
-    x1 = np.expand_dims(np.expand_dims(x1,1),2)
-    x2 = np.expand_dims(np.expand_dims(x2,1),2)
-    y1 = np.expand_dims(np.expand_dims(y1,1),2)
-    y2 = np.expand_dims(np.expand_dims(y2,1),2)
-    grid_x = np.tile(np.expand_dims(grid_x,0), [o.batchsz,1,1])
-    grid_y = np.tile(np.expand_dims(grid_y,0), [o.batchsz,1,1])
-    # mask
-    masks = np.logical_and(
-        np.logical_and(np.less_equal(x1, grid_x), 
-            np.less_equal(grid_x, x2)),
-        np.logical_and(np.less_equal(y1, grid_y), 
-            np.less_equal(grid_y, y2)))
-    # type and dim change so that it can be concated with x (add channel dim)
-    masks = np.expand_dims(masks.astype(np.float32),3)
-    return masks
+class Concat(object):
+
+    def __init__(self, datasets):
+        '''
+        Args:
+            datasets: Dictionary that maps name (string) to dataset.
+        '''
+        assert all('/' not in name for name in datasets.keys())
+        assert all(' ' not in name for name in datasets.keys())
+        self.datasets = datasets
+        # Copy all fields.
+        self.videos              = []
+        self.video_length        = {}
+        # self.image_size          = {}
+        self.original_image_size = {}
+        self.tracks              = {}
+        for dataset_name, dataset in datasets.items():
+            for video in dataset.videos:
+                new_video = dataset_name + '/' + video
+                self.videos.append(new_video)
+                self.video_length[new_video]        = dataset.video_length[video]
+                # self.image_size[new_video]          = dataset.image_size[video]
+                self.original_image_size[new_video] = dataset.original_image_size[video]
+                self.tracks[new_video]              = dataset.tracks[video]
+
+    def image_file(self, video, frame):
+        dataset_name, old_video = video.split('/', 1)
+        return self.datasets[dataset_name].image_file(old_video, frame)
+
+
+class CSV:
+
+    '''
+    Expects directory structure:
+        data/csv/dataset.csv
+        data/csv/images/xxx/yyy.jpg
+        data/csv/images_frmsz123/xxx/yyy.jpg (if useresizedimg is true)
+    The paths in data/csv/dataset.csv are relative to csv/images.
+    '''
+
+    def __init__(self, name, o):
+        # Video name is directory of image file.
+        fname = os.path.join(o.path_data_home, 'csv', name+'.csv')
+        with open(fname, 'r') as csv_file:
+            reader = csv.DictReader(csv_file)
+            rects = {}
+            size = {}
+            format_str = None
+            for row in reader:
+                video_path, image = os.path.split(row['filename'])
+                dataset_path, video_dir = os.path.split(video_path)
+                track_id = row['trackID']
+                image_name, image_ext = os.path.splitext(image)
+                t = int(image_name)
+                if not format_str:
+                    # e.g. '{:06d}.JPEG'
+                    # It is necessary to determine the format string to find
+                    # the path of unlabelled frames, which do not appear in the csv file.
+                    format_str = '{:0' + str(len(image_name)) + '}' + image_ext
+                assert image == format_str.format(t)
+                rects.setdefault(video_dir, {}).setdefault(track_id, {})[t] = CSV._row_to_rect(row)
+                size[video_dir] = (int(row['frameWidth']), int(row['frameHeight']))
+
+        videos = sorted(rects.keys())
+        # Convert dictionaries of tracks to lists.
+        rects = {
+            video: [tracks[name] for name in sorted(tracks.keys())]
+            for video, tracks in rects.iteritems()
+        }
+        # Take maximum time + 1 as video length.
+        video_length = {
+            video: max(t for track in tracks for t in track.keys())+1
+            for video, tracks in rects.iteritems()
+        }
+
+        self.videos = videos
+        self.video_length = video_length
+        self.tracks = rects
+        self.original_image_size = size
+        self.format_str = format_str
+        self.dataset_path = dataset_path
+        if o.useresizedimg:
+            self.image_dir = os.path.join(o.path_data_home, 'csv', 'images_frmsz{}'.format(o.frmsz))
+        else:
+            # TODO: Use something different here?
+            self.image_dir = os.path.join(o.path_data_home, 'csv', 'images')
+
+    @staticmethod
+    def _row_to_rect(row):
+        min_x  = float(row['leftX'])  / float(row['frameWidth'])
+        min_y  = float(row['topY'])   / float(row['frameHeight'])
+        size_x = float(row['width'])  / float(row['frameWidth'])
+        size_y = float(row['height']) / float(row['frameHeight'])
+        return [min_x, min_y, min_x+size_x, min_y + size_y]
+
+    def image_file(self, video, frame):
+        return os.path.join(self.image_dir, self.dataset_path, video, self.format_str.format(frame))
+
 
 def run_sanitycheck(batch, dataset, frmsz, stat=None, fulllen=False):
     if not fulllen:
