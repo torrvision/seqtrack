@@ -875,52 +875,32 @@ class Nornn(object):
 
         def combine_scoremaps(scoremap_init, scoremap_curr, o, is_training):
             dims = scoremap_init.shape.as_list()
-
-            if self.new_target_combine == 'add':
-                scoremap = scoremap_init + scoremap_curr
-            elif self.new_target_combine == 'multiply':
-                scoremap = scoremap_init * scoremap_curr
-            elif self.new_target_combine == 'concat':
+            if self.new_target_combine in ['add', 'multiply', 'concat']:
+                if self.new_target_combine == 'add':
+                    scoremap = scoremap_init + scoremap_curr
+                elif self.new_target_combine == 'multiply':
+                    scoremap = scoremap_init * scoremap_curr
+                elif self.new_target_combine == 'concat':
+                    scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
+                with slim.arg_scope([slim.conv2d],
+                        num_outputs=dims[-1],
+                        kernel_size=3,
+                        weights_regularizer=slim.l2_regularizer(o.wd)):
+                    scoremap = slim.conv2d(scoremap, scope='conv1')
+                    scoremap = slim.conv2d(scoremap, scope='conv2')
+            elif self.new_target_combine == 'gau':
                 scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
-            elif self.new_target_combine == 'gau_sum':
+                scoremap_residual = tf.identity(scoremap)
                 with slim.arg_scope([slim.conv2d],
                         num_outputs=dims[-1],
                         kernel_size=3,
-                        activation_fn=None,
                         weights_regularizer=slim.l2_regularizer(o.wd)):
-                    scoremap = tf.nn.tanh(slim.conv2d(scoremap_init, scope='filter_init')) * \
-                               tf.nn.sigmoid(slim.conv2d(scoremap_init, scope='gate_init')) + \
-                               tf.nn.tanh(slim.conv2d(scoremap_curr, scope='filter_curr')) * \
-                               tf.nn.sigmoid(slim.conv2d(scoremap_curr, scope='gate_curr'))
-            elif self.new_target_combine == 'concat_gau':
-                scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
-                with slim.arg_scope([slim.conv2d],
-                        num_outputs=dims[-1],
-                        kernel_size=3,
-                        activation_fn=None,
-                        weights_regularizer=slim.l2_regularizer(o.wd)):
-                    scoremap = tf.nn.tanh(slim.conv2d(scoremap, scope='filter')) * \
-                               tf.nn.sigmoid(slim.conv2d(scoremap, scope='gate'))
-            elif self.new_target_combine == 'share_gau_sum':
-                with slim.arg_scope([slim.conv2d],
-                        num_outputs=dims[-1],
-                        kernel_size=3,
-                        activation_fn=None,
-                        weights_regularizer=slim.l2_regularizer(o.wd)):
-                    scoremap = tf.nn.tanh(slim.conv2d(scoremap_init, scope='filter')) * \
-                               tf.nn.sigmoid(slim.conv2d(scoremap_init, scope='gate')) + \
-                               tf.nn.tanh(slim.conv2d(scoremap_curr, scope='filter', reuse=True)) * \
-                               tf.nn.sigmoid(slim.conv2d(scoremap_curr, scope='gate', reuse=True))
+                    scoremap = slim.conv2d(scoremap, rate=2, scope='conv_dilated')
+                    scoremap = tf.nn.tanh(scoremap) * tf.nn.sigmoid(scoremap)
+                    scoremap = slim.conv2d(scoremap, kernel_size=1, scope='conv_1x1')
+                    scoremap += slim.conv2d(scoremap_residual, kernel_size=1, scope='conv_residual')
             else:
                 assert False, 'Not available scoremap combine mode.'
-
-            with slim.arg_scope([slim.conv2d],
-                    num_outputs=dims[-1],
-                    kernel_size=3,
-                    weights_regularizer=slim.l2_regularizer(o.wd)):
-                scoremap = slim.conv2d(scoremap, scope='conv1')
-                scoremap = slim.conv2d(scoremap, scope='conv2')
-
             return scoremap
 
         def pass_interm_supervision(x, o):
