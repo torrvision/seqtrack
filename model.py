@@ -878,6 +878,8 @@ class Nornn(object):
 
             if self.new_target_combine == 'add':
                 scoremap = scoremap_init + scoremap_curr
+            elif self.new_target_combine == 'multiply':
+                scoremap = scoremap_init * scoremap_curr
             elif self.new_target_combine == 'concat':
                 scoremap = tf.concat([scoremap_init, scoremap_curr], -1)
             elif self.new_target_combine == 'gau_sum':
