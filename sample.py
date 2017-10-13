@@ -89,8 +89,10 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
     assert((ntimesteps is None) == (kind == 'full'))
     # videos = list(dataset.videos) # copy
 
-    assert shuffle
-    videos = list(sample_videos(dataset, rand=generator))
+    if shuffle:
+        videos = list(sample_videos(dataset, rand=generator))
+    else:
+        videos = list(dataset.videos)
 
     ## JV: Shuffle all videos even if max_videos specified.
     ## if max_videos is not None and len(videos) > max_videos:
@@ -100,8 +102,6 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
     ##         generator.shuffle(videos)
     if not shuffle and (max_videos is not None and max_videos < len(videos)):
         raise ValueError('enable shuffle or remove limit on number of videos')
-    if shuffle:
-        generator.shuffle(videos)
 
     num_videos = 0
     for video in videos:
