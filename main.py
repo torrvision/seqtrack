@@ -36,9 +36,23 @@ def parse_arguments():
             '--tfdb', help='run tensorflow debugger',
             action='store_true')
 
+    ## parser.add_argument(
+    ##         '--dataset', help='specify the name of dataset',
+    ##         type=str, default='')
     parser.add_argument(
-            '--dataset', help='specify the name of dataset',
-            type=str, default='')
+            '--train_dataset',
+            help='specify the training dataset; string, list of strings or list of tuples',
+            type=json.loads, default='"ILSVRC-train"')
+    parser.add_argument(
+            '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker (list)',
+            type=str, default=['ILSVRC-val', 'OTB-50'])
+    parser.add_argument(
+            '--eval_samplers', nargs='+', help='',
+            type=str, default=['full'])
+    parser.add_argument(
+            '--max_eval_videos', help='max number of videos to evaluate; not applied to OTB',
+            type=int, default=100)
+
     parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
             type=int, default=9)
@@ -164,15 +178,6 @@ def parse_arguments():
     parser.add_argument(
             '--motion_params', help='JSON string specifying motion augmentation',
             type=json.loads, default={})
-    parser.add_argument(
-            '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker',
-            type=str, default=['ILSVRC-train'])
-    parser.add_argument(
-            '--eval_samplers', nargs='+', help='',
-            type=str, default=['train'])
-    parser.add_argument(
-            '--max_eval_videos', help='max number of videos to evaluate; not applied to OTB',
-            type=int, default=100)
 
     parser.add_argument(
             '--path_data_home', help='location of datasets',
@@ -224,12 +229,42 @@ def main():
     o.initialize()
 
     # datasets = data.load_data(o)
-    datasets = {
+    datasets = {}
+    datasets.update({name: data.CSV(name, o) for name in [
+        'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123', 'otb50', 'otb100'
+    ]})
+    datasets.update({
         'ILSVRC-train': data.Data_ILSVRC('train', o),
         'ILSVRC-val':   data.Data_ILSVRC('val', o),
         'OTB-50':       data.Data_OTB('OTB-50', o),
         'OTB-100':      data.Data_OTB('OTB-100', o),
-    }
+    })
+    # Add some pre-defined unions.
+    datasets['vot'] = data.Concat({name: datasets[name] for name in [
+        'vot2013', 'vot2014', 'vot2016', 'vot2017']})
+    datasets['pool574'] = data.Concat({name: datasets[name] for name in [
+        'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro']})
+    datasets['pool697'] = data.Concat({name: datasets[name] for name in [
+        'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123']})
+
+    # Construct training dataset object from string.
+    # If it is a string, use a single dataset.
+    # If it is a list of strings, concatenate those datasets.
+    # If it is a list of (weight, string) pairs, construct a DatasetMixture.
+    if isinstance(o.train_dataset, basestring):
+        train_dataset = datasets[o.train_dataset]
+    elif isinstance(o.train_dataset, list):
+        assert len(o.train_dataset) > 0
+        if isinstance(o.train_dataset[0], basestring):
+            assert all(isinstance(x, basestring) for x in o.train_dataset)
+            train_dataset = data.Concat({name: datasets[name] for name in o.train_dataset})
+        else:
+            # Must be a list of pairs.
+            assert all(len(x) == 2 for x in o.train_dataset)
+            train_dataset = sample.DatasetMixture(
+                {name: (weight, datasets[name]) for weight, name in o.train_dataset})
+    else:
+        raise ValueError('train_dataset is not a string or a list: {}'.format(repr(o.train_dataset)))
 
     # These are the possible choices for evaluation sampler.
     # No need to specify `shuffle`, `max_videos`, `max_objects` here,
@@ -252,10 +287,10 @@ def main():
     eval_sets = {
         # Give each evaluation set its own random seed.
         d+'-'+s: functools.partial(sampler_presets[s], datasets[d],
-            generator=np.random.RandomState(o.seed_global),
-            max_videos=None if d.startswith('OTB-') else o.max_eval_videos,
-            shuffle=False if d.startswith('OTB-') else True,
-            max_objects=None if d.startswith('OTB-') else 1)
+            rand=np.random.RandomState(o.seed_global),
+            max_videos=o.max_eval_videos,
+            shuffle=True,
+            max_objects=1 if d.startswith('ILSVRC-') else None)
         for d in o.eval_datasets
         for s in o.eval_samplers
     }
@@ -267,7 +302,7 @@ def main():
     # TODO: Set model_opts from command-line or JSON file?
     m = model.load_model(o, model_params=o.model_params)
 
-    train.train(m, {'train': datasets['ILSVRC-train'], 'val': datasets['ILSVRC-val']},
+    train.train(m, {'train': train_dataset, 'val': datasets['ILSVRC-val']},
                 eval_sets, o, use_queues=o.use_queues)
 
 

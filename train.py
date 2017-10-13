@@ -29,7 +29,7 @@ from helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_di
 EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid', 'aspect']
 
 
-def train(create_model, datasets, eval_sets, o, use_queues=False):
+def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
     '''Trains a network.
 
     Args:
@@ -99,7 +99,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
     example = _perform_data_augmentation(example, o)
 
     # Always use same statistics for whitening (not set dependent).
-    stat = datasets['train'].stat
+    ## stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
     model = create_model(_whiten(_guard_labels(example), o, stat=stat),
                          summaries_collections=['summaries_model'])
@@ -204,7 +204,7 @@ def train(create_model, datasets, eval_sets, o, use_queues=False):
 
     # Use a separate random number generator for each sampler.
     sequences = {mode: iter_examples(datasets[mode], o,
-                                     generator=np.random.RandomState(o.seed_global),
+                                     rand=np.random.RandomState(o.seed_global),
                                      num_epochs=None)
                  for mode in modes}
 
@@ -635,7 +635,7 @@ def _guard_labels(unsafe):
 def _whiten(example_raw, o, stat=None, name='whiten'):
     with tf.name_scope(name) as scope:
         # Normalize mean and variance.
-        assert(stat is not None)
+        ## assert(stat is not None)
         # TODO: Check that this does not create two variables:
         mean = tf.constant(stat['mean'] if stat else 0.0, o.dtype, name='mean')
         std = tf.constant(stat['std'] if stat else 1.0,  o.dtype, name='std')
@@ -654,21 +654,21 @@ def _whiten_image(x, mean, std, name='whiten_image'):
         return tf.divide(x - 0.0, 1.0, name=scope)
 
 
-def iter_examples(dataset, o, generator=None, num_epochs=None):
+def iter_examples(dataset, o, rand=None, num_epochs=None):
     '''Generator that produces multiple epochs of examples for SGD.'''
     if num_epochs:
         epochs = xrange(num_epochs)
     else:
         epochs = itertools.count()
     for i in epochs:
-        sequences = sample.sample(dataset, generator=generator,
+        sequences = sample.sample(dataset, rand=rand,
                                   shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
                                   **o.sampler_params)
         for sequence in sequences:
             # JV: Add motion augmentation.
             # yield sequence
             if o.augment_motion:
-                sequence = motion.augment(sequence, rand=generator, **o.motion_params)
+                sequence = motion.augment(sequence, rand=rand, **o.motion_params)
             yield sequence
 
 def compute_scale_classification_gt(example, scales):

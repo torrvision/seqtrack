@@ -27,7 +27,8 @@ class Opts(object):
         #----------------------------------------------------------------------
         # data set specific parameters 
         # TODO: only params that need to change; otherwise put it in data class
-        self.dataset            = '' # (bouncing_mnist, etc.)
+        ## self.dataset            = '' # (bouncing_mnist, etc.)
+        self.train_dataset      = 'ILSVRC-train' # (bouncing_mnist, etc.)
         self.trainsplit         = 9 # 0,1,2,3 or 9 for all train sets
         self.frmsz              = 257
         self.useresizedimg      = True
@@ -105,7 +106,7 @@ class Opts(object):
         self.path_aux           = os.path.join(self.path_src, 'aux')
         self.path_stat          = os.path.join(self.path_src, 'stat')
         self.path_data_home     = './data'
-        self.path_data          = '' # This is set later e.g. {path_data_home}/ILSVRC
+        ## self.path_data          = '' # This is set later e.g. {path_data_home}/ILSVRC
         self.nosave             = False
         self.path_ckpt          = './ckpt'
         self.path_output        = './output'
@@ -151,13 +152,13 @@ class Opts(object):
         random.seed(self.seed_global)
         self._run_sanitycheck()
         self._set_gpu_config()
-        self._set_dataset_params()
+        ## self._set_dataset_params()
         self.activ_histogram = self.histograms
         self.param_histogram = self.histograms
 
-    def _set_dataset_params(self):
-        assert(self.dataset in ['moving_mnist', 'bouncing_mnist', 'ILSVRC'])
-        self.path_data = os.path.join(self.path_data_home, self.dataset)
+    ## def _set_dataset_params(self):
+    ##     assert(self.dataset in ['moving_mnist', 'bouncing_mnist', 'ILSVRC'])
+    ##     self.path_data = os.path.join(self.path_data_home, self.dataset)
 
     def _set_gpu_config(self):
         # set `CUDA_VISIBLE_DEVICES`

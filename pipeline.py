@@ -173,7 +173,9 @@ def load_images(example, image_size=[None, None, None], pad_value=128,
         # Read files from disk.
         file_contents = tf.map_fn(tf.read_file, example['image_files'], dtype=tf.string)
         # Decode images.
-        images = tf.map_fn(tf.image.decode_jpeg, file_contents, dtype=tf.uint8)
+        images = tf.map_fn(functools.partial(tf.image.decode_jpeg, channels=3),
+                           file_contents,
+                           dtype=tf.uint8)
         # Sample viewport in image.
         images = tf.image.convert_image_dtype(images, tf.float32)
         images = tf.image.crop_and_resize(images, geom.rect_to_tf_box(example['viewports']),
