@@ -633,6 +633,7 @@ class Nornn(object):
                  rnn_perturb_prob=0.0, # sampling rate of batch-wise scoremap perturbation.
                  rnn_skip=False,
                  rnn_skip_support=1,
+                 rnn_hglass=False,
                  coarse_hmap=False,
                  use_hmap_prior=False,
                  use_cosine_penalty=False,
@@ -673,6 +674,7 @@ class Nornn(object):
         self.rnn_perturb_prob  = rnn_perturb_prob
         self.rnn_skip          = rnn_skip
         self.rnn_skip_support  = rnn_skip_support
+        self.rnn_hglass        = rnn_hglass
         self.coarse_hmap       = coarse_hmap
         self.use_hmap_prior    = use_hmap_prior
         self.use_cosine_penalty= use_cosine_penalty
@@ -926,6 +928,24 @@ class Nornn(object):
                 x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='conv1')
                 x = slim.conv2d(x, num_outputs=2, kernel_size=1, activation_fn=None, scope='conv2')
             return x
+
+        def pass_hourglass_rnn(x, rnn_state, is_training, o):
+            dims = x.shape.as_list()
+            x_skip = []
+            with slim.arg_scope([slim.conv2d],
+                    weights_regularizer=slim.l2_regularizer(o.wd)):
+                x_skip.append(x)
+                x = slim.conv2d(x, dims[-1]*2, 5, 2,  scope='encoder_conv1')
+                x = slim.max_pool2d(x, [2, 2], padding='SAME', scope='encoder_pool1')
+                x_skip.append(x)
+                x = slim.conv2d(x, dims[-1]*2, 5, 2, scope='encoder_conv2')
+                x = slim.max_pool2d(x, [2, 2], padding='SAME', scope='encoder_pool2')
+                x_skip.append(x)
+                x, rnn_state = pass_rnn(x, rnn_state, self.rnn_cell_type, o, self.rnn_skip)
+                x = slim.conv2d(tf.image.resize_images(x + x_skip[2], [9, 9]),   dims[-1]*2, 3, 1, scope='decoder1')
+                x = slim.conv2d(tf.image.resize_images(x + x_skip[1], [33, 33]), dims[-1],   3, 1, scope='decoder2')
+                x = slim.conv2d(x + x_skip[0], 256, 3, 1, scope='decoder3')
+            return x, rnn_state
 
         def pass_deconvolution(x, is_training, o):
             ''' Upsampling layers.
@@ -1191,7 +1211,11 @@ class Nornn(object):
             if self.rnn:
                 if t == 0:
                     # RNN cell states
-                    state_dim = scoremap.shape.as_list()[-3:]
+                    if self.rnn_hglass:
+                        assert self.rnn_num_layers == 1
+                        state_dim = [3, 3, scoremap.shape.as_list()[-1]*2]
+                    else:
+                        state_dim = scoremap.shape.as_list()[-3:]
                     assert all(state_dim) # Require that size is static (no None values).
                     rnn_state_init = get_initial_rnn_state(
                         cell_type=self.rnn_cell_type,
@@ -1207,14 +1231,18 @@ class Nornn(object):
                 use_dropout = tf.logical_and(is_training, tf.less(prob, self.rnn_perturb_prob)) # apply batch-wise.
                 scoremap = tf.where(use_dropout, scoremap_dropout, scoremap)
 
-                for l in range(self.rnn_num_layers):
-                    with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
-                        if self.rnn_residual:
-                            scoremap_ori = tf.identity(scoremap)
-                            scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
-                            scoremap += scoremap_ori
-                        else:
-                            scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
+                if self.rnn_hglass:
+                    with tf.variable_scope('hourglass_rnn', reuse=(t > 0)):
+                        scoremap, rnn_state[l] = pass_hourglass_rnn(scoremap, rnn_state[l], is_training, o)
+                else:
+                    for l in range(self.rnn_num_layers):
+                        with tf.variable_scope('rnn_layer{}'.format(l), reuse=(t > 0)):
+                            if self.rnn_residual:
+                                scoremap_ori = tf.identity(scoremap)
+                                scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
+                                scoremap += scoremap_ori
+                            else:
+                                scoremap, rnn_state[l] = pass_rnn(scoremap, rnn_state[l], self.rnn_cell_type, o, self.rnn_skip)
 
                 with tf.variable_scope('convolutions_after_rnn', reuse=(t > 0)):
                     scoremap = pass_conv_after_rnn(scoremap, o)
