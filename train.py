@@ -204,7 +204,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
 
     # Use a separate random number generator for each sampler.
     sequences = {mode: iter_examples(datasets[mode], o,
-                                     generator=np.random.RandomState(o.seed_global),
+                                     rand=np.random.RandomState(o.seed_global),
                                      num_epochs=None)
                  for mode in modes}
 
@@ -654,21 +654,21 @@ def _whiten_image(x, mean, std, name='whiten_image'):
         return tf.divide(x - 0.0, 1.0, name=scope)
 
 
-def iter_examples(dataset, o, generator=None, num_epochs=None):
+def iter_examples(dataset, o, rand=None, num_epochs=None):
     '''Generator that produces multiple epochs of examples for SGD.'''
     if num_epochs:
         epochs = xrange(num_epochs)
     else:
         epochs = itertools.count()
     for i in epochs:
-        sequences = sample.sample(dataset, generator=generator,
+        sequences = sample.sample(dataset, rand=rand,
                                   shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
                                   **o.sampler_params)
         for sequence in sequences:
             # JV: Add motion augmentation.
             # yield sequence
             if o.augment_motion:
-                sequence = motion.augment(sequence, rand=generator, **o.motion_params)
+                sequence = motion.augment(sequence, rand=rand, **o.motion_params)
             yield sequence
 
 def compute_scale_classification_gt(example, scales):

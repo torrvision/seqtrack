@@ -12,7 +12,7 @@ import data
 import geom_np
 
 
-def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=None,
+def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
            kind=None, ntimesteps=None, freq=10, min_freq=10, max_freq=60):
     '''
     For training, set `shuffle=True`, `max_objects=1`, `ntimesteps` as required.
@@ -27,7 +27,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
 
     Args:
         dataset: Dataset object such as ILSVRC or OTB.
-        generator: Random number generator (can be module `random`).
+        rand: Random number rand (can be module `random`).
         shuffle: Whether to shuffle the videos.
             Note that if shuffled sequences are desired,
             then max_objects should be 1,
@@ -43,7 +43,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
     def _select_frames(is_valid, valid_frames):
         if kind == 'sampling':
             k = min(len(valid_frames), ntimesteps+1)
-            return sorted(generator.choice(valid_frames, k, replace=False))
+            return sorted(rand.choice(valid_frames, k, replace=False))
         elif kind == 'freq-range-fit':
             # TODO: The scope of this sampler should include
             # choosing objects within videos.
@@ -60,11 +60,11 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
             v = min(max_freq, float((video_len - 1) - valid_frames[0]) / ntimesteps)
             if not u <= v:
                 return None
-            f = math.exp(generator.uniform(math.log(u), math.log(v)))
+            f = math.exp(rand.uniform(math.log(u), math.log(v)))
             # Let n = ntimesteps*f.
             n = int(round(ntimesteps * f))
             # Choose first frame such that all frames are present.
-            a = generator.choice([a for a in valid_frames if a + n <= video_len - 1])
+            a = rand.choice([a for a in valid_frames if a + n <= video_len - 1])
             return [int(round(a + f*t)) for t in range(0, ntimesteps+1)]
         elif kind == 'regular':
             ''' Sample frames with `freq`, regardless of label
@@ -75,7 +75,7 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
             Curriculum Learning might be tried.
             '''
             num_frames = len(is_valid)
-            frames = range(generator.choice(valid_frames), num_frames, freq)
+            frames = range(rand.choice(valid_frames), num_frames, freq)
             return frames[:ntimesteps+1]
         elif kind == 'full':
             ''' The full sequence from first 1 to last 1, regardless of label.
@@ -89,17 +89,14 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
     assert((ntimesteps is None) == (kind == 'full'))
     # videos = list(dataset.videos) # copy
 
-    if shuffle:
-        videos = list(sample_videos(dataset, rand=generator))
-    else:
-        videos = list(dataset.videos)
+    videos = list(sample_videos(dataset, shuffle, rand))
 
     ## JV: Shuffle all videos even if max_videos specified.
     ## if max_videos is not None and len(videos) > max_videos:
-    ##     videos = generator.choice(videos, max_videos, replace=False)
+    ##     videos = rand.choice(videos, max_videos, replace=False)
     ## else:
     ##     if shuffle:
-    ##         generator.shuffle(videos)
+    ##         rand.shuffle(videos)
     if not shuffle and (max_videos is not None and max_videos < len(videos)):
         raise ValueError('enable shuffle or remove limit on number of videos')
 
@@ -111,11 +108,11 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
         ## JV: Shuffle all trajectories even if max_objects specified.
         ## trajectories = dataset.tracks[video]
         ## if max_objects is not None and len(trajectories) > max_objects:
-        ##     trajectories = generator.choice(trajectories, max_objects, replace=False)
+        ##     trajectories = rand.choice(trajectories, max_objects, replace=False)
         # Construct (index, trajectory) pairs.
         trajectories = list(enumerate(dataset.tracks[video]))
         if max_objects is not None and len(trajectories) > max_objects:
-            generator.shuffle(trajectories)
+            rand.shuffle(trajectories)
 
         ## for cnt, trajectory in enumerate(trajectories):
         num_objects = 0
@@ -152,11 +149,11 @@ def _invalid_rect():
     return [float('nan')] * 4
 
 
-def sample_videos(dataset, rand):
+def sample_videos(dataset, shuffle, rand):
     '''
     Args:
         dataset:
-            Must either have dataset.sample_videos(rand) that returns a list or
+            Must either have dataset.sample_videos(shuffle, rand) that returns a list or
             dataset.videos that is a list.
             Typically either DatasetMixture or data.Data_ILSVRC, data.CSV, etc.
 
@@ -164,15 +161,21 @@ def sample_videos(dataset, rand):
         Finite generator of length len(dataset.videos).
     '''
     try:
-        videos = dataset.sample_videos(rand=rand)
+        videos = dataset.sample_videos(shuffle, rand)
     except AttributeError:
         videos = list(dataset.videos)
-        rand.shuffle(videos)
+        if shuffle:
+            rand.shuffle(videos)
     for video in videos:
         yield video
 
 
 class DatasetMixture(data.Concat):
+
+    '''
+    If shuffle is False, the component will still be chosen stochastically
+    but the videos within the component will not be shuffled.
+    '''
 
     def __init__(self, components):
         datasets = {k: dataset for k, (_, dataset) in components.items()}
@@ -180,7 +183,7 @@ class DatasetMixture(data.Concat):
         # data.Concat.__init__(self, datasets)
         self.components = components
 
-    def sample_videos(self, rand):
+    def sample_videos(self, shuffle, rand):
         names = self.components.keys()
         weights = np.array([weight for weight, _ in (self.components[k] for k in names)])
         p = weights / np.sum(weights)
@@ -191,6 +194,6 @@ class DatasetMixture(data.Concat):
             try:
                 video = next(samplers[name])
             except StopIteration:
-                samplers[name] = sample_videos(self.datasets[name], rand=rand)
+                samplers[name] = sample_videos(self.datasets[name], shuffle, rand)
                 video = next(samplers[name])
             yield name + '/' + video

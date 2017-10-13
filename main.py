@@ -287,10 +287,10 @@ def main():
     eval_sets = {
         # Give each evaluation set its own random seed.
         d+'-'+s: functools.partial(sampler_presets[s], datasets[d],
-            generator=np.random.RandomState(o.seed_global),
-            max_videos=None if d.startswith('OTB-') else o.max_eval_videos,
-            shuffle=False if d.startswith('OTB-') else True,
-            max_objects=None if d.startswith('OTB-') else 1)
+            rand=np.random.RandomState(o.seed_global),
+            max_videos=o.max_eval_videos,
+            shuffle=True,
+            max_objects=1 if d.startswith('ILSVRC-') else None)
         for d in o.eval_datasets
         for s in o.eval_samplers
     }
