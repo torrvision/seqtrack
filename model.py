@@ -1244,11 +1244,10 @@ class Nornn(object):
                                     'scales': scales,
                                     } if self.sc else None
                    }
-        # JV: Use two separate state variables.
         state_init, state_final = {}, {}
+        # TODO: JV: From evaluate_test, it seems that 'x' may not be required?
         state_init['x'], state_final['x'] = x_init, x_prev
         state_init['y'], state_final['y'] = y_init, y_prev
-        # JV: Use nested collection of state.
         #if rnn_state:
         if self.rnn_num_layers > 0:
             state_init['rnn'] = rnn_state_init
