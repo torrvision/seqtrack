@@ -379,7 +379,7 @@ class Data_OTB(object):
             self.tracks              = info['tracks']
 
 
-class Concat:
+class Concat(object):
 
     def __init__(self, datasets):
         '''
@@ -410,6 +410,14 @@ class Concat:
 
 
 class CSV:
+
+    '''
+    Expects directory structure:
+        data/csv/dataset.csv
+        data/csv/images/xxx/yyy.jpg
+        data/csv/images_frmsz123/xxx/yyy.jpg (if useresizedimg is true)
+    The paths in data/csv/dataset.csv are relative to csv/images.
+    '''
 
     def __init__(self, name, o):
         # Video name is directory of image file.

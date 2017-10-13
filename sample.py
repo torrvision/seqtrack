@@ -5,8 +5,10 @@ The sequences can be returned as a list or the functions can be generators.
 
 import pdb
 import math
+import numpy as np
 import os
 
+import data
 import geom_np
 
 
@@ -85,7 +87,10 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
             raise ValueError('unknown sampler: {}'.format(kind))
 
     assert((ntimesteps is None) == (kind == 'full'))
-    videos = list(dataset.videos) # copy
+    # videos = list(dataset.videos) # copy
+
+    assert shuffle
+    videos = list(sample_videos(dataset, rand=generator))
 
     ## JV: Shuffle all videos even if max_videos specified.
     ## if max_videos is not None and len(videos) > max_videos:
@@ -145,3 +150,47 @@ def sample(dataset, generator=None, shuffle=False, max_videos=None, max_objects=
 
 def _invalid_rect():
     return [float('nan')] * 4
+
+
+def sample_videos(dataset, rand):
+    '''
+    Args:
+        dataset:
+            Must either have dataset.sample_videos(rand) that returns a list or
+            dataset.videos that is a list.
+            Typically either DatasetMixture or data.Data_ILSVRC, data.CSV, etc.
+
+    Returns:
+        Finite generator of length len(dataset.videos).
+    '''
+    try:
+        videos = dataset.sample_videos(rand=rand)
+    except AttributeError:
+        videos = list(dataset.videos)
+        rand.shuffle(videos)
+    for video in videos:
+        yield video
+
+
+class DatasetMixture(data.Concat):
+
+    def __init__(self, components):
+        datasets = {k: dataset for k, (_, dataset) in components.items()}
+        super(DatasetMixture, self).__init__(datasets)
+        # data.Concat.__init__(self, datasets)
+        self.components = components
+
+    def sample_videos(self, rand):
+        names = self.components.keys()
+        weights = np.array([weight for weight, _ in (self.components[k] for k in names)])
+        p = weights / np.sum(weights)
+
+        samplers = {name: (video for video in []) for name in names}
+        for i in range(len(self.videos)):
+            name = rand.choice(names, p=p)
+            try:
+                video = next(samplers[name])
+            except StopIteration:
+                samplers[name] = sample_videos(self.datasets[name], rand=rand)
+                video = next(samplers[name])
+            yield name + '/' + video

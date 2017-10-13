@@ -40,8 +40,9 @@ def parse_arguments():
     ##         '--dataset', help='specify the name of dataset',
     ##         type=str, default='')
     parser.add_argument(
-            '--train_datasets', help='specify the datasets to use',
-            type=str, nargs='+', default=['ILSVRC-train'])
+            '--train_dataset',
+            help='specify the training dataset; string, list of strings or list of tuples',
+            type=json.loads, default='"ILSVRC-train"')
     parser.add_argument(
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker (list)',
             type=str, default=['ILSVRC-val', 'OTB-50'])
@@ -246,7 +247,24 @@ def main():
     datasets['pool697'] = data.Concat({name: datasets[name] for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123']})
 
-    train_dataset = data.Concat({name: datasets[name] for name in o.train_datasets})
+    # Construct training dataset object from string.
+    # If it is a string, use a single dataset.
+    # If it is a list of strings, concatenate those datasets.
+    # If it is a list of (weight, string) pairs, construct a DatasetMixture.
+    if isinstance(o.train_dataset, basestring):
+        train_dataset = datasets[o.train_dataset]
+    elif isinstance(o.train_dataset, list):
+        assert len(o.train_dataset) > 0
+        if isinstance(o.train_dataset[0], basestring):
+            assert all(isinstance(x, basestring) for x in o.train_dataset)
+            train_dataset = data.Concat({name: datasets[name] for name in o.train_dataset})
+        else:
+            # Must be a list of pairs.
+            assert all(len(x) == 2 for x in o.train_dataset)
+            train_dataset = sample.DatasetMixture(
+                {name: (weight, datasets[name]) for weight, name in o.train_dataset})
+    else:
+        raise ValueError('train_dataset is not a string or a list: {}'.format(repr(o.train_dataset)))
 
     # These are the possible choices for evaluation sampler.
     # No need to specify `shuffle`, `max_videos`, `max_objects` here,
