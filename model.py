@@ -644,6 +644,7 @@ class Nornn(object):
                  sc=False, # scale classification
                  sc_light=False,
                  sc_pass_hmap=False,
+                 sc_shift_amount=0.0,
                  sc_score_threshold=0.9,
                  sc_num_class=3,
                  sc_step_size=0.03,
@@ -685,6 +686,7 @@ class Nornn(object):
         self.sc                = sc
         self.sc_light          = sc_light
         self.sc_pass_hmap      = sc_pass_hmap
+        self.sc_shift_amount   = sc_shift_amount
         self.sc_score_threshold= sc_score_threshold
         self.sc_num_class      = sc_num_class
         self.sc_step_size      = sc_step_size
@@ -1296,7 +1298,11 @@ class Nornn(object):
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y_prev)
                 target_init_pad, _, _ = process_image_with_box(x0, y0, o,
                         crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
-                target_pred_pad, _, _ = process_image_with_box(x_curr, y_curr_pred, o,
+                #target_pred_pad, _, _ = process_image_with_box(x_curr, y_curr_pred, o,
+                #        crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
+                target_pred_pad, _, _ = process_image_with_box(x_curr,
+                        tf.cond(is_training, lambda: geom.rect_translate_random(y_curr_pred, self.sc_shift_amount),
+                                             lambda: y_curr_pred), o,
                         crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
                 sc_in = tf.concat([target_init_pad, target_pred_pad], -1)
                 if self.sc_pass_hmap:
