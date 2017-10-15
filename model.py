@@ -926,7 +926,7 @@ class Nornn(object):
                 x, rnn_state = pass_rnn(x, rnn_state, self.rnn_cell_type, o, self.rnn_skip)
                 x = slim.conv2d(tf.image.resize_images(x + x_skip[2], [9, 9]),   dims[-1]*2, 3, 1, scope='decoder1')
                 x = slim.conv2d(tf.image.resize_images(x + x_skip[1], [33, 33]), dims[-1],   3, 1, scope='decoder2')
-                x = slim.conv2d(x + x_skip[0], 256, 3, 1, scope='decoder3')
+                x = slim.conv2d(x + x_skip[0], dims[-1], 3, 1, scope='decoder3')
             return x, rnn_state
 
         def pass_deconvolution(x, is_training, o):
