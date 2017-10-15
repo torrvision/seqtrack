@@ -203,3 +203,37 @@ def to_nested_tuple(tensor, value):
 
 def escape_filename(s):
     return s.replace('/', '_')
+
+
+class LazyDict:
+
+    '''
+    Dictionary that delays evaluation of its values until required.
+
+    Example:
+        d = LazyDict()
+        d['x'] = lambda: loadData() # assign lambda
+        x1 = d['x'] # loadData() is called here
+        x2 = d['x'] # loadData() is not called again
+    '''
+
+    def __init__(self):
+        self._fn = {}
+        self._cache = {}
+
+    def __getitem__(self, k):
+        if k in self._cache:
+            return self._cache[k]
+        v = self._fn[k]()
+        self._cache[k] = v
+        return v
+
+    def __setitem__(self, k, v):
+        if k in self._cache:
+            del self._cache[k]
+        self._fn[k] = v
+
+    def __delitem__(self, k):
+        if k in self._cache:
+            del self._cache[k]
+        del self._fn[k]
