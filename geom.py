@@ -107,7 +107,7 @@ def rect_translate_random(rect, limit, name='rect_translate_random'):
         rect_size = max_pt - min_pt
         diam = tf.reduce_mean(rect_size, axis=-1)
         delta = diam * tf.random_uniform(shape=[tf.shape(rect)[0]], minval=-limit, maxval=limit)
-        return rect_translate(rect, delta)
+        return rect_translate(rect, tf.expand_dims(delta, -1))
 
 
 def rect_mul(rect, scale, name='rect_mul'):
