@@ -642,6 +642,7 @@ class Nornn(object):
                  boxreg_stop_grad=False,
                  boxreg_regularize=False,
                  sc=False, # scale classification
+                 sc_net=True, # Use a separate network?
                  sc_light=False,
                  sc_pass_hmap=False,
                  sc_score_threshold=0.9,
@@ -683,6 +684,7 @@ class Nornn(object):
         self.boxreg_stop_grad  = boxreg_stop_grad
         self.boxreg_regularize = boxreg_regularize
         self.sc                = sc
+        self.sc_net            = sc_net
         self.sc_light          = sc_light
         self.sc_pass_hmap      = sc_pass_hmap
         self.sc_score_threshold= sc_score_threshold
@@ -929,7 +931,7 @@ class Nornn(object):
                 x = slim.conv2d(x + x_skip[0], 256, 3, 1, scope='decoder3')
             return x, rnn_state
 
-        def pass_deconvolution(x, is_training, o):
+        def pass_deconvolution(x, is_training, o, num_outputs=2):
             ''' Upsampling layers.
             The last layer should not have an activation!
             '''
@@ -941,7 +943,7 @@ class Nornn(object):
                     dim = x.shape.as_list()[-1]
                     if self.coarse_hmap: # No upsample layers.
                         x = slim.conv2d(x, num_outputs=dim, kernel_size=3, scope='deconv1')
-                        x = slim.conv2d(x, num_outputs=2, kernel_size=1,
+                        x = slim.conv2d(x, num_outputs=num_outputs, kernel_size=1,
                                         activation_fn=None,
                                         normalizer_fn=None,
                                         scope='deconv2')
@@ -951,19 +953,19 @@ class Nornn(object):
                         x = tf.image.resize_images(x, [(o.frmsz-1)/2+1]*2, align_corners=True)
                         x = slim.conv2d(x, num_outputs=dim/4, kernel_size=3, scope='deconv2')
                         x = tf.image.resize_images(x, [o.frmsz]*2, align_corners=True)
-                        x = slim.conv2d(x, num_outputs=2, kernel_size=1,
+                        x = slim.conv2d(x, num_outputs=num_outputs, kernel_size=1,
                                         activation_fn=None,
                                         normalizer_fn=None,
                                         scope='deconv3')
-                elif o.cnn_model == 'vgg_16':
-                    assert False, 'Please update this better before using it..'
-                    x = slim.conv2d(x, num_outputs=512, scope='deconv1')
-                    x = tf.image.resize_images(x, [61, 61])
-                    x = slim.conv2d(x, num_outputs=256, scope='deconv2')
-                    x = tf.image.resize_images(x, [121, 121])
-                    x = slim.conv2d(x, num_outputs=2, scope='deconv3')
-                    x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
-                    x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
+                # elif o.cnn_model == 'vgg_16':
+                #     assert False, 'Please update this better before using it..'
+                #     x = slim.conv2d(x, num_outputs=512, scope='deconv1')
+                #     x = tf.image.resize_images(x, [61, 61])
+                #     x = slim.conv2d(x, num_outputs=256, scope='deconv2')
+                #     x = tf.image.resize_images(x, [121, 121])
+                #     x = slim.conv2d(x, num_outputs=2, scope='deconv3')
+                #     x = tf.image.resize_images(x, [o.frmsz, o.frmsz])
+                #     x = slim.conv2d(x, num_outputs=2, activation_fn=None, scope='deconv4')
                 else:
                     assert False, 'Not available option.'
             return x
@@ -1097,6 +1099,9 @@ class Nornn(object):
 
         hmap_interm = {k: [] for k in ['score', 'score_A0', 'score_At']}
         sc_out_list = []
+        sc_active_list = []
+
+        scales = (np.arange(self.sc_num_class) - (self.sc_num_class / 2)) * self.sc_step_size + 1
 
         target_scope = o.cnn_model if self.target_share else o.cnn_model+'_target'
         search_scope = o.cnn_model if self.target_share else o.cnn_model+'_search'
@@ -1230,13 +1235,18 @@ class Nornn(object):
                     scoremap = pass_conv_after_rnn(scoremap, o)
 
             with tf.variable_scope('deconvolution', reuse=(True if self.new_target else t > 0)):
-                hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o)
+                hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o, num_outputs=2)
+                if self.sc and not self.sc_net:
+                    with tf.variable_scope('sc_deconv'):
+                        sc_out = pass_deconvolution(scoremap, is_training, o, num_outputs=self.sc_num_class)
+                        sc_out_list.append(sc_out)
                 if self.use_hmap_prior:
                     hmap_shape = hmap_curr_pred_oc.shape.as_list()
                     hmap_prior = tf.get_variable('hmap_prior', hmap_shape[-3:],
                                                  initializer=tf.zeros_initializer(),
                                                  regularizer=slim.l2_regularizer(o.wd))
                     hmap_curr_pred_oc += hmap_prior
+                p_loc_coarse = tf.unstack(tf.nn.softmax(hmap_curr_pred_oc), axis=-1)[0]
                 if self.coarse_hmap:
                     # Upsample to compute translation but not to compute loss.
                     hmap_upsample = tf.image.resize_images(hmap_curr_pred_oc, [o.frmsz, o.frmsz],
@@ -1290,38 +1300,57 @@ class Nornn(object):
                 # Regularize box scale manually.
                 if self.boxreg_regularize:
                     y_curr_pred = regularize_scale(y_prev, y_curr_pred, y0, 0.5, 1.0)
+
             elif self.sc:
-                # scale-classification network.
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
                         hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y_prev)
-                target_init_pad, _, _ = process_image_with_box(x0, y0, o,
-                        crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
-                target_pred_pad, _, _ = process_image_with_box(x_curr, y_curr_pred, o,
-                        crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
-                sc_in = tf.concat([target_init_pad, target_pred_pad], -1)
-                if self.sc_pass_hmap:
-                    hmap_crop, _, _ = process_image_with_box(hmap_curr_pred_oc_fg, y_curr_pred, o,
-                        crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
-                    sc_in = tf.concat([sc_in, hmap_crop*255], -1)
-                with tf.variable_scope('scale_classfication',reuse=(t > 0)):
-                    sc_out = pass_scale_classification(sc_in, is_training)
-                    sc_out_list.append(sc_out)
+                if self.sc_net:
+                    # scale-classification network.
+                    target_init_pad, _, _ = process_image_with_box(x0, y0, o,
+                            crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
+                    target_pred_pad, _, _ = process_image_with_box(x_curr, y_curr_pred, o,
+                            crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
+                    sc_in = tf.concat([target_init_pad, target_pred_pad], -1)
+                    if self.sc_pass_hmap:
+                        hmap_crop, _, _ = process_image_with_box(hmap_curr_pred_oc_fg, y_curr_pred, o,
+                            crop_size=(o.frmsz - 1) * o.target_scale / o.search_scale + 1, scale=1, aspect=inputs['aspect'])
+                        sc_in = tf.concat([sc_in, hmap_crop*255], -1)
+                    with tf.variable_scope('scale_classfication',reuse=(t > 0)):
+                        sc_out = pass_scale_classification(sc_in, is_training)
+                        sc_out_list.append(sc_out)
+
+                ## if self.sc_score_threshold > 0:
+                ##     max_score = tf.reduce_max(hmap_curr_pred_oc_fg, axis=(1,2,3))
+                ##     is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
+                ##     batchsz = tf.shape(is_pass)[0]
+                ##     stay = tf.cast(tf.reshape(tf.concat([tf.fill([batchsz, self.sc_num_class/2], 0.0),
+                ##                                          tf.fill([batchsz, 1], 1.0),
+                ##                                          tf.fill([batchsz, self.sc_num_class/2], 0.0)], axis=1),
+                ##                               tf.shape(is_max_scale)), tf.bool)
+                ##     is_max_scale = tf.where(is_pass, is_max_scale, stay)
+                ## is_max_scale = tf.to_float(is_max_scale)
+                ## scales = (np.arange(self.sc_num_class) - (self.sc_num_class / 2)) * self.sc_step_size + 1
+                ## scale = tf.reduce_sum(scales * is_max_scale, axis=-1) / tf.reduce_sum(is_max_scale, axis=-1)
+                ## y_curr_pred = scale_rectangle_size(tf.expand_dims(scale, -1), y_curr_pred)
 
                 # compute scale and update box.
                 p_scale = tf.nn.softmax(sc_out)
-                is_max_scale = tf.equal(p_scale, tf.reduce_max(p_scale, axis=1, keep_dims=True))
+                is_max_scale = tf.equal(p_scale, tf.reduce_max(p_scale, axis=-1, keep_dims=True))
+                is_max_scale = tf.to_float(is_max_scale)
+                scale = tf.reduce_sum(scales * is_max_scale, axis=-1) / tf.reduce_sum(is_max_scale, axis=-1)
+                if not self.sc_net:
+                    # Scale estimation is convolutional. Take location with max score.
+                    sc_active = tf.greater_equal(p_loc_coarse,
+                        tf.reduce_max(p_loc_coarse, axis=(-2, -1), keep_dims=True)*0.95)
+                    sc_active = tf.to_float(sc_active)
+                    scale = (tf.reduce_sum(scale * sc_active, axis=(-2, -1)) /
+                             tf.reduce_sum(sc_active, axis=(-2, -1)))
+                    sc_active_list.append(sc_active)
                 if self.sc_score_threshold > 0:
+                    # Use scale = 1 if max location score is not above threshold.
                     max_score = tf.reduce_max(hmap_curr_pred_oc_fg, axis=(1,2,3))
                     is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
-                    batchsz = tf.shape(is_pass)[0]
-                    stay = tf.cast(tf.reshape(tf.concat([tf.fill([batchsz, self.sc_num_class/2], 0.0),
-                                                         tf.fill([batchsz, 1], 1.0),
-                                                         tf.fill([batchsz, self.sc_num_class/2], 0.0)], axis=1),
-                                              tf.shape(is_max_scale)), tf.bool)
-                    is_max_scale = tf.where(is_pass, is_max_scale, stay)
-                is_max_scale = tf.to_float(is_max_scale)
-                scales = (np.arange(self.sc_num_class) - (self.sc_num_class / 2)) * self.sc_step_size + 1
-                scale = tf.reduce_sum(scales * is_max_scale, axis=-1) / tf.reduce_sum(is_max_scale, axis=-1)
+                    scale = tf.where(is_pass, scale, tf.ones_like(scale))
                 y_curr_pred = scale_rectangle_size(tf.expand_dims(scale, -1), y_curr_pred)
             else: # argmax to find center (then use x0's box)
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
@@ -1395,6 +1424,7 @@ class Nornn(object):
                    'search':    search,
                    'boxreg_delta': self.boxreg_delta,
                    'sc':           {'out': tf.stack(sc_out_list, axis=1),
+                                    'active': tf.stack(sc_active_list, axis=1) if not self.sc_net else None,
                                     'scales': scales,
                                     } if self.sc else None
                    }

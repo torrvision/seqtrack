@@ -812,14 +812,31 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
                 losses['ce_{}'.format(key)] = tf.reduce_mean(loss_ce_interm)
 
         if 'sc' in o.losses:
+            sc_rank = len(outputs['sc']['out'].shape)
+            if sc_rank == 5:
+                # Use same GT for all spatial positions.
+                shape = outputs['sc']['out'].shape.as_list()
+                sc_gt = tf.expand_dims(tf.expand_dims(sc_gt, -2), -2)
+                sc_gt = tf.tile(sc_gt, [1, 1, shape[2], shape[3], 1])
             sc_gt_valid = tf.boolean_mask(sc_gt, example['y_is_valid'])
             sc_pred_valid = tf.boolean_mask(outputs['sc']['out'], example['y_is_valid'])
-            sc_gt_valid, unmerge = merge_dims(sc_gt_valid, 0, 1)
-            sc_pred_valid, _ = merge_dims(sc_pred_valid, 0, 1)
-            loss_sc = tf.nn.softmax_cross_entropy_with_logits(
-                    labels=sc_gt_valid,
-                    logits=sc_pred_valid)
-            loss_sc = unmerge(loss_sc, 0)
+            # sc_gt_valid, unmerge = merge_dims(sc_gt_valid, 0, 4)
+            # sc_pred_valid, _ = merge_dims(sc_pred_valid, 0, 4)
+            loss_sc = tf.nn.softmax_cross_entropy_with_logits(labels=sc_gt, logits=outputs['sc']['out'])
+            # loss_sc = unmerge(loss_sc, 0)
+            if sc_rank == 5:
+                # Reduce over spatial predictions. Use active elements.
+                sc_active_valid = tf.boolean_mask(outputs['sc']['active'], example['y_is_valid'])
+                loss_sc = (tf.reduce_sum(sc_active_valid * loss_sc, axis=(-2, -1)) /
+                           tf.reduce_sum(sc_active_valid, axis=(-2, -1)))
+            ##sc_gt_valid = tf.boolean_mask(sc_gt, example['y_is_valid'])
+            ##sc_pred_valid = tf.boolean_mask(outputs['sc']['out'], example['y_is_valid'])
+            ##sc_gt_valid, unmerge = merge_dims(sc_gt_valid, 0, 1)
+            ##sc_pred_valid, _ = merge_dims(sc_pred_valid, 0, 1)
+            ##loss_sc = tf.nn.softmax_cross_entropy_with_logits(
+            ##        labels=sc_gt_valid,
+            ##        logits=sc_pred_valid)
+            ##loss_sc = unmerge(loss_sc, 0)
             losses['sc'] = tf.reduce_mean(loss_sc)
 
         # Reconstruction loss using generalized Charbonnier penalty

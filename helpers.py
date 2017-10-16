@@ -237,3 +237,14 @@ class LazyDict:
         if k in self._cache:
             del self._cache[k]
         del self._fn[k]
+
+
+# def softmax_cross_entropy_with_logits(
+#         _sentinel=None,
+#         labels=None,
+#         logits=None,
+#         dim=-1,
+#         name=None):
+#     sc_gt_valid, unmerge = merge_dims(sc_gt_valid, 0, 1)
+#     sc_pred_valid, _ = merge_dims(sc_pred_valid, 0, 1)
+#     loss_sc = tf.nn.softmax_cross_entropy_with_logits(labels=sc_gt, logits=outputs['sc']['out'])
