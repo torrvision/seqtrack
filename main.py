@@ -12,6 +12,7 @@ import data
 import model
 import train
 import sample
+from helpers import LazyDict
 
 
 def parse_arguments():
@@ -229,22 +230,20 @@ def main():
     o.initialize()
 
     # datasets = data.load_data(o)
-    datasets = {}
-    datasets.update({name: data.CSV(name, o) for name in [
-        'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123', 'otb50', 'otb100'
-    ]})
-    datasets.update({
-        'ILSVRC-train': data.Data_ILSVRC('train', o),
-        'ILSVRC-val':   data.Data_ILSVRC('val', o),
-        'OTB-50':       data.Data_OTB('OTB-50', o),
-        'OTB-100':      data.Data_OTB('OTB-100', o),
-    })
+    datasets = LazyDict()
+    csv_datasets = ['vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123', 'otb50', 'otb100']
+    for name in csv_datasets:
+        datasets[name] = lambda: data.CSV(name, o)
+    datasets['ILSVRC-train'] = lambda: data.Data_ILSVRC('train', o)
+    datasets['ILSVRC-val'] =   lambda: data.Data_ILSVRC('val', o)
+    datasets['OTB-50'] =  lambda: data.Data_OTB('OTB-50', o)
+    datasets['OTB-100'] = lambda: data.Data_OTB('OTB-100', o)
     # Add some pre-defined unions.
-    datasets['vot'] = data.Concat({name: datasets[name] for name in [
+    datasets['vot'] = lambda: data.Concat({name: datasets[name] for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017']})
-    datasets['pool574'] = data.Concat({name: datasets[name] for name in [
+    datasets['pool574'] = lambda: data.Concat({name: datasets[name] for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro']})
-    datasets['pool697'] = data.Concat({name: datasets[name] for name in [
+    datasets['pool697'] = lambda: data.Concat({name: datasets[name] for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123']})
 
     # Construct training dataset object from string.
