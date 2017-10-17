@@ -1238,10 +1238,6 @@ class Nornn(object):
 
             with tf.variable_scope('deconvolution', reuse=(True if self.new_target else t > 0)):
                 hmap_curr_pred_oc = pass_deconvolution(scoremap, is_training, o, num_outputs=2)
-                if self.sc and not self.sc_net:
-                    with tf.variable_scope('sc_deconv'):
-                        sc_out = pass_deconvolution(scoremap, is_training, o, num_outputs=self.sc_num_class)
-                        sc_out_list.append(sc_out)
                 if self.use_hmap_prior:
                     hmap_shape = hmap_curr_pred_oc.shape.as_list()
                     hmap_prior = tf.get_variable('hmap_prior', hmap_shape[-3:],
@@ -1324,20 +1320,10 @@ class Nornn(object):
                     with tf.variable_scope('scale_classfication',reuse=(t > 0)):
                         sc_out = pass_scale_classification(sc_in, is_training)
                         sc_out_list.append(sc_out)
-
-                ## if self.sc_score_threshold > 0:
-                ##     max_score = tf.reduce_max(hmap_curr_pred_oc_fg, axis=(1,2,3))
-                ##     is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
-                ##     batchsz = tf.shape(is_pass)[0]
-                ##     stay = tf.cast(tf.reshape(tf.concat([tf.fill([batchsz, self.sc_num_class/2], 0.0),
-                ##                                          tf.fill([batchsz, 1], 1.0),
-                ##                                          tf.fill([batchsz, self.sc_num_class/2], 0.0)], axis=1),
-                ##                               tf.shape(is_max_scale)), tf.bool)
-                ##     is_max_scale = tf.where(is_pass, is_max_scale, stay)
-                ## is_max_scale = tf.to_float(is_max_scale)
-                ## scales = (np.arange(self.sc_num_class) - (self.sc_num_class / 2)) * self.sc_step_size + 1
-                ## scale = tf.reduce_sum(scales * is_max_scale, axis=-1) / tf.reduce_sum(is_max_scale, axis=-1)
-                ## y_curr_pred = scale_rectangle_size(tf.expand_dims(scale, -1), y_curr_pred)
+                else:
+                    with tf.variable_scope('sc_deconv', reuse=(t > 0)):
+                        sc_out = pass_deconvolution(scoremap, is_training, o, num_outputs=self.sc_num_class)
+                        sc_out_list.append(sc_out)
 
                 # compute scale and update box.
                 p_scale = tf.nn.softmax(sc_out)
