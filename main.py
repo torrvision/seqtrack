@@ -227,13 +227,19 @@ def main():
 
     # datasets = data.load_data(o)
     datasets = LazyDict()
-    csv_datasets = ['vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123', 'otb50', 'otb100']
+    csv_datasets = [
+        'vot2013', 'vot2014', 'vot2016', 'vot2017',
+        'otb50', 'otb100', 'otb_diff',
+        'tc', 'dtb70', 'nuspro', 'uav123',
+        'tc_train', 'dtb70_train', 'nuspro_train', 'uav123_train',
+        'tc_val', 'dtb70_val', 'nuspro_val', 'uav123_val',
+    ]
     for name in csv_datasets:
-        datasets[name] = lambda: data.CSV(name, o)
-    datasets['ILSVRC-train'] = lambda: data.Data_ILSVRC('train', o)
-    datasets['ILSVRC-val'] =   lambda: data.Data_ILSVRC('val', o)
-    datasets['OTB-50'] =  lambda: data.Data_OTB('OTB-50', o)
-    datasets['OTB-100'] = lambda: data.Data_OTB('OTB-100', o)
+        datasets[name] = functools.partial(data.CSV, name, o)
+    datasets['ILSVRC-train'] = functools.partial(data.Data_ILSVRC, 'train', o)
+    datasets['ILSVRC-val'] = functools.partial(data.Data_ILSVRC, 'val', o)
+    datasets['OTB-50'] = functools.partial(data.Data_OTB, 'OTB-50', o)
+    datasets['OTB-100'] = functools.partial(data.Data_OTB, 'OTB-100', o)
     # Add some pre-defined unions.
     datasets['vot'] = lambda: data.Concat({name: datasets[name] for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017']})
@@ -241,6 +247,11 @@ def main():
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro']})
     datasets['pool697'] = lambda: data.Concat({name: datasets[name] for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123']})
+
+    datasets['pool636_train'] = lambda: data.Concat({name: datasets[name] for name in [
+        'tc_train', 'dtb70_train', 'nuspro_train', 'uav123_train']})
+    datasets['pool636_val'] = lambda: data.Concat({name: datasets[name] for name in [
+        'tc_val', 'dtb70_val', 'nuspro_val', 'uav123_val']})
 
     # Construct training dataset object from string.
     # If it is a string, use a single dataset.

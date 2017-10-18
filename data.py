@@ -426,21 +426,21 @@ class CSV:
             reader = csv.DictReader(csv_file)
             rects = {}
             size = {}
-            format_str = None
+            format_str = {}
             for row in reader:
-                video_path, image = os.path.split(row['filename'])
-                dataset_path, video_dir = os.path.split(video_path)
+                # Filename is e.g. 'uav123/person19_2/001865.jpg'
+                video, image = os.path.split(row['filename'])
                 track_id = row['trackID']
                 image_name, image_ext = os.path.splitext(image)
                 t = int(image_name)
-                if not format_str:
+                if video not in format_str:
                     # e.g. '{:06d}.JPEG'
                     # It is necessary to determine the format string to find
                     # the path of unlabelled frames, which do not appear in the csv file.
-                    format_str = '{:0' + str(len(image_name)) + '}' + image_ext
-                assert image == format_str.format(t)
-                rects.setdefault(video_dir, {}).setdefault(track_id, {})[t] = CSV._row_to_rect(row)
-                size[video_dir] = (int(row['frameWidth']), int(row['frameHeight']))
+                    format_str[video] = '{:0' + str(len(image_name)) + '}' + image_ext
+                assert image == format_str[video].format(t)
+                rects.setdefault(video, {}).setdefault(track_id, {})[t] = CSV._row_to_rect(row)
+                size[video] = (int(row['frameWidth']), int(row['frameHeight']))
 
         videos = sorted(rects.keys())
         # Convert dictionaries of tracks to lists.
@@ -459,7 +459,6 @@ class CSV:
         self.tracks = rects
         self.original_image_size = size
         self.format_str = format_str
-        self.dataset_path = dataset_path
         if o.useresizedimg:
             self.image_dir = os.path.join(o.path_data_home, 'csv', 'images_frmsz{}'.format(o.frmsz))
         else:
@@ -475,7 +474,7 @@ class CSV:
         return [min_x, min_y, min_x+size_x, min_y + size_y]
 
     def image_file(self, video, frame):
-        return os.path.join(self.image_dir, self.dataset_path, video, self.format_str.format(frame))
+        return os.path.join(self.image_dir, video, self.format_str[video].format(frame))
 
 
 def run_sanitycheck(batch, dataset, frmsz, stat=None, fulllen=False):
