@@ -235,7 +235,8 @@ def main():
         'vot2013', 'vot2014', 'vot2016', 'vot2017',
         'otb50', 'otb100', 'otb_diff',
         'tc', 'dtb70', 'nuspro', 'uav123',
-        'pool636_train', 'pool636_val',
+        'tc_train', 'dtb70_train', 'nuspro_train', 'uav123_train',
+        'tc_val', 'dtb70_val', 'nuspro_val', 'uav123_val',
     ]
     for name in csv_datasets:
         datasets[name] = functools.partial(data.CSV, name, o)
@@ -250,6 +251,11 @@ def main():
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro']})
     datasets['pool697'] = lambda: data.Concat({name: datasets[name] for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123']})
+
+    datasets['pool636_train'] = lambda: data.Concat({name: datasets[name] for name in [
+        'tc_train', 'dtb70_train', 'nuspro_train', 'uav123_train']})
+    datasets['pool636_val'] = lambda: data.Concat({name: datasets[name] for name in [
+        'tc_val', 'dtb70_val', 'nuspro_val', 'uav123_val']})
 
     # Construct training dataset object from string.
     # If it is a string, use a single dataset.
