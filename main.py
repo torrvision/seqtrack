@@ -246,11 +246,6 @@ def main():
     datasets['pool697'] = lambda: data.Concat({name: datasets[name] for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123']})
 
-    import pdb ; pdb.set_trace()
-    for k in csv_datasets:
-        print k, len(datasets[k].videos)
-    import sys; sys.exit(0)
-
     # Construct training dataset object from string.
     # If it is a string, use a single dataset.
     # If it is a list of strings, concatenate those datasets.
