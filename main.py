@@ -233,11 +233,11 @@ def main():
     datasets = LazyDict()
     csv_datasets = ['vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123', 'otb50', 'otb100']
     for name in csv_datasets:
-        datasets[name] = lambda: data.CSV(name, o)
-    datasets['ILSVRC-train'] = lambda: data.Data_ILSVRC('train', o)
-    datasets['ILSVRC-val'] =   lambda: data.Data_ILSVRC('val', o)
-    datasets['OTB-50'] =  lambda: data.Data_OTB('OTB-50', o)
-    datasets['OTB-100'] = lambda: data.Data_OTB('OTB-100', o)
+        datasets[name] = functools.partial(data.CSV, name, o)
+    datasets['ILSVRC-train'] = functools.partial(data.Data_ILSVRC, 'train', o)
+    datasets['ILSVRC-val'] = functools.partial(data.Data_ILSVRC, 'val', o)
+    datasets['OTB-50'] = functools.partial(data.Data_OTB, 'OTB-50', o)
+    datasets['OTB-100'] = functools.partial(data.Data_OTB, 'OTB-100', o)
     # Add some pre-defined unions.
     datasets['vot'] = lambda: data.Concat({name: datasets[name] for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017']})
@@ -245,6 +245,11 @@ def main():
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro']})
     datasets['pool697'] = lambda: data.Concat({name: datasets[name] for name in [
         'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123']})
+
+    import pdb ; pdb.set_trace()
+    for k in csv_datasets:
+        print k, len(datasets[k].videos)
+    import sys; sys.exit(0)
 
     # Construct training dataset object from string.
     # If it is a string, use a single dataset.
