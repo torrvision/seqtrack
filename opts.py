@@ -80,13 +80,9 @@ class Opts(object):
 
         #----------------------------------------------------------------------
         # Data augmentation
-        self.data_augmentation  = {'scale_shift': False,
-                                   'flip_up_down': False,
-                                   'flip_left_right': False,
-                                   'brightness': False,
+        self.color_augmentation = {'brightness': False,
                                    'contrast': False,
-                                   'hue': False,
-                                   'saturation': False}
+                                   'grayscale': False}
 
         #----------------------------------------------------------------------
         # Options for sampler

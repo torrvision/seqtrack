@@ -95,8 +95,8 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
                 capacity=4, num_threads=1)
         example = _make_placeholders(o, default=from_queue)
 
-    # data augmentation
-    example = _perform_data_augmentation(example, o)
+    # color augmentation
+    example = _perform_color_augmentation(example, o)
 
     # Always use same statistics for whitening (not set dependent).
     ## stat = datasets['train'].stat
@@ -472,133 +472,28 @@ def _make_placeholders(o, default=None):
     return example
 
 
-def _perform_data_augmentation(example_raw, o, name='data_augmentation'):
+def _perform_color_augmentation(example_raw, o, name='color_augmentation'):
 
     example = dict(example_raw)
 
     xs_aug = tf.concat([tf.expand_dims(example['x0_raw'], 1), example['x_raw']], 1)
-    ys_aug = tf.concat([tf.expand_dims(example['y0'], 1), example['y']], 1)
 
-    if o.data_augmentation.get('hue', False):
-        xs_aug = _data_augmentation_hue(xs_aug, o)
-
-    if o.data_augmentation.get('saturation', False):
-        xs_aug = _data_augmentation_saturation(xs_aug, o)
-
-    if o.data_augmentation.get('brightness', False):
+    if o.color_augmentation.get('brightness', False):
         xs_aug = tf.image.random_brightness(xs_aug, 0.1)
 
-    if o.data_augmentation.get('contrast', False):
-        xs_aug = tf.image.random_contrast(xs_aug, 0.5, 1.5)
+    if o.color_augmentation.get('contrast', False):
+        xs_aug = tf.image.random_contrast(xs_aug, 0.1, 1.1)
 
-    if o.data_augmentation.get('scale_shift', False):
-        xs_aug, ys_aug = _data_augmentation_scale_shift(xs_aug, ys_aug, o)
-
-    if o.data_augmentation.get('flip_up_down', False):
-        xs_aug, ys_aug = _data_augmentation_flip_up_down(xs_aug, ys_aug, o)
-
-    if o.data_augmentation.get('flip_left_right', False):
-        xs_aug, ys_aug = _data_augmentation_flip_left_right(xs_aug, ys_aug, o)
-
-    # TODO: May try other augmentations at expense - tf.image.{rot90, etc.}
+    if o.color_augmentation.get('grayscale', False):
+        max_grayscale_ratio = 0.2
+        rand_prob = tf.random_uniform(shape=[], minval=0, maxval=1)
+        xs_aug = tf.cond(tf.less_equal(rand_prob, max_grayscale_ratio),
+                         lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(xs_aug)),
+                         lambda: xs_aug)
 
     example['x0_raw'] = xs_aug[:,0]
     example['x_raw']  = xs_aug[:,1:]
-    example['y0']     = ys_aug[:,0]
-    example['y']      = ys_aug[:,1:]
     return example
-
-
-def _data_augmentation_scale_shift(xs, ys, o):
-    max_side_before = tf.reduce_max(tf.maximum(ys[:,:,2]-ys[:,:,0], ys[:,:,3]-ys[:,:,1]), 1)
-    max_side_after = tf.random_uniform(tf.shape(max_side_before), minval=0.05, maxval=1.0)
-    ratio = tf.divide(max_side_after, max_side_before)
-    xs_aug = []
-    ys_aug = []
-    for i in range(o.batchsz):
-        def _augment_pad(x, y, ratio):
-            ''' Case: ratio < 1.
-            Frames get resized (smaller) and padded to original size.
-            '''
-            ratio = tf.maximum(0.2, ratio) # minimum scale
-            x_resize = tf.image.resize_images(x, [tf.to_int32(ratio*o.frmsz)]*2,
-                                              method=tf.image.ResizeMethod.BICUBIC)
-            offset_h = tf.to_int32(tf.random_uniform([], maxval=o.frmsz*(1-ratio)))
-            offset_w = tf.to_int32(tf.random_uniform([], maxval=o.frmsz*(1-ratio)))
-            # NOTE: `tf.pad` doesn't take pad value and only pad with zeros.
-            x_aug = tf.image.pad_to_bounding_box(x_resize, offset_h, offset_w, o.frmsz, o.frmsz)
-            y_aug = y*ratio + tf.cast(tf.divide(tf.stack([offset_w, offset_h]*2), o.frmsz), o.dtype)
-            return x_aug, y_aug
-        def _augment_crop(x, y, ratio):
-            return tf.identity(x), tf.identity(y) # TODO: implement.
-        x_aug, y_aug = tf.cond(tf.less(ratio[i], 1.0),
-                               lambda: _augment_pad(xs[i], ys[i], ratio[i]),
-                               lambda: _augment_crop(xs[i], ys[i], ratio[i]))
-        xs_aug.append(x_aug)
-        ys_aug.append(y_aug)
-    return tf.stack(xs_aug), tf.stack(ys_aug)
-
-
-def _data_augmentation_flip_up_down(xs, ys, o):
-    xs_flip = []
-    ys_flip = []
-    prob_up_down = tf.random_uniform([o.batchsz])
-    for i in range(o.batchsz):
-        def _flip_up_down(x, y):
-            x_flip = []
-            y_flip = []
-            for t in range(o.ntimesteps+1):
-                x_flip.append(tf.image.flip_up_down(x[t])) # NOTE: doesn't support batch processing
-                y_flip.append(tf.stack([y[t][k] if k % 2 == 0 else 1-y[t][k] for k in [0, 3, 2, 1]]))
-            return tf.stack(x_flip), tf.stack(y_flip)
-        x_flip, y_flip = tf.cond(tf.less(prob_up_down[i], 0.5),
-                                 lambda: _flip_up_down(xs[i], ys[i]),
-                                 lambda: (tf.identity(xs[i]), tf.identity(ys[i])))
-        xs_flip.append(x_flip)
-        ys_flip.append(y_flip)
-    return tf.stack(xs_flip), tf.stack(ys_flip)
-
-
-def _data_augmentation_flip_left_right(xs, ys, o):
-    xs_flip = []
-    ys_flip = []
-    prob_left_right = tf.random_uniform([o.batchsz])
-    for i in range(o.batchsz):
-        def _flip_left_right(x, y):
-            x_flip = []
-            y_flip = []
-            for t in range(o.ntimesteps+1):
-                x_flip.append(tf.image.flip_left_right(x[t])) # NOTE: doesn't support batch processing
-                y_flip.append(tf.stack([y[t][k] if k % 2 == 1 else 1-y[t][k] for k in [2, 1, 0, 3]]))
-            return tf.stack(x_flip), tf.stack(y_flip)
-        x_flip, y_flip = tf.cond(tf.less(prob_left_right[i], 0.5),
-                                 lambda: _flip_left_right(xs[i], ys[i]),
-                                 lambda: (tf.identity(xs[i]), tf.identity(ys[i])))
-        xs_flip.append(x_flip)
-        ys_flip.append(y_flip)
-    return tf.stack(xs_flip), tf.stack(ys_flip)
-
-
-def _data_augmentation_hue(xs, o, max_delta=0.1):
-    '''
-    This data augmentation is applied by frame.
-    '''
-    xs_aug = []
-    for i in range(o.batchsz):
-        for t in range(o.ntimesteps+1):
-            xs_aug.append(tf.image.random_hue(xs[i,t], max_delta))
-    return tf.reshape(tf.stack(xs_aug), [-1, o.ntimesteps+1, o.frmsz, o.frmsz, 3])
-
-
-def _data_augmentation_saturation(xs, o, lower=0.9, upper=1.1):
-    '''
-    This data augmentation is applied by sequence.
-    '''
-    xs_aug = []
-    for i in range(o.batchsz):
-        for t in range(o.ntimesteps+1):
-            xs_aug.append(tf.image.random_saturation(xs[i,t], lower, upper))
-    return tf.reshape(tf.stack(xs_aug), [-1, o.ntimesteps+1, o.frmsz, o.frmsz, 3])
 
 
 def _guard_labels(unsafe):
