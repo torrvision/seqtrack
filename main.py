@@ -231,7 +231,12 @@ def main():
 
     # datasets = data.load_data(o)
     datasets = LazyDict()
-    csv_datasets = ['vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123', 'otb50', 'otb100']
+    csv_datasets = [
+        'vot2013', 'vot2014', 'vot2016', 'vot2017',
+        'otb50', 'otb100', 'otb_diff',
+        'tc', 'dtb70', 'nuspro', 'uav123',
+        'pool636_train', 'pool636_val',
+    ]
     for name in csv_datasets:
         datasets[name] = functools.partial(data.CSV, name, o)
     datasets['ILSVRC-train'] = functools.partial(data.Data_ILSVRC, 'train', o)
