@@ -1157,7 +1157,7 @@ class Nornn(object):
                 target_curr_prev = target_curr
 
                 with tf.variable_scope(target_scope, reuse=True):
-                    target_curr_feat = pass_cnn(target_curr, o, is_training, self.feat_act)
+                    target_curr_feat = pass_cnn(target_curr, o, is_training, self.feat_act, is_target=True)
 
                 with tf.variable_scope('cross_correlation', reuse=(t > 0)) as scope:
                     scoremap_init = pass_cross_correlation(search_feat, target_init_feat, o)
