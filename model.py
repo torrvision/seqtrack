@@ -190,70 +190,6 @@ def process_image_with_box(img, box, o, crop_size, scale, aspect=None):
                                     extrapolation_value=128)
     return crop, box, box_val
 
-# NL. replace with `process_image_with_box`.
-#def process_target_with_box(img, box, o, aspect=None):
-#    ''' Crop target image x with box y.
-#    Box y coordinate is in image-centric space.
-#    '''
-#    with tf.control_dependencies(
-#            [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0)]):
-#        box = tf.identity(box)
-#
-#    if aspect is not None:
-#        # stretch = tf.stack([aspect, tf.ones_like(aspect)], axis=-1)
-#        stretch = tf.stack([tf.pow(aspect, 0.5), tf.pow(aspect, -0.5)], axis=-1)
-#        # Find w, h such that w/h = aspect, (w+h)/2 = 1.
-#        # w = aspect*h, (1+aspect)*h = 2, h = 2/(1+aspect)
-#        # and w = 2*aspect/(1+aspect) = 2/(1+1/aspect)
-#        # stretch = tf.stack([2./(1. + 1./aspect), 2./(1. + aspect)], axis=-1)
-#        box = geom.rect_mul(box, stretch)
-#    # JV: Take a different rectange at the same position.
-#    box = modify_aspect_ratio(box, o.aspect_method)
-#    if aspect is not None:
-#        box = geom.rect_mul(box, 1./stretch)
-#
-#    box = scale_rectangle_size(o.target_scale, box)
-#
-#    batch_len = tf.shape(img)[0]
-#    crop_size = (o.frmsz - 1) * o.target_scale / o.search_scale + 1
-#    # Check that target_scale / search_scale * (frame_size-1) is an integer.
-#    assert (crop_size - 1) * o.search_scale == (o.frmsz - 1) * o.target_scale
-#    # TODO: Set extrapolation_value.
-#    crop = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
-#        box_ind=tf.range(batch_len),
-#        crop_size=[crop_size]*2,
-#        extrapolation_value=128)
-#    return crop, box
-#
-#def process_search_with_box(img, box, o, aspect=None):
-#    ''' Crop search image x with box y.
-#    '''
-#    # NOTE: Input box might be `line at the side` or `dot at the corner` of frame.
-#    # `enforce_inside_box` function doesn't guarantee that box has width or height > 0.0.
-#    # This will make `box_s_raw` and `box_s_val` have width or height of size 0.
-#    with tf.control_dependencies(
-#            [tf.assert_greater_equal(box, 0.0), tf.assert_less_equal(box, 1.0), # box coordinate range.
-#             ]):
-#        box = tf.identity(box)
-#
-#    if aspect is not None:
-#        stretch = tf.stack([tf.pow(aspect, 0.5), tf.pow(aspect, -0.5)], axis=-1)
-#        box = geom.rect_mul(box, stretch)
-#    box = modify_aspect_ratio(box, o.aspect_method)
-#    if aspect is not None:
-#        box = geom.rect_mul(box, 1./stretch)
-#
-#    box = scale_rectangle_size(o.search_scale, box)
-#    box_val = geom.rect_intersect(box, geom.unit_rect())
-#
-#    batch_len = tf.shape(img)[0]
-#    # TODO: Set extrapolation_value.
-#    search = tf.image.crop_and_resize(img, geom.rect_to_tf_box(box),
-#        box_ind=tf.range(batch_len),
-#        crop_size=[o.frmsz]*2,
-#        extrapolation_value=128)
-#    return search, box, box_val
-
 def modify_aspect_ratio(rect, method='stretch'):
     EPSILON = 1e-3
     if method == 'stretch':
@@ -643,7 +579,6 @@ class Nornn(object):
                  boxreg_regularize=False,
                  sc=False, # scale classification
                  sc_net=True, # Use a separate network?
-                 sc_light=False,
                  sc_pass_hmap=False,
                  sc_shift_amount=0.0,
                  sc_score_threshold=0.9,
@@ -686,7 +621,6 @@ class Nornn(object):
         self.boxreg_regularize = boxreg_regularize
         self.sc                = sc
         self.sc_net            = sc_net
-        self.sc_light          = sc_light
         self.sc_pass_hmap      = sc_pass_hmap
         self.sc_shift_amount   = sc_shift_amount
         self.sc_score_threshold= sc_score_threshold
@@ -1041,30 +975,17 @@ class Nornn(object):
                     normalizer_fn=slim.batch_norm,
                     normalizer_params={'is_training': is_training, 'fused': True},
                     weights_regularizer=slim.l2_regularizer(o.wd)):
-                if self.sc_light:
-                    x = slim.conv2d(x, 16,  5, 2, padding='VALID', scope='conv1')
-                    x = slim.conv2d(x, 32,  5, 2, padding='VALID', scope='conv2')
-                    x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                    x = slim.conv2d(x, 64,  3, 1, padding='VALID', scope='conv3')
-                    x = slim.conv2d(x, 128, 3, 1, padding='VALID', scope='conv4')
-                    x = slim.conv2d(x, 256, 3, 1, padding='VALID', scope='conv5')
-                    assert x.shape.as_list()[1] == 1
-                    x = slim.flatten(x)
-                    x = slim.fully_connected(x, 256, scope='fc1')
-                    x = slim.fully_connected(x, 256, scope='fc2')
-                    x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, normalizer_fn=None, scope='fc3')
-                else:
-                    x = slim.conv2d(x, dims[-1]*4,   5, 2, padding='VALID', scope='conv1')
-                    x = slim.conv2d(x, dims[-1]*16,  5, 2, padding='VALID', scope='conv2')
-                    x = slim.max_pool2d(x, 2, 2, scope='pool1')
-                    x = slim.conv2d(x, dims[-1]*32,  3, 1, padding='VALID', scope='conv3')
-                    x = slim.conv2d(x, dims[-1]*64,  3, 1, padding='VALID', scope='conv4')
-                    x = slim.conv2d(x, dims[-1]*128, 3, 1, padding='VALID', scope='conv5')
-                    assert x.shape.as_list()[1] == 1
-                    x = slim.flatten(x)
-                    x = slim.fully_connected(x, 512, scope='fc1')
-                    x = slim.fully_connected(x, 512, scope='fc2')
-                    x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, normalizer_fn=None, scope='fc3')
+                x = slim.conv2d(x, 16,  5, 2, padding='VALID', scope='conv1')
+                x = slim.conv2d(x, 32,  5, 2, padding='VALID', scope='conv2')
+                x = slim.max_pool2d(x, 2, 2, scope='pool1')
+                x = slim.conv2d(x, 64,  3, 1, padding='VALID', scope='conv3')
+                x = slim.conv2d(x, 128, 3, 1, padding='VALID', scope='conv4')
+                x = slim.conv2d(x, 256, 3, 1, padding='VALID', scope='conv5')
+                assert x.shape.as_list()[1] == 1
+                x = slim.flatten(x)
+                x = slim.fully_connected(x, 256, scope='fc1')
+                x = slim.fully_connected(x, 256, scope='fc2')
+                x = slim.fully_connected(x, self.sc_num_class, activation_fn=None, normalizer_fn=None, scope='fc3')
             return x
 
         # Inputs to the model.
