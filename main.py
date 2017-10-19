@@ -163,14 +163,10 @@ def parse_arguments():
             type=float, default=0.0)
 
     parser.add_argument(
-            '--data_augmentation', help='JSON string specifying data augmentation',
-            type=json.loads, default={'scale_shift': False,
-                                      'flip_up_down': False,
-                                      'flip_left_right': False,
-                                      'brightness': False,
+            '--color_augmentation', help='JSON string specifying color augmentation',
+            type=json.loads, default={'brightness': False,
                                       'contrast': False,
-                                      'hue': False,
-                                      'saturation': False})
+                                      'grayscale': False})
 
     parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
