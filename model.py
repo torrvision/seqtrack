@@ -684,7 +684,7 @@ class Nornn(object):
                         # then 240 / 2 / 24 = 5 gives a template of size 6.
                         kernel_size = (o.frmsz-1) * o.target_scale / o.search_scale / total_stride + 1
                         # print 'conv6 kernel size:', kernel_size
-                        assert all(map(lambda x: x > 0, kernel_size))
+                        assert kernel_size > 0
                         # (kernel_size-1) == (frmsz-1) * (target_scale / search_scale) / total_stride
                         assert (kernel_size-1)*total_stride*o.search_scale == (o.frmsz-1)*o.target_scale
                         assert np.all(np.array(kernel_size) % 2 == 1)
@@ -692,7 +692,8 @@ class Nornn(object):
                             activation_fn=get_act(act),
                             padding='VALID' if is_target else 'SAME',
                             scope='conv6')
-                        assert x.shape.as_list()[-3:-1] == [1, 1]
+                        if is_target:
+                            assert x.shape.as_list()[-3:-1] == [1, 1]
 
             elif o.cnn_model =='siamese': # exactly same as Siamese
                 with slim.arg_scope([slim.conv2d],
