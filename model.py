@@ -1056,7 +1056,7 @@ class Nornn(object):
             batchsz = tf.shape(x)[0]
             max_score_A0_init = tf.fill([batchsz], 1.0)
             max_score_A0_prev = tf.identity(max_score_A0_init)
-            target_curr_init = target_init
+            target_curr_init = tf.identity(target_init)
             target_curr_prev = tf.identity(target_curr_init)
 
         for t in range(o.ntimesteps):

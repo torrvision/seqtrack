@@ -25,7 +25,8 @@ class TestTrack(unittest.TestCase):
         # Which model to test?
         # TODO: Find a nice way to test all models?
         # model_fn = functools.partial(model_pkg.Nornn)
-        model_fn = functools.partial(model_pkg.Nornn, rnn_num_layers=2)
+        # model_fn = functools.partial(model_pkg.Nornn, rnn_num_layers=2)
+        model_fn = functools.partial(model_pkg.Nornn, new_target=True)
 
         try:
             tmp = tempfile.mkdtemp()
@@ -74,6 +75,7 @@ def random_sequence(dir_name, num_frames, frmsz):
         'labels':         [],
         'label_is_valid': [],
         'original_image_size': (frmsz, frmsz),
+        'aspect': 1.0,
     }
     for t in range(num_frames):
         # TODO: Better to have "real-ish" images here?
