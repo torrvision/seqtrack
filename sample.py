@@ -13,7 +13,8 @@ import geom_np
 
 
 def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
-           kind=None, ntimesteps=None, freq=10, min_freq=10, max_freq=60):
+           kind=None, ntimesteps=None, freq=10, min_freq=10, max_freq=60,
+           tre=False, tre_num=3):
     '''
     For training, set `shuffle=True`, `max_objects=1`, `ntimesteps` as required.
 
@@ -40,6 +41,7 @@ def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
             {'full', 'sampling', 'regular', 'freq-range-fit'}
         ntimesteps: Maximum number of frames after first frame, or None.
     '''
+
     def _select_frames(is_valid, valid_frames):
         if kind == 'sampling':
             k = min(len(valid_frames), ntimesteps+1)
@@ -100,6 +102,10 @@ def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
     if not shuffle and (max_videos is not None and max_videos < len(videos)):
         raise ValueError('enable shuffle or remove limit on number of videos')
 
+    if tre:
+        # TRE-mode should only be used in evaluation, not for SGD.
+        assert kind == 'full'
+
     num_videos = 0
     for video in videos:
         if max_videos is not None and not num_videos < max_videos:
@@ -116,29 +122,63 @@ def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
 
         ## for cnt, trajectory in enumerate(trajectories):
         num_objects = 0
-        for cnt, trajectory in trajectories:
+        for index, trajectory in trajectories:
             if max_objects is not None and not num_objects < max_objects:
                 break
 
             frame_is_valid = [(t in trajectory) for t in range(dataset.video_length[video])]
-            frames = _select_frames(frame_is_valid, trajectory.keys())
-            if not frames:
-                continue
-            label_is_valid = [(t in trajectory) for t in frames]
-            # Skip sequences with no labels (after first label).
-            num_labels = sum(1 for x in label_is_valid if x)
-            if num_labels < 2:
-                continue
-            width, height = dataset.original_image_size[video]
-            yield {
-                'image_files':         [dataset.image_file(video, t) for t in frames],
-                'viewports':           [geom_np.unit_rect() for _ in frames],
-                'labels':              [trajectory.get(t, _invalid_rect()) for t in frames],
-                'label_is_valid':      label_is_valid,
-                'aspect':              float(width) / float(height),
-                'original_image_size': dataset.original_image_size[video],
-                'video_name':          video + '-{}'.format(cnt) if len(trajectories) > 1 else video,
-            }
+            # JV: This was not sorted in previous commits? Could have an effect!
+            valid_frames = sorted(trajectory.keys())
+            # If TRE mode is enabled, sample multiple tracks from each track.
+            # TODO: Reduce duplication here and make this shorter.
+            if tre:
+                min_t = valid_frames[0]
+                max_t = valid_frames[-1]
+                for seg in range(tre_num):
+                    start_t = int(round(float(seg)/tre_num*(max_t-min_t))) + min_t
+                    # Snap to next valid frame (raises StopIteration if none).
+                    start_t = next(t for t in valid_frames if t >= start_t)
+                    # TODO: If the sampler should be 'full', then this is unnecessary?
+                    frames = _select_frames(frame_is_valid[start_t:], [t for t in valid_frames if t >= start_t])
+                    if not frames:
+                        # This should not happen since the sampler kind should be 'full'.
+                        raise ValueError('frame selection failed in TRE mode')
+                    label_is_valid = [(t in trajectory) for t in frames]
+                    # # Skip sequences with no labels (after first label).
+                    # num_labels = sum(1 for x in label_is_valid if x)
+                    # if num_labels < 2:
+                    #     continue
+                    width, height = dataset.original_image_size[video]
+                    yield {
+                        'image_files':         [dataset.image_file(video, t) for t in frames],
+                        'viewports':           [geom_np.unit_rect() for _ in frames],
+                        'labels':              [trajectory.get(t, _invalid_rect()) for t in frames],
+                        'label_is_valid':      label_is_valid,
+                        'aspect':              float(width) / float(height),
+                        'original_image_size': dataset.original_image_size[video],
+                        'video_name':          '{:s}-{:d}-seg{:d}'.format(video, index, seg),
+                    }
+            else:
+                frames = _select_frames(frame_is_valid, valid_frames)
+                if not frames:
+                    continue
+                label_is_valid = [(t in trajectory) for t in frames]
+                # Skip sequences with no labels (after first label).
+                num_labels = sum(1 for x in label_is_valid if x)
+                if num_labels < 2:
+                    continue
+                width, height = dataset.original_image_size[video]
+                yield {
+                    'image_files':         [dataset.image_file(video, t) for t in frames],
+                    'viewports':           [geom_np.unit_rect() for _ in frames],
+                    'labels':              [trajectory.get(t, _invalid_rect()) for t in frames],
+                    'label_is_valid':      label_is_valid,
+                    'aspect':              float(width) / float(height),
+                    'original_image_size': dataset.original_image_size[video],
+                    'video_name':          video + '-{}'.format(index) if len(trajectories) > 1 else video,
+                }
+
+            # Even if multiple tracks were added for TRE mode, still count as one "object".
             num_objects += 1
 
         if num_objects > 0:

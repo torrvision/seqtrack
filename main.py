@@ -48,6 +48,9 @@ def parse_arguments():
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker (list)',
             type=str, default=['ILSVRC-val', 'OTB-50'])
     parser.add_argument(
+            '--eval_tre_num', type=int, default=3,
+            help='number of points from which to start tracker in evaluation (full sampler only)')
+    parser.add_argument(
             '--eval_samplers', nargs='+', help='',
             type=str, default=['full'])
     parser.add_argument(
@@ -277,7 +280,8 @@ def main():
     # No need to specify `shuffle`, `max_videos`, `max_objects` here,
     # but `ntimesteps` should be set if applicable.
     sampler_presets = {
-        'full':   functools.partial(sample.sample, kind='full'),
+        'full':   functools.partial(sample.sample, kind='full',
+                                    tre=(o.eval_tre_num > 1), tre_num=o.eval_tre_num),
         # The 'train' sampler is the same as used during training.
         # This may be useful for detecting over-fitting.
         'train':  functools.partial(sample.sample, ntimesteps=o.ntimesteps, **o.sampler_params),
