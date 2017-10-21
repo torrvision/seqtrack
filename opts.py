@@ -91,7 +91,8 @@ class Opts(object):
         self.sampler_params     = {'kind': 'regular', 'freq': 10}
         # Dataset and sampler to use for evaluation.
         self.eval_datasets      = ['ILSVRC-train']
-        self.eval_samplers      = ['train']
+        self.eval_samplers      = ['full']
+        self.eval_tre_num       = 3
         self.max_eval_videos    = 100
         self.augment_motion     = False
         self.motion_params      = {}
