@@ -553,7 +553,7 @@ class Nornn(object):
                  supervision_score_A0=False,
                  supervision_score_At=False,
                  target_is_vector=False,
-                 join_method='dot', # {'dot', 'concat'}
+                 join_method='dot', # {'dot', 'concat', 'diff', 'absdiff', 'diff_absdiff'}
                  scale_target_num=1, # odd number, e.g., {1, 3, 5}
                  scale_target_mode='add', # {'add', 'weight'}
                  divide_target=False,
@@ -786,16 +786,23 @@ class Nornn(object):
                 else:
                     assert False, 'Wrong combine mode for multi-scoremap.'
 
-            elif self.join_method == 'concat':
-                with tf.variable_scope('concat'):
-                    target_size = target.shape.as_list()[-3:-1]
-                    assert target_size == [1, 1], 'target size: {}'.format(str(target_size))
-                    dim = target.shape.as_list()[-1]
-                    # Concat and perform 1x1 convolution.
-                    # relu(linear(concat(search, target)))
-                    # = relu(linear(search) + linear(target))
-                    scoremap = tf.nn.relu(slim.conv2d(target, dim, kernel_size=1, activation_fn=None) +
-                                          slim.conv2d(search, dim, kernel_size=1, activation_fn=None))
+            elif self.join_method in {'concat', 'diff', 'absdiff', 'diff_absdiff'}:
+                target_size = target.shape.as_list()[-3:-1]
+                assert target_size == [1, 1], 'target size: {}'.format(str(target_size))
+                if self.join_method == 'concat':
+                    with tf.variable_scope('concat'):
+                        dim = target.shape.as_list()[-1]
+                        # Concat and perform 1x1 convolution.
+                        # relu(linear(concat(search, target)))
+                        # = relu(linear(search) + linear(target))
+                        scoremap = tf.nn.relu(slim.conv2d(target, dim, kernel_size=1, activation_fn=None) +
+                                              slim.conv2d(search, dim, kernel_size=1, activation_fn=None))
+                elif self.join_method == 'diff':
+                    scoremap = target - search
+                elif self.join_method == 'absdiff':
+                    scoremap = tf.abs(target - search)
+                elif self.join_method == 'diff_absdiff':
+                    scoremap = tf.concat([target - search, tf.abs(target - search)], axis=-1)
             else:
                 raise ValueError('unknown join: {}'.format(self.join_method))
 
