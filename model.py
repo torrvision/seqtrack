@@ -787,14 +787,15 @@ class Nornn(object):
                     assert False, 'Wrong combine mode for multi-scoremap.'
 
             elif self.join_method == 'concat':
-                target_size = target.shape.as_list()[-3:-1]
-                assert target_size == [1, 1], 'target size: {}'.format(str(target_size))
-                dim = target.shape.as_list()[-1]
-                # Concat and perform 1x1 convolution.
-                # relu(linear(concat(search, target)))
-                # = relu(linear(search) + linear(target))
-                scoremap = tf.nn.relu(slim.conv2d(target, dim, kernel_size=1, activation_fn=None) +
-                                      slim.conv2d(search, dim, kernel_size=1, activation_fn=None))
+                with tf.variable_scope('concat'):
+                    target_size = target.shape.as_list()[-3:-1]
+                    assert target_size == [1, 1], 'target size: {}'.format(str(target_size))
+                    dim = target.shape.as_list()[-1]
+                    # Concat and perform 1x1 convolution.
+                    # relu(linear(concat(search, target)))
+                    # = relu(linear(search) + linear(target))
+                    scoremap = tf.nn.relu(slim.conv2d(target, dim, kernel_size=1, activation_fn=None) +
+                                          slim.conv2d(search, dim, kernel_size=1, activation_fn=None))
             else:
                 raise ValueError('unknown join: {}'.format(self.join_method))
 
