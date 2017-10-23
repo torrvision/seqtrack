@@ -323,12 +323,15 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model, eval_sequences,
                                 # visualize=visualizer.visualize if o.save_videos else None,
-                                visualize=True, vis_dir=vis_dir,
-                                use_gt=o.use_gt_eval,
-                                save_frames=o.save_frames),
+                                visualize=True, vis_dir=vis_dir, save_frames=o.save_frames,
+                                use_gt=o.use_gt_eval, tre_num=o.eval_tre_num),
                             makedir=True)
-                        print 'IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
-                            result['iou_mean'], result['auc'], result['cle_mean'],result['cle_representative'])
+                        assert 'OPE' in result
+                        modes = [mode for mode in ['OPE', 'TRE'] if mode in result]
+                        for mode in modes:
+                            print 'mode {}: IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
+                                mode, result[mode]['iou_mean'], result[mode]['auc'],
+                                result[mode]['cle_mean'], result[mode]['cle_representative'])
 
                 # Take a training step.
                 start = time.time()
@@ -866,7 +869,9 @@ def _load_batch(seqs, o):
                          for x in examples])
             for k in EXAMPLE_KEYS}
 
-def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean', 'cle_representative']):
+def generate_report(samplers, datasets, o,
+        modes=['OPE', 'TRE'],
+        metrics=['iou_mean', 'auc']):
     '''Finds all results for each evaluation distribution.
 
     Identifies the best result for each metric.
@@ -885,28 +890,30 @@ def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean
             results = {dataset: load_results(eval_id_fn(sampler, dataset)) for dataset in datasets}
             # Print results for each dataset.
             for dataset in datasets:
-                print '==== evaluation: sampler {}, dataset {} ===='.format(sampler, dataset)
-                steps = sorted(results[dataset].keys())
-                for step in steps:
-                    print 'iter {}:  {}'.format(step,
-                        '; '.join(['{}: {:.3g}'.format(metric, results[dataset][step][metric])
-                                   for metric in metrics]))
+                for mode in modes:
+                    print '==== evaluation: sampler {}, dataset {}, mode {} ===='.format(sampler, dataset, mode)
+                    steps = sorted(results[dataset].keys())
+                    for step in steps:
+                        print 'iter {}:  {}'.format(step,
+                            '; '.join(['{}: {:.3g}'.format(metric, results[dataset][step][mode][metric])
+                                       for metric in metrics]))
+                    for metric in metrics:
+                        values = [results[dataset][step][mode][metric] for step in steps]
+                        print 'best {}: {:.3g}'.format(metric, np.asscalar(best_fn[metric](values)))
+            for mode in modes:
+                # Generate plot for each metric.
+                # Take union of steps for all datasets.
+                steps = sorted(set.union(*[set(r.keys()) for r in results.values()]))
                 for metric in metrics:
-                    values = [results[dataset][step][metric] for step in steps]
-                    print 'best {}: {:.3g}'.format(metric, np.asscalar(best_fn[metric](values)))
-            # Generate plot for each metric.
-            # Take union of steps for all datasets.
-            steps = sorted(set.union(*[set(r.keys()) for r in results.values()]))
-            for metric in metrics:
-                # Plot this metric over time for all datasets.
-                data_file = 'sampler-{}-metric-{}'.format(sampler, metric)
-                with open(os.path.join(report_dir, data_file+'.tsv'), 'w') as f:
-                    write_data_file(f, metric, steps, results)
-                try:
-                    plot_file = plot_data(report_dir, data_file)
-                    print 'plot created:', plot_file
-                except Exception as e:
-                    print 'could not create plot:', e
+                    # Plot this metric over time for all datasets.
+                    data_file = 'sampler-{}-mode-{}-metric-{}'.format(sampler, mode, metric)
+                    with open(os.path.join(report_dir, data_file+'.tsv'), 'w') as f:
+                        write_data_file(f, mode, metric, steps, results)
+                    try:
+                        plot_file = plot_data(report_dir, data_file)
+                        print 'plot created:', plot_file
+                    except Exception as e:
+                        print 'could not create plot:', e
 
     def load_results(eval_id):
         '''Returns a dictionary from step number to dictionary of metrics.'''
@@ -926,7 +933,7 @@ def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean
             print 'warning: no results found:', eval_id
         return results
 
-    def write_data_file(f, metric, steps, results):
+    def write_data_file(f, mode, metric, steps, results):
         # Create a column for the variance.
         fieldnames = ['step'] + [x+suffix for x in datasets for suffix in ['', '_std_err']]
         w = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
@@ -935,7 +942,7 @@ def generate_report(samplers, datasets, o, metrics=['iou_mean', 'auc', 'cle_mean
             # Map variance of metric to variance of 
             row = {
                 dataset+suffix:
-                    gnuplot_str(results[dataset].get(step, {}).get(metric+suffix, None))
+                    gnuplot_str(results[dataset].get(step, {}).get(mode, {}).get(metric+suffix, None))
                 for dataset in datasets
                 for suffix in ['', '_std_err']}
             row['step'] = step
