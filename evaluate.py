@@ -168,49 +168,91 @@ def _make_progress_bar():
     #             Percentage(), ') ', Bar(), ' ', ETA()]).start()
 
 
-def evaluate(sess, inputs, model, sequences, use_gt=False, **kwargs):
+def evaluate(sess, inputs, model, sequences, use_gt=False, tre_num=1, **kwargs):
     '''
-    Args:
-        nbatches_: the number of batches to evaluate
     Returns:
-        results: a dictionary that contains evaluation results
+        A dictionary that contains evaluation results.
     '''
+    if not tre_num or tre_num < 1:
+        tre_num = 1
     sequences = list(sequences)
-    sequence_results = []
+    sequence_tre_results = []
     bar = _make_progress_bar()
-    for i, sequence in enumerate(bar(sequences)):
-        if len(sequence['image_files']) < 2:
-            continue
-        is_valid = sequence['label_is_valid']
-        # Count number of valid labels after first frame (ground truth).
-        num_valid = sum([1 for x in is_valid[1:] if x])
-        if num_valid < 1:
-            continue
-        #print 'sequence {} of {}'.format(i+1, len(sequences))
-        pred, hmap_pred = track(sess, inputs, model, sequence, use_gt, **kwargs)
-        # if visualize:
-        #     visualize(sequence['video_name'], sequence, pred, hmap_pred, save_frames)
-        gt = np.array(sequence['labels'])
-        # Convert to original image co-ordinates.
-        pred = _unnormalize_rect(pred, sequence['original_image_size'])
-        gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
-        sequence_results.append(evaluate_track(pred, gt, is_valid))
+    for i, full_sequence in enumerate(bar(sequences)):
+        tre_results = []
+        for tre_ind in range(tre_num):
+            sequence = extract_tre_sequence(full_sequence, tre_ind, tre_num)
+            if sequence is None:
+                # raise ValueError('could not extract TRE sequence')
+                continue
+            if len(sequence['image_files']) < 2:
+                #raise ValueError('sequence shorter than 2 frames')
+                continue
+            is_valid = sequence['label_is_valid']
+            # Count number of valid labels after first frame (ground truth).
+            num_valid = sum([1 for x in is_valid[1:] if x])
+            if num_valid < 1:
+                #raise ValueError('no frames with labels after first frame')
+                continue
+            #print 'sequence {} of {}'.format(i+1, len(sequences))
+            pred, hmap_pred = track(sess, inputs, model, sequence, use_gt, **kwargs)
+            # if visualize:
+            #     visualize(sequence['video_name'], sequence, pred, hmap_pred, save_frames)
+            gt = np.array(sequence['labels'])
+            # Convert to original image co-ordinates.
+            pred = _unnormalize_rect(pred, sequence['original_image_size'])
+            gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
+            tre_results.append(evaluate_track(pred, gt, is_valid))
+        sequence_tre_results.append(tre_results)
 
     results = {}
-    assert(len(sequence_results) > 0)
-    for k in sequence_results[0]:
-        # TODO: Store all results and compute this later!
-        # (More flexible but breaks backwards compatibility.)
-        results_k = np.array([r[k] for r in sequence_results])
-        mean = np.mean(results_k, axis=0)
-        var = np.var(results_k, axis=0)
-        # Compute the standard error of the *bootstrap sample* of the mean.
-        # Note that this is different from the standard deviation of a single set.
-        # See page 107 of "All of Statistics" (Wasserman).
-        std_err = np.sqrt(var / len(results_k))
-        results[k]            = mean.tolist() # Convert to list for JSON.
-        results[k+'_std_err'] = std_err.tolist()
+    modes = ['OPE'] + (['TRE'] if tre_num > 1 else [])
+    for mode in modes:
+        results[mode] = {}
+        if mode == 'OPE':
+            # Take first result (full sequence).
+            sequence_results = [tre_results[0] for tre_results in sequence_tre_results]
+        elif mode == 'TRE':
+            # Concat all results.
+            sequence_results = [result for tre_results in sequence_tre_results for result in tre_results]
+        else:
+            sequence_results = []
+        assert(len(sequence_results) > 0)
+        for k in sequence_results[0]:
+            # TODO: Store all results and compute this later!
+            # (More flexible but breaks backwards compatibility.)
+            results_k = np.array([r[k] for r in sequence_results])
+            mean = np.mean(results_k, axis=0)
+            var = np.var(results_k, axis=0)
+            # Compute the standard error of the *bootstrap sample* of the mean.
+            # Note that this is different from the standard deviation of a single set.
+            # See page 107 of "All of Statistics" (Wasserman).
+            std_err = np.sqrt(var / len(results_k))
+            results[mode][k]            = mean.tolist() # Convert to list for JSON.
+            results[mode][k+'_std_err'] = std_err.tolist()
     return results
+
+
+def extract_tre_sequence(seq, ind, num):
+    is_valid = seq['label_is_valid']
+    num_frames = len(is_valid)
+    valid_frames = [t for t in range(num_frames) if is_valid[t]]
+    min_t, max_t = valid_frames[0], valid_frames[-1]
+
+    start_t = int(round(float(ind)/num*(max_t-min_t))) + min_t
+    # Snap to next valid frame (raises StopIteration if none).
+    try:
+        start_t = next(t for t in valid_frames if t >= start_t)
+    except StopIteration:
+        return None
+
+    KEYS_SEQ = ['image_files', 'viewports', 'labels', 'label_is_valid']
+    KEYS_NON_SEQ = ['aspect', 'original_image_size']
+    subseq = {}
+    subseq.update({k: seq[k][start_t:] for k in KEYS_SEQ})
+    subseq.update({k: seq[k] for k in KEYS_NON_SEQ})
+    subseq['video_name'] = seq['video_name'] + ('-seg{}'.format(ind) if ind > 0 else '')
+    return subseq
 
 
 def _normalize_rect(r, size):
