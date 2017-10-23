@@ -280,8 +280,7 @@ def main():
     # No need to specify `shuffle`, `max_videos`, `max_objects` here,
     # but `ntimesteps` should be set if applicable.
     sampler_presets = {
-        'full':   functools.partial(sample.sample, kind='full',
-                                    tre=(o.eval_tre_num > 1), tre_num=o.eval_tre_num),
+        'full':   functools.partial(sample.sample, kind='full'),
         # The 'train' sampler is the same as used during training.
         # This may be useful for detecting over-fitting.
         'train':  functools.partial(sample.sample, ntimesteps=o.ntimesteps, **o.sampler_params),
