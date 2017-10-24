@@ -392,9 +392,11 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
                             '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
                     print 'ep {}/{}, batch {}/{} (bsz:{}), global_step {} {}'.format(
                             ie+1, nepoch, ib+1, nbatch, o.batchsz, global_step, losstime)
+                    sys.stdout.flush()
 
             print '[Epoch finished] ep {:d}/{:d}, global_step {:d} |loss:{:.5f} (time:{:.2f})'.format(
                     ie+1, nepoch, global_step_var.eval(), np.mean(loss_ep), time.time()-t_epoch)
+            sys.stdout.flush()
 
         # **training finished
         print '\ntraining finished! ------------------------------------------'
