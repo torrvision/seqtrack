@@ -224,6 +224,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
         print '\ntraining starts! --------------------------------------------'
+        sys.stdout.flush()
 
         # 1. resume (full restore), 2. initialize from scratch, 3. curriculume learning (partial restore)
         prev_ckpt = 0
