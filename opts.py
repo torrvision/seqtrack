@@ -159,7 +159,7 @@ class Opts(object):
 
     def _set_gpu_config(self):
         # set `CUDA_VISIBLE_DEVICES`
-        os.environ['CUDA_VISIBLE_DEVICES'] = '{}'.format(self.gpu_device)
+        #os.environ['CUDA_VISIBLE_DEVICES'] = '{}'.format(self.gpu_device)
         # set tfconfig 
         self.tfconfig = tf.ConfigProto()
         # TODO: not sure if this should be always true.
