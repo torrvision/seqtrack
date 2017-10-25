@@ -740,11 +740,14 @@ class Nornn(object):
             # NOTE: To confirm the feature in this module, there should be
             # enough training pairs different in scale during training -> data augmentation.
             targets = []
-            scales = range(dims[1]-(self.scale_target_num/2)*2, dims[1]+(self.scale_target_num/2)*2+1, 2)
-            for s in scales:
-                targets.append(tf.image.resize_images(target, [s, s],
-                                                      method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
-                                                      align_corners=True))
+            if self.scale_target_num > 1:
+                scales = range(dims[1]-(self.scale_target_num/2)*2, dims[1]+(self.scale_target_num/2)*2+1, 2)
+                for s in scales:
+                    targets.append(tf.image.resize_images(target, [s, s],
+                                                          method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
+                                                          align_corners=True))
+            else:
+                targets.append(target)
 
             if self.divide_target:
                 assert False, 'Do not use it now.'
@@ -766,6 +769,8 @@ class Nornn(object):
                                 tf.logical_and(tf.less_equal(y1, grid_y), tf.less_equal(grid_y, y2)))
                             targets.append(target * tf.expand_dims(tf.cast(mask, tf.float32), -1))
                             weights.append(float(patchsz[n])/height)
+
+            num_feat_channels = search.shape.as_list()[-1]
 
             if self.join_method == 'dot':
                 # cross-correlation. (`scale_target_num` # of scoremaps)
@@ -812,7 +817,7 @@ class Nornn(object):
                 'normalizer_params': {'is_training': is_training, 'fused': True},
             }
             with slim.arg_scope([slim.conv2d],
-                    num_outputs=scoremap.shape.as_list()[-1],
+                    num_outputs=num_feat_channels,
                     kernel_size=3,
                     weights_regularizer=slim.l2_regularizer(o.wd),
                     **bnorm_args):
