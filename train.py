@@ -235,6 +235,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
             print 'restore: {}'.format(model_file)
             saver.restore(sess, model_file)
             print 'done: restore'
+            sys.stdout.flush()
             prev_ckpt = global_step_var.eval()
         elif o.cnn_pretrain:
             model_file = os.path.join(o.path_data_home, 'pretrained', '{}.ckpt'.format(o.cnn_model))
@@ -253,6 +254,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
                 print 'restore: {}'.format(o.pretrained_cl)
                 saver_cl.restore(sess, o.pretrained_cl)
                 print 'done: (partial) restore for curriculum learning'
+                sys.stdout.flush()
 
         if use_queues:
             coord = tf.train.Coordinator()
