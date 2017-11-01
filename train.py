@@ -370,7 +370,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
                         start = time.time()
                         feed_dict = {example['use_gt']:      o.use_gt_train,  # Match training.
                                      example['is_training']: False, # Do not update bnorm stats.
-                                     example['gt_ratio']:    max(1.0*np.exp(o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
+                                     example['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
                         if use_queues:
                             feed_dict.update({queue_index: 1}) # Choose validation queue.
                         else:
