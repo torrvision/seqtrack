@@ -1140,7 +1140,8 @@ class Nornn(object):
                         for l in range(len(rnn_state_init))]
 
                 # Apply probabilsitic dropout to scoremap before passing it to RNN.
-                scoremap_dropout = tf.layers.dropout(scoremap, rate=0.5, training=is_training)
+                scoremap_dropout = tf.layers.dropout(scoremap, rate=0.1,
+                    noise_shape=[tf.shape(scoremap)[i] for i in range(3)]+[1], training=is_training) # same along channels
                 prob = tf.random_uniform(shape=[tf.shape(scoremap)[0]], minval=0, maxval=1)
                 use_dropout = tf.logical_and(is_training, tf.less(prob, self.rnn_perturb_prob)) # apply batch-wise.
                 scoremap = tf.where(use_dropout, scoremap_dropout, scoremap)
