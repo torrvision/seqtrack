@@ -13,7 +13,7 @@ import geom_np
 
 
 def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
-           kind=None, ntimesteps=None, freq=10, min_freq=10, max_freq=60):
+           kind=None, ntimesteps=None, freq=10, min_freq=10, max_freq=60, use_log=True):
     '''
     For training, set `shuffle=True`, `max_objects=1`, `ntimesteps` as required.
 
@@ -61,7 +61,10 @@ def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
             v = min(max_freq, float((video_len - 1) - valid_frames[0]) / ntimesteps)
             if not u <= v:
                 return None
-            f = math.exp(rand.uniform(math.log(u), math.log(v)))
+            if use_log:
+                f = math.exp(rand.uniform(math.log(u), math.log(v)))
+            else:
+                f = rand.uniform(u, v)
             # Let n = ntimesteps*f.
             n = int(round(ntimesteps * f))
             # Choose first frame such that all frames are present.
