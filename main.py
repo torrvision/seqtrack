@@ -10,6 +10,7 @@ import tensorflow as tf
 from opts           import Opts
 import data
 import model
+import track
 import train
 import sample
 from helpers import LazyDict
@@ -17,6 +18,7 @@ from helpers import LazyDict
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='rnn tracking - main script')
+    track.add_tracker_arguments(parser)
 
     parser.add_argument(
             '--verbose', help='print arguments',
@@ -64,8 +66,6 @@ def parse_arguments():
             '--seed_global', help='random seed',
             type=int, default=9)
 
-    parser.add_argument(
-            '--frmsz', help='size of a square image', type=int, default=257)
     # NOTE: (NL) any reason to have two arguments for this option?
     parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)
@@ -77,44 +77,15 @@ def parse_arguments():
             type=json.loads, default={'Gaussian': True})
 
     parser.add_argument(
-            '--model', help='model!',
-            type=str, default='')
-    parser.add_argument(
-            '--model_params', help='JSON string specifying model',
-            type=json.loads, default={})
-    parser.add_argument(
             '--losses', nargs='+', help='list of losses to be used',
             type=str) # example [l1, iou]
-    parser.add_argument(
-            '--search_scale', help='size of search space relative to target',
-            type=int, default=4)
-    parser.add_argument(
-            '--target_scale', help='size of context relative to target',
-            type=int, default=1)
-    parser.add_argument(
-            '--perspective', help='ic: image-centric, oc: object-centric',
-            type=str, default='oc')
-    parser.add_argument(
-            '--aspect_method', help='method for fixing aspect ratio',
-            type=str, default='stretch',
-            choices=['stretch', 'area', 'perimeter'])
 
-    parser.add_argument(
-            '--cnn_model', help='pretrained CNN model',
-            type=str, default='custom')
     parser.add_argument(
             '--cnn_pretrain', help='specify if using pretrained model',
             action='store_true')
     parser.add_argument(
             '--cnn_trainable', help='set False to fix pretrained params',
             action='store_true')
-
-    parser.add_argument(
-            '--nunits', help='number of hidden units in rnn cell',
-            type=int, default=256)
-    parser.add_argument(
-            '--ntimesteps', help='number of time steps for rnn',
-            type=int, default=20)
 
     parser.add_argument(
             '--nepoch', help='number of epochs',
@@ -160,10 +131,6 @@ def parse_arguments():
     parser.add_argument(
             '--use_gt_eval', help='use ground-truth during evaluation', # Should be set False in most cases.
             action='store_true')
-
-    parser.add_argument(
-            '--th_prob_stay', help='threshold probability to stay movement',
-            type=float, default=0.0)
 
     parser.add_argument(
             '--color_augmentation', help='JSON string specifying color augmentation',
@@ -219,6 +186,8 @@ def parse_arguments():
     # print help and args
     if args.verbose: print args
     return args
+
+
 
 def main():
     # sys.settrace(trace) # Use this to find segfaults.

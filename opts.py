@@ -54,7 +54,7 @@ class Opts(object):
         #----------------------------------------------------------------------
         # model parameters - rnn
         self.nunits             = 256
-        self.ntimesteps         = 20
+        self.ntimesteps         = 1
 
         #----------------------------------------------------------------------
         # training policies

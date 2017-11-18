@@ -18,10 +18,11 @@ FRAME_PATTERN = '%06d.jpeg'
 
 
 def track(sess, inputs, model, sequence, use_gt,
-        # Visualization options:
-        visualize=False,
-        vis_dir=None,
-        save_frames=False):
+          verbose=False,
+          # Visualization options:
+          visualize=False,
+          vis_dir=None,
+          save_frames=False):
     '''Run an instantiated tracker on a sequence.
 
     model.outputs      -- Dictionary of tensors
@@ -68,6 +69,9 @@ def track(sess, inputs, model, sequence, use_gt,
     sequence_len = len(sequence['image_files'])
     assert(sequence_len >= 2)
 
+    dur = 0.
+    prev_time = time.time()
+
     # If the length of the sequence is greater than the instantiated RNN,
     # it will need to be run in chunks.
     y_pred_chunks = []
@@ -77,6 +81,7 @@ def track(sess, inputs, model, sequence, use_gt,
         rem = sequence_len - start
         # Feed the next `chunk_len` frames into the model.
         chunk_len = min(rem, model.sequence_len)
+        dur += time.time() - prev_time
         # JV: Use viewport.
         # images = map(lambda x: load_image(x, model.image_size, resize=True),
         #              sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
@@ -86,6 +91,7 @@ def track(sess, inputs, model, sequence, use_gt,
                 sequence['image_files'][start:start+chunk_len],
                 sequence['viewports'][start:start+chunk_len])
         ]
+        prev_time = time.time()
         labels = sequence['labels'][start:start+chunk_len]
         is_valid = sequence['label_is_valid'][start:start+chunk_len]
 
@@ -125,6 +131,10 @@ def track(sess, inputs, model, sequence, use_gt,
 
         y_pred_chunks.append(y_pred)
         hmap_pred_chunks.append(hmap_pred)
+
+    dur += time.time() - prev_time
+    if verbose:
+        print 'time: {:.3g} sec ({:.3g} fps)'.format(dur, (sequence_len-1)/dur)
 
     if visualize:
         args = ['ffmpeg', '-loglevel', 'error',
