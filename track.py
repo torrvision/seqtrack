@@ -24,6 +24,7 @@ def parse_arguments():
         help='e.g. iteration-100000; where iteration-100000.index exists')
     parser.add_argument('out_file', help='e.g. track.csv')
 
+    parser.add_argument('--vot', action='store_true')
     parser.add_argument('--sequence_name', type=str, default='untitled')
     parser.add_argument('--init_rect', type=json.loads, required=True,
         help='e.g. {"xmin": 0.1, "ymin": 0.7, "xmax": 0.4, "ymax": 0.9}')
@@ -42,22 +43,32 @@ def parse_arguments():
 
 def main():
     args = parse_arguments()
+    if args.vot:
+        global vot
+        vot = __import__('vot', globals(), locals())
+
     o = Opts()
     o.update_by_sysarg(args=args)
     o.initialize()
 
-    # Load sequence from args.
-    frames = range(args.start, args.end+1)
-    sequence = {}
-    sequence['video_name'] = args.sequence_name
-    sequence['image_files'] = [args.image_format % i for i in frames]
-    sequence['viewports'] = [geom_np.unit_rect() for _ in frames]
-    init_rect = np.asfarray([args.init_rect[k] for k in ['xmin', 'ymin', 'xmax', 'ymax']])
-    sequence['labels'] = [init_rect if i == args.start else geom_np.unit_rect() for i in frames]
-    sequence['label_is_valid'] = [i == args.start for i in frames]
-    width, height = Image.open(args.image_format % args.start).size
-    sequence['aspect'] = float(width) / height
-    # sequence['original_image_size']
+    # if vot:
+    #     handle = vot.VOT("rectangle")
+    #     selection = handle.region()
+
+    # # Load sequence from args.
+    # frames = range(args.start, args.end+1)
+    # sequence = {}
+    # sequence['video_name'] = args.sequence_name
+    # sequence['image_files'] = [args.image_format % i for i in frames]
+    # sequence['viewports'] = [geom_np.unit_rect() for _ in frames]
+    # init_rect = np.asfarray([args.init_rect[k] for k in ['xmin', 'ymin', 'xmax', 'ymax']])
+    # sequence['labels'] = [init_rect if i == args.start else geom_np.unit_rect() for i in frames]
+    # sequence['label_is_valid'] = [i == args.start for i in frames]
+    # width, height = Image.open(args.image_format % args.start).size
+    # sequence['aspect'] = float(width) / height # Careful.
+    # # sequence['original_image_size']
+
+    times = range(args.start, args.end+1)
 
     example = train._make_placeholders(o)
     create_model = model_pkg.load_model(o, model_params=o.model_params)
@@ -70,14 +81,28 @@ def main():
     config.gpu_options.per_process_gpu_memory_fraction = args.gpu_frac
     with tf.Session(config=config) as sess:
         saver.restore(sess, args.model_file)
-        rect_pred, _ = evaluate.track(sess, example, model, sequence, use_gt=False, verbose=True,
-            visualize=args.vis, vis_dir=args.vis_dir, save_frames=args.vis_keep_frames)
+
+        # rect_pred, _ = evaluate.track(sess, example, model, sequence, use_gt=False, verbose=True,
+        #     visualize=args.vis, vis_dir=args.vis_dir, save_frames=args.vis_keep_frames)
+        tracker = evaluate.SimpleTracker(sess, example, model,
+            verbose=True,
+            sequence_name=args.sequence_name,
+            sequence_aspect=1.,
+            visualize=args.vis,
+            vis_dir=args.vis_dir,
+            save_frames=args.vis_keep_frames)
+        init_image = args.image_format % times[0]
+        init_rect = np.asfarray([args.init_rect[k] for k in ['xmin', 'ymin', 'xmax', 'ymax']])
+        tracker.start(init_image, init_rect)
+        rect_pred = []
+        for t in times[1:]:
+            rect_pred.append(tracker.next(args.image_format % t))
+        tracker.end()
 
     rect_pred = np.asarray(rect_pred).tolist()
     with open(args.out_file, 'w') as f:
         writer = csv.writer(f)
         writer.writerow(['frame', 'xmin', 'ymin', 'xmax', 'ymax'])
-        times = range(args.start, args.end+1)
         for t, rect_t in zip(times[1:], rect_pred):
             writer.writerow([t] + map(lambda x: '{:.6g}'.format(x), rect_t))
         # json.dump(rect_pred, sys.stdout)

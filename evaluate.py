@@ -10,14 +10,357 @@ import time
 
 import draw
 import data
+import geom_np
+import visualize as visualize_pkg
 from helpers import load_image_viewport, im_to_arr, pad_to, to_nested_tuple
 from helpers import escape_filename
-import visualize as visualize_pkg
 
 FRAME_PATTERN = '%06d.jpeg'
 
 
-def track(sess, inputs, model, sequence, use_gt,
+class ChunkedTracker:
+
+    def __init__(self, sess, inputs, model,
+            use_gt=False,
+            verbose=False,
+            sequence_name='untitled',
+            sequence_aspect=None, # TODO: Obtain automatically from first image.
+            # Visualization options:
+            visualize=False,
+            vis_dir=None,
+            save_frames=False):
+        self._sess = sess
+        self._inputs = inputs
+        self._model = model
+        self._use_gt = use_gt
+        self._verbose = verbose
+        self._sequence_name = sequence_name
+        self._sequence_aspect = sequence_aspect
+        self._visualize = visualize
+        self._vis_dir = vis_dir
+        self._save_frames = save_frames
+
+        self._num_frames = 0
+        self._prev_state = {}
+
+        self._frame_dir = None
+        if self._visualize:
+            assert self._vis_dir is not None
+            if not os.path.exists(self._vis_dir):
+                os.makedirs(self._vis_dir, 0755)
+            if not self._save_frames:
+                self._frame_dir = tempfile.mkdtemp()
+            else:
+                self._frame_dir = os.path.join(self._vis_dir, 'frames', escape_filename(self._sequence_name))
+                if not os.path.exists(self._frame_dir):
+                    os.makedirs(self._frame_dir)
+
+    def start(self, init_frame):
+        '''
+        Args:
+            init_frame: Sequence of length 1.
+        '''
+        # JV: Use viewport.
+        # first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
+        first_image = load_image_viewport(
+            init_frame['image_files'][0],
+            init_frame['viewports'][0],
+            self._model.image_size)
+        first_label = init_frame['labels'][0]
+        # Prepare for input to network.
+        self._batch_first_image = _single_to_batch(im_to_arr(first_image), self._model.batch_size)
+        self._batch_first_label = _single_to_batch(first_label, self._model.batch_size)
+
+        if self._visualize:
+            im_vis = visualize_pkg.draw_output(first_image.copy(), rect_gt=first_label)
+            im_vis.save(os.path.join(self._frame_dir, FRAME_PATTERN % 0))
+
+    def next(self, chunk):
+        chunk_len = len(chunk['image_files'])
+        assert chunk_len <= self._model.sequence_len
+        # TODO: If chunk_len != self._model.sequence_len, then set self._final.
+
+        # dur += time.time() - prev_time
+        # JV: Use viewport.
+        # images = map(lambda x: load_image(x, self._model.image_size, resize=True),
+        #              sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
+        images = [
+            load_image_viewport(image_file, viewport, self._model.image_size)
+            for image_file, viewport in zip(chunk['image_files'], chunk['viewports'])
+        ]
+        prev_time = time.time()
+        labels = chunk['labels']
+        is_valid = chunk['label_is_valid']
+
+        # Prepare data as input to network.
+        images_arr = map(im_to_arr, images)
+        feed_dict = {
+            self._inputs['x0_raw']:     self._batch_first_image,
+            self._inputs['y0']:         self._batch_first_label,
+            self._inputs['x_raw']:      self._to_batch_sequence(images_arr),
+            self._inputs['y']:          self._to_batch_sequence(labels),
+            self._inputs['y_is_valid']: self._to_batch_sequence(is_valid),
+            # self._inputs['aspect']:     self._to_batch(sequence['aspect']),
+            self._inputs['use_gt']:     self._use_gt,
+        }
+        if self._sequence_aspect is not None:
+            feed_dict[self._inputs['aspect']] = self._to_batch(self._sequence_aspect)
+        if self._num_frames > 0:
+            # This is not the first chunk.
+            # Add the previous state to the feed dictionary.
+            tensor, value = to_nested_tuple(self._model.state_init, self._prev_state)
+            if tensor is not None: # Function returns None if empty.
+                feed_dict[tensor] = value
+        # Get output and final state.
+        y_pred, self._prev_state, hmap_pred = self._sess.run(
+            [self._model.outputs['y']['ic'], self._model.state_final, self._model.outputs['hmap']['ic']],
+            feed_dict=feed_dict)
+        # Take first element of batch and first `chunk_len` elements of output.
+        y_pred = y_pred[0][:chunk_len]
+        hmap_pred = hmap_pred[0][:chunk_len]
+
+        if self._visualize:
+            for i in range(len(images)):
+                t = self._num_frames + i + 1
+                im_vis = visualize_pkg.draw_output(images[i].copy(),
+                    rect_gt=(labels[i] if is_valid[i] else None),
+                    rect_pred=y_pred[i],
+                    hmap_pred=hmap_pred[i])
+                im_vis.save(os.path.join(self._frame_dir, FRAME_PATTERN % t))
+
+        self._num_frames += chunk_len
+        return y_pred, hmap_pred
+
+    def end(self):
+        if self._visualize:
+            args = ['ffmpeg',
+                '-loglevel', 'error',
+                # '-r', '1', # fps.
+                '-y', # Overwrite without asking.
+                '-nostdin', # No interaction with user.
+                '-i', FRAME_PATTERN,
+                '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+                os.path.join(os.path.abspath(self._vis_dir),
+                             escape_filename(self._sequence_name)+'.mp4')]
+            try:
+                p = subprocess.Popen(args, cwd=self._frame_dir)
+                p.wait()
+            except Exception as inst:
+                print 'error:', inst
+            finally:
+                if not self._save_frames:
+                    shutil.rmtree(self._frame_dir)
+
+    def _to_batch(self, x):
+        return _single_to_batch(x, self._model.batch_size)
+
+    def _to_batch_sequence(self, x):
+        return _single_to_batch(pad_to(x, self._model.sequence_len), self._model.batch_size)
+
+
+def track(sess, inputs, model, sequence, use_gt=False,
+          verbose=False,
+          # Visualization options:
+          visualize=False,
+          vis_dir=None,
+          save_frames=False):
+    '''Run an instantiated tracker on a sequence.
+
+    model.outputs      -- Dictionary of tensors
+    model.state_init   -- Nested collection of tensors.
+    model.state_final  -- Nested collection of tensors.
+    model.sequence_len -- Integer
+    model.batch_size   -- Integer or None
+
+    sequence['image_files']    -- List of strings of length n.
+    sequence['viewports']      -- Numpy array of rectangles [n, 4].
+    sequence['labels']         -- Numpy array of shape [n, 4]
+    sequence['label_is_valid'] -- List of booleans of length n.
+    sequence['aspect']         -- Aspect ratio of original image.
+    sequence['original_image_size'] -- (width, height) tuple.
+        Required to compute IOU, etc. with correct aspect ratio.
+    '''
+    # TODO: Variable batch size.
+    # TODO: Run on a batch of sequences for speed.
+
+    tracker = ChunkedTracker(sess, inputs, model,
+        use_gt=use_gt,
+        verbose=verbose,
+        sequence_name=sequence['video_name'],
+        sequence_aspect=sequence['aspect'],
+        visualize=visualize,
+        vis_dir=vis_dir,
+        save_frames=save_frames,
+    )
+    init_frame = {
+        'image_files': sequence['image_files'][0:1],
+        'viewports':   sequence['viewports'][0:1],
+        'labels':      sequence['labels'][0:1],
+        'is_valid':    sequence['label_is_valid'][0:1],
+    }
+    tracker.start(init_frame)
+
+    # if visualize:
+    #     assert vis_dir is not None
+    #     if not os.path.exists(vis_dir): os.makedirs(vis_dir, 0755)
+    #     if not save_frames:
+    #         frame_dir = tempfile.mkdtemp()
+    #     else:
+    #         frame_dir = os.path.join(vis_dir, 'frames', escape_filename(sequence['video_name']))
+    #         if not os.path.exists(frame_dir): os.makedirs(frame_dir)
+
+    # # JV: Use viewport.
+    # # first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
+    # first_image = load_image_viewport(
+    #     sequence['image_files'][0],
+    #     sequence['viewports'][0],
+    #     model.image_size)
+    # first_label = sequence['labels'][0]
+    # # Prepare for input to network.
+    # batch_first_image = _single_to_batch(im_to_arr(first_image), model.batch_size)
+    # batch_first_label = _single_to_batch(first_label, model.batch_size)
+
+    # if visualize:
+    #     im_vis = visualize_pkg.draw_output(first_image.copy(), rect_gt=first_label)
+    #     im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % 0))
+
+    sequence_len = len(sequence['image_files'])
+    assert(sequence_len >= 2)
+
+    # dur = 0.
+    # prev_time = time.time()
+
+    # If the length of the sequence is greater than the instantiated RNN,
+    # it will need to be run in chunks.
+    y_pred_chunks = []
+    hmap_pred_chunks = []
+    for start in range(1, sequence_len, model.sequence_len):
+        rem = sequence_len - start
+        # Feed the next `chunk_len` frames into the model.
+        chunk_len = min(rem, model.sequence_len)
+
+        chunk = {
+            'image_files':    sequence['image_files'][start:start+chunk_len],
+            'viewports':      sequence['viewports'][start:start+chunk_len],
+            'labels':         sequence['labels'][start:start+chunk_len],
+            'label_is_valid': sequence['label_is_valid'][start:start+chunk_len],
+        }
+        y_pred, hmap_pred = tracker.next(chunk)
+
+        # dur += time.time() - prev_time
+        # # JV: Use viewport.
+        # # images = map(lambda x: load_image(x, model.image_size, resize=True),
+        # #              sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
+        # images = [
+        #     load_image_viewport(image_file, viewport, model.image_size)
+        #     for image_file, viewport in zip(
+        #         sequence['image_files'][start:start+chunk_len],
+        #         sequence['viewports'][start:start+chunk_len])
+        # ]
+        # prev_time = time.time()
+        # labels = sequence['labels'][start:start+chunk_len]
+        # is_valid = sequence['label_is_valid'][start:start+chunk_len]
+
+        # # Prepare data as input to network.
+        # images_arr = map(im_to_arr, images)
+        # feed_dict = {
+        #     inputs['x0_raw']:     batch_first_image,
+        #     inputs['y0']:         batch_first_label,
+        #     inputs['x_raw']:      _single_to_batch(pad_to(images_arr, model.sequence_len), model.batch_size),
+        #     inputs['y']:          _single_to_batch(pad_to(labels, model.sequence_len), model.batch_size),
+        #     inputs['y_is_valid']: _single_to_batch(pad_to(is_valid, model.sequence_len), model.batch_size),
+        #     inputs['aspect']:     _single_to_batch(sequence['aspect'], model.batch_size),
+        #     inputs['use_gt']:     use_gt,
+        # }
+        # if start > 1:
+        #     # This is not the first chunk.
+        #     # Add the previous state to the feed dictionary.
+        #     tensor, value = to_nested_tuple(model.state_init, prev_state)
+        #     if tensor is not None: # Function returns None if empty.
+        #         feed_dict[tensor] = value
+        # # Get output and final state.
+        # y_pred, prev_state, hmap_pred = sess.run(
+        #     [model.outputs['y']['ic'], model.state_final, model.outputs['hmap']['ic']],
+        #     feed_dict=feed_dict)
+        # # Take first element of batch and first `chunk_len` elements of output.
+        # y_pred = y_pred[0][:chunk_len]
+        # hmap_pred = hmap_pred[0][:chunk_len]
+
+        # if visualize:
+        #     for i in range(len(images)):
+        #         t = start + i
+        #         im_vis = visualize_pkg.draw_output(images[i].copy(),
+        #             rect_gt=(labels[i] if is_valid[i] else None),
+        #             rect_pred=y_pred[i],
+        #             hmap_pred=hmap_pred[i])
+        #         im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % t))
+
+        y_pred_chunks.append(y_pred)
+        hmap_pred_chunks.append(hmap_pred)
+
+    # dur += time.time() - prev_time
+    # if verbose:
+    #     print 'time: {:.3g} sec ({:.3g} fps)'.format(dur, (sequence_len-1)/dur)
+
+    tracker.end()
+
+    # if visualize:
+    #     args = ['ffmpeg', '-loglevel', 'error',
+    #                       # '-r', '1', # fps.
+    #                       '-y', # Overwrite without asking.
+    #                       '-nostdin', # No interaction with user.
+    #                       '-i', FRAME_PATTERN,
+    #                       '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+    #                       os.path.join(os.path.abspath(vis_dir),
+    #                                    escape_filename(sequence['video_name'])+'.mp4')]
+    #     try:
+    #         p = subprocess.Popen(args, cwd=frame_dir)
+    #         p.wait()
+    #     except Exception as inst:
+    #         print 'error:', inst
+    #     finally:
+    #         if not save_frames:
+    #             shutil.rmtree(frame_dir)
+
+    # Concatenate the results for all chunks.
+    y_pred = np.concatenate(y_pred_chunks)
+    hmap_pred = np.concatenate(hmap_pred_chunks)
+    return y_pred, hmap_pred
+
+
+class SimpleTracker:
+
+    def __init__(self, sess, inputs, model, **kwargs):
+        '''
+        kwargs for ChunkedTracker
+        '''
+        self._tracker = ChunkedTracker(sess, inputs, model, **kwargs)
+
+    def start(self, image_file, rect):
+        init_frame = {
+            'image_files': [image_file],
+            'viewports':   [geom_np.unit_rect()],
+            'labels':      [rect],
+        }
+        self._tracker.start(init_frame)
+
+    def next(self, image_file, gt_rect=None):
+        label_valid = gt_rect is not None
+        chunk = {
+            'image_files':    [image_file],
+            'viewports':      [geom_np.unit_rect()],
+            'labels':         [gt_rect if label_valid else geom_np.unit_rect()],
+            'label_is_valid': [label_valid],
+        }
+        y_pred, _ = self._tracker.next(chunk)
+        return y_pred[0]
+
+    def end(self):
+        self._tracker.end()
+
+
+def track_old(sess, inputs, model, sequence,
+          use_gt=False,
           verbose=False,
           # Visualization options:
           visualize=False,
