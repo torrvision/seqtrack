@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from PIL import Image
 
 import draw
 import data
@@ -24,7 +25,7 @@ class ChunkedTracker:
             use_gt=False,
             verbose=False,
             sequence_name='untitled',
-            sequence_aspect=None, # TODO: Obtain automatically from first image.
+            sequence_aspect=None,
             # Visualization options:
             visualize=False,
             vis_dir=None,
@@ -35,7 +36,7 @@ class ChunkedTracker:
         self._use_gt = use_gt
         self._verbose = verbose
         self._sequence_name = sequence_name
-        self._sequence_aspect = sequence_aspect
+        self._aspect = sequence_aspect
         self._visualize = visualize
         self._vis_dir = vis_dir
         self._save_frames = save_frames
@@ -62,6 +63,10 @@ class ChunkedTracker:
         '''
         # JV: Use viewport.
         # first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
+        if self._aspect is None:
+            # TODO: Inefficient to load image twice.
+            im_width, im_height = Image.open(init_frame['image_files'][0]).size
+            self._aspect = float(im_width) / im_height
         first_image = load_image_viewport(
             init_frame['image_files'][0],
             init_frame['viewports'][0],
@@ -100,11 +105,9 @@ class ChunkedTracker:
             self._inputs['x_raw']:      self._to_batch_sequence(images_arr),
             self._inputs['y']:          self._to_batch_sequence(labels),
             self._inputs['y_is_valid']: self._to_batch_sequence(is_valid),
-            # self._inputs['aspect']:     self._to_batch(sequence['aspect']),
+            self._inputs['aspect']:     self._to_batch(self._aspect),
             self._inputs['use_gt']:     self._use_gt,
         }
-        if self._sequence_aspect is not None:
-            feed_dict[self._inputs['aspect']] = self._to_batch(self._sequence_aspect)
         if self._num_frames > 0:
             # This is not the first chunk.
             # Add the previous state to the feed dictionary.

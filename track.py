@@ -22,15 +22,16 @@ def parse_arguments():
     add_tracker_arguments(parser)
     parser.add_argument('model_file',
         help='e.g. iteration-100000; where iteration-100000.index exists')
-    parser.add_argument('out_file', help='e.g. track.csv')
 
+    parser.add_argument('--out_file', help='e.g. track.csv')
     parser.add_argument('--vot', action='store_true')
+
     parser.add_argument('--sequence_name', type=str, default='untitled')
-    parser.add_argument('--init_rect', type=json.loads, required=True,
+    parser.add_argument('--init_rect', type=json.loads,
         help='e.g. {"xmin": 0.1, "ymin": 0.7, "xmax": 0.4, "ymax": 0.9}')
-    parser.add_argument('--start', type=int, required=True)
-    parser.add_argument('--end', type=int, required=True)
-    parser.add_argument('--image_format', type=str, required=True,
+    parser.add_argument('--start', type=int)
+    parser.add_argument('--end', type=int)
+    parser.add_argument('--image_format', type=str,
         help='e.g. sequence/%%06d.jpeg')
 
     parser.add_argument('--gpu_frac', type=float, default='1.0', help='fraction of gpu memory')
@@ -51,25 +52,6 @@ def main():
     o.update_by_sysarg(args=args)
     o.initialize()
 
-    # if vot:
-    #     handle = vot.VOT("rectangle")
-    #     selection = handle.region()
-
-    # # Load sequence from args.
-    # frames = range(args.start, args.end+1)
-    # sequence = {}
-    # sequence['video_name'] = args.sequence_name
-    # sequence['image_files'] = [args.image_format % i for i in frames]
-    # sequence['viewports'] = [geom_np.unit_rect() for _ in frames]
-    # init_rect = np.asfarray([args.init_rect[k] for k in ['xmin', 'ymin', 'xmax', 'ymax']])
-    # sequence['labels'] = [init_rect if i == args.start else geom_np.unit_rect() for i in frames]
-    # sequence['label_is_valid'] = [i == args.start for i in frames]
-    # width, height = Image.open(args.image_format % args.start).size
-    # sequence['aspect'] = float(width) / height # Careful.
-    # # sequence['original_image_size']
-
-    times = range(args.start, args.end+1)
-
     example = train._make_placeholders(o)
     create_model = model_pkg.load_model(o, model_params=o.model_params)
     model = create_model(train._whiten(train._guard_labels(example), o, stat=None),
@@ -79,33 +61,56 @@ def main():
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
     config.gpu_options.per_process_gpu_memory_fraction = args.gpu_frac
-    with tf.Session(config=config) as sess:
-        saver.restore(sess, args.model_file)
+    sess = tf.Session(config=config)
+    saver.restore(sess, args.model_file)
 
-        # rect_pred, _ = evaluate.track(sess, example, model, sequence, use_gt=False, verbose=True,
-        #     visualize=args.vis, vis_dir=args.vis_dir, save_frames=args.vis_keep_frames)
-        tracker = evaluate.SimpleTracker(sess, example, model,
-            verbose=True,
-            sequence_name=args.sequence_name,
-            sequence_aspect=1.,
-            visualize=args.vis,
-            vis_dir=args.vis_dir,
-            save_frames=args.vis_keep_frames)
+    # rect_pred, _ = evaluate.track(sess, example, model, sequence, use_gt=False, verbose=True,
+    #     visualize=args.vis, vis_dir=args.vis_dir, save_frames=args.vis_keep_frames)
+    tracker = evaluate.SimpleTracker(sess, example, model,
+        verbose=True,
+        sequence_name=args.sequence_name,
+        visualize=args.vis,
+        vis_dir=args.vis_dir,
+        save_frames=args.vis_keep_frames)
+
+    if args.vot:
+        handle = vot.VOT('rectangle')
+        vot_init_rect = handle.region()
+        init_image = handle.frame()
+        if not init_image:
+            return
+        image_size = Image.open(init_image).size
+        init_rect = rect_from_vot(vot_init_rect, image_size)
+    else:
+        times = range(args.start, args.end+1)
         init_image = args.image_format % times[0]
-        init_rect = np.asfarray([args.init_rect[k] for k in ['xmin', 'ymin', 'xmax', 'ymax']])
-        tracker.start(init_image, init_rect)
-        rect_pred = []
-        for t in times[1:]:
-            rect_pred.append(tracker.next(args.image_format % t))
-        tracker.end()
+        init_rect = args.init_rect
 
-    rect_pred = np.asarray(rect_pred).tolist()
-    with open(args.out_file, 'w') as f:
-        writer = csv.writer(f)
-        writer.writerow(['frame', 'xmin', 'ymin', 'xmax', 'ymax'])
-        for t, rect_t in zip(times[1:], rect_pred):
-            writer.writerow([t] + map(lambda x: '{:.6g}'.format(x), rect_t))
-        # json.dump(rect_pred, sys.stdout)
+    tracker.start(init_image, rect_to_vec(init_rect))
+    if args.vot:
+        while True:
+            image_t = handle.frame()
+            if image_t is None:
+                break
+            pred_t = tracker.next(image_t)
+            handle.report(rect_to_vot(rect_from_vec(pred_t), image_size))
+    else:
+        pred = []
+        for t in times[1:]:
+            image_t = args.image_format % t
+            pred_t = tracker.next(image_t)
+            pred.append(pred_t)
+    tracker.end()
+
+    if args.out_file is not None:
+        # Write to file.
+        # pred = np.asarray(pred).tolist()
+        with open(args.out_file, 'w') as f:
+            writer = csv.writer(f)
+            writer.writerow(['frame', 'xmin', 'ymin', 'xmax', 'ymax'])
+            for t, rect_t in zip(times[1:], pred):
+                writer.writerow([t] + map(lambda x: '{:.6g}'.format(x), rect_t))
+            # json.dump(pred, sys.stdout)
 
 
 def add_tracker_arguments(parser):
@@ -147,105 +152,30 @@ def add_tracker_arguments(parser):
             type=float, default=0.0)
 
 
-# def test(m, loader, o, dstype, fulllen=False, draw_track=False):
-#     '''
-#     Note that it is considered that this wrapper serves a test routine with a 
-#     completely trained model. If you want a on-the-fly evaluations during 
-#     training, consider carefully which session you will use.
-#     '''
-# 
-#     saver = tf.train.Saver()
-#     with tf.Session(config=o.tfconfig) as sess:
-#         saver.restore(sess, o.restore_model)
-#         t_start = time.time()
-#         results = evaluate(sess, m, loader, o, dstype, fulllen=fulllen)
-# 
-#     # save results
-#     if fulllen:
-#         savedir = os.path.join(o.path_base, 
-#             os.path.dirname(o.restore_model)[:-7] 
-#             + '/evaluations_{}_fulllen'.format(o.dataset))
-#     else:
-#         savedir = os.path.join(o.path_base, 
-#             os.path.dirname(o.restore_model)[:-7] 
-#             + '/evaluations_{}_RNNlen'.format(o.dataset))
-#     if not os.path.exists(savedir): os.makedirs(savedir)
-# 
-#     # save subset of results (due to memory)
-#     results_partial = {}
-#     results_partial['iou_mean'] = results['iou_mean']
-#     results_partial['success_rates'] = results['success_rates']
-#     results_partial['auc'] = results['auc']
-#     results_partial['cle_mean'] = results['cle_mean']
-#     results_partial['precision_rates'] = results['precision_rates']
-#     results_partial['cle_representative'] = results['cle_representative']
-#     np.save(savedir + '/results_partial.npy', results_partial)
-# 
-#     # print
-#     print '-------------------------------------------------------------------'
-#     print 'Evaluation finished (time: {0:.3f}).'.format(time.time()-t_start)
-#     print 'Model: {}'.format(o.model) 
-#     print 'dataset: {}(''{}'')'.format(o.dataset, dstype)
-#     print 'iou_mean: {0:.3f}'.format(results['iou_mean'])
-#     print 'success_rates: [%s]' % ', '.join(
-#             '%.3f' % val for val in results['success_rates'])
-#     print 'auc: {0:.3f}'.format(results['auc'])
-#     print 'cle_mean: {0:.3f}'.format(results['cle_mean'])
-#     print 'precision_rates: [%s]' % ', '.join(
-#             '%.3f' % val for val in results['precision_rates'])
-#     print 'cle_representative: {0:.3f}'.format(results['cle_representative'])
-#     print 'results and plots are saved at {}'.format(savedir)
-#     print '-------------------------------------------------------------------'
-# 
-#     # Plot success and precision plots
-#     draw.plot_successplot(results['success_rates'], results['auc'], o, savedir)
-#     draw.plot_precisionplot(
-#         results['precision_rates'], results['cle_representative'], o, savedir)
-# 
-#     # VISUALIZE TRACKING RESULTS 
-#     if draw_track:
-#         draw.show_track_results_fl(results, loader, o, savedir)
+def rect_from_vot(rect, image_size):
+    width, height = image_size
+    return {
+        'xmin': float(rect.x - 1) / width,
+        'ymin': float(rect.y - 1) / height,
+        'xmax': float(rect.x + rect.width - 1) / width,
+        'ymax': float(rect.y + rect.height - 1) / height,
+    }
 
+def rect_to_vot(rect, image_size):
+    width, height = image_size
+    return vot.Rectangle(**{
+        'x': rect['xmin'] * width + 1,
+        'y': rect['ymin'] * height + 1,
+        'width': (rect['xmax'] - rect['xmin']) * width,
+        'height': (rect['ymax'] - rect['ymin']) * height,
+    })
 
-# if __name__ == '__main__':
-#     '''Test script
-#     Provide the followings:
-#         - CUDA_VISIBLE_DEVICES
-#         - dataset (e.g., bouncing_mnist)
-#         - model (e.g., rnn_attention_st)
-#         - restore_model (e.g., ***.ckpt)
-#         - ntimesteps
-#         - yprev_mode
-#         - losses
-#         - (optionally) batchsz
-#     Note that if provided option is inconsitent with the trained model 
-#     (e.g., ntimesteps), it will fail to restore the model.
-#     '''
-#     args = parse_arguments()
-#     o = Opts()
-#     o.update_by_sysarg(args=args)
-#     o._set_gpu_config()
-#     o._set_dataset_params()
-# 
-#     # NOTE: other options can be passed to args or simply put here.
-#     if o.dataset == 'ILSVRC':
-#         dstype = 'val'
-# 
-#     loader = data.load_data(o)
-# 
-#     m = Model(o)
-# 
-#     test_fl = True
-# 
-#     # Case: T-length sequences
-#     if not test_fl:
-#         dstype = 'test' 
-#         test(m, loader, o, dstype=dstype)
-# 
-#     # Case: Full-length sequences
-#     else:
-#         dstype = 'val' # ILSVRC
-#         test(m, loader, o, dstype=dstype, fulllen=True, draw_track=args.draw_track)
+def rect_to_vec(rect):
+    return np.asfarray([rect[k] for k in ['xmin', 'ymin', 'xmax', 'ymax']])
+
+def rect_from_vec(vec):
+    return {k: vec[i] for i, k in enumerate(['xmin', 'ymin', 'xmax', 'ymax'])}
+
 
 if __name__ == '__main__':
     main()
