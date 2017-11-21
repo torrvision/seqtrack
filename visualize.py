@@ -58,7 +58,7 @@ def draw_output_mpl(im, rect_gt=None, rect_pred=None, hmap_pred=None, fname=None
             facecolor='y', edgecolor='y', fill=False))
 
     #plt.axis('off')
-    fig.savefig(fname, dpi=min(im.size))
+    fig.savefig(fname, dpi=min(min(im.size), 480))
     plt.close()
     del ax
     del fig

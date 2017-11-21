@@ -67,11 +67,18 @@ def track(sess, inputs, model, sequence, use_gt,
 
     if visualize:
         if save_original:
-            visualize_pkg.draw_output_mpl(
-                    load_image(sequence['image_files'][0]),
-                    rect_gt=first_label,
-                    fname=os.path.join(frame_dir, FRAME_PATTERN % 0),
-                    cmap=mycmap)
+            if 'frmsz257' in sequence['image_files'][0]:
+                visualize_pkg.draw_output_mpl(
+                        load_image(sequence['image_files'][0].replace('images_frmsz257', 'images')),
+                        rect_gt=first_label,
+                        fname=os.path.join(frame_dir, FRAME_PATTERN % 0),
+                        cmap=mycmap)
+            else:
+                visualize_pkg.draw_output_mpl(
+                        load_image(sequence['image_files'][0]),
+                        rect_gt=first_label,
+                        fname=os.path.join(frame_dir, FRAME_PATTERN % 0),
+                        cmap=mycmap)
         else:
             im_vis = visualize_pkg.draw_output(first_image.copy(), rect_gt=first_label)
             im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % 0))
@@ -127,8 +134,12 @@ def track(sess, inputs, model, sequence, use_gt,
 
         if visualize:
             if save_original:
-                images = map(lambda x: load_image(x),
-                             sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
+                if 'frmsz257' in sequence['image_files'][0]:
+                    images = map(lambda x: load_image(x.replace('images_frmsz257', 'images')),
+                                 sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
+                else:
+                    images = map(lambda x: load_image(x),
+                                 sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
                 for i in range(len(images)):
                     t = start + i
                     visualize_pkg.draw_output_mpl(
