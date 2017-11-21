@@ -206,6 +206,9 @@ def parse_arguments():
     parser.add_argument(
             '--save_frames', help='save frames of video during evaluation',
             action='store_true')
+    parser.add_argument(
+            '--save_original', help='save original size frames of video during evaluation',
+            action='store_true')
 
     parser.add_argument(
             '--gpu_device', help='set `CUDA_VISIBLE_DEVICES`',

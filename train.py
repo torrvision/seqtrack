@@ -326,7 +326,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
                         result = cache_json(result_file,
                             lambda: evaluate.evaluate(sess, example, model, eval_sequences,
                                 # visualize=visualizer.visualize if o.save_videos else None,
-                                visualize=True, vis_dir=vis_dir, save_frames=o.save_frames,
+                                visualize=True, vis_dir=vis_dir, save_frames=o.save_frames, save_original=o.save_original,
                                 use_gt=o.use_gt_eval, tre_num=o.eval_tre_num),
                             makedir=True)
                         assert 'OPE' in result

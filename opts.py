@@ -116,6 +116,7 @@ class Opts(object):
         self.period_preview     = 100 # Ensure that period_preview % period_summary == 0.
         self.save_videos        = False
         self.save_frames        = False
+        self.save_original      = False
 
         #----------------------------------------------------------------------
         # custom libraries

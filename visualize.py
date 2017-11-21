@@ -7,12 +7,56 @@ import subprocess
 import tempfile
 import matplotlib.cm as cm
 
+import matplotlib
+matplotlib.use('Agg') # generate images without having a window appear
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+
 import geom_np
 from helpers import load_image, load_image_viewport, escape_filename
 
 
 COLOR_PRED = ImageColor.getrgb('yellow')
 COLOR_GT   = ImageColor.getrgb('blue')
+
+
+def transparent_cmap(cmap, N=255):
+    mycmap = cmap
+    mycmap._init()
+    mycmap._lut[:,-1] = np.linspace(0.3, 0.7, N+4)
+    return mycmap
+
+
+def draw_output_mpl(im, rect_gt=None, rect_pred=None, hmap_pred=None, fname=None, cmap=None):
+
+    fig = plt.figure(frameon=False)
+    fig.set_size_inches(im.size[0] / float(min(im.size)), im.size[1] / float(min(im.size)))
+
+    ax = plt.Axes(fig, [0., 0., 1., 1.])
+    ax.set_axis_off()
+    fig.add_axes(ax)
+
+    ax.imshow(im)
+    if hmap_pred is not None:
+        ax.imshow(np.squeeze(hmap_pred), alpha=1., cmap=cmap)
+
+    ax = plt.gca()
+    if rect_gt is not None:
+        rect_gt = _rect_to_int_list(_unnormalize_rect(rect_gt, im.size))
+        ax.add_patch(Rectangle(
+            (rect_gt[0], rect_gt[1]), rect_gt[2]-rect_gt[0], rect_gt[3]-rect_gt[1],
+            facecolor='blue', edgecolor='blue', fill=False))
+    if rect_pred is not None:
+        rect_pred = _rect_to_int_list(_unnormalize_rect(rect_pred, im.size))
+        ax.add_patch(Rectangle(
+            (rect_pred[0], rect_pred[1]), rect_pred[2]-rect_pred[0], rect_pred[3]-rect_pred[1],
+            facecolor='y', edgecolor='y', fill=False))
+
+    #plt.axis('off')
+    fig.savefig(fname, dpi=min(im.size))
+    plt.close()
+    del ax
+    del fig
 
 
 def draw_output(im, rect_gt=None, rect_pred=None, hmap_pred=None, color_pred=None, color_gt=None):

@@ -10,18 +10,22 @@ import time
 
 import draw
 import data
-from helpers import load_image_viewport, im_to_arr, pad_to, to_nested_tuple
+from helpers import load_image, load_image_viewport, im_to_arr, pad_to, to_nested_tuple
 from helpers import escape_filename
 import visualize as visualize_pkg
 
 FRAME_PATTERN = '%06d.jpeg'
+
+import matplotlib.pyplot as plt
+mycmap = visualize_pkg.transparent_cmap(plt.cm.hot)
 
 
 def track(sess, inputs, model, sequence, use_gt,
         # Visualization options:
         visualize=False,
         vis_dir=None,
-        save_frames=False):
+        save_frames=False,
+        save_original=False):
     '''Run an instantiated tracker on a sequence.
 
     model.outputs      -- Dictionary of tensors
@@ -62,8 +66,15 @@ def track(sess, inputs, model, sequence, use_gt,
     batch_first_label = _single_to_batch(first_label, model.batch_size)
 
     if visualize:
-        im_vis = visualize_pkg.draw_output(first_image.copy(), rect_gt=first_label)
-        im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % 0))
+        if save_original:
+            visualize_pkg.draw_output_mpl(
+                    load_image(sequence['image_files'][0]),
+                    rect_gt=first_label,
+                    fname=os.path.join(frame_dir, FRAME_PATTERN % 0),
+                    cmap=mycmap)
+        else:
+            im_vis = visualize_pkg.draw_output(first_image.copy(), rect_gt=first_label)
+            im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % 0))
 
     sequence_len = len(sequence['image_files'])
     assert(sequence_len >= 2)
@@ -117,11 +128,20 @@ def track(sess, inputs, model, sequence, use_gt,
         if visualize:
             for i in range(len(images)):
                 t = start + i
-                im_vis = visualize_pkg.draw_output(images[i].copy(),
-                    rect_gt=(labels[i] if is_valid[i] else None),
-                    rect_pred=y_pred[i],
-                    hmap_pred=hmap_pred[i])
-                im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % t))
+                if save_original:
+                    visualize_pkg.draw_output_mpl(
+                            images[i],
+                            (labels[i] if is_valid[i] else None),
+                            y_pred[i],
+                            hmap_pred[i],
+                            os.path.join(frame_dir, FRAME_PATTERN % t),
+                            mycmap)
+                else:
+                    im_vis = visualize_pkg.draw_output(images[i].copy(),
+                        rect_gt=(labels[i] if is_valid[i] else None),
+                        rect_pred=y_pred[i],
+                        hmap_pred=hmap_pred[i])
+                    im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % t))
 
         y_pred_chunks.append(y_pred)
         hmap_pred_chunks.append(hmap_pred)
