@@ -126,9 +126,11 @@ def track(sess, inputs, model, sequence, use_gt,
         hmap_pred = hmap_pred[0][:chunk_len]
 
         if visualize:
-            for i in range(len(images)):
-                t = start + i
-                if save_original:
+            if save_original:
+                images = map(lambda x: load_image(x),
+                             sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
+                for i in range(len(images)):
+                    t = start + i
                     visualize_pkg.draw_output_mpl(
                             images[i],
                             (labels[i] if is_valid[i] else None),
@@ -136,7 +138,9 @@ def track(sess, inputs, model, sequence, use_gt,
                             hmap_pred[i],
                             os.path.join(frame_dir, FRAME_PATTERN % t),
                             mycmap)
-                else:
+            else:
+                for i in range(len(images)):
+                    t = start + i
                     im_vis = visualize_pkg.draw_output(images[i].copy(),
                         rect_gt=(labels[i] if is_valid[i] else None),
                         rect_pred=y_pred[i],

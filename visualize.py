@@ -11,6 +11,7 @@ import matplotlib
 matplotlib.use('Agg') # generate images without having a window appear
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+import scipy
 
 import geom_np
 from helpers import load_image, load_image_viewport, escape_filename
@@ -37,8 +38,12 @@ def draw_output_mpl(im, rect_gt=None, rect_pred=None, hmap_pred=None, fname=None
     fig.add_axes(ax)
 
     ax.imshow(im)
+
     if hmap_pred is not None:
-        ax.imshow(np.squeeze(hmap_pred), alpha=1., cmap=cmap)
+        if hmap_pred.shape[:2] == im.size:
+            ax.imshow(np.squeeze(hmap_pred), alpha=1., cmap=cmap)
+        else:
+            ax.imshow(scipy.misc.imresize(np.squeeze(hmap_pred), (im.size[1], im.size[0])), alpha=1., cmap=cmap)
 
     ax = plt.gca()
     if rect_gt is not None:
