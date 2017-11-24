@@ -48,6 +48,9 @@ class ReceptiveField:
     def __eq__(a, b):
         return a.rect == b.rect and a.stride == b.stride
 
+    def __str__(self):
+        return '{}@{}'.format(self.rect, tuple(self.stride))
+
 def identity_rf():
     return ReceptiveField(rect=IntRect((0, 0), (1, 1)), stride=(1, 1))
 

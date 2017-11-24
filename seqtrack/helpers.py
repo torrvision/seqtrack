@@ -239,6 +239,16 @@ class LazyDict:
         del self._fn[k]
 
 
+def map_nested(f, xs):
+    if isinstance(xs, dict):
+        return {k: map_nested(f, x) for k, x in xs.items()}
+    if isinstance(xs, list):
+        return [map_nested(f, x) for x in xs]
+    if isinstance(xs, tuple):
+        return tuple([map_nested(f, x) for x in xs])
+    return f(xs)
+
+
 # def softmax_cross_entropy_with_logits(
 #         _sentinel=None,
 #         labels=None,
