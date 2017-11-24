@@ -8,8 +8,8 @@ import math
 import numpy as np
 import os
 
-import data
-import geom_np
+from seqtrack import data
+from seqtrack import geom_np
 
 
 def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,

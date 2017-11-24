@@ -8,11 +8,11 @@ import shutil
 import tempfile
 import tensorflow as tf
 
-import evaluate
-import geom_np
-import model as model_pkg
-import opts
-import train
+from seqtrack import evaluate
+from seqtrack import geom_np
+from seqtrack import model as model_pkg
+from seqtrack import opts
+from seqtrack import train
 
 class TestTrack(unittest.TestCase):
 

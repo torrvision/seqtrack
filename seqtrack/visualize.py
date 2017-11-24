@@ -7,8 +7,8 @@ import subprocess
 import tempfile
 import matplotlib.cm as cm
 
-import geom_np
-from helpers import load_image, load_image_viewport, escape_filename
+from seqtrack import geom_np
+from seqtrack.helpers import load_image, load_image_viewport, escape_filename
 
 
 COLOR_PRED = ImageColor.getrgb('yellow')

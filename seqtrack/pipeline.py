@@ -36,7 +36,7 @@ import pdb
 import functools
 import tensorflow as tf
 
-import geom
+from seqtrack import geom
 
 
 def get_example_filenames(capacity=32, name='get_example'):

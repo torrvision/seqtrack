@@ -8,11 +8,11 @@ import subprocess
 import tempfile
 import time
 
-import draw
-import data
-from helpers import load_image_viewport, im_to_arr, pad_to, to_nested_tuple
-from helpers import escape_filename
-import visualize as visualize_pkg
+from seqtrack import draw
+from seqtrack import data
+from seqtrack import visualize as visualize_pkg
+from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to, to_nested_tuple
+from seqtrack.helpers import escape_filename
 
 FRAME_PATTERN = '%06d.jpeg'
 

@@ -1,6 +1,6 @@
 import unittest
 
-from helpers import to_nested_tuple
+from seqtrack.helpers import to_nested_tuple
 
 class TestToNestedTuple(unittest.TestCase):
 

@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-from helpers import merge_dims
+from seqtrack.helpers import merge_dims
 
 EPSILON = 1e-3
 
