@@ -5,7 +5,7 @@ import tensorflow as tf
 import socket
 import random
 
-import helpers
+from seqtrack import helpers
 
 
 class Opts(object):

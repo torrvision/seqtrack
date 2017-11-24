@@ -29,10 +29,10 @@ import math
 import numpy as np
 import os
 
-import cnnutil
-import geom
-from helpers import merge_dims, diag_conv
-from upsample import upsample
+from seqtrack import cnnutil
+from seqtrack import geom
+from seqtrack.helpers import merge_dims, diag_conv
+from seqtrack.upsample import upsample
 
 concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
 

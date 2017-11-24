@@ -15,16 +15,16 @@ import re
 import subprocess
 import threading
 
-import draw
-import evaluate
-import helpers
-import motion
-import pipeline
-import sample
-import visualize
+from seqtrack import draw
+from seqtrack import evaluate
+from seqtrack import helpers
+from seqtrack import motion
+from seqtrack import pipeline
+from seqtrack import sample
+from seqtrack import visualize
 
-from model import convert_rec_to_heatmap, to_object_centric_coordinate
-from helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_dims
+from seqtrack.model import convert_rec_to_heatmap, to_object_centric_coordinate
+from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_dims
 
 EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid', 'aspect']
 

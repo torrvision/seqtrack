@@ -3,8 +3,8 @@ import math
 import numpy as np
 import scipy.interpolate
 
-import geom
-import geom_np
+from seqtrack import geom
+from seqtrack import geom_np
 
 
 def augment(sequence,

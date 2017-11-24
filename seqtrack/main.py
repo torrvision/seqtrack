@@ -7,13 +7,13 @@ import numpy as np
 import random
 import tensorflow as tf
 
-from opts           import Opts
-import data
-import model
-import track
-import train
-import sample
-from helpers import LazyDict
+from seqtrack.opts import Opts
+from seqtrack import data
+from seqtrack import model
+from seqtrack import track
+from seqtrack import train
+from seqtrack import sample
+from seqtrack.helpers import LazyDict
 
 
 def parse_arguments():

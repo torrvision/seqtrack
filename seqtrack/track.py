@@ -8,13 +8,13 @@ import os
 import numpy as np
 from PIL import Image
 
-from opts import Opts
-import evaluate
-import geom_np
-import data
-import model as model_pkg
-import draw
-import train
+from seqtrack.opts import Opts
+from seqtrack import evaluate
+from seqtrack import geom_np
+from seqtrack import data
+from seqtrack import model as model_pkg
+from seqtrack import draw
+from seqtrack import train
 
 
 def parse_arguments():

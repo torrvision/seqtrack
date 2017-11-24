@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Rectangle
 
-import helpers
+from seqtrack import helpers
 
 
 def show_masks(masks, dataset):

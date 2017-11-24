@@ -33,8 +33,8 @@ import xmltodict
 import cv2
 from PIL import Image
 
-import draw
-import helpers
+from seqtrack import draw
+from seqtrack import helpers
 
 
 class Data_ILSVRC(object):

@@ -7,7 +7,7 @@ import os
 from PIL import Image
 import tensorflow as tf
 
-import geom_np
+from seqtrack import geom_np
 
 def get_time():
     dt = datetime.datetime.now()
