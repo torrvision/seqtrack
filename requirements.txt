@@ -1,0 +1,8 @@
+numpy
+tensorflow-gpu
+Pillow
+matplotlib
+xmltodict
+opencv-python
+progressbar2
+scipy
