@@ -27,7 +27,7 @@ from seqtrack import visualize
 from seqtrack.model import convert_rec_to_heatmap, to_object_centric_coordinate
 from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_dims
 
-EXAMPLE_KEYS = ['x0_raw', 'y0', 'x_raw', 'y', 'y_is_valid', 'aspect']
+EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect']
 
 
 def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
@@ -94,7 +94,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues,
                 capacity=4, num_threads=1)
-        example = graph.make_placeholders(o, default=from_queue)
+        example = graph.make_placeholders(o.ntimesteps, (o.frmsz, o.frmsz), default=from_queue)
 
     # color augmentation
     example = _perform_color_augmentation(example, o)
@@ -102,7 +102,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
     # Always use same statistics for whitening (not set dependent).
     ## stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(graph.whiten(graph.guard_labels(example), o, stat=stat),
+    model = create_model(graph.whiten(graph.guard_labels(example), stat=stat),
                          summaries_collections=['summaries_model'])
     loss_var, model.gt = get_loss(example, model.outputs, model.gt, o)
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
@@ -442,9 +442,9 @@ def _make_input_pipeline(o, dtype=tf.float32,
         # Put in format expected by model.
         # is_valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
         example_batch = {
-            'x0_raw':     images_batch['images'][:, 0],
+            'x0':         images_batch['images'][:, 0],
             'y0':         images_batch['labels'][:, 0],
-            'x_raw':      images_batch['images'][:, 1:],
+            'x':          images_batch['images'][:, 1:],
             'y':          images_batch['labels'][:, 1:],
             'y_is_valid': images_batch['label_is_valid'][:, 1:],
             'aspect':     images_batch['aspect'],
@@ -456,7 +456,7 @@ def _perform_color_augmentation(example_raw, o, name='color_augmentation'):
 
     example = dict(example_raw)
 
-    xs_aug = tf.concat([tf.expand_dims(example['x0_raw'], 1), example['x_raw']], 1)
+    xs_aug = tf.concat([tf.expand_dims(example['x0'], 1), example['x']], 1)
 
     if o.color_augmentation.get('brightness', False):
         xs_aug = tf.image.random_brightness(xs_aug, 0.1)
@@ -471,8 +471,8 @@ def _perform_color_augmentation(example_raw, o, name='color_augmentation'):
                          lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(xs_aug)),
                          lambda: xs_aug)
 
-    example['x0_raw'] = xs_aug[:,0]
-    example['x_raw']  = xs_aug[:,1:]
+    example['x0'] = xs_aug[:,0]
+    example['x']  = xs_aug[:,1:]
     return example
 
 
@@ -692,11 +692,11 @@ def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
 def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
     # Note: This will produce INT_MIN when casting NaN to int.
     with tf.name_scope(name) as scope:
-        # example['x_raw']   -- [b, t, h, w, 3]
+        # example['x']       -- [b, t, h, w, 3]
         # example['y']       -- [b, t, 4]
         # model.outputs['y'] -- [b, t, 4]
         # Just do the first example in the batch.
-        image = (1.0/255)*example['x_raw'][0][::time_stride]
+        image = (1.0/255)*example['x'][0][::time_stride]
         y_gt   = example['y'][0][::time_stride]
         y_pred = model.outputs['y']['ic'][0][::time_stride]
         # TODO: Do not use model.state here. Breaks encapsulation.
@@ -769,9 +769,9 @@ def _load_sequence(seq, o):
         'label_is_valid' # Tensor with shape [n] containing booleans.
         'aspect'         # Tensor with shape [] containing aspect ratio.
     Example has keys:
-        'x0_raw'     # First image in sequence, shape [h, w, 3]
+        'x0'     # First image in sequence, shape [h, w, 3]
         'y0'         # Position of target in first image, shape [4]
-        'x_raw'      # Input images, shape [n-1, h, w, 3]
+        'x'      # Input images, shape [n-1, h, w, 3]
         'y'          # Position of target in following frames, shape [n-1, 4]
         'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
         'aspect'     # Aspect ratio of original image.
@@ -790,16 +790,16 @@ def _load_sequence(seq, o):
         for t in range(seq_len)
     ]
     return {
-        'x0_raw':     np.array(images[0]),
+        'x0':         np.array(images[0]),
         'y0':         np.array(seq['labels'][0]),
-        'x_raw':      np.array(images[1:]),
+        'x':          np.array(images[1:]),
         'y':          np.array(seq['labels'][1:]),
         'y_is_valid': np.array(seq['label_is_valid'][1:]),
         'aspect':     seq['aspect'],
     }
 
 def _load_batch(seqs, o):
-    sequence_keys = set(['x_raw', 'y', 'y_is_valid'])
+    sequence_keys = set(['x', 'y', 'y_is_valid'])
     examples = map(lambda x: _load_sequence(x, o), seqs)
     # Pad all sequences to o.ntimesteps.
     # NOTE: Assumes that none of the arrays to be padded are empty.

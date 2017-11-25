@@ -59,9 +59,9 @@ def main():
     sequence['aspect'] = float(width) / height
     # sequence['original_image_size']
 
-    example = graph.make_placeholders(o)
+    example = graph.make_placeholders(o.ntimesteps, (o.frmsz, o.frmsz))
     create_model = model_pkg.load_model(o, model_params=o.model_params)
-    model = create_model(graph.whiten(graph.guard_labels(example), o, stat=None),
+    model = create_model(graph.whiten(graph.guard_labels(example), stat=None),
                          summaries_collections=['summaries_model'])
     saver = tf.train.Saver()
 

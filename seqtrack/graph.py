@@ -3,16 +3,17 @@
 import tensorflow as tf
 
 
-def make_placeholders(o, default=None):
+def make_placeholders(ntimesteps, im_size, default=None):
+    im_height, im_width = im_size # TODO
     shapes = {
-        'x0_raw':     [None, o.frmsz, o.frmsz, 3],
+        'x0':         [None, im_height, im_width, 3],
         'y0':         [None, 4],
-        'x_raw':      [None, o.ntimesteps, o.frmsz, o.frmsz, 3],
-        'y':          [None, o.ntimesteps, 4],
-        'y_is_valid': [None, o.ntimesteps],
+        'x':          [None, ntimesteps, im_height, im_width, 3],
+        'y':          [None, ntimesteps, 4],
+        'y_is_valid': [None, ntimesteps],
         'aspect':     [None],
     }
-    dtype = lambda k: tf.bool if k.endswith('_is_valid') else o.dtype
+    dtype = lambda k: tf.bool if k.endswith('_is_valid') else tf.float32
 
     if default is not None:
         assert(set(default.keys()) == set(shapes.keys()))
@@ -32,19 +33,17 @@ def make_placeholders(o, default=None):
     return example
 
 
-def whiten(example_raw, o, stat=None, name='whiten'):
+def whiten(example_raw, stat=None, name='whiten'):
     with tf.name_scope(name) as scope:
         # Normalize mean and variance.
         ## assert(stat is not None)
         # TODO: Check that this does not create two variables:
-        mean = tf.constant(stat['mean'] if stat else 0.0, o.dtype, name='mean')
-        std = tf.constant(stat['std'] if stat else 1.0,  o.dtype, name='std')
+        mean = tf.constant(stat['mean'] if stat else 0.0, tf.float32, name='mean')
+        std = tf.constant(stat['std'] if stat else 1.0,  tf.float32, name='std')
         example = dict(example_raw) # Copy dictionary before modifying.
         # Replace raw x (images) with whitened x (images).
-        example['x'] = _whiten_image(example['x_raw'], mean, std, name='x')
-        del example['x_raw']
-        example['x0'] = _whiten_image(example['x0_raw'], mean, std, name='x0')
-        del example['x0_raw']
+        example['x'] = _whiten_image(example_raw['x'], mean, std, name='x')
+        example['x0'] = _whiten_image(example_raw['x0'], mean, std, name='x0')
         return example
 
 
@@ -59,9 +58,9 @@ def guard_labels(unsafe):
 
     This prevents the model from accidentally using 'y'.
     '''
-    # unsafe['x_raw'] -- [b, t, h, w, 3]
+    # unsafe['x'] -- [b, t, h, w, 3]
     # unsafe['y']     -- [b, t, 4]
-    images = unsafe['x_raw']
+    images = unsafe['x']
     safe = dict(unsafe)
     safe['y'] = tf.cond(unsafe['use_gt'],
         lambda: unsafe['y'],
