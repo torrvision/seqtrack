@@ -14,7 +14,7 @@ from seqtrack import geom_np
 from seqtrack import data
 from seqtrack import model as model_pkg
 from seqtrack import draw
-from seqtrack import train
+from seqtrack import graph
 
 
 def parse_arguments():
@@ -59,9 +59,9 @@ def main():
     sequence['aspect'] = float(width) / height
     # sequence['original_image_size']
 
-    example = train._make_placeholders(o)
+    example = graph.make_placeholders(o.ntimesteps, (o.frmsz, o.frmsz))
     create_model = model_pkg.load_model(o, model_params=o.model_params)
-    model = create_model(train._whiten(train._guard_labels(example), o, stat=None),
+    model = create_model(graph.whiten(graph.guard_labels(example), stat=None),
                          summaries_collections=['summaries_model'])
     saver = tf.train.Saver()
 
