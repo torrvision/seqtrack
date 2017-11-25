@@ -17,6 +17,7 @@ import threading
 
 from seqtrack import draw
 from seqtrack import evaluate
+from seqtrack import graph
 from seqtrack import helpers
 from seqtrack import motion
 from seqtrack import pipeline
@@ -93,7 +94,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues,
                 capacity=4, num_threads=1)
-        example = _make_placeholders(o, default=from_queue)
+        example = graph.make_placeholders(o, default=from_queue)
 
     # color augmentation
     example = _perform_color_augmentation(example, o)
@@ -101,7 +102,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
     # Always use same statistics for whitening (not set dependent).
     ## stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(_whiten(_guard_labels(example), o, stat=stat),
+    model = create_model(graph.whiten(graph.guard_labels(example), o, stat=stat),
                          summaries_collections=['summaries_model'])
     loss_var, model.gt = get_loss(example, model.outputs, model.gt, o)
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
@@ -451,35 +452,6 @@ def _make_input_pipeline(o, dtype=tf.float32,
         return example_batch, feed_loop
 
 
-def _make_placeholders(o, default=None):
-    shapes = {
-        'x0_raw':     [None, o.frmsz, o.frmsz, 3],
-        'y0':         [None, 4],
-        'x_raw':      [None, o.ntimesteps, o.frmsz, o.frmsz, 3],
-        'y':          [None, o.ntimesteps, 4],
-        'y_is_valid': [None, o.ntimesteps],
-        'aspect':     [None],
-    }
-    dtype = lambda k: tf.bool if k.endswith('_is_valid') else o.dtype
-
-    if default is not None:
-        assert(set(default.keys()) == set(shapes.keys()))
-        example = {
-            k: tf.placeholder_with_default(default[k], shapes[k], name='placeholder_'+k)
-            for k in shapes.keys()}
-    else:
-        example = {
-            k: tf.placeholder(dtype(k), shapes[k], name='placeholder_'+k)
-            for k in EXAMPLE_KEYS}
-    # Add a placeholder for models that use ground-truth during training.
-    example['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
-    # Add a placeholder that specifies training mode for e.g. batch_norm.
-    example['is_training'] = tf.placeholder_with_default(False, [], name='is_training')
-    # Add a placeholder for scheduled sampling of y_prev_GT during training
-    example['gt_ratio'] = tf.placeholder_with_default(1.0, [], name='gt_ratio')
-    return example
-
-
 def _perform_color_augmentation(example_raw, o, name='color_augmentation'):
 
     example = dict(example_raw)
@@ -502,44 +474,6 @@ def _perform_color_augmentation(example_raw, o, name='color_augmentation'):
     example['x0_raw'] = xs_aug[:,0]
     example['x_raw']  = xs_aug[:,1:]
     return example
-
-
-def _guard_labels(unsafe):
-    '''Hides the 'y' labels if 'use_gt' is False.
-
-    This prevents the model from accidentally using 'y'.
-    '''
-    # unsafe['x_raw'] -- [b, t, h, w, 3]
-    # unsafe['y']     -- [b, t, 4]
-    images = unsafe['x_raw']
-    safe = dict(unsafe)
-    safe['y'] = tf.cond(unsafe['use_gt'],
-        lambda: unsafe['y'],
-        lambda: tf.fill(tf.concat([tf.shape(images)[0:2], [4]], axis=0), float('nan')),
-        name='labels_safe')
-    return safe
-
-
-def _whiten(example_raw, o, stat=None, name='whiten'):
-    with tf.name_scope(name) as scope:
-        # Normalize mean and variance.
-        ## assert(stat is not None)
-        # TODO: Check that this does not create two variables:
-        mean = tf.constant(stat['mean'] if stat else 0.0, o.dtype, name='mean')
-        std = tf.constant(stat['std'] if stat else 1.0,  o.dtype, name='std')
-        example = dict(example_raw) # Copy dictionary before modifying.
-        # Replace raw x (images) with whitened x (images).
-        example['x'] = _whiten_image(example['x_raw'], mean, std, name='x')
-        del example['x_raw']
-        example['x0'] = _whiten_image(example['x0_raw'], mean, std, name='x0')
-        del example['x0_raw']
-        return example
-
-
-def _whiten_image(x, mean, std, name='whiten_image'):
-    with tf.name_scope(name) as scope:
-        #return tf.divide(x - mean, std, name=scope)
-        return tf.divide(x - 0.0, 1.0, name=scope)
 
 
 def iter_examples(dataset, o, rand=None, num_epochs=None):
