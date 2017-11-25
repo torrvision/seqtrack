@@ -3,42 +3,118 @@ import tensorflow.contrib.slim as slim
 import numpy as np
 
 from seqtrack import cnnutil
-from seqtrack.cnnutil import ReceptiveField, IntRect
+from seqtrack import geom
 
+from seqtrack.cnnutil import ReceptiveField, IntRect
+from seqtrack.helpers import grow_rect, modify_aspect_ratio, diag_xcorr
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
-def crop():
-    pass
+def crop(im, rect, im_size):
+    batch_len = tf.shape(im)[0]
+    crop = tf.image.crop_and_resize(im, geom.rect_to_tf_box(rect),
+                                    box_ind=tf.range(batch_len),
+                                    crop_size=n_positive_integers(im_size),
+                                    extrapolation_value=128)
 
 
-def conv2d(inputs, input_rfs, num_outputs, kernel_size, stride=1, padding='SAME', **kwargs):
-    assert len(inputs.shape) == 4
+def crop_pyr(im, rect, im_size, scales):
+    '''
+    Args:
+        im: [b, h, w, 3]
+        rect: [b, 4]
+        scales: [s]
+
+    Returns:
+        [b, s, h, w, 3]
+    '''
+    # [b, s, 4]
+    rects = enlarge_rect(tf.expand_dim(scales, -1), tf.expand_dims(rect, -2))
+    # Extract multiple rectangles from each image.
+    batch_len = tf.shape(im)[0]
+    num_scales, = tf.unstack(tf.shape(scales))
+    box_ind = tf.tile(tf.expand_dims(tf.range(batch_len), 1), [1, num_scales])
+    # [b, s, ...] -> [b*s, ...]
+    rects, restore = merge_dims(rects, 0, 2)
+    box_ind, _ = merge_dims(box_ind, 0, 2)
+    crop = tf.image.crop_and_resize(im, geom.rect_to_tf_box(rects),
+                                    box_ind=box_ind,
+                                    crop_size=n_positive_integers(im_size),
+                                    extrapolation_value=128)
+    # [b*s, ...] -> [b, s, ...]
+    crop = restore(crop, 0)
+    return crop, rects
+
+
+def scale_range(num, step):
+    assert isinstance(num, tf.Tensor)
+    with tf.control_dependencies([tf.Assert(num % 2 == 0)]):
+        half = (num - 1) / 2
+    log_step = tf.abs(tf.log(step))
+    return tf.exp(log_step * tf.to_float(tf.range(-half, half+1)))
+
+
+def conv2d_rf(inputs, input_rfs, num_outputs, kernel_size, stride=1, padding='SAME', **kwargs):
+    '''Wraps slim.conv2d to include receptive field calculation.
+    
+    input_rfs['var_name'] is the receptive field of input w.r.t. var_name.
+    output_rfs['var_name'] is the receptive field of output w.r.t. var_name.
+    '''
+    if input_rfs is None:
+        input_rfs = {}
+    assert len(inputs.shape) == 4 # otherwise slim.conv2d does higher-dim convolution
     outputs = slim.conv2d(inputs, num_outputs, kernel_size, stride, padding, **kwargs)
     rel_rf = _filter_rf(kernel_size, stride, padding)
-    if input_rfs is None:
-        output_rfs = None
-    else:
-        output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
+    output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
     return outputs, output_rfs
 
 
-def max_pool2d(inputs, input_rfs, kernel_size, stride=2, padding='VALID', **kwargs):
-    outputs = slim.max_pool2d(
-        inputs,
-        kernel_size,
-        stride,
-        padding,
-        **kwargs)
+def max_pool2d_rf(inputs, input_rfs, kernel_size, stride=2, padding='VALID', **kwargs):
+    '''Wraps slim.max_pool2d to include receptive field calculation.'''
+    if input_rfs is None:
+        input_rfs = {}
+    outputs = slim.max_pool2d(inputs, kernel_size, stride, padding, **kwargs)
     rel_rf = _filter_rf(kernel_size, stride, padding)
-    if input_rfs is None:
-        output_rfs = None
-    else:
-        output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
+    output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
     return outputs, output_rfs
+
+
+def diag_xcorr_rf(input, filter, input_rfs, stride=1, padding='VALID', name='diag_xcorr'):
+    '''
+    Args:
+        input: [b, ..., h, w, c]
+        filter: [b, fh, fw, c]
+        stride: Either an integer or length 2 (as for slim operations).
+    '''
+    stride = n_positive_integers(2, stride)
+    nhwc_strides = [1, stride[0], stride[1], 1]
+    output = diag_xcorr(input, filter, strides=nhwc_strides, padding=padding, name=name)
+    kernel_size = filter.shape.as_list()[-4:-2]
+    assert all(kernel_size) # Must not be None or 0.
+    rel_rf = _filter_rf(kernel_size, stride, padding)
+    output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
+    return output, output_rfs
+
+
+def xcorr_rf(input, filter, input_rfs, padding='VALID'):
+    '''Wraps tf.nn.conv2d to include receptive field calculation.
+
+    Args:
+        input: [b, h, w, c]
+        filter: [b, h, w, c]
+    '''
+    # TODO: Support depth-wise/diagonal convolution.
+    if input_rfs is None:
+        input_rfs = {}
+    kernel_size = filter.shape.as_list()[-4:-2]
+    rel_rf = _filter_rf(kernel_size, stride, padding)
+    output = tf.nn.conv2d(input, filter, padding=padding)
+    output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
+    return output, output_rfs
 
 
 def _filter_rf(kernel_size, stride, padding):
+    '''Computes the receptive field of a filter.'''
     kernel_size = np.array(n_positive_integers(2, kernel_size))
     stride = np.array(n_positive_integers(2, stride))
     # Get relative receptive field.
@@ -53,3 +129,17 @@ def _filter_rf(kernel_size, stride, padding):
     else:
         raise ValueError('invalid padding: {}'.format(padding))
     return rel_rf
+
+
+def context_rect(target, scale, im_aspect, aspect_method='stretch', name='context_rect'):
+    with tf.name_scope(name) as scope:
+        # Modify aspect ratio of target.
+        # Necessary to account for aspect ratio of reference frame.
+        if aspect_method != 'stretch':
+            # Transform (1, 1) to (im_aspect, 1) so that width/height = im_aspect.
+            # stretch = tf.stack([tf.pow(im_aspect, 0.5), tf.pow(im_aspect, -0.5)], axis=-1)
+            stretch = tf.stack([im_aspect, tf.ones_like(im_aspect)], axis=-1)
+            target = geom.rect_mul(target, stretch)
+            target = modify_aspect_ratio(target, aspect_method)
+            target = geom.rect_mul(target, 1./stretch)
+        return grow_rect(scale, target)

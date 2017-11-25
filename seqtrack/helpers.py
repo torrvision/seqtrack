@@ -7,6 +7,7 @@ import os
 from PIL import Image
 import tensorflow as tf
 
+from seqtrack import geom
 from seqtrack import geom_np
 
 def get_time():
@@ -113,65 +114,81 @@ def cache_json(filename, func, makedir=False):
     return result
 
 
-def merge_dims(x, a, b):
+def merge_dims(x, a, b, name='merge_dims'):
     '''Merges dimensions a to b-1
 
     Returns:
         Reshaped tensor and a function to restore the shape.
     '''
-    # Group dimensions of x into a, b-a, n-b:
-    #     [0, ..., a-1 | a, ..., b-1 | b, ..., n-1]
-    # Then y has dimensions grouped in: a, 1, n-b:
-    #     [0, ..., a-1 | a | a+1, ..., a+n-b]
-    # giving a total length of m = n-b+a+1.
-    x_dynamic = tf.shape(x)
-    x_static = x.shape.as_list()
-    n = len(x_static)
+    def restore(v, axis, x_static, x_dynamic, name='restore'):
+        with tf.name_scope(name) as scope:
+            '''Restores dimensions [axis] to dimensions [a, ..., b-1].'''
+            v_dynamic = tf.unstack(tf.shape(v))
+            v_static = v.shape.as_list()
+            m = len(v_static)
+            # Substitute the static size where possible.
+            u_dynamic = ([v_static[i] or v_dynamic[i] for i in range(0, axis)] +
+                         [x_static[i] or x_dynamic[i] for i in range(a, b)] +
+                         [v_static[i] or v_dynamic[i] for i in range(axis+1, m)])
+            u = tf.reshape(v, u_dynamic)
+            return u
 
-    def restore(v, axis):
-        '''Restores dimensions [axis] to dimensions [a, ..., b-1].'''
-        v_dynamic = tf.shape(v)
-        v_static = v.shape.as_list()
-        m = len(v_static)
+    with tf.name_scope(name) as scope:
+        # Group dimensions of x into a, b-a, n-b:
+        #     [0, ..., a-1 | a, ..., b-1 | b, ..., n-1]
+        # Then y has dimensions grouped in: a, 1, n-b:
+        #     [0, ..., a-1 | a | a+1, ..., a+n-b]
+        # giving a total length of m = n-b+a+1.
+        x_dynamic = tf.unstack(tf.shape(x))
+        x_static = x.shape.as_list()
+        n = len(x_static)
+
         # Substitute the static size where possible.
-        u_dynamic = ([v_static[i] or v_dynamic[i] for i in range(0, axis)] +
-                     [x_static[i] or x_dynamic[i] for i in range(a, b)] +
-                     [v_static[i] or v_dynamic[i] for i in range(axis+1, m)])
-        u = tf.reshape(v, u_dynamic)
-        return u
-
-    # Substitute the static size where possible.
-    y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, a)] +
-                 [tf.reduce_prod(x_dynamic[a:b])] +
-                 [x_static[i] or x_dynamic[i] for i in range(b, n)])
-    y = tf.reshape(x, y_dynamic)
-    return y, restore
+        y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, a)] +
+                     [tf.reduce_prod(x_dynamic[a:b])] +
+                     [x_static[i] or x_dynamic[i] for i in range(b, n)])
+        y = tf.reshape(x, y_dynamic)
+        restore_fn = functools.partial(restore, x_static=x_static, x_dynamic=x_dynamic)
+        return y, restore_fn
 
 
-def diag_conv(x, f, strides, padding, **kwargs):
+def diag_xcorr(x, f, strides, padding, name='diag_xcorr', **kwargs):
     '''
     Args:
-        x: [b, hx, wx, c]
+        x: [b, ..., hx, wx, c]
         f: [b, hf, wf, c]
 
+    strides: Argument to tf.nn.depthwise_conv_2d
+
     Returns:
-        [b, ho, wo, c]
+        [b, ..., ho, wo, c]
     '''
-    assert len(x.shape) == 4
-    assert len(f.shape) == 4
-    # x.shape is [b, hx, wx, c]
-    # f.shape is [b, hf, wf, c]
-    # [b, hx, wx, c] -> [hx, wx, b, c] -> [hx, wx, b*c]
-    x, restore = merge_dims(tf.transpose(x, [1, 2, 0, 3]), 2, 4)
-    # [b, hf, wf, c] -> [hf, wf, b, c] -> [hf, wf, b*c]
-    f, _ = merge_dims(tf.transpose(f, [1, 2, 0, 3]), 2, 4)
-    x = tf.expand_dims(x, axis=0) # [1, hx, wx, b*c]
-    f = tf.expand_dims(f, axis=3) # [hf, wf, b*c, 1]
-    x = tf.nn.depthwise_conv2d(x, f, strides=strides, padding=padding, **kwargs)
-    x = tf.squeeze(x, axis=0) # [ho, wo, b*c]
-    # [ho, wo, b*c] -> [ho, wo, b, c] -> [b, ho, wo, c]
-    x = tf.transpose(restore(x, axis=2), [2, 0, 1, 3])
-    return x
+    if len(x.shape) == 4:
+        x = tf.expand_dims(x, 1)
+        x = diag_xcorr(x, f, strides, padding, name=name, **kwargs)
+        x = tf.squeeze(x, 1)
+        return x
+    if len(x.shape) > 5:
+        # Merge dims 0, (1, ..., n-4), n-3, n-2, n-1
+        x, restore = merge_dims(x, 0, len(x.shape)-3)
+        x = diag_xcorr(x, f, strides, padding, name=name, **kwargs)
+        x = restore(x, 1)
+        return x
+
+    with tf.name_scope(name) as scope:
+        assert len(x.shape) == 5
+        assert len(f.shape) == 4
+        # x.shape is [b, n, hx, wx, c]
+        # f.shape is [b, hf, wf, c]
+        # [b, n, hx, wx, c] -> [n, hx, wx, b, c] -> [n, hx, wx, b*c]
+        x, restore = merge_dims(tf.transpose(x, [1, 2, 3, 0, 4]), 3, 5)
+        # [b, hf, wf, c] -> [hf, wf, b, c] -> [hf, wf, b*c]
+        f, _ = merge_dims(tf.transpose(f, [1, 2, 0, 3]), 2, 4)
+        f = tf.expand_dims(f, axis=3) # [hf, wf, b*c, 1]
+        x = tf.nn.depthwise_conv2d(x, f, strides=strides, padding=padding, **kwargs)
+        # [n, ho, wo, b*c] -> [n, ho, wo, b, c] -> [b, n, ho, wo, c]
+        x = tf.transpose(restore(x, axis=3), [3, 0, 1, 2, 4])
+        return x
 
 
 def to_nested_tuple(tensor, value):
@@ -247,6 +264,54 @@ def map_nested(f, xs):
     if isinstance(xs, tuple):
         return tuple([map_nested(f, x) for x in xs])
     return f(xs)
+
+
+def grow_rect(alpha, rect, name='grow_rect'):
+    '''
+    Args:
+        alpha: [] or [..., 1]
+        rect: [..., 4]
+
+    Supports broadcasting.
+    '''
+    with tf.name_scope(name) as scope:
+        min_pt, max_pt = geom.rect_min_max(rect)
+        center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
+        size *= alpha
+        return geom.make_rect(center-0.5*size, center+0.5*size)
+
+
+def modify_aspect_ratio(rect, method='stretch', name='modify_aspect_ratio'):
+    if method == 'stretch':
+        return rect # No change.
+    with tf.name_scope(name) as scope:
+        EPSILON = 1e-3
+        min_pt, max_pt = geom.rect_min_max(rect)
+        center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
+        with tf.control_dependencies([tf.assert_greater_equal(size, 0.0)]):
+            size = tf.identity(size)
+        if method == 'perimeter':
+            # Average of dimensions.
+            width = tf.reduce_mean(size, axis=-1, keep_dims=True)
+            return geom.make_rect(center - 0.5*width, center + 0.5*width)
+        if method == 'area':
+            # Geometric average of dimensions.
+            width = tf.exp(tf.reduce_mean(tf.log(tf.maximum(size, EPSILON)),
+                                          axis=-1,
+                                          keep_dims=True))
+            return geom.make_rect(center - 0.5*width, center + 0.5*width)
+        raise ValueError('unknown method: {}'.format(method))
+
+
+def get_act(act):
+    if act == 'relu':
+        return tf.nn.relu
+    elif act =='tanh':
+        return tf.nn.tanh
+    elif act == 'linear':
+        return None
+    else:
+        raise ValueError('wrong activation type: {}'.format(act))
 
 
 # def softmax_cross_entropy_with_logits(

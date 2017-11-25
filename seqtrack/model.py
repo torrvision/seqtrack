@@ -31,7 +31,7 @@ import os
 
 from seqtrack import cnnutil
 from seqtrack import geom
-from seqtrack.helpers import merge_dims, diag_conv
+from seqtrack.helpers import merge_dims, diag_conv, grow_rect, modify_aspect_ratio, get_act
 from seqtrack.upsample import upsample
 
 concat = tf.concat if hasattr(tf, 'concat') else tf.concat_v2
@@ -180,7 +180,7 @@ def process_image_with_box(img, box, o, crop_size, scale, aspect=None):
     if aspect is not None:
         box = geom.rect_mul(box, 1./stretch)
 
-    box = scale_rectangle_size(scale, box)
+    box = grow_rect(scale, box)
     box_val = geom.rect_intersect(box,geom.unit_rect())
 
     batch_len = tf.shape(img)[0]
@@ -189,32 +189,6 @@ def process_image_with_box(img, box, o, crop_size, scale, aspect=None):
                                     crop_size=[crop_size]*2,
                                     extrapolation_value=128)
     return crop, box, box_val
-
-def modify_aspect_ratio(rect, method='stretch'):
-    EPSILON = 1e-3
-    if method == 'stretch':
-        return rect # No change.
-    min_pt, max_pt = geom.rect_min_max(rect)
-    center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
-    with tf.control_dependencies([tf.assert_greater_equal(size, 0.0)]):
-        size = tf.identity(size)
-    if method == 'perimeter':
-        # Average of dimensions.
-        width = tf.reduce_mean(size, axis=-1, keep_dims=True)
-        return geom.make_rect(center - 0.5*width, center + 0.5*width)
-    if method == 'area':
-        # Geometric average of dimensions.
-        width = tf.exp(tf.reduce_mean(tf.log(tf.maximum(size, EPSILON)),
-                                      axis=-1,
-                                      keep_dims=True))
-        return geom.make_rect(center - 0.5*width, center + 0.5*width)
-    raise ValueError('unknown method: {}'.format(method))
-
-def scale_rectangle_size(alpha, rect):
-    min_pt, max_pt = geom.rect_min_max(rect)
-    center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
-    size *= alpha
-    return geom.make_rect(center-0.5*size, center+0.5*size)
 
 def find_center_in_scoremap(scoremap, o):
     assert len(scoremap.shape.as_list()) == 4
@@ -295,16 +269,6 @@ def to_image_centric_hmap(hmap_pred_oc, box_s_raw, box_s_val, o):
         crop_size=[o.frmsz]*2,
         extrapolation_value=None)
     return hmap_pred_ic
-
-def get_act(act):
-    if act == 'relu':
-        return tf.nn.relu
-    elif act =='tanh':
-        return tf.nn.tanh
-    elif act == 'linear':
-        return None
-    else:
-        assert False, 'wrong activation type'
 
 def regularize_scale(y_prev, y_curr, y0=None, local_bound=0.01, global_bound=0.1):
     ''' This function regularize (only) scale of new box.
@@ -1269,7 +1233,7 @@ class Nornn(object):
                     max_score = tf.reduce_max(hmap_curr_pred_oc_fg, axis=(1,2,3))
                     is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
                     scale = tf.where(is_pass, scale, tf.ones_like(scale))
-                y_curr_pred = scale_rectangle_size(tf.expand_dims(scale, -1), y_curr_pred)
+                y_curr_pred = grow_rect(tf.expand_dims(scale, -1), y_curr_pred)
             else: # argmax to find center (then use x0's box)
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
                     hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, o, y0)
