@@ -143,3 +143,30 @@ def context_rect(target, scale, im_aspect, aspect_method='stretch', name='contex
             target = modify_aspect_ratio(target, aspect_method)
             target = geom.rect_mul(target, 1./stretch)
         return grow_rect(scale, target)
+
+
+def find_center_in_scoremap(scoremap, threshold=0.95):
+    assert len(scoremap.shape.as_list()) == 4
+
+    max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
+    with tf.control_dependencies([tf.assert_greater_equal(scoremap, 0.0)]):
+        max_loc = tf.greater_equal(scoremap, max_val*threshold) # values over 95% of max.
+
+    spatial_dim = scoremap.shape.as_list()[1:3]
+    assert all(spatial_dim) # Spatial dimension must be static.
+    # Compute center of each pixel in [0, 1] in search area.
+    dim_y, dim_x = spatial_dim[0], spatial_dim[1]
+    centers_x, centers_y = tf.meshgrid(
+        tf.to_float(tf.range(dim_x)) / tf.to_float(dim_x - 1),
+        tf.to_float(tf.range(dim_y)) / tf.to_float(dim_y - 1))
+    centers = tf.stack([centers_x, centers_y], axis=-1)
+    max_loc = tf.to_float(max_loc)
+    center = tf.divide(
+        tf.reduce_sum(centers * max_loc, axis=(1, 2)),
+        tf.reduce_sum(max_loc, axis=(1, 2)))
+
+    EPSILON = 1e-4
+    with tf.control_dependencies([tf.assert_greater_equal(center, -EPSILON),
+                                  tf.assert_less_equal(center, 1.0+EPSILON)]):
+        center = tf.identity(center)
+    return center

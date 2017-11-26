@@ -9,11 +9,15 @@ import tensorflow as tf
 
 from seqtrack.opts import Opts
 from seqtrack import data
-from seqtrack import model
+# from seqtrack import model
 from seqtrack import track
 from seqtrack import train
 from seqtrack import sample
 from seqtrack.helpers import LazyDict
+
+from seqtrack.models.nornn import Nornn
+from seqtrack.models.itermodel import ModelFromIterModel
+from seqtrack.models.siamfc import SiamFC
 
 
 def parse_arguments():
@@ -76,16 +80,18 @@ def parse_arguments():
             '--heatmap_params', help='JSON string specifying heatmap options',
             type=json.loads, default={'Gaussian': True})
 
-    parser.add_argument(
-            '--losses', nargs='+', help='list of losses to be used',
-            type=str) # example [l1, iou]
+    # JV: Move to model.
+    # parser.add_argument(
+    #         '--losses', nargs='+', help='list of losses to be used',
+    #         type=str) # example [l1, iou]
 
     parser.add_argument(
             '--cnn_pretrain', help='specify if using pretrained model',
             action='store_true')
-    parser.add_argument(
-            '--cnn_trainable', help='set False to fix pretrained params',
-            action='store_true')
+    # JV: Move to model.
+    # parser.add_argument(
+    #         '--cnn_trainable', help='set False to fix pretrained params',
+    #         action='store_true')
 
     parser.add_argument(
             '--nepoch', help='number of epochs',
@@ -105,8 +111,8 @@ def parse_arguments():
     parser.add_argument(
             '--lr_decay_steps', help='period for decaying learning rate',
             type=int, default=10000)
-    parser.add_argument(
-            '--wd', help='weight decay', type=float, default=0.0)
+    # parser.add_argument(
+    #         '--wd', help='weight decay', type=float, default=0.0)
     parser.add_argument(
             '--grad_clip', help='gradient clipping flag',
             action='store_true')
@@ -279,9 +285,15 @@ def main():
         return
 
     # TODO: Set model_opts from command-line or JSON file?
-    m = model.load_model(o, model_params=o.model_params)
+    # m = model.load_model(o, model_params=o.model_params)
+    if o.model == 'Nornn':
+        model = Nornn(**o.model_params)
+    elif o.model == 'SiamFC':
+        model = ModelFromIterModel(SiamFC(**o.model_params))
+    else:
+        raise ValueError('unknown model: {}'.format(o.model))
 
-    train.train(m, {'train': train_dataset, 'val': datasets['ILSVRC-val']},
+    train.train(model, {'train': train_dataset, 'val': datasets['ILSVRC-val']},
                 eval_sets, o, use_queues=o.use_queues)
 
 

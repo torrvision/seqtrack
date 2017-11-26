@@ -24,13 +24,12 @@ from seqtrack import pipeline
 from seqtrack import sample
 from seqtrack import visualize
 
-from seqtrack.model import convert_rec_to_heatmap, to_object_centric_coordinate
 from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_dims
 
 EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect']
 
 
-def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
+def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
     '''Trains a network.
 
     Args:
@@ -94,7 +93,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues,
                 capacity=4, num_threads=1)
-        example = graph.make_placeholders(o.ntimesteps, (o.frmsz, o.frmsz), default=from_queue)
+        example, run_opts = graph.make_placeholders(o.ntimesteps, (o.frmsz, o.frmsz), default=from_queue)
 
     # color augmentation
     example = _perform_color_augmentation(example, o)
@@ -102,9 +101,14 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
     # Always use same statistics for whitening (not set dependent).
     ## stat = datasets['train'].stat
     # TODO: Mask y with use_gt to prevent accidental use.
-    model = create_model(graph.whiten(graph.guard_labels(example), stat=stat),
-                         summaries_collections=['summaries_model'])
-    loss_var, model.gt = get_loss(example, model.outputs, model.gt, o)
+    # model = create_model(graph.whiten(graph.guard_labels(example), stat=stat),
+    #                      summaries_collections=['summaries_model'])
+    # loss_var, model.gt = get_loss(example, model.outputs, model.gt, o)
+    # example_input = graph.whiten(graph.guard_labels(example), stat=stat)
+    example_input = graph.whiten(example, stat=stat)
+    outputs, loss_var, init_state, final_state = model.instantiate(
+        example_input, run_opts, enable_loss=True,
+        image_summaries_collections=['IMAGE_SUMMARIES'])
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
     loss_var += r
@@ -139,41 +143,7 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
     summary_vars_with_preview = {}
     global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
     with tf.name_scope('summary'):
-        # Create a preview and add it to the list of summaries.
-        if 'y' in model.outputs:
-            boxes = tf.summary.image('box',
-                _draw_bounding_boxes(example, model),
-                max_outputs=o.ntimesteps+1, collections=[])
-            image_summaries = [boxes]
-        # Produce an image summary of the heatmap prediction (ic and oc).
-        if 'hmap' in model.outputs:
-            for key in model.outputs['hmap']:
-                hmap = tf.summary.image('hmap_pred_{}'.format(key),
-                    _draw_heatmap(model, pred=True, perspective=key),
-                    max_outputs=o.ntimesteps+1, collections=[])
-                image_summaries.append(hmap)
-        # Produce an image summary of the heatmap gt (ic and oc).
-        if 'hmap' in model.gt:
-            for key in model.gt['hmap']:
-                hmap = tf.summary.image('hmap_gt_{}'.format(key),
-                    _draw_heatmap(model, pred=False, perspective=key),
-                    max_outputs=o.ntimesteps+1, collections=[])
-                image_summaries.append(hmap)
-        # Produce an image summary of target and search images (input to CNNs).
-        for key in ['search', 'target_init', 'target_curr']:
-            if key in model.outputs:
-                if model.outputs[key] is None: continue
-                input_image = tf.summary.image('cnn_input_{}'.format(key),
-                    _draw_input_image(model, key, o, name='draw_{}'.format(key)),
-                    max_outputs=o.ntimesteps+1, collections=[])
-                image_summaries.append(input_image)
-        ## Produce an image summary of target and search images (input to CNNs).
-        #if 'target' in model.outputs and 'search' in model.outputs:
-        #    for key in ['target', 'search']:
-        #        input_image = tf.summary.image('cnn_input_{}'.format(key),
-        #            _draw_input_image(model, key, o, name='draw_{}'.format(key)),
-        #            max_outputs=o.ntimesteps+1, collections=[])
-        #        image_summaries.append(input_image)
+        image_summaries = tf.get_collection('IMAGE_SUMMARIES')
         for mode in modes:
             with tf.name_scope(mode):
                 # Merge summaries with any that are specific to the mode.
@@ -339,9 +309,9 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
 
                 # Take a training step.
                 start = time.time()
-                feed_dict = {example['use_gt']:      o.use_gt_train,
-                             example['is_training']: True,
-                             example['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*global_step),
+                feed_dict = {run_opts['use_gt']:      o.use_gt_train,
+                             run_opts['is_training']: True,
+                             run_opts['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*global_step),
                                                          o.min_gt_ratio)}
                 if use_queues:
                     feed_dict.update({queue_index: 0}) # Choose validation queue.
@@ -369,9 +339,9 @@ def train(create_model, datasets, eval_sets, o, stat=None, use_queues=False):
                     # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
                     if ib * nbatch_val >= ib_val * nbatch:
                         start = time.time()
-                        feed_dict = {example['use_gt']:      o.use_gt_train,  # Match training.
-                                     example['is_training']: False, # Do not update bnorm stats.
-                                     example['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
+                        feed_dict = {run_opts['use_gt']:      o.use_gt_train,  # Match training.
+                                     run_opts['is_training']: False, # Do not update bnorm stats.
+                                     run_opts['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
                         if use_queues:
                             feed_dict.update({queue_index: 1}) # Choose validation queue.
                         else:
@@ -493,273 +463,6 @@ def iter_examples(dataset, o, rand=None, num_epochs=None):
                 sequence = motion.augment(sequence, rand=rand, **o.motion_params)
             yield sequence
 
-def compute_scale_classification_gt(example, scales):
-    import geom
-    obj_min, obj_max = geom.rect_min_max(tf.concat([tf.expand_dims(example['y0'],1), example['y']], 1))
-    obj_center, obj_size = 0.5 * (obj_min + obj_max), obj_max - obj_min
-    diam = tf.reduce_mean(obj_size, axis=-1) # 0.5*(width+height)
-    sc_ratio = tf.divide(diam[:, 1:], diam[:, :-1])
-    sc_gt = []
-    for i in range(len(scales)):
-        if i == 0:
-            sc_gt.append(tf.less(sc_ratio, scales[i]))
-        elif i < len(scales)/2:
-            sc_gt.append(tf.logical_and(tf.greater_equal(sc_ratio, scales[i-1]), tf.less(sc_ratio, scales[i])))
-        elif i == len(scales)/2:
-            sc_gt.append(tf.logical_and(tf.greater_equal(sc_ratio, scales[i-1]), tf.less(sc_ratio, scales[i+1])))
-        elif i > len(scales)/2 and not i == len(scales)-1:
-            sc_gt.append(tf.logical_and(tf.greater_equal(sc_ratio, scales[i]), tf.less(sc_ratio, scales[i+1])))
-        elif i == len(scales)-1:
-            sc_gt.append(tf.greater_equal(sc_ratio, scales[i]))
-        else:
-            assert False
-    return tf.stack(sc_gt, -1)
-
-def get_loss(example, outputs, gt, o, summaries_collections=None, name='loss'):
-    with tf.name_scope(name) as scope:
-        y_gt    = {'ic': None, 'oc': None}
-        hmap_gt = {'ic': None, 'oc': None}
-
-        y_gt['ic'] = example['y']
-        y_gt['oc'] = to_object_centric_coordinate(example['y'], outputs['box_s_raw'], outputs['box_s_val'], o)
-        hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], o, min_size=1.0, **o.heatmap_params)
-        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], o, min_size=1.0, **o.heatmap_params)
-        if outputs['sc']:
-            assert 'sc' in o.losses
-            sc_gt = compute_scale_classification_gt(example, outputs['sc']['scales'])
-
-        # Regress displacement rather than absolute location. Update y_gt.
-        if outputs['boxreg_delta']:
-            y_gt['ic'] = y_gt['ic'] - tf.concat([tf.expand_dims(example['y0'],1), y_gt['ic'][:,:o.ntimesteps-1]],1) 
-            delta0 = y_gt['oc'][:,0] - tf.stack([0.5 - 1./o.search_scale/2., 0.5 + 1./o.search_scale/2.]*2)
-            y_gt['oc'] = tf.concat([tf.expand_dims(delta0,1), y_gt['oc'][:,1:]-y_gt['oc'][:,:o.ntimesteps-1]], 1)
-
-        assert(y_gt['ic'].get_shape().as_list()[1] == o.ntimesteps)
-
-        for key in outputs['hmap_interm']:
-            if outputs['hmap_interm'][key] is not None:
-                pred_size = outputs['hmap_interm'][key].shape.as_list()[2:4]
-                hmap_interm_gt, unmerge = merge_dims(hmap_gt['oc'], 0, 2)
-                hmap_interm_gt = tf.image.resize_images(hmap_interm_gt, pred_size,
-                        method=tf.image.ResizeMethod.BILINEAR,
-                        align_corners=True)
-                hmap_interm_gt = unmerge(hmap_interm_gt, axis=0)
-                break
-
-        if 'oc' in outputs['hmap']:
-            # Resize GT heatmap to match size of prediction if necessary.
-            pred_size = outputs['hmap']['oc'].shape.as_list()[2:4]
-            assert all(pred_size) # Must not be None.
-            gt_size = hmap_gt['oc'].shape.as_list()[2:4]
-            if gt_size != pred_size:
-                hmap_gt['oc'], unmerge = merge_dims(hmap_gt['oc'], 0, 2)
-                hmap_gt['oc'] = tf.image.resize_images(hmap_gt['oc'], pred_size,
-                    method=tf.image.ResizeMethod.BILINEAR,
-                    align_corners=True)
-                hmap_gt['oc'] = unmerge(hmap_gt['oc'], axis=0)
-
-        losses = dict()
-
-        # l1 distances for left-top and right-bottom
-        if 'l1' in o.losses or 'l1_relative' in o.losses:
-            y_gt_valid   = tf.boolean_mask(y_gt[o.perspective], example['y_is_valid'])
-            y_pred_valid = tf.boolean_mask(outputs['y'][o.perspective], example['y_is_valid'])
-            loss_l1 = tf.reduce_mean(tf.abs(y_gt_valid - y_pred_valid), axis=-1)
-            if 'l1' in o.losses:
-                losses['l1'] = tf.reduce_mean(loss_l1)
-            if 'l1_relative' in o.losses:
-                # TODO: Reduce code duplication?
-                x_size = tf.abs(y_gt_valid[:,2] - y_gt_valid[:,0])
-                y_size = tf.abs(y_gt_valid[:,3] - y_gt_valid[:,1])
-                size = tf.stack([x_size, y_size], axis=-1)
-                loss_l1_relative = loss_l1 / (tf.reduce_mean(size, axis=-1) + 0.05)
-                losses['l1_relative'] = tf.reduce_mean(loss_l1_relative)
-
-        # CLE (center location error). Measured in l2 distance.
-        if 'cle' in o.losses or 'cle_relative' in o.losses:
-            y_gt_valid   = tf.boolean_mask(y_gt[o.perspective], example['y_is_valid'])
-            y_pred_valid = tf.boolean_mask(outputs['y'][o.perspective], example['y_is_valid'])
-            x_center = (y_gt_valid[:,2] + y_gt_valid[:,0]) * 0.5
-            y_center = (y_gt_valid[:,3] + y_gt_valid[:,1]) * 0.5
-            center = tf.stack([x_center, y_center], axis=-1)
-            x_pred_center = (y_pred_valid[:,2] + y_pred_valid[:,0]) * 0.5
-            y_pred_center = (y_pred_valid[:,3] + y_pred_valid[:,1]) * 0.5
-            pred_center = tf.stack([x_pred_center, y_pred_center], axis=-1)
-            loss_cle = tf.norm(center - pred_center, axis=-1)
-            if 'cle' in o.losses:
-                losses['cle'] = tf.reduce_mean(loss_cle)
-            if 'cle_relative' in o.losses:
-                # TODO: Reduce code duplication?
-                x_size = tf.abs(y_gt_valid[:,2] - y_gt_valid[:,0])
-                y_size = tf.abs(y_gt_valid[:,3] - y_gt_valid[:,1])
-                size = tf.stack([x_size, y_size], axis=-1)
-                radius = tf.exp(tf.reduce_mean(tf.log(size), axis=-1))
-                loss_cle_relative = loss_cle / (radius + 0.05)
-                losses['cle_relative'] = tf.reduce_mean(loss_cle_relative)
-
-        # Cross-entropy between probabilty maps (need to change label)
-        if 'ce' in o.losses or 'ce_balanced' in o.losses:
-            hmap_gt_valid   = tf.boolean_mask(hmap_gt[o.perspective], example['y_is_valid'])
-            hmap_pred_valid = tf.boolean_mask(outputs['hmap'][o.perspective], example['y_is_valid'])
-            # hmap is [valid_images, height, width, 2]
-            count = tf.reduce_sum(hmap_gt_valid, axis=(1, 2), keep_dims=True)
-            class_weight = 0.5 / tf.cast(count+1, tf.float32)
-            weight = tf.reduce_sum(hmap_gt_valid * class_weight, axis=-1)
-            # Flatten to feed into softmax_cross_entropy_with_logits.
-            hmap_gt_valid, unmerge = merge_dims(hmap_gt_valid, 0, 3)
-            hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
-            loss_ce = tf.nn.softmax_cross_entropy_with_logits(
-                    labels=hmap_gt_valid,
-                    logits=hmap_pred_valid)
-            loss_ce = unmerge(loss_ce, 0)
-            if 'ce' in o.losses:
-                losses['ce'] = tf.reduce_mean(loss_ce)
-            if 'ce_balanced' in o.losses:
-                losses['ce_balanced'] = tf.reduce_mean(
-                        tf.reduce_sum(weight * loss_ce, axis=(1, 2)))
-
-        # TODO: Make it neat if things work well.
-        if outputs['hmap_A0'] is not None:
-            hmap_gt_valid   = tf.boolean_mask(hmap_gt[o.perspective], example['y_is_valid'])
-            hmap_pred_valid = tf.boolean_mask(outputs['hmap_A0'], example['y_is_valid'])
-            # hmap is [valid_images, height, width, 2]
-            count = tf.reduce_sum(hmap_gt_valid, axis=(1, 2), keep_dims=True)
-            class_weight = 0.5 / tf.cast(count+1, tf.float32)
-            weight = tf.reduce_sum(hmap_gt_valid * class_weight, axis=-1)
-            # Flatten to feed into softmax_cross_entropy_with_logits.
-            hmap_gt_valid, unmerge = merge_dims(hmap_gt_valid, 0, 3)
-            hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
-            loss_ce = tf.nn.softmax_cross_entropy_with_logits(
-                    labels=hmap_gt_valid,
-                    logits=hmap_pred_valid)
-            loss_ce = unmerge(loss_ce, 0)
-            losses['ce_A0'] = tf.reduce_mean(loss_ce)
-
-        for key in outputs['hmap_interm']:
-            if outputs['hmap_interm'][key] is not None:
-                hmap_gt_valid   = tf.boolean_mask(hmap_interm_gt, example['y_is_valid'])
-                hmap_pred_valid = tf.boolean_mask(outputs['hmap_interm'][key], example['y_is_valid'])
-                # Flatten to feed into softmax_cross_entropy_with_logits.
-                hmap_gt_valid, unmerge = merge_dims(hmap_gt_valid, 0, 3)
-                hmap_pred_valid, _ = merge_dims(hmap_pred_valid, 0, 3)
-                loss_ce_interm = tf.nn.softmax_cross_entropy_with_logits(
-                        labels=hmap_gt_valid,
-                        logits=hmap_pred_valid)
-                loss_ce_interm = unmerge(loss_ce_interm, 0)
-                losses['ce_{}'.format(key)] = tf.reduce_mean(loss_ce_interm)
-
-        if 'sc' in o.losses:
-            sc_rank = len(outputs['sc']['out'].shape)
-            if sc_rank == 5:
-                # Use same GT for all spatial positions.
-                shape = outputs['sc']['out'].shape.as_list()
-                sc_gt = tf.expand_dims(tf.expand_dims(sc_gt, -2), -2)
-                sc_gt = tf.tile(sc_gt, [1, 1, shape[2], shape[3], 1])
-            sc_gt_valid = tf.boolean_mask(sc_gt, example['y_is_valid'])
-            sc_pred_valid = tf.boolean_mask(outputs['sc']['out'], example['y_is_valid'])
-            loss_sc = tf.nn.softmax_cross_entropy_with_logits(labels=sc_gt_valid, logits=sc_pred_valid)
-            if sc_rank == 5:
-                # Reduce over spatial predictions. Use active elements.
-                sc_active_valid = tf.boolean_mask(outputs['sc']['active'], example['y_is_valid'])
-                loss_sc = (tf.reduce_sum(sc_active_valid * loss_sc, axis=(-2, -1)) /
-                           tf.reduce_sum(sc_active_valid, axis=(-2, -1)))
-            ##sc_gt_valid = tf.boolean_mask(sc_gt, example['y_is_valid'])
-            ##sc_pred_valid = tf.boolean_mask(outputs['sc']['out'], example['y_is_valid'])
-            ##sc_gt_valid, unmerge = merge_dims(sc_gt_valid, 0, 1)
-            ##sc_pred_valid, _ = merge_dims(sc_pred_valid, 0, 1)
-            ##loss_sc = tf.nn.softmax_cross_entropy_with_logits(
-            ##        labels=sc_gt_valid,
-            ##        logits=sc_pred_valid)
-            ##loss_sc = unmerge(loss_sc, 0)
-            losses['sc'] = tf.reduce_mean(loss_sc)
-
-        # Reconstruction loss using generalized Charbonnier penalty
-        if 'recon' in o.losses:
-            alpha = 0.25
-            s_prev_valid  = tf.boolean_mask(outputs['s_prev'],  example['y_is_valid'])
-            s_recon_valid = tf.boolean_mask(outputs['s_recon'], example['y_is_valid'])
-            charbonnier_penalty = tf.pow(tf.square(s_prev_valid - s_recon_valid) + 1e-10, alpha)
-            losses['recon'] = tf.reduce_mean(charbonnier_penalty)
-
-        with tf.name_scope('summary'):
-            for name, loss in losses.iteritems():
-                tf.summary.scalar(name, loss, collections=summaries_collections)
-
-        #gt['y']    = {'ic': y_gt['ic'],    'oc': y_gt['oc']}
-        gt['hmap'] = {'ic': hmap_gt['ic'], 'oc': hmap_gt['oc']} # for visualization in summary.
-        return tf.reduce_sum(losses.values(), name=scope), gt
-
-def _draw_bounding_boxes(example, model, time_stride=1, name='draw_box'):
-    # Note: This will produce INT_MIN when casting NaN to int.
-    with tf.name_scope(name) as scope:
-        # example['x']       -- [b, t, h, w, 3]
-        # example['y']       -- [b, t, 4]
-        # model.outputs['y'] -- [b, t, 4]
-        # Just do the first example in the batch.
-        image = (1.0/255)*example['x'][0][::time_stride]
-        y_gt   = example['y'][0][::time_stride]
-        y_pred = model.outputs['y']['ic'][0][::time_stride]
-        # TODO: Do not use model.state here. Breaks encapsulation.
-        # JV: Use new model state format.
-        # image  = tf.concat((tf.expand_dims(model.state['x'][0][0], 0),  image), 0) # add init frame
-        # y_gt   = tf.concat((tf.expand_dims(model.state['y'][0][0], 0),   y_gt), 0) # add init y_gt
-        # y_pred = tf.concat((tf.expand_dims(model.state['y'][0][0], 0), y_pred), 0) # add init y_gt for pred too
-        image  = tf.concat((tf.expand_dims(model.state_init['x'][0], 0),  image), 0) # add init frame
-        y_gt   = tf.concat((tf.expand_dims(model.state_init['y'][0], 0),   y_gt), 0) # add init y_gt
-        y_pred = tf.concat((tf.expand_dims(model.state_init['y'][0], 0), y_pred), 0) # add init y_gt for pred too
-        y = tf.stack([y_gt, y_pred], axis=1)
-        coords = tf.unstack(y, axis=2)
-        boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=2)
-        return tf.image.draw_bounding_boxes(image, boxes, name=scope)
-
-def _draw_heatmap(model, pred, perspective, time_stride=1, name='draw_heatmap'):
-    with tf.name_scope(name) as scope:
-        # model.outputs['hmap'] -- [b, t, frmsz, frmsz, 2]
-        if pred:
-            p = model.outputs['hmap'][perspective][0,::time_stride]
-            if perspective == 'oc':
-                p = tf.nn.softmax(p)
-        else:
-            p = model.gt['hmap'][perspective][0,::time_stride]
-
-        # JV: Not sure what model.state['hmap'] is, and...
-        # JV: concat() fails when hmap is coarse (lower resolution than input image).
-        # hmaps = tf.concat((model.state['hmap'][0][0:1], p[:,:,:,0:1]), 0) # add init hmap
-        hmaps = p[:,:,:,0:1]
-        # Convert to uint8 for absolute scale.
-        hmaps = tf.image.convert_image_dtype(hmaps, tf.uint8)
-        return hmaps
-
-def _draw_flow_fields(model, key, time_stride=1, name='draw_flow_fields'):
-    with tf.name_scope(name) as scope:
-        if key == 'u':
-            input_image = tf.expand_dims(model.outputs['flow'][0,::time_stride, :, :, 0], -1)
-        elif key =='v':
-            input_image = tf.expand_dims(model.outputs['flow'][0,::time_stride, :, :, 1], -1)
-        else:
-            assert False , 'No available flow fields'
-        return input_image
-
-def _draw_input_image(model, key, o, time_stride=1, name='draw_input_image'):
-    with tf.name_scope(name) as scope:
-        input_image = model.outputs[key][0,::time_stride]
-        if key == 'search':
-            if model.outputs['boxreg_delta']:
-                y_pred_delta = model.outputs['y']['oc'][0][::time_stride]
-                y_pred = y_pred_delta + tf.stack([0.5 - 1./o.search_scale/2., 0.5 + 1./o.search_scale/2.]*2)
-            else:
-                y_pred = model.outputs['y']['oc'][0][::time_stride]
-            coords = tf.unstack(y_pred, axis=1)
-            boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=1)
-            boxes = tf.expand_dims(boxes, 1)
-            return tf.image.draw_bounding_boxes(input_image, boxes, name=scope)
-        else:
-            return input_image
-
-def _draw_memory_state(model, mtype, time_stride=1, name='draw_memory_states'):
-    with tf.name_scope(name) as scope:
-        p = tf.nn.softmax(model.memory[mtype][0,::time_stride])
-        return tf.cast(tf.round(255*p[:,:,:,0:1]), tf.uint8)
 
 def _load_sequence(seq, o):
     '''

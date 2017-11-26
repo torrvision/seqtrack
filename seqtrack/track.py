@@ -12,7 +12,7 @@ from seqtrack.opts import Opts
 from seqtrack import evaluate
 from seqtrack import geom_np
 from seqtrack import data
-from seqtrack import model as model_pkg
+# from seqtrack import model as model_pkg
 from seqtrack import draw
 from seqtrack import graph
 
@@ -96,131 +96,29 @@ def add_tracker_arguments(parser):
     parser.add_argument(
             '--model_params', help='JSON string specifying model',
             type=json.loads, default={})
-    parser.add_argument(
-            '--cnn_model', help='pretrained CNN model',
-            type=str, default='custom')
-    parser.add_argument(
-            '--nunits', help='number of hidden units in rnn cell',
-            type=int, default=256)
+    # parser.add_argument(
+    #         '--cnn_model', help='pretrained CNN model',
+    #         type=str, default='custom')
 
-    parser.add_argument(
-            '--search_scale', help='size of search space relative to target',
-            type=int, default=4)
-    parser.add_argument(
-            '--target_scale', help='size of context relative to target',
-            type=int, default=1)
-    parser.add_argument(
-            '--perspective', help='ic: image-centric, oc: object-centric',
-            type=str, default='oc')
-    parser.add_argument(
-            '--aspect_method', help='method for fixing aspect ratio',
-            type=str, default='stretch',
-            choices=['stretch', 'area', 'perimeter'])
+    # JV: Move these to the model.
+    # parser.add_argument(
+    #         '--search_scale', help='size of search space relative to target',
+    #         type=int, default=4)
+    # parser.add_argument(
+    #         '--target_scale', help='size of context relative to target',
+    #         type=int, default=1)
+    # parser.add_argument(
+    #         '--perspective', help='ic: image-centric, oc: object-centric',
+    #         type=str, default='oc')
+    # parser.add_argument(
+    #         '--aspect_method', help='method for fixing aspect ratio',
+    #         type=str, default='stretch',
+    #         choices=['stretch', 'area', 'perimeter'])
 
-    parser.add_argument(
-            '--th_prob_stay', help='threshold probability to stay movement',
-            type=float, default=0.0)
+    # parser.add_argument(
+    #         '--th_prob_stay', help='threshold probability to stay movement',
+    #         type=float, default=0.0)
 
-
-# def test(m, loader, o, dstype, fulllen=False, draw_track=False):
-#     '''
-#     Note that it is considered that this wrapper serves a test routine with a 
-#     completely trained model. If you want a on-the-fly evaluations during 
-#     training, consider carefully which session you will use.
-#     '''
-# 
-#     saver = tf.train.Saver()
-#     with tf.Session(config=o.tfconfig) as sess:
-#         saver.restore(sess, o.restore_model)
-#         t_start = time.time()
-#         results = evaluate(sess, m, loader, o, dstype, fulllen=fulllen)
-# 
-#     # save results
-#     if fulllen:
-#         savedir = os.path.join(o.path_base, 
-#             os.path.dirname(o.restore_model)[:-7] 
-#             + '/evaluations_{}_fulllen'.format(o.dataset))
-#     else:
-#         savedir = os.path.join(o.path_base, 
-#             os.path.dirname(o.restore_model)[:-7] 
-#             + '/evaluations_{}_RNNlen'.format(o.dataset))
-#     if not os.path.exists(savedir): os.makedirs(savedir)
-# 
-#     # save subset of results (due to memory)
-#     results_partial = {}
-#     results_partial['iou_mean'] = results['iou_mean']
-#     results_partial['success_rates'] = results['success_rates']
-#     results_partial['auc'] = results['auc']
-#     results_partial['cle_mean'] = results['cle_mean']
-#     results_partial['precision_rates'] = results['precision_rates']
-#     results_partial['cle_representative'] = results['cle_representative']
-#     np.save(savedir + '/results_partial.npy', results_partial)
-# 
-#     # print
-#     print '-------------------------------------------------------------------'
-#     print 'Evaluation finished (time: {0:.3f}).'.format(time.time()-t_start)
-#     print 'Model: {}'.format(o.model) 
-#     print 'dataset: {}(''{}'')'.format(o.dataset, dstype)
-#     print 'iou_mean: {0:.3f}'.format(results['iou_mean'])
-#     print 'success_rates: [%s]' % ', '.join(
-#             '%.3f' % val for val in results['success_rates'])
-#     print 'auc: {0:.3f}'.format(results['auc'])
-#     print 'cle_mean: {0:.3f}'.format(results['cle_mean'])
-#     print 'precision_rates: [%s]' % ', '.join(
-#             '%.3f' % val for val in results['precision_rates'])
-#     print 'cle_representative: {0:.3f}'.format(results['cle_representative'])
-#     print 'results and plots are saved at {}'.format(savedir)
-#     print '-------------------------------------------------------------------'
-# 
-#     # Plot success and precision plots
-#     draw.plot_successplot(results['success_rates'], results['auc'], o, savedir)
-#     draw.plot_precisionplot(
-#         results['precision_rates'], results['cle_representative'], o, savedir)
-# 
-#     # VISUALIZE TRACKING RESULTS 
-#     if draw_track:
-#         draw.show_track_results_fl(results, loader, o, savedir)
-
-
-# if __name__ == '__main__':
-#     '''Test script
-#     Provide the followings:
-#         - CUDA_VISIBLE_DEVICES
-#         - dataset (e.g., bouncing_mnist)
-#         - model (e.g., rnn_attention_st)
-#         - restore_model (e.g., ***.ckpt)
-#         - ntimesteps
-#         - yprev_mode
-#         - losses
-#         - (optionally) batchsz
-#     Note that if provided option is inconsitent with the trained model 
-#     (e.g., ntimesteps), it will fail to restore the model.
-#     '''
-#     args = parse_arguments()
-#     o = Opts()
-#     o.update_by_sysarg(args=args)
-#     o._set_gpu_config()
-#     o._set_dataset_params()
-# 
-#     # NOTE: other options can be passed to args or simply put here.
-#     if o.dataset == 'ILSVRC':
-#         dstype = 'val'
-# 
-#     loader = data.load_data(o)
-# 
-#     m = Model(o)
-# 
-#     test_fl = True
-# 
-#     # Case: T-length sequences
-#     if not test_fl:
-#         dstype = 'test' 
-#         test(m, loader, o, dstype=dstype)
-# 
-#     # Case: Full-length sequences
-#     else:
-#         dstype = 'val' # ILSVRC
-#         test(m, loader, o, dstype=dstype, fulllen=True, draw_track=args.draw_track)
 
 if __name__ == '__main__':
     main()

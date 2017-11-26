@@ -2,12 +2,14 @@ import tensorflow as tf
 import tensorflow.contrib.slim as slim
 
 from seqtrack import cnnutil
+from seqtrack import models
+from seqtrack.models import interface
 from seqtrack.models import util
 
 from seqtrack.helpers import merge_dims, get_act
 
 
-class SiamFC(object):
+class SiamFC(interface.IterModel):
 
     def __init__(
             self,
@@ -20,7 +22,8 @@ class SiamFC(object):
         self._num_scales = num_scales
         self._scale_step = scale_step
 
-    def start(self, frame, is_training, enable_loss):
+    def start(self, frame, aspect, is_training, enable_loss,
+              image_summaries_collections=None):
         self._is_training = is_training
         self._enable_loss = enable_loss
         self._init_rect = frame['rect']
@@ -47,7 +50,7 @@ class SiamFC(object):
         search_rect = util.context_rect(prev_state['rect'], self._search_scale,
                                         frame['aspect'], aspect_method='perimeter')
         # Extract an image pyramid in testing mode.
-        num_scales = tf.cond(self._is_training, 1, self._num_scales)
+        num_scales = tf.cond(self._is_training, lambda: 1, lambda: self._num_scales)
         scales = util.scale_range(num_scales, self._scale_step)
         search_ims, search_rects = util.crop_pyr(frame['x'], search_rect, self._search_size, scales)
         rfs = {'search': cnnutil.identity_rf()}
@@ -63,16 +66,21 @@ class SiamFC(object):
         if self._enable_loss:
             pass
 
+        location = util.find_center_in_scoremap(scoremap)
+
         # Rectangle to use in next frame for search area.
         # If using gt and rect not valid, use previous.
-        gt_rect = tf.cond(frame['rect_valid'], frame['rect'], prev_state['rect'])
-        next_prev_rect = tf.cond(self._is_training, gt_rect, pred_rect)
+        gt_rect = tf.cond(frame['rect_valid'], lambda: frame['rect'], lambda: prev_state['rect'])
+        next_prev_rect = tf.cond(self._is_training, lambda: gt_rect, lambda: pred_rect)
 
         state = {
             'rect': next_prev_rect,
             'template_feat': prev_state['template_feat'],
         }
         return pred_rect, state
+
+    def end(self):
+        return 0.
 
 
 def _feature_net(x, rfs=None, padding=None,
