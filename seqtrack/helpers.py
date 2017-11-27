@@ -153,6 +153,12 @@ def merge_dims(x, a, b, name='merge_dims'):
         return y, restore_fn
 
 
+def expand_dims_n(input, axis=None, n=1, name=None):
+    for i in range(n):
+        input = tf.expand_dims(input, axis, name=name)
+    return input
+
+
 def diag_xcorr(x, f, strides, padding, name='diag_xcorr', **kwargs):
     '''
     Args:
@@ -313,6 +319,10 @@ def get_act(act):
         return None
     else:
         raise ValueError('wrong activation type: {}'.format(act))
+
+
+def most_static_shape(x):
+    return [s or d for s, d in zip(x.shape.as_list(), tf.unstack(tf.shape(x)))]
 
 
 # def softmax_cross_entropy_with_logits(

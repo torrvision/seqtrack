@@ -27,6 +27,7 @@ class IntRect:
         return self.max - self.min
 
     def int_center(self):
+        '''Finds the center pixel of a region.'''
         s = self.min + self.max - 1
         if not all(s % 2 == 0):
             raise ValueError('rectangle does not have integer center')

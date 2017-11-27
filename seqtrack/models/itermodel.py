@@ -1,3 +1,5 @@
+import tensorflow as tf
+
 from seqtrack.models import interface
 
 
@@ -6,7 +8,7 @@ class ModelFromIterModel(interface.Model):
     def __init__(self, iter_model):
         self._model = iter_model
 
-    def instantiate(self, example, is_training=None, enable_loss=True,
+    def instantiate(self, example, run_opts, enable_loss=True,
                     image_summaries_collections=None):
         '''Instantiates the graph of a model.
 
@@ -33,14 +35,15 @@ class ModelFromIterModel(interface.Model):
         '''
         # TODO: Aspect, viewport.
         frame = {'x': example['x0'], 'y': example['y0']}
-        init_state = self._model.init(frame, aspect, is_training=is_training, enable_loss=enable_loss)
+        init_state = self._model.start(frame, example['aspect'], run_opts, enable_loss=enable_loss)
 
         frames = {
             'x': tf.unstack(example['x'], axis=1),
             'y': tf.unstack(example['y'], axis=1),
+            'y_is_valid': tf.unstack(example['y_is_valid'], axis=1),
         }
-        frames = {k: frames[k][i] for k in frames}
-        ntimesteps = len(frames)
+        ntimesteps = len(frames['x'])
+        frames = [{k: frames[k][i] for k in frames} for i in range(ntimesteps)]
 
         predictions = [None for _ in range(ntimesteps)]
         losses = [None for _ in range(ntimesteps)]

@@ -6,15 +6,15 @@ from seqtrack import cnnutil
 from seqtrack import geom
 
 from seqtrack.cnnutil import ReceptiveField, IntRect
-from seqtrack.helpers import grow_rect, modify_aspect_ratio, diag_xcorr
+from seqtrack.helpers import merge_dims, grow_rect, modify_aspect_ratio, diag_xcorr
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
 def crop(im, rect, im_size):
     batch_len = tf.shape(im)[0]
-    crop = tf.image.crop_and_resize(im, geom.rect_to_tf_box(rect),
+    return tf.image.crop_and_resize(im, geom.rect_to_tf_box(rect),
                                     box_ind=tf.range(batch_len),
-                                    crop_size=n_positive_integers(im_size),
+                                    crop_size=n_positive_integers(2, im_size),
                                     extrapolation_value=128)
 
 
@@ -29,7 +29,7 @@ def crop_pyr(im, rect, im_size, scales):
         [b, s, h, w, 3]
     '''
     # [b, s, 4]
-    rects = enlarge_rect(tf.expand_dim(scales, -1), tf.expand_dims(rect, -2))
+    rects = grow_rect(tf.expand_dims(scales, -1), tf.expand_dims(rect, -2))
     # Extract multiple rectangles from each image.
     batch_len = tf.shape(im)[0]
     num_scales, = tf.unstack(tf.shape(scales))
@@ -39,7 +39,7 @@ def crop_pyr(im, rect, im_size, scales):
     box_ind, _ = merge_dims(box_ind, 0, 2)
     crop = tf.image.crop_and_resize(im, geom.rect_to_tf_box(rects),
                                     box_ind=box_ind,
-                                    crop_size=n_positive_integers(im_size),
+                                    crop_size=n_positive_integers(2, im_size),
                                     extrapolation_value=128)
     # [b*s, ...] -> [b, s, ...]
     crop = restore(crop, 0)
@@ -48,7 +48,8 @@ def crop_pyr(im, rect, im_size, scales):
 
 def scale_range(num, step):
     assert isinstance(num, tf.Tensor)
-    with tf.control_dependencies([tf.Assert(num % 2 == 0)]):
+    with tf.control_dependencies(
+            [tf.assert_equal(num % 2, 1, message='number of scales must be odd')]):
         half = (num - 1) / 2
     log_step = tf.abs(tf.log(step))
     return tf.exp(log_step * tf.to_float(tf.range(-half, half+1)))
@@ -87,12 +88,13 @@ def diag_xcorr_rf(input, filter, input_rfs, stride=1, padding='VALID', name='dia
         stride: Either an integer or length 2 (as for slim operations).
     '''
     stride = n_positive_integers(2, stride)
-    nhwc_strides = [1, stride[0], stride[1], 1]
-    output = diag_xcorr(input, filter, strides=nhwc_strides, padding=padding, name=name)
-    kernel_size = filter.shape.as_list()[-4:-2]
+    kernel_size = filter.shape.as_list()[-3:-1]
     assert all(kernel_size) # Must not be None or 0.
     rel_rf = _filter_rf(kernel_size, stride, padding)
     output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
+
+    nhwc_strides = [1, stride[0], stride[1], 1]
+    output = diag_xcorr(input, filter, strides=nhwc_strides, padding=padding, name=name)
     return output, output_rfs
 
 
@@ -170,3 +172,24 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
                                   tf.assert_less_equal(center, 1.0+EPSILON)]):
         center = tf.identity(center)
     return center
+
+
+def displacement_from_center(im_size):
+    '''
+    Args:
+        im_size: (height, width)
+
+    Returns:
+        Tensor grid of size [height, width, 2] as (x, y).
+    '''
+    # Get the translation from the center.
+    im_size = np.asarray(im_size)
+    assert all(im_size % 2 == 1)
+    center = (im_size - 1) / 2
+    size_y, size_x = im_size
+    center_y, center_x = center
+    grid_y = tf.range(size_y) - center_y
+    grid_x = tf.range(size_x) - center_x
+    grid = tf.stack((tf.tile(tf.expand_dims(grid_x, 0), [size_y, 1]),
+                     tf.tile(tf.expand_dims(grid_y, 1), [1, size_x])), axis=-1)
+    return grid

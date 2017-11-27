@@ -51,6 +51,7 @@ def make_placeholders(ntimesteps, im_size, default=None):
     run_opts['use_gt'] = tf.placeholder_with_default(False, [], name='use_gt')
     # Add a placeholder that specifies training mode for e.g. batch_norm.
     run_opts['is_training'] = tf.placeholder_with_default(False, [], name='is_training')
+    run_opts['is_tracking'] = tf.placeholder_with_default(False, [], name='is_tracking')
     # Add a placeholder for scheduled sampling of y_prev_GT during training
     run_opts['gt_ratio'] = tf.placeholder_with_default(1.0, [], name='gt_ratio')
     return example, run_opts

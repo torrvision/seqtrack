@@ -311,6 +311,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                 start = time.time()
                 feed_dict = {run_opts['use_gt']:      o.use_gt_train,
                              run_opts['is_training']: True,
+                             run_opts['is_tracking']: False,
                              run_opts['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*global_step),
                                                          o.min_gt_ratio)}
                 if use_queues:
@@ -341,6 +342,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                         start = time.time()
                         feed_dict = {run_opts['use_gt']:      o.use_gt_train,  # Match training.
                                      run_opts['is_training']: False, # Do not update bnorm stats.
+                                     run_opts['is_tracking']: False,
                                      run_opts['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
                         if use_queues:
                             feed_dict.update({queue_index: 1}) # Choose validation queue.

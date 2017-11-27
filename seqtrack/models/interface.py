@@ -1,7 +1,7 @@
 class Model(object):
     '''Model can instantiate a model.'''
 
-    def instantiate(self, example, is_training, enable_loss,
+    def instantiate(self, example, run_opts, enable_loss,
                     image_summaries_collections=None):
         '''
         Args:
@@ -32,7 +32,7 @@ class IterModel(object):
 
     The interface is used like this:
 
-        state = model.start(frames[0], is_training, enable_loss)
+        state = model.start(frames[0], run_opts, enable_loss)
         for i in range(ntimesteps):
             rects[i], state, losses[i] = model.next(frames[i], state)
         extra_loss = model.end()
@@ -45,14 +45,12 @@ class IterModel(object):
     Each state is a nested structure (dicts, lists, tuples) of tensors.
     '''
 
-    def start(self, frame, aspect, is_training, enable_loss,
+    def start(self, frame, aspect, run_opts, enable_loss,
               image_summaries_collections=None):
         '''Processes the first frame.
 
         Args:
             frame is a frame dict
-            is_training is a boolean tensor
-            enable_loss is a boolean
 
         Returns:
             Initial state.
