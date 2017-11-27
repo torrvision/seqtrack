@@ -70,7 +70,8 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
             has_label = tf.logical_or(is_pos, is_neg)
             is_pos = tf.to_float(is_pos)
             is_neg = tf.to_float(is_neg)
-            labels = tf.where(has_label, is_pos / (is_pos + is_neg), 0.5)
+            labels = is_pos / (is_pos + is_neg)
+            labels = tf.where(has_label, labels, 0.5*tf.ones_like(labels))
         else:
             raise ValueError('shape not supported: {}'.format(shape))
         return labels, has_label
@@ -78,13 +79,15 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
 
 def make_balanced_weights(labels, has_label, axis=None, name='make_balanced_weights'):
     with tf.name_scope(name) as scope:
-        mass_pos = tf.where(has_label, labels, 0.)
-        mass_neg = tf.where(has_label, 1. - labels, 0.)
+        mass_pos = tf.where(has_label, labels, tf.zeros_like(labels))
+        mass_neg = tf.where(has_label, 1. - labels, tf.zeros_like(labels))
         total_mass_pos = tf.reduce_sum(mass_pos, axis=axis, keep_dims=True)
         total_mass_neg = tf.reduce_sum(mass_neg, axis=axis, keep_dims=True)
+        weights_pos = mass_pos / total_mass_pos
+        weights_neg = mass_neg / total_mass_neg
         # Use tf.where to avoid nans if total_mass_* = 0
-        weights = (0.5 * tf.where(has_label, mass_pos / total_mass_pos, 0.) +
-                   0.5 * tf.where(has_label, mass_neg / total_mass_neg, 0.))
+        weights = (0.5 * tf.where(has_label, weights_pos, tf.zeros_like(weights_pos)) +
+                   0.5 * tf.where(has_label, weights_neg, tf.zeros_like(weights_neg)))
         return weights
 
 

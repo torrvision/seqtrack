@@ -22,19 +22,28 @@ class SiamFC(interface.IterModel):
             template_size=127,
             search_size=255,
             feature_padding='VALID',
+            bnorm_after_xcorr=False,
+            # Tracking parameters:
             num_scales=5,
             scale_step=1.03,
             scale_update_rate=0.6,
+            # Loss parameters:
+            sigma=0.3,
             balance_classes=False):
         self._template_size = template_size
         self._search_size = search_size
+        self._template_scale = 2
+        self._search_scale = 4
         self._feature_padding = feature_padding
+        self._bnorm_after_xcorr = bnorm_after_xcorr
         self._num_scales = num_scales
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
+        self._sigma = sigma
         self._balance_classes = balance_classes
 
-        self._debug = {k: [] for k in ['search', 'response', 'labels']}
+        self._num_frames = 0
+        self._info = {k: [] for k in ['search', 'response', 'labels']}
 
     def start(self, frame, aspect, run_opts, enable_loss,
               image_summaries_collections=None, name='start'):
@@ -47,12 +56,16 @@ class SiamFC(interface.IterModel):
             self._image_summaries_collections = image_summaries_collections
 
             # TODO: frame['image'] and template_im have a viewport
-            template_rect = util.context_rect(frame['y'], scale=2,
+            template_rect = util.context_rect(frame['y'], scale=self._template_scale,
                                               im_aspect=self._aspect, aspect_method='perimeter')
             template_im = util.crop(frame['x'], template_rect, self._template_size)
             with tf.variable_scope('feature_net', reuse=False):
                 template_feat, _ = _feature_net(template_im, padding=self._feature_padding,
                                                 is_training=self._is_training)
+
+            with tf.name_scope('summary'):
+                tf.summary.image('template', tf.saturate_cast(template_im[0:1], tf.uint8),
+                                 max_outputs=1, collections=self._image_summaries_collections)
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
@@ -69,16 +82,15 @@ class SiamFC(interface.IterModel):
             # During training, use the true location of THIS frame.
             # If this label is not valid, use the previous location from the state.
             gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y'])
-            prev_rect = tf.cond(self._is_training, lambda: prev_state['y'], lambda: gt_rect)
-            search_rect = util.context_rect(prev_rect, scale=4,
+            prev_rect = tf.cond(self._is_tracking, lambda: prev_state['y'], lambda: gt_rect)
+            search_rect = util.context_rect(prev_rect, scale=self._search_scale,
                                             im_aspect=self._aspect, aspect_method='perimeter')
             # Only extract an image pyramid in tracking mode.
             num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
             mid_scale = (num_scales - 1) / 2
             scales = util.scale_range(num_scales, self._scale_step)
             search_ims, search_rects = util.crop_pyr(frame['x'], search_rect, self._search_size, scales)
-            self._debug['search'].append(
-                tf.image.convert_image_dtype(search_ims[:, mid_scale], tf.float32, saturate=True))
+            self._info['search'].append(tf.saturate_cast(search_ims[:, mid_scale], tf.uint8))
             rfs = {'search': cnnutil.identity_rf()}
             with tf.variable_scope('feature_net', reuse=True):
                 search_feat, rfs = _feature_net(search_ims, rfs, padding=self._feature_padding,
@@ -87,18 +99,22 @@ class SiamFC(interface.IterModel):
             response, rfs = util.diag_xcorr_rf(search_feat, template_feat, rfs)
             # Reduce to a scalar response.
             response = tf.reduce_sum(response, axis=-1, keep_dims=True)
-            response = slim.batch_norm(response, scale=True, is_training=self._is_training)
+            # TODO: Does this need variable scope to be shared across time-steps?
+            with tf.variable_scope('output', reuse=(self._num_frames > 0)):
+                if self._bnorm_after_xcorr:
+                    response = slim.batch_norm(response, scale=True, is_training=self._is_training)
+                else:
+                    gain = tf.get_variable('gain', shape=[], dtype=tf.float32)
+                    bias = tf.get_variable('bias', shape=[], dtype=tf.float32)
+                    response = gain * response + bias
             output_size = response.shape.as_list()[-3:-1]
             assert_alignment_correct(self._search_size, output_size, rfs['search'])
             sigmoid_response = tf.sigmoid(response)
-            self._debug['response'].append(
+            self._info['response'].append(
                 tf.image.convert_image_dtype(sigmoid_response[:, mid_scale], tf.uint8, saturate=True))
 
             loss = 0.
             if self._enable_loss:
-                # response is [b, s, h, w, 1] with s = 1
-                # TODO: Manage is_valid=False.
-
                 # Obtain displacement from center of search image.
                 disp = util.displacement_from_center(output_size)
                 disp = tf.to_float(disp) * rfs['search'].stride / self._search_size
@@ -106,9 +122,9 @@ class SiamFC(interface.IterModel):
 
                 gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
                 # labels, has_label = lossfunc.translation_labels(grid, gt_rect_in_search, **kwargs)
-                labels, has_label = lossfunc.foreground_labels(
-                    grid, gt_rect_in_search, shape='rect', sigma=0.3)
-                self._debug['labels'].append(
+                labels, has_label = lossfunc.translation_labels(
+                    grid, gt_rect_in_search, shape='gaussian', sigma=self._sigma/self._search_scale)
+                self._info['labels'].append(
                     tf.image.convert_image_dtype(tf.expand_dims(labels, -1), tf.uint8, saturate=True))
                 if self._balance_classes:
                     weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
@@ -118,9 +134,9 @@ class SiamFC(interface.IterModel):
                 loss = tf.nn.sigmoid_cross_entropy_with_logits(
                     labels=labels,                            # [b, h, w]
                     logits=tf.squeeze(response, axis=(1, 4))) # [b, s, h, w, 1] -> [b, h, w]
+                # TODO: Is this the best way to handle y_is_valid?
                 loss = tf.where(frame['y_is_valid'], loss, tf.zeros_like(loss))
                 loss = tf.reduce_sum(weights * loss)
-                # ce_loss = lossfunc.cross_entropy(response, search_rect, frame['y'])
 
             prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
 
@@ -141,6 +157,7 @@ class SiamFC(interface.IterModel):
             # gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_rect)
             next_prev_rect = tf.cond(self._is_training, lambda: gt_rect, lambda: pred)
 
+            self._num_frames += 1
             outputs = {'y': pred}
             state = {
                 'y': next_prev_rect,
@@ -148,17 +165,18 @@ class SiamFC(interface.IterModel):
             }
             return pred, state, loss
 
-    def end(self):
-        extra_loss = 0.
-        with tf.name_scope('summary'):
-            image_sequence_summary('search', tf.stack(self._debug['search'], axis=1),
-                                   collections=self._image_summaries_collections)
-            image_sequence_summary('response', tf.stack(self._debug['response'], axis=1),
-                                   collections=self._image_summaries_collections)
-            if self._enable_loss:
-                image_sequence_summary('labels', tf.stack(self._debug['labels'], axis=1),
+    def end(self, name='end'):
+        with tf.name_scope(name) as scope:
+            extra_loss = 0.
+            with tf.name_scope('summary'):
+                image_sequence_summary('search', tf.stack(self._info['search'], axis=1),
                                        collections=self._image_summaries_collections)
-        return extra_loss
+                image_sequence_summary('response', tf.stack(self._info['response'], axis=1),
+                                       collections=self._image_summaries_collections)
+                if self._enable_loss:
+                    image_sequence_summary('labels', tf.stack(self._info['labels'], axis=1),
+                                           collections=self._image_summaries_collections)
+            return extra_loss
 
 
 def image_sequence_summary(name, tensor, **kwargs):
