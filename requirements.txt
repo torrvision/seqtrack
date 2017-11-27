@@ -6,3 +6,4 @@ xmltodict
 opencv-python
 progressbar2
 scipy
+sphinx
