@@ -49,6 +49,7 @@ def crop_pyr(im, rect, im_size, scales, name='crop_pyr'):
 
 
 def scale_range(num, step, name='scale_range'):
+    '''Creates a geometric progression with 1 at the center.'''
     with tf.name_scope(name) as scope:
         assert isinstance(num, tf.Tensor)
         with tf.control_dependencies(

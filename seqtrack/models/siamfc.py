@@ -150,13 +150,14 @@ class SiamFC(interface.IterModel):
 
     def end(self):
         extra_loss = 0.
-        image_sequence_summary('search', tf.stack(self._debug['search'], axis=1),
-                               collections=self._image_summaries_collections)
-        image_sequence_summary('response', tf.stack(self._debug['response'], axis=1),
-                               collections=self._image_summaries_collections)
-        if self._enable_loss:
-            image_sequence_summary('labels', tf.stack(self._debug['labels'], axis=1),
+        with tf.name_scope('summary'):
+            image_sequence_summary('search', tf.stack(self._debug['search'], axis=1),
                                    collections=self._image_summaries_collections)
+            image_sequence_summary('response', tf.stack(self._debug['response'], axis=1),
+                                   collections=self._image_summaries_collections)
+            if self._enable_loss:
+                image_sequence_summary('labels', tf.stack(self._debug['labels'], axis=1),
+                                       collections=self._image_summaries_collections)
         return extra_loss
 
 
