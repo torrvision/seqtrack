@@ -29,7 +29,8 @@ class SiamFC(interface.IterModel):
             scale_update_rate=0.6,
             # Loss parameters:
             sigma=0.3,
-            balance_classes=False):
+            balance_classes=False,
+            loss_coeffs=None):
         self._template_size = template_size
         self._search_size = search_size
         self._template_scale = 2
@@ -41,9 +42,12 @@ class SiamFC(interface.IterModel):
         self._scale_update_rate = scale_update_rate
         self._sigma = sigma
         self._balance_classes = balance_classes
+        self._loss_coeffs = loss_coeffs or {}
 
         self._num_frames = 0
+        # For summaries in end():
         self._info = {k: [] for k in ['search', 'response', 'labels']}
+        self._losses = {}
 
     def start(self, frame, aspect, run_opts, enable_loss,
               image_summaries_collections=None, name='start'):
@@ -113,7 +117,7 @@ class SiamFC(interface.IterModel):
             self._info['response'].append(
                 tf.image.convert_image_dtype(sigmoid_response[:, mid_scale], tf.uint8, saturate=True))
 
-            loss = 0.
+            losses = {}
             if self._enable_loss:
                 # Obtain displacement from center of search image.
                 disp = util.displacement_from_center(output_size)
@@ -131,12 +135,16 @@ class SiamFC(interface.IterModel):
                 else:
                     weights = lossfunc.make_uniform_weights(has_label, axis=(-2, -1))
                 # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
-                loss = tf.nn.sigmoid_cross_entropy_with_logits(
+                losses['ce'] = tf.nn.sigmoid_cross_entropy_with_logits(
                     labels=labels,                            # [b, h, w]
                     logits=tf.squeeze(response, axis=(1, 4))) # [b, s, h, w, 1] -> [b, h, w]
                 # TODO: Is this the best way to handle y_is_valid?
-                loss = tf.where(frame['y_is_valid'], loss, tf.zeros_like(loss))
-                loss = tf.reduce_sum(weights * loss)
+                losses['ce'] = tf.where(frame['y_is_valid'], losses['ce'], tf.zeros_like(losses['ce']))
+                losses['ce'] = tf.reduce_sum(weights * losses['ce'])
+
+            for k in losses:
+                self._losses.setdefault(k, []).append(losses[k])
+            loss = tf.add_n([float(self._loss_coeffs[k]) * v for k, v in losses.items()])
 
             prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
 
@@ -168,6 +176,9 @@ class SiamFC(interface.IterModel):
     def end(self, name='end'):
         with tf.name_scope(name) as scope:
             extra_loss = 0.
+            with tf.name_scope('loss_summary'):
+                for loss_name, values in self._losses.items():
+                    tf.summary.scalar(loss_name, tf.reduce_mean(values))
             with tf.name_scope('summary'):
                 image_sequence_summary('search', tf.stack(self._info['search'], axis=1),
                                        collections=self._image_summaries_collections)
