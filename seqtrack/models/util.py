@@ -10,15 +10,16 @@ from seqtrack.helpers import merge_dims, grow_rect, modify_aspect_ratio, diag_xc
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
-def crop(im, rect, im_size):
-    batch_len = tf.shape(im)[0]
-    return tf.image.crop_and_resize(im, geom.rect_to_tf_box(rect),
-                                    box_ind=tf.range(batch_len),
-                                    crop_size=n_positive_integers(2, im_size),
-                                    extrapolation_value=128)
+def crop(im, rect, im_size, name='crop'):
+    with tf.name_scope(name) as scope:
+        batch_len = tf.shape(im)[0]
+        return tf.image.crop_and_resize(im, geom.rect_to_tf_box(rect),
+                                        box_ind=tf.range(batch_len),
+                                        crop_size=n_positive_integers(2, im_size),
+                                        extrapolation_value=128)
 
 
-def crop_pyr(im, rect, im_size, scales):
+def crop_pyr(im, rect, im_size, scales, name='crop_pyr'):
     '''
     Args:
         im: [b, h, w, 3]
@@ -28,31 +29,33 @@ def crop_pyr(im, rect, im_size, scales):
     Returns:
         [b, s, h, w, 3]
     '''
-    # [b, s, 4]
-    rects = grow_rect(tf.expand_dims(scales, -1), tf.expand_dims(rect, -2))
-    # Extract multiple rectangles from each image.
-    batch_len = tf.shape(im)[0]
-    num_scales, = tf.unstack(tf.shape(scales))
-    box_ind = tf.tile(tf.expand_dims(tf.range(batch_len), 1), [1, num_scales])
-    # [b, s, ...] -> [b*s, ...]
-    rects, restore = merge_dims(rects, 0, 2)
-    box_ind, _ = merge_dims(box_ind, 0, 2)
-    crop = tf.image.crop_and_resize(im, geom.rect_to_tf_box(rects),
-                                    box_ind=box_ind,
-                                    crop_size=n_positive_integers(2, im_size),
-                                    extrapolation_value=128)
-    # [b*s, ...] -> [b, s, ...]
-    crop = restore(crop, 0)
-    return crop, rects
+    with tf.name_scope(name) as scope:
+        # [b, s, 4]
+        rects = grow_rect(tf.expand_dims(scales, -1), tf.expand_dims(rect, -2))
+        # Extract multiple rectangles from each image.
+        batch_len = tf.shape(im)[0]
+        num_scales, = tf.unstack(tf.shape(scales))
+        box_ind = tf.tile(tf.expand_dims(tf.range(batch_len), 1), [1, num_scales])
+        # [b, s, ...] -> [b*s, ...]
+        rects, restore = merge_dims(rects, 0, 2)
+        box_ind, _ = merge_dims(box_ind, 0, 2)
+        crop = tf.image.crop_and_resize(im, geom.rect_to_tf_box(rects),
+                                        box_ind=box_ind,
+                                        crop_size=n_positive_integers(2, im_size),
+                                        extrapolation_value=128)
+        # [b*s, ...] -> [b, s, ...]
+        crop = restore(crop, 0)
+        return crop, rects
 
 
-def scale_range(num, step):
-    assert isinstance(num, tf.Tensor)
-    with tf.control_dependencies(
-            [tf.assert_equal(num % 2, 1, message='number of scales must be odd')]):
-        half = (num - 1) / 2
-    log_step = tf.abs(tf.log(step))
-    return tf.exp(log_step * tf.to_float(tf.range(-half, half+1)))
+def scale_range(num, step, name='scale_range'):
+    with tf.name_scope(name) as scope:
+        assert isinstance(num, tf.Tensor)
+        with tf.control_dependencies(
+                [tf.assert_equal(num % 2, 1, message='number of scales must be odd')]):
+            half = (num - 1) / 2
+        log_step = tf.abs(tf.log(step))
+        return tf.exp(log_step * tf.to_float(tf.range(-half, half+1)))
 
 
 def conv2d_rf(inputs, input_rfs, num_outputs, kernel_size, stride=1, padding='SAME', **kwargs):
@@ -98,21 +101,21 @@ def diag_xcorr_rf(input, filter, input_rfs, stride=1, padding='VALID', name='dia
     return output, output_rfs
 
 
-def xcorr_rf(input, filter, input_rfs, padding='VALID'):
-    '''Wraps tf.nn.conv2d to include receptive field calculation.
-
-    Args:
-        input: [b, h, w, c]
-        filter: [b, h, w, c]
-    '''
-    # TODO: Support depth-wise/diagonal convolution.
-    if input_rfs is None:
-        input_rfs = {}
-    kernel_size = filter.shape.as_list()[-4:-2]
-    rel_rf = _filter_rf(kernel_size, stride, padding)
-    output = tf.nn.conv2d(input, filter, padding=padding)
-    output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
-    return output, output_rfs
+# def xcorr_rf(input, filter, input_rfs, padding='VALID'):
+#     '''Wraps tf.nn.conv2d to include receptive field calculation.
+# 
+#     Args:
+#         input: [b, h, w, c]
+#         filter: [b, h, w, c]
+#     '''
+#     # TODO: Support depth-wise/diagonal convolution.
+#     if input_rfs is None:
+#         input_rfs = {}
+#     kernel_size = filter.shape.as_list()[-4:-2]
+#     rel_rf = _filter_rf(kernel_size, stride, padding)
+#     output = tf.nn.conv2d(input, filter, padding=padding)
+#     output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
+#     return output, output_rfs
 
 
 def _filter_rf(kernel_size, stride, padding):
@@ -174,7 +177,7 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
     return center
 
 
-def displacement_from_center(im_size):
+def displacement_from_center(im_size, name='displacement_grid'):
     '''
     Args:
         im_size: (height, width)
@@ -182,14 +185,15 @@ def displacement_from_center(im_size):
     Returns:
         Tensor grid of size [height, width, 2] as (x, y).
     '''
-    # Get the translation from the center.
-    im_size = np.asarray(im_size)
-    assert all(im_size % 2 == 1)
-    center = (im_size - 1) / 2
-    size_y, size_x = im_size
-    center_y, center_x = center
-    grid_y = tf.range(size_y) - center_y
-    grid_x = tf.range(size_x) - center_x
-    grid = tf.stack((tf.tile(tf.expand_dims(grid_x, 0), [size_y, 1]),
-                     tf.tile(tf.expand_dims(grid_y, 1), [1, size_x])), axis=-1)
-    return grid
+    with tf.name_scope(name) as scope:
+        # Get the translation from the center.
+        im_size = np.asarray(im_size)
+        assert all(im_size % 2 == 1)
+        center = (im_size - 1) / 2
+        size_y, size_x = im_size
+        center_y, center_x = center
+        grid_y = tf.range(size_y) - center_y
+        grid_x = tf.range(size_x) - center_x
+        grid = tf.stack((tf.tile(tf.expand_dims(grid_x, 0), [size_y, 1]),
+                         tf.tile(tf.expand_dims(grid_y, 1), [1, size_x])), axis=-1)
+        return grid

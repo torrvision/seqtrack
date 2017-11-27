@@ -37,114 +37,116 @@ class SiamFC(interface.IterModel):
         self._debug = {k: [] for k in ['search', 'response', 'labels']}
 
     def start(self, frame, aspect, run_opts, enable_loss,
-              image_summaries_collections=None):
-        self._aspect = aspect
-        self._is_training = run_opts['is_training']
-        self._is_tracking = run_opts['is_tracking']
-        self._enable_loss = enable_loss
-        # self._init_rect = frame['y']
-        self._image_summaries_collections = image_summaries_collections
+              image_summaries_collections=None, name='start'):
+        with tf.name_scope(name) as scope:
+            self._aspect = aspect
+            self._is_training = run_opts['is_training']
+            self._is_tracking = run_opts['is_tracking']
+            self._enable_loss = enable_loss
+            # self._init_rect = frame['y']
+            self._image_summaries_collections = image_summaries_collections
 
-        # TODO: frame['image'] and template_im have a viewport
-        template_rect = util.context_rect(frame['y'], scale=2,
-                                          im_aspect=self._aspect, aspect_method='perimeter')
-        template_im = util.crop(frame['x'], template_rect, self._template_size)
-        with tf.variable_scope('feature_net', reuse=False):
-            template_feat, _ = _feature_net(template_im, padding=self._feature_padding,
-                                            is_training=self._is_training)
+            # TODO: frame['image'] and template_im have a viewport
+            template_rect = util.context_rect(frame['y'], scale=2,
+                                              im_aspect=self._aspect, aspect_method='perimeter')
+            template_im = util.crop(frame['x'], template_rect, self._template_size)
+            with tf.variable_scope('feature_net', reuse=False):
+                template_feat, _ = _feature_net(template_im, padding=self._feature_padding,
+                                                is_training=self._is_training)
 
-        # TODO: Avoid passing template_feat to and from GPU (or re-computing).
-        state = {
-            'y': frame['y'],
-            'template_feat': template_feat,
-        }
-        return state
+            # TODO: Avoid passing template_feat to and from GPU (or re-computing).
+            state = {
+                'y': frame['y'],
+                'template_feat': template_feat,
+            }
+            return state
 
-    def next(self, frame, prev_state):
-        # TODO: Should be 255 / 64 instead of 4?
-        # TODO: Is 'perimeter' equivalent to SiamFC?
+    def next(self, frame, prev_state, name='timestep'):
+        with tf.name_scope(name) as scope:
+            # TODO: Should be 255 / 64 instead of 4?
+            # TODO: Is 'perimeter' equivalent to SiamFC?
 
-        # During training, use the true location of THIS frame.
-        # If this label is not valid, use the previous location from the state.
-        gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y'])
-        prev_rect = tf.cond(self._is_training, lambda: prev_state['y'], lambda: gt_rect)
-        search_rect = util.context_rect(prev_rect, scale=4,
-                                        im_aspect=self._aspect, aspect_method='perimeter')
-        # Only extract an image pyramid in tracking mode.
-        num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
-        mid_scale = (num_scales - 1) / 2
-        scales = util.scale_range(num_scales, self._scale_step)
-        search_ims, search_rects = util.crop_pyr(frame['x'], search_rect, self._search_size, scales)
-        self._debug['search'].append(
-            tf.image.convert_image_dtype(search_ims[:, mid_scale], tf.float32, saturate=True))
-        rfs = {'search': cnnutil.identity_rf()}
-        with tf.variable_scope('feature_net', reuse=True):
-            search_feat, rfs = _feature_net(search_ims, rfs, padding=self._feature_padding,
-                                            is_training=self._is_training)
-        template_feat = prev_state['template_feat']
-        response, rfs = util.diag_xcorr_rf(search_feat, template_feat, rfs)
-        # Reduce to a scalar response.
-        response = tf.reduce_sum(response, axis=-1, keep_dims=True)
-        response = slim.batch_norm(response, scale=True, is_training=self._is_training)
-        output_size = response.shape.as_list()[-3:-1]
-        assert_alignment_correct(self._search_size, output_size, rfs['search'])
-        sigmoid_response = tf.sigmoid(response)
-        self._debug['response'].append(
-            tf.image.convert_image_dtype(sigmoid_response[:, mid_scale], tf.uint8, saturate=True))
+            # During training, use the true location of THIS frame.
+            # If this label is not valid, use the previous location from the state.
+            gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y'])
+            prev_rect = tf.cond(self._is_training, lambda: prev_state['y'], lambda: gt_rect)
+            search_rect = util.context_rect(prev_rect, scale=4,
+                                            im_aspect=self._aspect, aspect_method='perimeter')
+            # Only extract an image pyramid in tracking mode.
+            num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
+            mid_scale = (num_scales - 1) / 2
+            scales = util.scale_range(num_scales, self._scale_step)
+            search_ims, search_rects = util.crop_pyr(frame['x'], search_rect, self._search_size, scales)
+            self._debug['search'].append(
+                tf.image.convert_image_dtype(search_ims[:, mid_scale], tf.float32, saturate=True))
+            rfs = {'search': cnnutil.identity_rf()}
+            with tf.variable_scope('feature_net', reuse=True):
+                search_feat, rfs = _feature_net(search_ims, rfs, padding=self._feature_padding,
+                                                is_training=self._is_training)
+            template_feat = prev_state['template_feat']
+            response, rfs = util.diag_xcorr_rf(search_feat, template_feat, rfs)
+            # Reduce to a scalar response.
+            response = tf.reduce_sum(response, axis=-1, keep_dims=True)
+            response = slim.batch_norm(response, scale=True, is_training=self._is_training)
+            output_size = response.shape.as_list()[-3:-1]
+            assert_alignment_correct(self._search_size, output_size, rfs['search'])
+            sigmoid_response = tf.sigmoid(response)
+            self._debug['response'].append(
+                tf.image.convert_image_dtype(sigmoid_response[:, mid_scale], tf.uint8, saturate=True))
 
-        loss = 0.
-        if self._enable_loss:
-            # response is [b, s, h, w, 1] with s = 1
-            # TODO: Manage is_valid=False.
+            loss = 0.
+            if self._enable_loss:
+                # response is [b, s, h, w, 1] with s = 1
+                # TODO: Manage is_valid=False.
 
-            # Obtain displacement from center of search image.
-            disp = util.displacement_from_center(output_size)
-            disp = tf.to_float(disp) * rfs['search'].stride / self._search_size
-            grid = 0.5 + disp
+                # Obtain displacement from center of search image.
+                disp = util.displacement_from_center(output_size)
+                disp = tf.to_float(disp) * rfs['search'].stride / self._search_size
+                grid = 0.5 + disp
 
-            gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
-            # labels, has_label = lossfunc.translation_labels(grid, gt_rect_in_search, **kwargs)
-            labels, has_label = lossfunc.foreground_labels(
-                grid, gt_rect_in_search, shape='rect', sigma=0.3)
-            self._debug['labels'].append(
-                tf.image.convert_image_dtype(tf.expand_dims(labels, -1), tf.uint8, saturate=True))
-            if self._balance_classes:
-                weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
-            else:
-                weights = lossfunc.make_uniform_weights(has_label, axis=(-2, -1))
-            # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
-            loss = tf.nn.sigmoid_cross_entropy_with_logits(
-                labels=labels,                            # [b, h, w]
-                logits=tf.squeeze(response, axis=(1, 4))) # [b, s, h, w, 1] -> [b, h, w]
-            loss = tf.where(frame['y_is_valid'], loss, tf.zeros_like(loss))
-            loss = tf.reduce_sum(weights * loss)
-            # ce_loss = lossfunc.cross_entropy(response, search_rect, frame['y'])
+                gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
+                # labels, has_label = lossfunc.translation_labels(grid, gt_rect_in_search, **kwargs)
+                labels, has_label = lossfunc.foreground_labels(
+                    grid, gt_rect_in_search, shape='rect', sigma=0.3)
+                self._debug['labels'].append(
+                    tf.image.convert_image_dtype(tf.expand_dims(labels, -1), tf.uint8, saturate=True))
+                if self._balance_classes:
+                    weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
+                else:
+                    weights = lossfunc.make_uniform_weights(has_label, axis=(-2, -1))
+                # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
+                loss = tf.nn.sigmoid_cross_entropy_with_logits(
+                    labels=labels,                            # [b, h, w]
+                    logits=tf.squeeze(response, axis=(1, 4))) # [b, s, h, w, 1] -> [b, h, w]
+                loss = tf.where(frame['y_is_valid'], loss, tf.zeros_like(loss))
+                loss = tf.reduce_sum(weights * loss)
+                # ce_loss = lossfunc.cross_entropy(response, search_rect, frame['y'])
 
-        prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
+            prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
 
-        # Get relative translation and scale from response.
-        translation_in_search, scale = _relative_motion_from_multiscale_scores(
-            response, rfs['search'].stride, self._search_size, scales)
-        # Damp the scale update towards 1.
-        scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
-        # Get rectangle in search image.
-        pred_in_search = _rect_translate_scale(prev_target_in_search, translation_in_search,
-                                               tf.expand_dims(scale, -1))
-        # Move from search back to original image.
-        # TODO: Test that this is equivalent to scaling translation?
-        pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
+            # Get relative translation and scale from response.
+            translation_in_search, scale = _relative_motion_from_multiscale_scores(
+                response, rfs['search'].stride, self._search_size, scales)
+            # Damp the scale update towards 1.
+            scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
+            # Get rectangle in search image.
+            pred_in_search = _rect_translate_scale(prev_target_in_search, translation_in_search,
+                                                   tf.expand_dims(scale, -1))
+            # Move from search back to original image.
+            # TODO: Test that this is equivalent to scaling translation?
+            pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
 
-        # Rectangle to use in next frame for search area.
-        # If using gt and rect not valid, use previous.
-        # gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_rect)
-        next_prev_rect = tf.cond(self._is_training, lambda: gt_rect, lambda: pred)
+            # Rectangle to use in next frame for search area.
+            # If using gt and rect not valid, use previous.
+            # gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_rect)
+            next_prev_rect = tf.cond(self._is_training, lambda: gt_rect, lambda: pred)
 
-        outputs = {'y': pred}
-        state = {
-            'y': next_prev_rect,
-            'template_feat': prev_state['template_feat'],
-        }
-        return pred, state, loss
+            outputs = {'y': pred}
+            state = {
+                'y': next_prev_rect,
+                'template_feat': prev_state['template_feat'],
+            }
+            return pred, state, loss
 
     def end(self):
         extra_loss = 0.
