@@ -55,5 +55,6 @@ class ModelFromIterModel(interface.Model):
         extra_loss = self._model.end()
         loss = tf.reduce_mean(losses) + extra_loss
 
+        predictions = tf.stack(predictions, axis=1)
         outputs = {'y': predictions}
         return outputs, loss, init_state, final_state

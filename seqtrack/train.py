@@ -17,6 +17,7 @@ import threading
 
 from seqtrack import draw
 from seqtrack import evaluate
+from seqtrack import geom
 from seqtrack import graph
 from seqtrack import helpers
 from seqtrack import motion
@@ -106,13 +107,16 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
     # loss_var, model.gt = get_loss(example, model.outputs, model.gt, o)
     # example_input = graph.whiten(graph.guard_labels(example), stat=stat)
     example_input = graph.whiten(example, stat=stat)
-    outputs, loss_var, init_state, final_state = model.instantiate(
-        example_input, run_opts, enable_loss=True,
-        image_summaries_collections=['IMAGE_SUMMARIES'])
+    with tf.name_scope('model'):
+        outputs, loss_var, init_state, final_state = model.instantiate(
+            example_input, run_opts, enable_loss=True,
+            image_summaries_collections=['IMAGE_SUMMARIES'])
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
     loss_var += r
     tf.summary.scalar('total', loss_var)
+
+    _draw_summaries(example, outputs)
 
     nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
@@ -568,3 +572,36 @@ def gnuplot_str(x):
     if x is None:
         return '?'
     return str(x)
+
+
+def _draw_summaries(example, outputs):
+    with tf.name_scope('image_summary'):
+        ntimesteps = example['x'].shape.as_list()[1]
+        assert ntimesteps is not None
+
+        # TODO: Use standard tf format so this is unnecessary.
+        x0 = example['x0'][0] / 255.
+        x = example['x'][0] / 255.
+
+        tf.summary.image(
+            'image_0', max_outputs=1,
+            tensor=_draw_rectangles([x0], gt=[example['y0'][0]], dtype=tf.uint8))
+        tf.summary.image(
+            'image_1_to_T', max_outputs=ntimesteps,
+            tensor=_draw_rectangles(
+                x, gt=example['y'][0], gt_is_valid=example['y_is_valid'][0],
+                pred=outputs['y'][0], dtype=tf.uint8))
+
+def _draw_rectangles(im, gt, gt_is_valid=None, pred=None, dtype=None):
+    if dtype is None:
+        # Convert back to original dtype.
+        dtype = im.dtype
+    im = tf.image.convert_image_dtype(im, tf.float32)
+    if gt_is_valid is not None:
+        gt = tf.where(gt_is_valid, gt, tf.zeros_like(gt) + geom.unit_rect())
+    boxes = [gt]
+    if pred is not None:
+        boxes.append(pred)
+    boxes = map(geom.rect_to_tf_box, boxes)
+    im = tf.image.draw_bounding_boxes(im, tf.stack(boxes, axis=1))
+    return tf.image.convert_image_dtype(im, dtype)
