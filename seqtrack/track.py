@@ -84,8 +84,12 @@ def main():
 
 
 def add_tracker_arguments(parser):
+    # parser.add_argument(
+    #         '--frmsz', help='size of a square image', type=int, default=257)
     parser.add_argument(
-            '--frmsz', help='size of a square image', type=int, default=257)
+            '--imwidth', type=int, default=640, help='image resolution')
+    parser.add_argument(
+            '--imheight', type=int, default=360, help='image resolution')
     parser.add_argument(
             '--ntimesteps', help='number of time steps for rnn',
             type=int, default=1)

@@ -30,7 +30,9 @@ class Opts(object):
         ## self.dataset            = '' # (bouncing_mnist, etc.)
         self.train_dataset      = 'ILSVRC-train' # (bouncing_mnist, etc.)
         self.trainsplit         = 9 # 0,1,2,3 or 9 for all train sets
-        self.frmsz              = 257
+        # self.frmsz              = 257
+        self.imwidth            = 480
+        self.imheight           = 360
         self.useresizedimg      = True
         self.use_queues         = False
         self.heatmap_params     = {'Gaussian': True}

@@ -88,12 +88,14 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
             queues = []
             for mode in modes:
                 # Create a queue each for training and validation data.
-                queue, feed_loop[mode] = _make_input_pipeline(o,
+                queue, feed_loop[mode] = _make_input_pipeline(
+                    ntimesteps=o.ntimesteps, batchsz=o.batchsz, im_size=(o.imheight, o.imwidth),
                     num_load_threads=1, num_batch_threads=1, name='pipeline_'+mode)
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues,
                 capacity=4, num_threads=1)
-        example, run_opts = graph.make_placeholders(o.ntimesteps, (o.frmsz, o.frmsz), default=from_queue)
+        example, run_opts = graph.make_placeholders(
+            o.ntimesteps, (o.imheight, o.imwidth), default=from_queue)
 
     # color augmentation
     example = _perform_color_augmentation(example, o)
@@ -393,26 +395,31 @@ def _get_optimizer(lr, o):
     return optimizer
 
 
-def _make_input_pipeline(o, dtype=tf.float32,
+def _make_input_pipeline(ntimesteps, batchsz, im_size, dtype=tf.float32,
         example_capacity=4, load_capacity=4, batch_capacity=4,
         num_load_threads=1, num_batch_threads=1,
         name='pipeline'):
+    '''
+    Args:
+        im_size: (height, width) to construct tensor
+    '''
     with tf.name_scope(name) as scope:
+        height, width = im_size
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
         images = pipeline.load_images(files, capacity=load_capacity,
-                num_threads=num_load_threads, image_size=[o.frmsz, o.frmsz, 3])
+                num_threads=num_load_threads, image_size=[height, width, 3])
         images_batch = pipeline.batch(images,
-            batch_size=o.batchsz, sequence_length=o.ntimesteps+1,
+            batch_size=batchsz, sequence_length=ntimesteps+1,
             capacity=batch_capacity, num_threads=num_batch_threads)
 
         # Set static dimension of sequence length.
         # TODO: This may only be necessary due to how the model is written.
-        images_batch['images'].set_shape([None, o.ntimesteps+1, None, None, None])
-        images_batch['labels'].set_shape([None, o.ntimesteps+1, None])
+        images_batch['images'].set_shape([None, ntimesteps+1, None, None, None])
+        images_batch['labels'].set_shape([None, ntimesteps+1, None])
         # Cast type of images.
-        images_batch['images'] = tf.cast(images_batch['images'], o.dtype)
+        images_batch['images'] = tf.cast(images_batch['images'], tf.float32)
         # Put in format expected by model.
-        # is_valid = (range(1, o.ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
+        # is_valid = (range(1, ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
         example_batch = {
             'x0':         images_batch['images'][:, 0],
             'y0':         images_batch['labels'][:, 0],

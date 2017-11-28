@@ -26,7 +26,11 @@ import tensorflow as tf
 
 
 def make_placeholders(ntimesteps, im_size, default=None):
-    im_height, im_width = im_size # TODO
+    '''
+    Args:
+        im_size: (height, width) to construct tensor
+    '''
+    im_height, im_width = im_size
     shapes = {
         'x0':         [None, im_height, im_width, 3],
         'y0':         [None, 4],
