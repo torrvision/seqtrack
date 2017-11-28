@@ -8,26 +8,35 @@ from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to
 EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect']
 
 
-# class ModelInstance:
-#     '''ModelInstance describes an instantiated model.
-# 
-#     model_instance.example['x0']
-#     model_instance.example['y0']
-#     model_instance.example['x']
-#     model_instance.example['y']
-#     model_instance.outputs['y']
-#     model_instance.state_init: Nested structure of tensors.
-#     model_instance.state_final: Nested structure of tensors.
-#     model_instance.batchsz
-#     model_instance.ntimesteps
-#     '''
-# 
-#     def __init__(self, example, outputs, state_init, state_final, ntimesteps, batchsz):
-#         self.outputs = outputs
-#         self.state_init = state_init
-#         self.state_final = state_final
-#         self.ntimesteps = ntimesteps
-#         self.batchsz = batchsz
+class ModelInstance:
+    '''ModelInstance describes an instantiated model.
+
+    self.example['x0']
+    self.example['y0']
+    self.example['x']
+    self.example['y']
+    self.outputs['y']
+    self.state_init: Nested structure of tensors.
+    self.state_final: Nested structure of tensors.
+    self.batchsz
+    self.ntimesteps
+    self.imheight
+    self.imwidth
+
+    Note that batchsz may be None to indicate that dynamic batch size is supported.
+    '''
+
+    def __init__(self, example, run_opts, outputs, state_init, state_final,
+                 batchsz, ntimesteps, imheight, imwidth):
+        self.example = example
+        self.run_opts = run_opts
+        self.outputs = outputs
+        self.state_init = state_init
+        self.state_final = state_final
+        self.batchsz = batchsz
+        self.ntimesteps = ntimesteps
+        self.imheight = imheight
+        self.imwidth = imwidth
 
 
 def make_placeholders(ntimesteps, im_size, default=None):

@@ -11,7 +11,7 @@ from seqtrack import models
 from seqtrack.models import interface
 from seqtrack.models import util
 
-from seqtrack.helpers import merge_dims, expand_dims_n, get_act
+from seqtrack.helpers import merge_dims, expand_dims_n, get_act, grow_rect
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
@@ -29,6 +29,7 @@ class SiamFC(interface.IterModel):
             num_scales=5,
             scale_step=1.03,
             scale_update_rate=0.6,
+            report_square=False,
             # Loss parameters:
             sigma=0.3,
             balance_classes=False,
@@ -43,6 +44,7 @@ class SiamFC(interface.IterModel):
         self._num_scales = num_scales
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
+        self._report_square = report_square
         self._sigma = sigma
         self._balance_classes = balance_classes
         self._loss_coeffs = loss_coeffs or {}
@@ -63,8 +65,9 @@ class SiamFC(interface.IterModel):
             self._image_summaries_collections = image_summaries_collections
 
             # TODO: frame['image'] and template_im have a viewport
-            template_rect = util.context_rect(frame['y'], scale=self._template_scale,
-                                              im_aspect=self._aspect, aspect_method=self._aspect_method)
+            rect_square = util.coerce_aspect(frame['y'], im_aspect=self._aspect,
+                                             aspect_method=self._aspect_method)
+            template_rect = grow_rect(self._template_scale, rect_square)
             template_im = util.crop(frame['x'], template_rect, self._template_size)
             with tf.variable_scope('feature_net', reuse=False):
                 template_feat, _ = _feature_net(template_im, padding=self._feature_padding,
@@ -76,7 +79,7 @@ class SiamFC(interface.IterModel):
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
-                'y': frame['y'],
+                'y': tf.identity(frame['y']),
                 'template_feat': template_feat,
             }
             return state
@@ -87,8 +90,11 @@ class SiamFC(interface.IterModel):
             # If this label is not valid, use the previous location from the state.
             gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y'])
             prev_rect = tf.cond(self._is_tracking, lambda: prev_state['y'], lambda: gt_rect)
-            search_rect = util.context_rect(prev_rect, scale=self._search_scale,
-                                            im_aspect=self._aspect, aspect_method=self._aspect_method)
+            prev_rect_square = util.coerce_aspect(prev_rect, im_aspect=self._aspect,
+                                                  aspect_method=self._aspect_method)
+            if self._report_square:
+                prev_rect = prev_rect_square
+            search_rect = grow_rect(self._search_scale, prev_rect_square)
             # Only extract an image pyramid in tracking mode.
             num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
             mid_scale = (num_scales - 1) / 2

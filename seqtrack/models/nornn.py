@@ -11,15 +11,15 @@ from seqtrack.helpers import merge_dims, diag_xcorr, grow_rect, modify_aspect_ra
 class Nornn(interface.Model):
 
     def __init__(self,
+                 search_size=257, # Takes the role of frmsz.
                  cnn_model='custom',
                  target_scale=1,
                  search_scale=4,
-                 search_size=257,
                  aspect_method='stretch',
                  cnn_trainable=True,
                  wd=0.,
                  losses=None,
-                 heatmap_params=None,
+                 heatmap_params=None, # Default is {'Gaussian': true}
                  conv1_stride=2,
                  feat_act='tanh', # NOTE: tanh ~ linear >>>>> relu. Do not use relu!
                  new_target=False,
@@ -61,13 +61,13 @@ class Nornn(interface.Model):
                  light=False,
                  ):
         losses = losses or []
-        heatmap_params = heatmap_params or dict()
+        heatmap_params = heatmap_params or {'Gaussian': True}
         wd = float(wd)
 
+        self.search_size    = search_size
         self.cnn_model      = cnn_model
         self.target_scale   = target_scale
         self.search_scale   = search_scale
-        self.search_size    = search_size
         self.aspect_method  = aspect_method
         self.cnn_trainable  = cnn_trainable
         self.wd             = wd
@@ -122,17 +122,16 @@ class Nornn(interface.Model):
 
     def instantiate(self, example, run_opts, enable_loss, image_summaries_collections=None):
         self.image_summaries_collections = image_summaries_collections
-
         outputs, init_state, final_state = self._load_model(example, run_opts)
         if enable_loss:
             loss, gt = get_loss(
-                example, outputs, search_scale=self.search_scale, output_size=self.search_size,
+                example, outputs, search_scale=self.search_scale, search_size=self.search_size,
                 losses=self.losses, perspective='oc', heatmap_params=self.heatmap_params)
         else:
             loss = 0.
-
         with tf.name_scope('summary'):
             add_summaries(example, outputs, gt, self.image_summaries_collections)
+        outputs = {'y': outputs['y']['ic']}
         return outputs, loss, init_state, final_state
 
 
@@ -147,7 +146,9 @@ class Nornn(interface.Model):
         gt_ratio    = run_opts['gt_ratio']
         is_training = run_opts['is_training']
 
-        ntimesteps = x.shape.as_list()[1]
+        x_shape = x.shape.as_list()
+        ntimesteps = x_shape[1]
+        imheight, imwidth = x_shape[2], x_shape[3]
 
         # TODO: This would better be during loading data.
         y0 = enforce_inside_box(y0) # In OTB, Panda has GT error (i.e., > 1.0).
@@ -439,7 +440,7 @@ class Nornn(interface.Model):
 
             # Get image-centric outputs. Some are used for visualization purpose.
             hmap_curr_pred = to_image_centric_hmap(hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr,
-                                                   [self.search_size]*2)
+                                                   (imheight, imwidth))
 
             # Outputs.
             y_pred.append(y_curr_pred)
@@ -1206,18 +1207,20 @@ def get_masks_from_rectangles(rec, output_size, kind='fg', typecast=True, min_si
         return masks
 
 
-def get_loss(example, outputs, search_scale, output_size, losses, perspective, heatmap_params,
+def get_loss(example, outputs, search_scale, search_size, losses, perspective, heatmap_params,
              name='loss'):
     with tf.name_scope(name) as scope:
-        ntimesteps = example['x'].shape.as_list()[1]
+        x_shape = example['x'].shape.as_list()
+        ntimesteps = x_shape[1]
+        imheight, imwidth = x_shape[2], x_shape[3]
 
         y_gt    = {'ic': None, 'oc': None}
         hmap_gt = {'ic': None, 'oc': None}
 
         y_gt['ic'] = example['y']
         y_gt['oc'] = to_object_centric_coordinate(example['y'], outputs['box_s_raw'], outputs['box_s_val'])
-        hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], [output_size]*2, min_size=1.0, **heatmap_params)
-        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], [output_size]*2, min_size=1.0, **heatmap_params)
+        hmap_gt['oc'] = convert_rec_to_heatmap(y_gt['oc'], [search_size]*2, min_size=1.0, **heatmap_params)
+        hmap_gt['ic'] = convert_rec_to_heatmap(y_gt['ic'], (imheight, imwidth), min_size=1.0, **heatmap_params)
         if outputs['sc']:
             assert 'sc' in losses
             sc_gt = compute_scale_classification_gt(example, outputs['sc']['scales'])
@@ -1410,11 +1413,11 @@ def compute_scale_classification_gt(example, scales):
 def add_summaries(example, outputs, gt, image_summaries_collections):
     ntimesteps = example['x'].shape.as_list()[1]
     assert ntimesteps is not None
-    # Create a preview and add it to the list of summaries.
-    if 'y' in outputs:
-        boxes = tf.summary.image('box',
-            _draw_bounding_boxes(example, outputs),
-            max_outputs=ntimesteps+1, collections=image_summaries_collections)
+    # JV: This is done in train.py now.
+    # if 'y' in outputs:
+    #     boxes = tf.summary.image('box',
+    #         _draw_bounding_boxes(example, outputs),
+    #         max_outputs=ntimesteps+1, collections=image_summaries_collections)
     # Produce an image summary of the heatmap prediction (ic and oc).
     if 'hmap' in outputs:
         for key in outputs['hmap']:
@@ -1428,9 +1431,7 @@ def add_summaries(example, outputs, gt, image_summaries_collections):
                 _draw_heatmap(outputs, gt, pred=False, perspective=key),
                 max_outputs=ntimesteps+1, collections=image_summaries_collections)
     # Produce an image summary of target and search images (input to CNNs).
-    # TODO: Restore 'search'
-    # for key in ['search', 'target_init', 'target_curr']:
-    for key in ['target_init', 'target_curr']:
+    for key in ['search', 'target_init', 'target_curr']:
         if key in outputs:
             if outputs[key] is None: continue
             input_image = tf.summary.image('cnn_input_{}'.format(key),
@@ -1487,19 +1488,20 @@ def _draw_heatmap(outputs, gt, pred, perspective, time_stride=1, name='draw_heat
 def _draw_input_image(outputs, key, time_stride=1, name='draw_input_image'):
     with tf.name_scope(name) as scope:
         input_image = outputs[key][0,::time_stride]
-        # if key == 'search':
-        #     if outputs['boxreg_delta']:
-        #         y_pred_delta = outputs['y']['oc'][0][::time_stride]
-        #         y_pred = y_pred_delta + tf.stack([0.5 - 1./o.search_scale/2., 0.5 + 1./o.search_scale/2.]*2)
-        #     else:
-        #         y_pred = outputs['y']['oc'][0][::time_stride]
-        #     coords = tf.unstack(y_pred, axis=1)
-        #     boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=1)
-        #     boxes = tf.expand_dims(boxes, 1)
-        #     return tf.image.draw_bounding_boxes(input_image, boxes, name=scope)
-        # else:
-        #     return input_image
-        assert key != 'search'
+        if key == 'search':
+            # if outputs['boxreg_delta']:
+            #     y_pred_delta = outputs['y']['oc'][0][::time_stride]
+            #     y_pred = y_pred_delta + tf.stack([0.5 - 1./o.search_scale/2., 0.5 + 1./o.search_scale/2.]*2)
+            # else:
+            #     y_pred = outputs['y']['oc'][0][::time_stride]
+            assert not outputs['boxreg_delta']
+            y_pred = outputs['y']['oc'][0][::time_stride]
+            coords = tf.unstack(y_pred, axis=1)
+            boxes = tf.stack([coords[i] for i in [1, 0, 3, 2]], axis=1)
+            boxes = tf.expand_dims(boxes, 1)
+            return tf.image.draw_bounding_boxes(input_image, boxes, name=scope)
+        else:
+            return input_image
         return input_image
 
 # def _draw_memory_state(model, mtype, time_stride=1, name='draw_memory_states'):

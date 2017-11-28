@@ -111,12 +111,17 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
         outputs, loss_var, init_state, final_state = model.instantiate(
             example_input, run_opts, enable_loss=True,
             image_summaries_collections=['IMAGE_SUMMARIES'])
+    _draw_summaries(example, outputs)
+
+    model_inst = graph.ModelInstance(
+        example, run_opts, outputs, init_state, final_state,
+        batchsz=outputs['y'].shape.as_list()[0], ntimesteps=o.ntimesteps,
+        imheight=o.imheight, imwidth=o.imwidth)
+
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     tf.summary.scalar('regularization', r)
     loss_var += r
     tf.summary.scalar('total', loss_var)
-
-    _draw_summaries(example, outputs)
 
     nepoch     = o.nepoch if not o.debugmode else 2
     nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
@@ -299,7 +304,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                         result_file = os.path.join(o.path_output, 'assess', eval_id,
                             iter_id+'.json')
                         result = cache_json(result_file,
-                            lambda: evaluate.evaluate(sess, example, model, eval_sequences,
+                            lambda: evaluate.evaluate(sess, model_inst, eval_sequences,
                                 # visualize=visualizer.visualize if o.save_videos else None,
                                 visualize=True, vis_dir=vis_dir, save_frames=o.save_frames,
                                 use_gt=o.use_gt_eval, tre_num=o.eval_tre_num),
@@ -587,7 +592,7 @@ def _draw_summaries(example, outputs):
             'image_0', max_outputs=1,
             tensor=_draw_rectangles([x0], gt=[example['y0'][0]], dtype=tf.uint8))
         tf.summary.image(
-            'image_1_to_T', max_outputs=ntimesteps,
+            'image_1_to_n', max_outputs=ntimesteps,
             tensor=_draw_rectangles(
                 x, gt=example['y'][0], gt_is_valid=example['y_is_valid'][0],
                 pred=outputs['y'][0], dtype=tf.uint8))

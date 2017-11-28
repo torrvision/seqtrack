@@ -263,7 +263,7 @@ class Data_OTB(object):
         self.variant = variant # {'OTB-50', 'OTB-100'}
         # Options to save locally.
         self.useresizedimg = o.useresizedimg
-        self.frmsz         = o.frmsz
+        # self.frmsz         = o.frmsz
 
         # TODO: OTB dataset has attributes to videos. Add them.
 
@@ -273,10 +273,11 @@ class Data_OTB(object):
         self._load_data(o)
 
     def image_file(self, video, t):
-        if self.useresizedimg:
-            img_dir = 'img'
-        else:
-            img_dir = 'img_frmsz{}'.format(self.frmsz)
+        # if self.useresizedimg:
+        #     img_dir = 'img'
+        # else:
+        #     img_dir = 'img_frmsz{}'.format(self.frmsz)
+        img_dir = 'img'
         if video == 'Board':
             filename = '{:05d}.jpg'.format(t+1)
         else:
@@ -466,11 +467,12 @@ class CSV:
         self.tracks = rects
         self.original_image_size = size
         self.format_str = format_str
-        if o.useresizedimg:
-            self.image_dir = os.path.join(o.path_data_home, 'csv', 'images_frmsz{}'.format(o.frmsz))
-        else:
-            # TODO: Use something different here?
-            self.image_dir = os.path.join(o.path_data_home, 'csv', 'images')
+        # if o.useresizedimg:
+        #     self.image_dir = os.path.join(o.path_data_home, 'csv', 'images_frmsz{}'.format(o.frmsz))
+        # else:
+        #     # TODO: Use something different here?
+        #     self.image_dir = os.path.join(o.path_data_home, 'csv', 'images')
+        self.image_dir = os.path.join(o.path_data_home, 'csv', 'images')
 
     @staticmethod
     def _row_to_rect(row):

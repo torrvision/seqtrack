@@ -17,7 +17,7 @@ from seqtrack.helpers import escape_filename
 FRAME_PATTERN = '%06d.jpeg'
 
 
-def track(sess, inputs, model, sequence, use_gt,
+def track(sess, model_inst, sequence, use_gt,
           verbose=False,
           # Visualization options:
           visualize=False,
@@ -25,11 +25,15 @@ def track(sess, inputs, model, sequence, use_gt,
           save_frames=False):
     '''Run an instantiated tracker on a sequence.
 
-    model.outputs      -- Dictionary of tensors
-    model.state_init   -- Nested collection of tensors.
-    model.state_final  -- Nested collection of tensors.
-    model.sequence_len -- Integer
-    model.batch_size   -- Integer or None
+    model_inst.batchsz      -- Integer or None
+    model_inst.ntimesteps   -- Integer
+    model_inst.imheight     -- Integer
+    model_inst.imwidth      -- Integer
+    model_inst.example      -- Dictionary of tensors
+    model_inst.run_opts     -- Dictionary of tensors
+    model_inst.outputs      -- Dictionary of tensors
+    model_inst.state_init   -- Nested collection of tensors.
+    model_inst.state_final  -- Nested collection of tensors.
 
     sequence['image_files']    -- List of strings of length n.
     sequence['viewports']      -- Numpy array of rectangles [n, 4].
@@ -56,11 +60,11 @@ def track(sess, inputs, model, sequence, use_gt,
     first_image = load_image_viewport(
         sequence['image_files'][0],
         sequence['viewports'][0],
-        model.image_size)
+        size_hw=(model_inst.imheight, model_inst.imwidth))
     first_label = sequence['labels'][0]
     # Prepare for input to network.
-    batch_first_image = _single_to_batch(im_to_arr(first_image), model.batch_size)
-    batch_first_label = _single_to_batch(first_label, model.batch_size)
+    batch_first_image = _single_to_batch(im_to_arr(first_image), model_inst.batchsz)
+    batch_first_label = _single_to_batch(first_label, model_inst.batchsz)
 
     if visualize:
         im_vis = visualize_pkg.draw_output(first_image.copy(), rect_gt=first_label)
@@ -75,18 +79,19 @@ def track(sess, inputs, model, sequence, use_gt,
     # If the length of the sequence is greater than the instantiated RNN,
     # it will need to be run in chunks.
     y_pred_chunks = []
-    hmap_pred_chunks = []
+    # hmap_pred_chunks = []
     prev_state = {}
-    for start in range(1, sequence_len, model.sequence_len):
+    for start in range(1, sequence_len, model_inst.ntimesteps):
         rem = sequence_len - start
         # Feed the next `chunk_len` frames into the model.
-        chunk_len = min(rem, model.sequence_len)
+        chunk_len = min(rem, model_inst.ntimesteps)
         dur += time.time() - prev_time
         # JV: Use viewport.
         # images = map(lambda x: load_image(x, model.image_size, resize=True),
         #              sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
         images = [
-            load_image_viewport(image_file, viewport, model.image_size)
+            load_image_viewport(image_file, viewport,
+                                size_hw=(model_inst.imheight, model_inst.imwidth))
             for image_file, viewport in zip(
                 sequence['image_files'][start:start+chunk_len],
                 sequence['viewports'][start:start+chunk_len])
@@ -98,39 +103,49 @@ def track(sess, inputs, model, sequence, use_gt,
         # Prepare data as input to network.
         images_arr = map(im_to_arr, images)
         feed_dict = {
-            inputs['x0_raw']:     batch_first_image,
-            inputs['y0']:         batch_first_label,
-            inputs['x_raw']:      _single_to_batch(pad_to(images_arr, model.sequence_len), model.batch_size),
-            inputs['y']:          _single_to_batch(pad_to(labels, model.sequence_len), model.batch_size),
-            inputs['y_is_valid']: _single_to_batch(pad_to(is_valid, model.sequence_len), model.batch_size),
-            inputs['aspect']:     _single_to_batch(sequence['aspect'], model.batch_size),
-            inputs['use_gt']:     use_gt,
+            model_inst.example['x0']: batch_first_image,
+            model_inst.example['y0']: batch_first_label,
+            model_inst.example['x']:
+                _single_to_batch(pad_to(images_arr, model_inst.ntimesteps), model_inst.batchsz),
+            model_inst.example['y']:
+                _single_to_batch(pad_to(labels, model_inst.ntimesteps), model_inst.batchsz),
+            model_inst.example['y_is_valid']:
+                _single_to_batch(pad_to(is_valid, model_inst.ntimesteps), model_inst.batchsz),
+            model_inst.example['aspect']:
+                _single_to_batch(sequence['aspect'], model_inst.batchsz),
+            model_inst.run_opts['use_gt']: use_gt,
+            model_inst.run_opts['is_tracking']: True,
         }
         if start > 1:
             # This is not the first chunk.
             # Add the previous state to the feed dictionary.
-            tensor, value = to_nested_tuple(model.state_init, prev_state)
+            tensor, value = to_nested_tuple(model_inst.state_init, prev_state)
             if tensor is not None: # Function returns None if empty.
                 feed_dict[tensor] = value
         # Get output and final state.
-        y_pred, prev_state, hmap_pred = sess.run(
-            [model.outputs['y']['ic'], model.state_final, model.outputs['hmap']['ic']],
-            feed_dict=feed_dict)
+        # y_pred, prev_state, hmap_pred = sess.run(
+        #     [model_inst.outputs['y']['ic'], model_inst.state_final, model_inst.outputs['hmap']['ic']],
+        #     feed_dict=feed_dict)
+        y_pred, prev_state = sess.run(
+            [model_inst.outputs['y'], model_inst.state_final], feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
         y_pred = y_pred[0][:chunk_len]
-        hmap_pred = hmap_pred[0][:chunk_len]
+        # hmap_pred = hmap_pred[0][:chunk_len]
 
         if visualize:
             for i in range(len(images)):
                 t = start + i
+                # im_vis = visualize_pkg.draw_output(images[i].copy(),
+                #     rect_gt=(labels[i] if is_valid[i] else None),
+                #     rect_pred=y_pred[i],
+                #     hmap_pred=hmap_pred[i])
                 im_vis = visualize_pkg.draw_output(images[i].copy(),
                     rect_gt=(labels[i] if is_valid[i] else None),
-                    rect_pred=y_pred[i],
-                    hmap_pred=hmap_pred[i])
+                    rect_pred=y_pred[i])
                 im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % t))
 
         y_pred_chunks.append(y_pred)
-        hmap_pred_chunks.append(hmap_pred)
+        # hmap_pred_chunks.append(hmap_pred)
 
     dur += time.time() - prev_time
     if verbose:
@@ -156,8 +171,9 @@ def track(sess, inputs, model, sequence, use_gt,
 
     # Concatenate the results for all chunks.
     y_pred = np.concatenate(y_pred_chunks)
-    hmap_pred = np.concatenate(hmap_pred_chunks)
-    return y_pred, hmap_pred
+    # hmap_pred = np.concatenate(hmap_pred_chunks)
+    # return y_pred, hmap_pred
+    return y_pred
 
 def _single_to_batch(x, batch_size):
     x = np.expand_dims(x, 0)
@@ -178,7 +194,7 @@ def _make_progress_bar():
     #             Percentage(), ') ', Bar(), ' ', ETA()]).start()
 
 
-def evaluate(sess, inputs, model, sequences, use_gt=False, tre_num=1, **kwargs):
+def evaluate(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
     '''
     Returns:
         A dictionary that contains evaluation results.
@@ -205,7 +221,8 @@ def evaluate(sess, inputs, model, sequences, use_gt=False, tre_num=1, **kwargs):
                 #raise ValueError('no frames with labels after first frame')
                 continue
             #print 'sequence {} of {}'.format(i+1, len(sequences))
-            pred, hmap_pred = track(sess, inputs, model, sequence, use_gt, **kwargs)
+            # pred, hmap_pred = track(sess, model_inst, sequence, use_gt, **kwargs)
+            pred = track(sess, model_inst, sequence, use_gt, **kwargs)
             # if visualize:
             #     visualize(sequence['video_name'], sequence, pred, hmap_pred, save_frames)
             gt = np.array(sequence['labels'])

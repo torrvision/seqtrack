@@ -137,7 +137,7 @@ def _filter_rf(kernel_size, stride, padding):
     return rel_rf
 
 
-def context_rect(target, scale, im_aspect, aspect_method='stretch', name='context_rect'):
+def coerce_aspect(target, im_aspect, aspect_method='stretch', name='coerce_aspect'):
     with tf.name_scope(name) as scope:
         # Modify aspect ratio of target.
         # Necessary to account for aspect ratio of reference frame.
@@ -148,7 +148,7 @@ def context_rect(target, scale, im_aspect, aspect_method='stretch', name='contex
             target = geom.rect_mul(target, stretch)
             target = modify_aspect_ratio(target, aspect_method)
             target = geom.rect_mul(target, 1./stretch)
-        return grow_rect(scale, target)
+        return target
 
 
 def find_center_in_scoremap(scoremap, threshold=0.95):
