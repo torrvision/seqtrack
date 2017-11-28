@@ -21,6 +21,7 @@ class SiamFC(interface.IterModel):
             self,
             template_size=127,
             search_size=255,
+            aspect_method='perimeter',
             feature_padding='VALID',
             bnorm_after_xcorr=False,
             # Tracking parameters:
@@ -33,6 +34,7 @@ class SiamFC(interface.IterModel):
             loss_coeffs=None):
         self._template_size = template_size
         self._search_size = search_size
+        self._aspect_method = aspect_method
         self._template_scale = 2
         self._search_scale = 4
         self._feature_padding = feature_padding
@@ -61,7 +63,7 @@ class SiamFC(interface.IterModel):
 
             # TODO: frame['image'] and template_im have a viewport
             template_rect = util.context_rect(frame['y'], scale=self._template_scale,
-                                              im_aspect=self._aspect, aspect_method='perimeter')
+                                              im_aspect=self._aspect, aspect_method=self._aspect_method)
             template_im = util.crop(frame['x'], template_rect, self._template_size)
             with tf.variable_scope('feature_net', reuse=False):
                 template_feat, _ = _feature_net(template_im, padding=self._feature_padding,
@@ -88,7 +90,7 @@ class SiamFC(interface.IterModel):
             gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y'])
             prev_rect = tf.cond(self._is_tracking, lambda: prev_state['y'], lambda: gt_rect)
             search_rect = util.context_rect(prev_rect, scale=self._search_scale,
-                                            im_aspect=self._aspect, aspect_method='perimeter')
+                                            im_aspect=self._aspect, aspect_method=self._aspect_method)
             # Only extract an image pyramid in tracking mode.
             num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
             mid_scale = (num_scales - 1) / 2
