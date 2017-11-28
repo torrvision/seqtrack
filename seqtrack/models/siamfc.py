@@ -21,7 +21,8 @@ class SiamFC(interface.IterModel):
             self,
             template_size=127,
             search_size=255,
-            aspect_method='perimeter',
+            template_scale=2,
+            aspect_method='perimeter', # TODO: Equivalent to SiamFC?
             feature_padding='VALID',
             bnorm_after_xcorr=False,
             # Tracking parameters:
@@ -35,8 +36,8 @@ class SiamFC(interface.IterModel):
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
-        self._template_scale = 2
-        self._search_scale = 4
+        self._template_scale = template_scale
+        self._search_scale = float(search_size) / template_size * template_scale
         self._feature_padding = feature_padding
         self._bnorm_after_xcorr = bnorm_after_xcorr
         self._num_scales = num_scales
@@ -82,9 +83,6 @@ class SiamFC(interface.IterModel):
 
     def next(self, frame, prev_state, name='timestep'):
         with tf.name_scope(name) as scope:
-            # TODO: Should be 255 / 64 instead of 4?
-            # TODO: Is 'perimeter' equivalent to SiamFC?
-
             # During training, use the true location of THIS frame.
             # If this label is not valid, use the previous location from the state.
             gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y'])
