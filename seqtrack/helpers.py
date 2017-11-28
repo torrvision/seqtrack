@@ -37,35 +37,37 @@ def createScalarMap(name='hot', vmin=-10, vmax=10):
     cNorm  = colors.Normalize(vmin=vmin, vmax=vmax)
     return cmx.ScalarMappable(norm=cNorm, cmap=cm)
 
-def load_image(fname, size=None, resize=False):
+def load_image(fname, size_hw=None, resize=False):
     im = Image.open(fname)
     if im.mode != 'RGB':
         im = im.convert('RGB')
-    if size is not None:
-        size = tuple(size)
-        if im.size != size:
+    if size_hw is not None:
+        height, width = size_hw
+        size_wh = (width, height)
+        if im.size != size_wh:
             if resize:
-                im = im.resize(size)
+                im = im.resize(size_wh)
             else:
                 pdb.set_trace()
                 raise ValueError('size does not match')
     return im
 
-def crop_and_resize(src, box, size, pad_value):
+def crop_and_resize(src, box, size_hw, pad_value):
     '''
     Args:
         src: PIL image
-        size: (width, height)
     '''
     assert len(pad_value) == 3
+    height, width = size_hw
+    size_wh = (width, height)
     # Valid region in original image.
     src_valid = geom_np.rect_intersect(box, geom_np.unit_rect())
     # Valid region in box.
     box_valid = geom_np.crop_rect(src_valid, box)
     src_valid_pix = np.rint(geom_np.rect_mul(src_valid, src.size)).astype(np.int)
-    box_valid_pix = np.rint(geom_np.rect_mul(box_valid, size)).astype(np.int)
+    box_valid_pix = np.rint(geom_np.rect_mul(box_valid, size_wh)).astype(np.int)
 
-    out = Image.new('RGB', size, pad_value)
+    out = Image.new('RGB', size_wh, pad_value)
     src_valid_pix_size = geom_np.rect_size(src_valid_pix)
     box_valid_pix_size = geom_np.rect_size(box_valid_pix)
     if all(src_valid_pix_size >= 1) and all(box_valid_pix_size >= 1):
@@ -75,17 +77,13 @@ def crop_and_resize(src, box, size, pad_value):
         out.paste(out_valid_im, box_valid_pix)
     return out
 
-def load_image_viewport(fname, viewport, size, pad_value=None):
-    '''
-    Args:
-        size: (width, height)
-    '''
+def load_image_viewport(fname, viewport, size_hw, pad_value=None):
     if pad_value is None:
         pad_value = (128, 128, 128)
     im = Image.open(fname)
     if im.mode != 'RGB':
         im = im.convert('RGB')
-    return crop_and_resize(im, viewport, size, pad_value)
+    return crop_and_resize(im, viewport, size_hw, pad_value)
 
 def im_to_arr(x, dtype=np.float32):
     return np.array(x, dtype=dtype)

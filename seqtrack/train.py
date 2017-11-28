@@ -24,9 +24,7 @@ from seqtrack import pipeline
 from seqtrack import sample
 from seqtrack import visualize
 
-from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to, cache_json, merge_dims
-
-EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect']
+from seqtrack.helpers import cache_json
 
 
 def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
@@ -320,7 +318,8 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                     feed_dict.update({queue_index: 0}) # Choose validation queue.
                 else:
                     batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
-                    batch = _load_batch(batch_seqs, o)
+                    # batch = _load_batch(batch_seqs, o)
+                    batch = graph.load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
                     feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                     dur_load = time.time() - start
                 if global_step % o.period_summary == 0:
@@ -350,7 +349,8 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                             feed_dict.update({queue_index: 1}) # Choose validation queue.
                         else:
                             batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
-                            batch = _load_batch(batch_seqs, o)
+                            # batch = _load_batch(batch_seqs, o)
+                            batch = graph.load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
                             feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                             dur_load = time.time() - start
                         summary_var = (summary_vars_with_preview['val']
@@ -472,53 +472,6 @@ def iter_examples(dataset, o, rand=None, num_epochs=None):
                 sequence = motion.augment(sequence, rand=rand, **o.motion_params)
             yield sequence
 
-
-def _load_sequence(seq, o):
-    '''
-    Sequence has keys:
-        'image_files'    # Tensor with shape [n] containing strings.
-        'labels'         # Tensor with shape [n, 4] containing rectangles.
-        'label_is_valid' # Tensor with shape [n] containing booleans.
-        'aspect'         # Tensor with shape [] containing aspect ratio.
-    Example has keys:
-        'x0'     # First image in sequence, shape [h, w, 3]
-        'y0'         # Position of target in first image, shape [4]
-        'x'      # Input images, shape [n-1, h, w, 3]
-        'y'          # Position of target in following frames, shape [n-1, 4]
-        'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
-        'aspect'     # Aspect ratio of original image.
-    '''
-    seq_len = len(seq['image_files'])
-    assert(len(seq['labels']) == seq_len)
-    assert(len(seq['label_is_valid']) == seq_len)
-    assert(seq['label_is_valid'][0] == True)
-    # f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
-    #                         dtype=np.float32)
-    images = [
-        im_to_arr(load_image_viewport(
-            seq['image_files'][t],
-            seq['viewports'][t],
-            size=(o.frmsz, o.frmsz)))
-        for t in range(seq_len)
-    ]
-    return {
-        'x0':         np.array(images[0]),
-        'y0':         np.array(seq['labels'][0]),
-        'x':          np.array(images[1:]),
-        'y':          np.array(seq['labels'][1:]),
-        'y_is_valid': np.array(seq['label_is_valid'][1:]),
-        'aspect':     seq['aspect'],
-    }
-
-def _load_batch(seqs, o):
-    sequence_keys = set(['x', 'y', 'y_is_valid'])
-    examples = map(lambda x: _load_sequence(x, o), seqs)
-    # Pad all sequences to o.ntimesteps.
-    # NOTE: Assumes that none of the arrays to be padded are empty.
-    return {k: np.stack([pad_to(x[k], o.ntimesteps, axis=0)
-                             if k in sequence_keys else x[k]
-                         for x in examples])
-            for k in EXAMPLE_KEYS}
 
 def generate_report(samplers, datasets, o,
         modes=['OPE', 'TRE'],

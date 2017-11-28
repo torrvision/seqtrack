@@ -1,6 +1,11 @@
 '''Contains functions for constructing the TF graph.'''
 
 import tensorflow as tf
+import numpy as np
+
+from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to
+
+EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect']
 
 
 # class ModelInstance:
@@ -95,3 +100,57 @@ def _whiten_image(x, mean, std, name='whiten_image'):
 #         lambda: tf.fill(tf.concat([tf.shape(images)[0:2], [4]], axis=0), float('nan')),
 #         name='labels_safe')
 #     return safe
+
+
+def load_sequence(seq, im_size):
+    '''
+    Args:
+        im_size: (height, width)
+
+    Sequence has keys:
+        'image_files'    # Tensor with shape [n] containing strings.
+        'labels'         # Tensor with shape [n, 4] containing rectangles.
+        'label_is_valid' # Tensor with shape [n] containing booleans.
+        'aspect'         # Tensor with shape [] containing aspect ratio.
+    '''
+    seq_len = len(seq['image_files'])
+    assert(len(seq['labels']) == seq_len)
+    assert(len(seq['label_is_valid']) == seq_len)
+    assert(seq['label_is_valid'][0] == True)
+    # f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
+    #                         dtype=np.float32)
+    images = [
+        im_to_arr(load_image_viewport(seq['image_files'][t], seq['viewports'][t], im_size))
+        for t in range(seq_len)
+    ]
+    return {
+        'x0':         np.array(images[0]),
+        'y0':         np.array(seq['labels'][0]),
+        'x':          np.array(images[1:]),
+        'y':          np.array(seq['labels'][1:]),
+        'y_is_valid': np.array(seq['label_is_valid'][1:]),
+        'aspect':     seq['aspect'],
+    }
+
+
+def load_batch(seqs, ntimesteps, im_size):
+    '''
+    Args:
+        im_size: (height, width)
+
+    Example has keys:
+        'x0'     # First image in sequence, shape [h, w, 3]
+        'y0'         # Position of target in first image, shape [4]
+        'x'      # Input images, shape [n-1, h, w, 3]
+        'y'          # Position of target in following frames, shape [n-1, 4]
+        'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
+        'aspect'     # Aspect ratio of original image.
+    '''
+    sequence_keys = set(['x', 'y', 'y_is_valid'])
+    examples = map(lambda x: load_sequence(x, im_size), seqs)
+    # Pad all sequences to o.ntimesteps.
+    # NOTE: Assumes that none of the arrays to be padded are empty.
+    return {k: np.stack([pad_to(x[k], ntimesteps, axis=0)
+                             if k in sequence_keys else x[k]
+                         for x in examples])
+            for k in EXAMPLE_KEYS}
