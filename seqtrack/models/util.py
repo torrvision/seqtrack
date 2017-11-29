@@ -10,7 +10,7 @@ from seqtrack.helpers import merge_dims, grow_rect, modify_aspect_ratio, diag_xc
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
-def crop(im, rect, im_size, pad_value, name='crop'):
+def crop(im, rect, im_size, pad_value=0, feather=False, feather_margin=0.05, name='crop'):
     '''
     Args:
         im_size: (height, width)
@@ -19,11 +19,15 @@ def crop(im, rect, im_size, pad_value, name='crop'):
     '''
     with tf.name_scope(name) as scope:
         if isinstance(pad_value, tf.Tensor):
+            # TODO: This operation seems slow!
             im -= pad_value
-            im = crop(im, rect, im_size, pad_value=0, name=name)
+            im = crop(im, rect, im_size, pad_value=0,
+                      feather=feather, feather_margin=feather_margin, name=name)
             im += pad_value
             return im
 
+        if feather:
+            im = feather_image(im, margin=feather_margin, background_value=pad_value)
         batch_len = tf.shape(im)[0]
         return tf.image.crop_and_resize(im, geom.rect_to_tf_box(rect),
                                         box_ind=tf.range(batch_len),
@@ -31,7 +35,7 @@ def crop(im, rect, im_size, pad_value, name='crop'):
                                         extrapolation_value=pad_value)
 
 
-def crop_pyr(im, rect, im_size, scales, pad_value, name='crop_pyr'):
+def crop_pyr(im, rect, im_size, scales, pad_value=0, feather=False, feather_margin=0.05, name='crop_pyr'):
     '''
     Args:
         im: [b, h, w, 3]
@@ -46,12 +50,15 @@ def crop_pyr(im, rect, im_size, scales, pad_value, name='crop_pyr'):
     '''
     with tf.name_scope(name) as scope:
         if isinstance(pad_value, tf.Tensor):
+            # TODO: This operation seems slow!
             im -= pad_value
-            # TODO: May be slow?
-            crop_ims, rects = crop_pyr(im, rect, im_size, scales, pad_value=0, name=name)
+            crop_ims, rects = crop_pyr(im, rect, im_size, scales, pad_value=0,
+                                       feather=feather, feather_margin=feather_margin, name=name)
             crop_ims += tf.expand_dims(pad_value, 1)
             return crop_ims, rects
 
+        if feather:
+            im = feather_image(im, margin=feather_margin, background_value=pad_value)
         # [b, s, 4]
         rects = grow_rect(tf.expand_dims(scales, -1), tf.expand_dims(rect, -2))
         # Extract multiple rectangles from each image.
@@ -68,6 +75,38 @@ def crop_pyr(im, rect, im_size, scales, pad_value, name='crop_pyr'):
         # [b*s, ...] -> [b, s, ...]
         crop_ims = restore(crop_ims, 0)
         return crop_ims, rects
+
+
+def feather_image(im, margin, background_value=0, name='feather_image'):
+    with tf.name_scope(name) as scope:
+        im_size = im.shape.as_list()[-3:-1]
+        assert all(im_size)
+        mask = feather_mask(im_size, margin)
+        if background_value == 0:
+            im *= mask
+        else:
+            im = mask * im + (1-mask) * background_value
+        return im
+
+
+def feather_mask(im_size, margin, name='feather_mask'):
+    '''
+    Args:
+        im_size: (height, width)
+        pad_value: Either scalar constant or
+            tf.Tensor that is broadcast-compatible with image.
+    '''
+    # TODO: Should account for aspect ratio.
+    with tf.name_scope(name) as scope:
+        grid = make_grid_centers(im_size)
+        # Distance from interior on either side.
+        lower, upper = margin, 1-margin
+        below_lower = tf.clip_by_value((lower - grid) / margin, 0., 1.)
+        above_upper = tf.clip_by_value((grid - upper) / margin, 0., 1.)
+        delta = tf.maximum(below_lower, above_upper)
+        dist = tf.clip_by_value(tf.norm(delta, axis=-1, keep_dims=True), 0., 1.)
+        mask = 1. - dist
+        return mask
 
 
 def scale_range(num, step, name='scale_range'):
@@ -198,6 +237,24 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
                                   tf.assert_less_equal(center, 1.0+EPSILON)]):
         center = tf.identity(center)
     return center
+
+
+def make_grid_centers(im_size, name='make_grid_centers'):
+    '''Make grid of center positions of each pixel.
+
+    Args:
+        im_size: (height, width)
+
+    Returns:
+        Tensor grid of size [height, width, 2] as (x, y).
+    '''
+    with tf.name_scope(name) as scope:
+        size_y, size_x = n_positive_integers(2, im_size)
+        grid_y = (tf.to_float(tf.range(size_y)) + 0.5) / float(size_y)
+        grid_x = (tf.to_float(tf.range(size_x)) + 0.5) / float(size_x)
+        grid = tf.stack((tf.tile(tf.expand_dims(grid_x, 0), [size_y, 1]),
+                         tf.tile(tf.expand_dims(grid_y, 1), [1, size_x])), axis=-1)
+        return grid
 
 
 def displacement_from_center(im_size, name='displacement_grid'):

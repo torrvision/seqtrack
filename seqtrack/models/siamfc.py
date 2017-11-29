@@ -24,6 +24,8 @@ class SiamFC(interface.IterModel):
             template_scale=2,
             aspect_method='perimeter', # TODO: Equivalent to SiamFC?
             pad_with_mean=False, # Use mean of first image for padding.
+            feather=True,
+            feather_margin=0.05,
             center_input_range=True, # Make range [-0.5, 0.5] instead of [0, 1].
             keep_uint8_range=False, # Use input range of 255 instead of 1.
             feature_padding='VALID',
@@ -41,6 +43,8 @@ class SiamFC(interface.IterModel):
         self._search_size = search_size
         self._aspect_method = aspect_method
         self._pad_with_mean = pad_with_mean
+        self._feather = feather
+        self._feather_margin = feather_margin
         self._keep_uint8_range = keep_uint8_range
         self._center_input_range = center_input_range
         self._template_scale = template_scale
@@ -75,8 +79,10 @@ class SiamFC(interface.IterModel):
             rect_square = util.coerce_aspect(frame['y'], im_aspect=self._aspect,
                                              aspect_method=self._aspect_method)
             template_rect = grow_rect(self._template_scale, rect_square)
-            template_im = util.crop(frame['x'], template_rect, self._template_size,
-                                    pad_value=mean_color if self._pad_with_mean else 0.5)
+            template_im = util.crop(
+                frame['x'], template_rect, self._template_size,
+                pad_value=mean_color if self._pad_with_mean else 0.5,
+                feather=self._feather, feather_margin=self._feather_margin)
             template_input = self._preproc(template_im)
             with tf.variable_scope('feature_net', reuse=False):
                 template_feat, _ = _feature_net(template_input, padding=self._feature_padding,
@@ -111,7 +117,8 @@ class SiamFC(interface.IterModel):
             scales = util.scale_range(num_scales, self._scale_step)
             search_ims, search_rects = util.crop_pyr(
                 frame['x'], search_rect, self._search_size, scales,
-                pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5)
+                pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
+                feather=self._feather, feather_margin=self._feather_margin)
             self._info['search'].append(_to_uint8(search_ims[:, mid_scale]))
             rfs = {'search': cnnutil.identity_rf()}
             search_input = self._preproc(search_ims)
