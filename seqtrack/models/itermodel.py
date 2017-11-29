@@ -35,7 +35,8 @@ class ModelFromIterModel(interface.Model):
         '''
         # TODO: Aspect, viewport.
         frame = {'x': example['x0'], 'y': example['y0']}
-        init_state = self._model.start(frame, example['aspect'], run_opts, enable_loss=enable_loss)
+        init_state = self._model.start(frame, example['aspect'], run_opts, enable_loss=enable_loss,
+                                       image_summaries_collections=image_summaries_collections)
 
         frames = {
             'x': tf.unstack(example['x'], axis=1),
