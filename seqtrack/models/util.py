@@ -2,17 +2,22 @@ import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import numpy as np
 
+import functools
+import matplotlib.cm
+
 from seqtrack import cnnutil
 from seqtrack import geom
 
 from seqtrack.cnnutil import ReceptiveField, IntRect
-from seqtrack.helpers import merge_dims, grow_rect, modify_aspect_ratio, diag_xcorr
+from seqtrack.helpers import merge_dims, modify_aspect_ratio, diag_xcorr
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
 def crop(im, rect, im_size, pad_value=0, feather=False, feather_margin=0.05, name='crop'):
     '''
     Args:
+        im: [b, h, w, c]
+        rect: [b, 4] or [4]
         im_size: (height, width)
         pad_value: Either scalar constant or
             tf.Tensor that is broadcast-compatible with image.
@@ -29,6 +34,8 @@ def crop(im, rect, im_size, pad_value=0, feather=False, feather_margin=0.05, nam
         if feather:
             im = feather_image(im, margin=feather_margin, background_value=pad_value)
         batch_len = tf.shape(im)[0]
+        # Make rect broadcast.
+        rect = rect + tf.zeros([batch_len, 1], tf.float32)
         return tf.image.crop_and_resize(im, geom.rect_to_tf_box(rect),
                                         box_ind=tf.range(batch_len),
                                         crop_size=n_positive_integers(2, im_size),
@@ -60,7 +67,7 @@ def crop_pyr(im, rect, im_size, scales, pad_value=0, feather=False, feather_marg
         if feather:
             im = feather_image(im, margin=feather_margin, background_value=pad_value)
         # [b, s, 4]
-        rects = grow_rect(tf.expand_dims(scales, -1), tf.expand_dims(rect, -2))
+        rects = geom.grow_rect(tf.expand_dims(scales, -1), tf.expand_dims(rect, -2))
         # Extract multiple rectangles from each image.
         batch_len = tf.shape(im)[0]
         num_scales, = tf.unstack(tf.shape(scales))
@@ -277,3 +284,19 @@ def displacement_from_center(im_size, name='displacement_grid'):
         grid = tf.stack((tf.tile(tf.expand_dims(grid_x, 0), [size_y, 1]),
                          tf.tile(tf.expand_dims(grid_y, 1), [1, size_x])), axis=-1)
         return grid
+
+
+def colormap(x, cmap_name, name='colormap'):
+    with tf.name_scope(name) as scope:
+        x_shape = x.shape.as_list()
+        assert x_shape[-1] == 1
+        y = tf.py_func(functools.partial(_colormap_np, cmap_name), [x], tf.float32)
+        y.set_shape(x_shape[:-1] + [4])
+        return y
+
+def _colormap_np(cmap_name, x):
+    cmap = matplotlib.cm.get_cmap(cmap_name)
+    x = np.squeeze(x, axis=-1)
+    x = cmap(x)
+    x = np.asfarray(x, np.float32)
+    return x

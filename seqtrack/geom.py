@@ -134,3 +134,18 @@ def unit_rect(dtype=tf.float32):
     min_pt = tf.constant([0, 0], dtype=dtype)
     max_pt = tf.constant([1, 1], dtype=dtype)
     return make_rect(min_pt, max_pt)
+
+
+def grow_rect(scale, rect, name='grow_rect'):
+    '''
+    Args:
+        scale: [] or [..., 1]
+        rect: [..., 4]
+
+    Supports broadcasting.
+    '''
+    with tf.name_scope(name) as scope:
+        min_pt, max_pt = rect_min_max(rect)
+        center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
+        size *= scale
+        return make_rect(center-0.5*size, center+0.5*size)

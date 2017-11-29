@@ -272,21 +272,6 @@ def map_nested(f, xs):
     return f(xs)
 
 
-def grow_rect(alpha, rect, name='grow_rect'):
-    '''
-    Args:
-        alpha: [] or [..., 1]
-        rect: [..., 4]
-
-    Supports broadcasting.
-    '''
-    with tf.name_scope(name) as scope:
-        min_pt, max_pt = geom.rect_min_max(rect)
-        center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
-        size *= alpha
-        return geom.make_rect(center-0.5*size, center+0.5*size)
-
-
 def modify_aspect_ratio(rect, method='stretch', name='modify_aspect_ratio'):
     if method == 'stretch':
         return rect # No change.

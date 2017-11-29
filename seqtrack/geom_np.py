@@ -85,7 +85,7 @@ def rect_mul(rect, size):
     min_pt, max_pt = rect_min_max(rect)
     return make_rect(size * min_pt, size * max_pt)
 
-def rect_enlarge(rect, scale):
+def grow_rect(scale, rect):
     min_pt, max_pt = rect_min_max(rect)
     center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
     size *= scale

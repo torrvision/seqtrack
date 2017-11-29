@@ -5,7 +5,7 @@ import numpy as np
 from seqtrack import geom
 from seqtrack.models import interface
 from seqtrack.models import util
-from seqtrack.helpers import merge_dims, diag_xcorr, grow_rect, modify_aspect_ratio, get_act
+from seqtrack.helpers import merge_dims, diag_xcorr, modify_aspect_ratio, get_act
 
 
 class Nornn(interface.Model):
@@ -436,7 +436,7 @@ class Nornn(interface.Model):
                     max_score = tf.reduce_max(hmap_curr_pred_oc_fg, axis=(1,2,3))
                     is_pass = tf.greater_equal(max_score, self.sc_score_threshold)
                     scale = tf.where(is_pass, scale, tf.ones_like(scale))
-                y_curr_pred = grow_rect(tf.expand_dims(scale, -1), y_curr_pred)
+                y_curr_pred = geom.grow_rect(tf.expand_dims(scale, -1), y_curr_pred)
             else: # argmax to find center (then use x0's box)
                 y_curr_pred_oc, y_curr_pred = get_rectangles_from_hmap(
                     hmap_curr_pred_oc_fg, box_s_raw_curr, box_s_val_curr, y0)
@@ -918,7 +918,7 @@ def process_image_with_box(img, box, crop_size, scale, aspect=None, aspect_metho
     if aspect is not None:
         box = geom.rect_mul(box, 1./stretch)
 
-    box = grow_rect(scale, box)
+    box = geom.grow_rect(scale, box)
     box_val = geom.rect_intersect(box,geom.unit_rect())
 
     batch_len = tf.shape(img)[0]
