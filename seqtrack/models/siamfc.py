@@ -191,21 +191,20 @@ class SiamFC(interface.IterModel):
             }
             return pred, state, loss
 
-    def end(self, name='end'):
-        with tf.name_scope(name) as scope:
-            extra_loss = 0.
-            with tf.name_scope('loss_summary'):
-                for loss_name, values in self._losses.items():
-                    tf.summary.scalar(loss_name, tf.reduce_mean(values))
-            with tf.name_scope('summary'):
-                image_sequence_summary('search', tf.stack(self._info['search'], axis=1),
+    def end(self):
+        extra_loss = 0.
+        with tf.name_scope('loss_summary'):
+            for loss_name, values in self._losses.items():
+                tf.summary.scalar(loss_name, tf.reduce_mean(values))
+        with tf.name_scope('summary'):
+            image_sequence_summary('search', tf.stack(self._info['search'], axis=1),
+                                   collections=self._image_summaries_collections)
+            image_sequence_summary('response', tf.stack(self._info['response'], axis=1),
+                                   collections=self._image_summaries_collections)
+            if self._enable_loss:
+                image_sequence_summary('labels', tf.stack(self._info['labels'], axis=1),
                                        collections=self._image_summaries_collections)
-                image_sequence_summary('response', tf.stack(self._info['response'], axis=1),
-                                       collections=self._image_summaries_collections)
-                if self._enable_loss:
-                    image_sequence_summary('labels', tf.stack(self._info['labels'], axis=1),
-                                           collections=self._image_summaries_collections)
-            return extra_loss
+        return extra_loss
 
     def _preproc(self, im, name='preproc'):
         with tf.name_scope(name) as scope:
