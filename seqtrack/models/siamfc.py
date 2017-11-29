@@ -23,7 +23,9 @@ class SiamFC(interface.IterModel):
             search_size=255,
             template_scale=2,
             aspect_method='perimeter', # TODO: Equivalent to SiamFC?
-            pad_with_mean=False,
+            pad_with_mean=False, # Use mean of first image for padding.
+            center_input_range=True, # Make range [-0.5, 0.5] instead of [0, 1].
+            keep_uint8_range=False, # Use input range of 255 instead of 1.
             feature_padding='VALID',
             bnorm_after_xcorr=False,
             # Tracking parameters:
@@ -39,6 +41,8 @@ class SiamFC(interface.IterModel):
         self._search_size = search_size
         self._aspect_method = aspect_method
         self._pad_with_mean = pad_with_mean
+        self._keep_uint8_range = keep_uint8_range
+        self._center_input_range = center_input_range
         self._template_scale = template_scale
         self._search_scale = float(search_size) / template_size * template_scale
         self._feature_padding = feature_padding
@@ -72,13 +76,14 @@ class SiamFC(interface.IterModel):
                                              aspect_method=self._aspect_method)
             template_rect = grow_rect(self._template_scale, rect_square)
             template_im = util.crop(frame['x'], template_rect, self._template_size,
-                                    pad_value=mean_color if self._pad_with_mean else 128)
+                                    pad_value=mean_color if self._pad_with_mean else 0.5)
+            template_input = self._preproc(template_im)
             with tf.variable_scope('feature_net', reuse=False):
-                template_feat, _ = _feature_net(template_im, padding=self._feature_padding,
+                template_feat, _ = _feature_net(template_input, padding=self._feature_padding,
                                                 is_training=self._is_training)
 
             with tf.name_scope('summary'):
-                tf.summary.image('template', tf.saturate_cast(template_im[0:1], tf.uint8),
+                tf.summary.image('template', _to_uint8(template_im[0:1]),
                                  max_outputs=1, collections=self._image_summaries_collections)
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
@@ -106,11 +111,12 @@ class SiamFC(interface.IterModel):
             scales = util.scale_range(num_scales, self._scale_step)
             search_ims, search_rects = util.crop_pyr(
                 frame['x'], search_rect, self._search_size, scales,
-                pad_value=prev_state['mean_color'] if self._pad_with_mean else 128)
-            self._info['search'].append(tf.saturate_cast(search_ims[:, mid_scale], tf.uint8))
+                pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5)
+            self._info['search'].append(_to_uint8(search_ims[:, mid_scale]))
             rfs = {'search': cnnutil.identity_rf()}
+            search_input = self._preproc(search_ims)
             with tf.variable_scope('feature_net', reuse=True):
-                search_feat, rfs = _feature_net(search_ims, rfs, padding=self._feature_padding,
+                search_feat, rfs = _feature_net(search_input, rfs, padding=self._feature_padding,
                                                 is_training=self._is_training)
             template_feat = prev_state['template_feat']
             response, rfs = util.diag_xcorr_rf(search_feat, template_feat, rfs)
@@ -127,8 +133,7 @@ class SiamFC(interface.IterModel):
             output_size = response.shape.as_list()[-3:-1]
             assert_alignment_correct(self._search_size, output_size, rfs['search'])
             sigmoid_response = tf.sigmoid(response)
-            self._info['response'].append(
-                tf.image.convert_image_dtype(sigmoid_response[:, mid_scale], tf.uint8, saturate=True))
+            self._info['response'].append(_to_uint8(sigmoid_response[:, mid_scale]))
 
             losses = {}
             if self._enable_loss:
@@ -141,8 +146,7 @@ class SiamFC(interface.IterModel):
                 # labels, has_label = lossfunc.translation_labels(grid, gt_rect_in_search, **kwargs)
                 labels, has_label = lossfunc.translation_labels(
                     grid, gt_rect_in_search, shape='gaussian', sigma=self._sigma/self._search_scale)
-                self._info['labels'].append(
-                    tf.image.convert_image_dtype(tf.expand_dims(labels, -1), tf.uint8, saturate=True))
+                self._info['labels'].append(_to_uint8(tf.expand_dims(labels, -1)))
                 if self._balance_classes:
                     weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
                 else:
@@ -202,6 +206,14 @@ class SiamFC(interface.IterModel):
                     image_sequence_summary('labels', tf.stack(self._info['labels'], axis=1),
                                            collections=self._image_summaries_collections)
             return extra_loss
+
+    def _preproc(self, im, name='preproc'):
+        with tf.name_scope(name) as scope:
+            if self._center_input_range:
+                im -= 0.5
+            if self._keep_uint8_range:
+                im *= 255.
+            return tf.identity(im, scope)
 
 
 def image_sequence_summary(name, tensor, **kwargs):
@@ -344,3 +356,7 @@ def assert_alignment_correct(input_size, output_size, rf):
     # If gap_before is equal to gap_after, then center of response map
     # corresponds to center of search image.
     np.testing.assert_array_equal(gap_before, gap_after)
+
+
+def _to_uint8(x):
+    return tf.image.convert_image_dtype(x, tf.uint8, saturate=True)

@@ -86,7 +86,8 @@ def load_image_viewport(fname, viewport, size_hw, pad_value=None):
     return crop_and_resize(im, viewport, size_hw, pad_value)
 
 def im_to_arr(x, dtype=np.float32):
-    return np.array(x, dtype=dtype)
+    # return np.array(x, dtype=dtype)
+    return (1./255) * np.array(x, dtype=dtype)
 
 def pad_to(x, n, axis=0, mode='constant'):
     x = np.asarray(x)

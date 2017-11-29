@@ -121,6 +121,12 @@ class Nornn(interface.Model):
 
 
     def instantiate(self, example, run_opts, enable_loss, image_summaries_collections=None):
+        if not self.normalize_input_range:
+            # TODO: This is a hack to avoid modifying the implementation.
+            example = dict(example)
+            example['x0'] *= 255.
+            example['x'] *= 255.
+
         self.image_summaries_collections = image_summaries_collections
         outputs, init_state, final_state = self._load_model(example, run_opts)
         if enable_loss:

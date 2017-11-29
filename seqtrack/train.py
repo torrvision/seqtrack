@@ -426,7 +426,9 @@ def _make_input_pipeline(ntimesteps, batchsz, im_size, dtype=tf.float32,
         images_batch['images'].set_shape([None, ntimesteps+1, None, None, None])
         images_batch['labels'].set_shape([None, ntimesteps+1, None])
         # Cast type of images.
-        images_batch['images'] = tf.cast(images_batch['images'], tf.float32)
+        # JV: convert_image_dtype changes range to 1, as expected by other tf functions
+        # images_batch['images'] = tf.cast(images_batch['images'], tf.float32)
+        images_batch['images'] = tf.image.convert_image_dtype(images_batch['images'], tf.float32)
         # Put in format expected by model.
         # is_valid = (range(1, ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
         example_batch = {
@@ -583,25 +585,18 @@ def _draw_summaries(example, outputs):
     with tf.name_scope('image_summary'):
         ntimesteps = example['x'].shape.as_list()[1]
         assert ntimesteps is not None
-
-        # TODO: Use standard tf format so this is unnecessary.
-        x0 = example['x0'][0] / 255.
-        x = example['x'][0] / 255.
-
         tf.summary.image(
-            'image_0', max_outputs=1,
-            tensor=_draw_rectangles([x0], gt=[example['y0'][0]], dtype=tf.uint8))
+            'image_0', max_outputs=1, collections=['IMAGE_SUMMARIES'],
+            tensor=_draw_rectangles([example['x0'][0]], gt=[example['y0'][0]]))
         tf.summary.image(
-            'image_1_to_n', max_outputs=ntimesteps,
-            tensor=_draw_rectangles(
-                x, gt=example['y'][0], gt_is_valid=example['y_is_valid'][0],
-                pred=outputs['y'][0], dtype=tf.uint8))
+            'image_1_to_n', max_outputs=ntimesteps, collections=['IMAGE_SUMMARIES'],
+            tensor=_draw_rectangles(example['x'][0], gt=example['y'][0], pred=outputs['y'][0],
+                                    gt_is_valid=example['y_is_valid'][0]))
 
-def _draw_rectangles(im, gt, gt_is_valid=None, pred=None, dtype=None):
-    if dtype is None:
-        # Convert back to original dtype.
-        dtype = im.dtype
-    im = tf.image.convert_image_dtype(im, tf.float32)
+def _draw_rectangles(im, gt, gt_is_valid=None, pred=None):
+    im = tf.convert_to_tensor(im)
+    if im.dtype != tf.float32:
+        im = tf.image.convert_image_dtype(im, tf.float32)
     if gt_is_valid is not None:
         gt = tf.where(gt_is_valid, gt, tf.zeros_like(gt) + geom.unit_rect())
     boxes = [gt]
@@ -609,4 +604,4 @@ def _draw_rectangles(im, gt, gt_is_valid=None, pred=None, dtype=None):
         boxes.append(pred)
     boxes = map(geom.rect_to_tf_box, boxes)
     im = tf.image.draw_bounding_boxes(im, tf.stack(boxes, axis=1))
-    return tf.image.convert_image_dtype(im, dtype)
+    return tf.image.convert_image_dtype(im, tf.uint8, saturate=True)
