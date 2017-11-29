@@ -10,26 +10,48 @@ from seqtrack.helpers import merge_dims, grow_rect, modify_aspect_ratio, diag_xc
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
-def crop(im, rect, im_size, name='crop'):
+def crop(im, rect, im_size, pad_value, name='crop'):
+    '''
+    Args:
+        im_size: (height, width)
+        pad_value: Either scalar constant or
+            tf.Tensor that is broadcast-compatible with image.
+    '''
     with tf.name_scope(name) as scope:
+        if isinstance(pad_value, tf.Tensor):
+            im -= pad_value
+            im = crop(im, rect, im_size, pad_value=0, name=name)
+            im += pad_value
+            return im
+
         batch_len = tf.shape(im)[0]
         return tf.image.crop_and_resize(im, geom.rect_to_tf_box(rect),
                                         box_ind=tf.range(batch_len),
                                         crop_size=n_positive_integers(2, im_size),
-                                        extrapolation_value=128)
+                                        extrapolation_value=pad_value)
 
 
-def crop_pyr(im, rect, im_size, scales, name='crop_pyr'):
+def crop_pyr(im, rect, im_size, scales, pad_value, name='crop_pyr'):
     '''
     Args:
         im: [b, h, w, 3]
         rect: [b, 4]
+        im_size: (height, width)
         scales: [s]
+        pad_value: Either scalar constant or
+            tf.Tensor that is broadcast-compatible with image.
 
     Returns:
         [b, s, h, w, 3]
     '''
     with tf.name_scope(name) as scope:
+        if isinstance(pad_value, tf.Tensor):
+            im -= pad_value
+            # TODO: May be slow?
+            crop_ims, rects = crop_pyr(im, rect, im_size, scales, pad_value=0, name=name)
+            crop_ims += tf.expand_dims(pad_value, 1)
+            return crop_ims, rects
+
         # [b, s, 4]
         rects = grow_rect(tf.expand_dims(scales, -1), tf.expand_dims(rect, -2))
         # Extract multiple rectangles from each image.
@@ -39,13 +61,13 @@ def crop_pyr(im, rect, im_size, scales, name='crop_pyr'):
         # [b, s, ...] -> [b*s, ...]
         rects, restore = merge_dims(rects, 0, 2)
         box_ind, _ = merge_dims(box_ind, 0, 2)
-        crop = tf.image.crop_and_resize(im, geom.rect_to_tf_box(rects),
-                                        box_ind=box_ind,
-                                        crop_size=n_positive_integers(2, im_size),
-                                        extrapolation_value=128)
+        crop_ims = tf.image.crop_and_resize(im, geom.rect_to_tf_box(rects),
+                                            box_ind=box_ind,
+                                            crop_size=n_positive_integers(2, im_size),
+                                            extrapolation_value=pad_value)
         # [b*s, ...] -> [b, s, ...]
-        crop = restore(crop, 0)
-        return crop, rects
+        crop_ims = restore(crop_ims, 0)
+        return crop_ims, rects
 
 
 def scale_range(num, step, name='scale_range'):

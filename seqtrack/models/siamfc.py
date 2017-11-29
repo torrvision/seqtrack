@@ -23,6 +23,7 @@ class SiamFC(interface.IterModel):
             search_size=255,
             template_scale=2,
             aspect_method='perimeter', # TODO: Equivalent to SiamFC?
+            pad_with_mean=False,
             feature_padding='VALID',
             bnorm_after_xcorr=False,
             # Tracking parameters:
@@ -37,6 +38,7 @@ class SiamFC(interface.IterModel):
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
+        self._pad_with_mean = pad_with_mean
         self._template_scale = template_scale
         self._search_scale = float(search_size) / template_size * template_scale
         self._feature_padding = feature_padding
@@ -64,11 +66,13 @@ class SiamFC(interface.IterModel):
             # self._init_rect = frame['y']
             self._image_summaries_collections = image_summaries_collections
 
+            mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keep_dims=True)
             # TODO: frame['image'] and template_im have a viewport
             rect_square = util.coerce_aspect(frame['y'], im_aspect=self._aspect,
                                              aspect_method=self._aspect_method)
             template_rect = grow_rect(self._template_scale, rect_square)
-            template_im = util.crop(frame['x'], template_rect, self._template_size)
+            template_im = util.crop(frame['x'], template_rect, self._template_size,
+                                    pad_value=mean_color if self._pad_with_mean else 128)
             with tf.variable_scope('feature_net', reuse=False):
                 template_feat, _ = _feature_net(template_im, padding=self._feature_padding,
                                                 is_training=self._is_training)
@@ -79,8 +83,9 @@ class SiamFC(interface.IterModel):
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
-                'y': tf.identity(frame['y']),
-                'template_feat': template_feat,
+                'y':             tf.identity(frame['y']),
+                'template_feat': tf.identity(template_feat),
+                'mean_color':    tf.identity(mean_color),
             }
             return state
 
@@ -99,7 +104,9 @@ class SiamFC(interface.IterModel):
             num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
             mid_scale = (num_scales - 1) / 2
             scales = util.scale_range(num_scales, self._scale_step)
-            search_ims, search_rects = util.crop_pyr(frame['x'], search_rect, self._search_size, scales)
+            search_ims, search_rects = util.crop_pyr(
+                frame['x'], search_rect, self._search_size, scales,
+                pad_value=prev_state['mean_color'] if self._pad_with_mean else 128)
             self._info['search'].append(tf.saturate_cast(search_ims[:, mid_scale], tf.uint8))
             rfs = {'search': cnnutil.identity_rf()}
             with tf.variable_scope('feature_net', reuse=True):
@@ -176,6 +183,7 @@ class SiamFC(interface.IterModel):
             state = {
                 'y': next_prev_rect,
                 'template_feat': prev_state['template_feat'],
+                'mean_color':    prev_state['mean_color'],
             }
             return pred, state, loss
 
@@ -335,4 +343,4 @@ def assert_alignment_correct(input_size, output_size, rf):
     gap_after = input_size - max_pt
     # If gap_before is equal to gap_after, then center of response map
     # corresponds to center of search image.
-    assert np.array_equal(gap_before, gap_after)
+    np.testing.assert_array_equal(gap_before, gap_after)
