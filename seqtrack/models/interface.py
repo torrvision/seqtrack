@@ -34,7 +34,7 @@ class IterModel(object):
 
         state = model.start(frames[0], run_opts, enable_loss)
         for i in range(ntimesteps):
-            rects[i], state, losses[i] = model.next(frames[i], state)
+            outputs[i], state, losses[i] = model.next(frames[i], state)
         extra_loss = model.end()
 
     Each frame is a dict with:
@@ -68,7 +68,7 @@ class IterModel(object):
                 It may have 'y' (and 'y_is_valid') but at test time these will be invalid.
 
         Returns:
-            rect, state, loss
+            outputs, state, loss
 
         The method next() should not modify member variables of the model.
         Instead, it should pass all information to the next frame using state.

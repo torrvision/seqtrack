@@ -8,7 +8,7 @@ from seqtrack import cnnutil
 from seqtrack import geom
 from seqtrack import lossfunc
 from seqtrack import models
-from seqtrack.models import interface
+from seqtrack.models import interface as models_interface
 from seqtrack.models import util
 
 from seqtrack.helpers import merge_dims, expand_dims_n, get_act
@@ -17,7 +17,7 @@ from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 _COLORMAP = 'viridis'
 
 
-class SiamFC(interface.IterModel):
+class SiamFC(models_interface.IterModel):
 
     def __init__(
             self,
@@ -196,11 +196,13 @@ class SiamFC(interface.IterModel):
             # Draw upsample, regularized response over original image.
             response_final_cmap = util.colormap(tf.expand_dims(response_final, -1), _COLORMAP)
             self._info['response_final'].append(_to_uint8(response_final_cmap[:, mid_scale]))
-            final_response_in_search = _align_corner_centers(rf_centers, upsample_size)
-            final_response_in_image = geom.crop_rect(final_response_in_search,
+            response_final_in_search = _align_corner_centers(rf_centers, upsample_size)
+            response_final_in_image = geom.crop_rect(response_final_in_search,
                                                      geom.crop_inverse(search_rect))
-            self._info['response_final_in_image'].append(_to_uint8(paste_image_at_rect(
-                frame['x'], response_final_cmap[:, mid_scale], final_response_in_image, alpha=0.5)))
+            # TODO: How to visualize multi-scale responses?
+            vis = paste_image_at_rect(frame['x'], response_final_cmap[:, mid_scale],
+                                      response_final_in_image, alpha=0.5)
+            self._info['response_final_in_image'].append(_to_uint8(vis))
 
             # Damp the scale update towards 1.
             scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
@@ -218,13 +220,13 @@ class SiamFC(interface.IterModel):
             next_prev_rect = tf.cond(self._is_training, lambda: gt_rect, lambda: pred)
 
             self._num_frames += 1
-            outputs = {'y': pred}
+            outputs = {'y': pred, 'vis': vis}
             state = {
                 'y': next_prev_rect,
                 'template_feat': prev_state['template_feat'],
                 'mean_color':    prev_state['mean_color'],
             }
-            return pred, state, loss
+            return outputs, state, loss
 
     def end(self):
         extra_loss = 0.

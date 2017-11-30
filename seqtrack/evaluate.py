@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import time
 
+from PIL import Image
+
 from seqtrack import draw
 from seqtrack import data
 from seqtrack import visualize as visualize_pkg
@@ -126,25 +128,33 @@ def track(sess, model_inst, sequence, use_gt,
         # y_pred, prev_state, hmap_pred = sess.run(
         #     [model_inst.outputs['y']['ic'], model_inst.state_final, model_inst.outputs['hmap']['ic']],
         #     feed_dict=feed_dict)
-        y_pred, prev_state = sess.run(
-            [model_inst.outputs['y'], model_inst.state_final], feed_dict=feed_dict)
+        output_vars = {'y': model_inst.outputs['y']}
+        if 'vis' in model_inst.outputs:
+            output_vars['vis'] = model_inst.outputs['vis']
+        outputs, prev_state = sess.run(
+            [output_vars, model_inst.state_final], feed_dict=feed_dict)
         # Take first element of batch and first `chunk_len` elements of output.
-        y_pred = y_pred[0][:chunk_len]
-        # hmap_pred = hmap_pred[0][:chunk_len]
+        outputs['y'] = outputs['y'][0][:chunk_len]
+        if 'vis' in outputs:
+            outputs['vis'] = outputs['vis'][0][:chunk_len]
 
         if visualize:
             for i in range(len(images)):
                 t = start + i
+                if 'vis' in outputs:
+                    image_i = Image.fromarray(np.uint8(255 * outputs['vis'][i]))
+                else:
+                    image_i = images[i]
                 # im_vis = visualize_pkg.draw_output(images[i].copy(),
                 #     rect_gt=(labels[i] if is_valid[i] else None),
                 #     rect_pred=y_pred[i],
                 #     hmap_pred=hmap_pred[i])
-                im_vis = visualize_pkg.draw_output(images[i].copy(),
+                im_vis = visualize_pkg.draw_output(image_i,
                     rect_gt=(labels[i] if is_valid[i] else None),
-                    rect_pred=y_pred[i])
+                    rect_pred=outputs['y'][i])
                 im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % t))
 
-        y_pred_chunks.append(y_pred)
+        y_pred_chunks.append(outputs['y'])
         # hmap_pred_chunks.append(hmap_pred)
 
     dur += time.time() - prev_time

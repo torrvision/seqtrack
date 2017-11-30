@@ -1,9 +1,11 @@
 import tensorflow as tf
 
-from seqtrack.models import interface
+from seqtrack.models import interface as models_interface
+
+from seqtrack.helpers import stack_dict
 
 
-class ModelFromIterModel(interface.Model):
+class ModelFromIterModel(models_interface.Model):
 
     def __init__(self, iter_model):
         self._model = iter_model
@@ -46,16 +48,16 @@ class ModelFromIterModel(interface.Model):
         ntimesteps = len(frames['x'])
         frames = [{k: frames[k][i] for k in frames} for i in range(ntimesteps)]
 
-        predictions = [None for _ in range(ntimesteps)]
+        outputs = [None for _ in range(ntimesteps)]
         losses = [None for _ in range(ntimesteps)]
         state = init_state
         for i in range(ntimesteps):
-            predictions[i], state, losses[i] = self._model.next(frames[i], state)
+            outputs[i], state, losses[i] = self._model.next(frames[i], state)
+            assert 'y' in outputs[i]
         final_state = state
 
         extra_loss = self._model.end()
         loss = tf.reduce_mean(losses) + extra_loss
 
-        predictions = tf.stack(predictions, axis=1)
-        outputs = {'y': predictions}
+        outputs = stack_dict(outputs, axis=1)
         return outputs, loss, init_state, final_state

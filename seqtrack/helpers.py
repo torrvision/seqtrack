@@ -309,12 +309,21 @@ def most_static_shape(x):
     return [s or d for s, d in zip(x.shape.as_list(), tf.unstack(tf.shape(x)))]
 
 
-# def softmax_cross_entropy_with_logits(
-#         _sentinel=None,
-#         labels=None,
-#         logits=None,
-#         dim=-1,
-#         name=None):
-#     sc_gt_valid, unmerge = merge_dims(sc_gt_valid, 0, 1)
-#     sc_pred_valid, _ = merge_dims(sc_pred_valid, 0, 1)
-#     loss_sc = tf.nn.softmax_cross_entropy_with_logits(labels=sc_gt, logits=outputs['sc']['out'])
+def stack_dict(frames, axis=0, keys=None):
+    '''Converts list of dictionaries to dictionary of tensors.'''
+    if keys is None:
+        keys = frames[0].keys()
+    return {
+        k: tf.stack([frame[k] for frame in frames], axis=axis)
+        for k in keys
+    }
+
+
+# def unstack_dict(d, keys, axis):
+#     '''Converts dictionary of tensors to list of dictionaries.'''
+#     # Gather lists of all elements at same index.
+#     # {'x': [x0, x1], 'y': [y0, y1]} => [[x0, y0], [x1, y1]]
+#     value_lists = zip(*[tf.unstack(d[k], axis=axis) for k in keys])
+#     # Create a dictionary from each.
+#     # [[x0, y0], [x1, y1]] => [{'x': x0, 'y': y0}, {'x': x1, 'y': y1}]
+#     return [dict(zip(keys, vals)) for vals in value_lists]
