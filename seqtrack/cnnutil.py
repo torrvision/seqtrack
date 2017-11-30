@@ -1,7 +1,6 @@
 import numpy as np
 
-import pprint
-import pdb
+from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 class IntRect:
     '''Describes a rectangle.
@@ -80,71 +79,78 @@ def compose_rf(prev_rf, rel_rf):
     max = prev_rf.rect.max + prev_rf.stride * (rel_rf.rect.max-1)
     return ReceptiveField(IntRect(min, max), stride)
 
-def find_rf(s, t, prev_rf=identity_rf()):
-    # Traverse graph from input to output.
-    # Return None if no path can be found, or if the receptive field cannot be determined.
-    # Careful: Traverses every path (i.e. bad for ResNet).
-    if s is t:
-        return prev_rf
-    if not prev_rf:
-        return None
-    rfs = []
-    for op in s.consumers():
-        # Get receptive fields
-        rel_rf = _operation_rf(op)
-        if not rel_rf:
-            # Receptive field cannot be determined.
-            continue
-        # if len(op.outputs) > 1:
-        #     raise ValueError('multiple outputs')
-        curr_rf = compose_rf(prev_rf, rel_rf)
-        rf = find_rf(op.outputs[0], t, curr_rf)
-        rfs.append(rf)
-    # Resolve multiple receptive fields.
-    return reduce(resolve_rfs, rfs, None)
+def rf_centers_in_input(output_size, rf):
+    '''Gives the center pixels of the receptive fields of the corners of the activation map.'''
+    output_size = np.asarray(n_positive_integers(2, output_size))
+    center_min = rf.rect.int_center()
+    center_max = center_min + (output_size - 1) * rf.stride
+    return center_min, center_max
 
-def _operation_rf(op):
-    '''Returns the receptive field of the operation.
-
-    Considers only the first input and the first output.
-    Returns None if the receptive field cannot be determined.
-    '''
-    # Careful: This probably violates encapsulation and might break if TensorFlow changes.
-
-    if op.type in {'Conv2D', 'MaxPool'}:
-        data_format = op.get_attr('data_format')
-        if data_format != 'NHWC':
-            raise ValueError('unexpected format: {}'.format(data_format))
-        if op.type == 'Conv2D':
-            filter_var = op.inputs[1]
-            filter_size = np.array(map(int, filter_var.shape[0:2]))
-        else:
-            filter_size = np.array(map(int, op.get_attr('ksize')[1:3]))
-        rect = _filter_rect_padding(filter_size, op.get_attr('padding'))
-        stride = np.array(map(int, op.get_attr('strides')[1:3]))
-        return ReceptiveField(rect, stride)
-    elif op.type in {'BiasAdd', 'Relu', 'Identity', 'HistogramSummary'}:
-        return identity_rf()
-    elif op.type in {'Reshape'}:
-        return None
-    else:
-        print str(op)
-        raise ValueError('unknown type: {}'.format(op.type))
-
-def _filter_rect_padding(filter_size, padding):
-    if padding == 'SAME':
-        if all(filter_size % 2 != 0):
-            # Both filter dimensions are odd - good.
-            # Filter support is [-(size-1)/2, ..., 0, ..., (size-1)/2]
-            return IntRect(-(filter_size-1)/2, (filter_size-1)/2+1)
-        else:
-            # Pad and put the extra row/column at the end.
-            # Filter support is [-(size/2-1), ..., 0, ..., size/2-1, size/2]
-            return IntRect(-(filter_size/2 - 1), filter_size/2 + 1)
-    elif padding == 'VALID':
-        return IntRect((0, 0), filter_size)
-    else:
-        raise ValueError('unknown padding type: {}'.format(padding))
+# def find_rf(s, t, prev_rf=identity_rf()):
+#     # Traverse graph from input to output.
+#     # Return None if no path can be found, or if the receptive field cannot be determined.
+#     # Careful: Traverses every path (i.e. bad for ResNet).
+#     if s is t:
+#         return prev_rf
+#     if not prev_rf:
+#         return None
+#     rfs = []
+#     for op in s.consumers():
+#         # Get receptive fields
+#         rel_rf = _operation_rf(op)
+#         if not rel_rf:
+#             # Receptive field cannot be determined.
+#             continue
+#         # if len(op.outputs) > 1:
+#         #     raise ValueError('multiple outputs')
+#         curr_rf = compose_rf(prev_rf, rel_rf)
+#         rf = find_rf(op.outputs[0], t, curr_rf)
+#         rfs.append(rf)
+#     # Resolve multiple receptive fields.
+#     return reduce(resolve_rfs, rfs, None)
+# 
+# def _operation_rf(op):
+#     '''Returns the receptive field of the operation.
+# 
+#     Considers only the first input and the first output.
+#     Returns None if the receptive field cannot be determined.
+#     '''
+#     # Careful: This probably violates encapsulation and might break if TensorFlow changes.
+# 
+#     if op.type in {'Conv2D', 'MaxPool'}:
+#         data_format = op.get_attr('data_format')
+#         if data_format != 'NHWC':
+#             raise ValueError('unexpected format: {}'.format(data_format))
+#         if op.type == 'Conv2D':
+#             filter_var = op.inputs[1]
+#             filter_size = np.array(map(int, filter_var.shape[0:2]))
+#         else:
+#             filter_size = np.array(map(int, op.get_attr('ksize')[1:3]))
+#         rect = _filter_rect_padding(filter_size, op.get_attr('padding'))
+#         stride = np.array(map(int, op.get_attr('strides')[1:3]))
+#         return ReceptiveField(rect, stride)
+#     elif op.type in {'BiasAdd', 'Relu', 'Identity', 'HistogramSummary'}:
+#         return identity_rf()
+#     elif op.type in {'Reshape'}:
+#         return None
+#     else:
+#         print str(op)
+#         raise ValueError('unknown type: {}'.format(op.type))
+# 
+# def _filter_rect_padding(filter_size, padding):
+#     if padding == 'SAME':
+#         if all(filter_size % 2 != 0):
+#             # Both filter dimensions are odd - good.
+#             # Filter support is [-(size-1)/2, ..., 0, ..., (size-1)/2]
+#             return IntRect(-(filter_size-1)/2, (filter_size-1)/2+1)
+#         else:
+#             # Pad and put the extra row/column at the end.
+#             # Filter support is [-(size/2-1), ..., 0, ..., size/2-1, size/2]
+#             return IntRect(-(filter_size/2 - 1), filter_size/2 + 1)
+#     elif padding == 'VALID':
+#         return IntRect((0, 0), filter_size)
+#     else:
+#         raise ValueError('unknown padding type: {}'.format(padding))
 
 def resolve_rfs(a, b):
     if not a:

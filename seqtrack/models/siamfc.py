@@ -38,6 +38,7 @@ class SiamFC(interface.IterModel):
             scale_step=1.03,
             scale_update_rate=0.6,
             report_square=False,
+            upsample_rate=2,
             # Loss parameters:
             sigma=0.3,
             balance_classes=False,
@@ -65,8 +66,10 @@ class SiamFC(interface.IterModel):
 
         self._num_frames = 0
         # For summaries in end():
-        info_keys = ['search', 'response', 'response_final', 'labels', 'response_in_search']
-        self._info = {k: [] for k in info_keys}
+        self._info = {k: [] for k in [
+            'search', 'response', 'labels', 'response_in_search',
+            'response_final', 'response_final_in_image',
+        ]}
         self._losses = {}
 
     def start(self, frame, aspect, run_opts, enable_loss,
@@ -107,16 +110,18 @@ class SiamFC(interface.IterModel):
 
     def next(self, frame, prev_state, name='timestep'):
         with tf.name_scope(name) as scope:
-            # During training, use the true location of THIS frame.
-            # If this label is not valid, use the previous location from the state.
+            # During training, let the "previous location" be the current true location
+            # so that the object is in the center of the search area (like SiamFC).
             gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y'])
             prev_rect = tf.cond(self._is_tracking, lambda: prev_state['y'], lambda: gt_rect)
-            prev_rect_square = util.coerce_aspect(prev_rect, im_aspect=self._aspect,
-                                                  aspect_method=self._aspect_method)
+            # Coerce the aspect ratio of the rectangle to construct the search area.
+            prev_rect_square = util.coerce_aspect(
+                prev_rect, im_aspect=self._aspect, aspect_method=self._aspect_method)
             if self._report_square:
                 prev_rect = prev_rect_square
             search_rect = geom.grow_rect(self._search_scale, prev_rect_square)
-            # Only extract an image pyramid in tracking mode.
+
+            # Extract an image pyramid (use 1 scale when not in tracking mode).
             num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
             mid_scale = (num_scales - 1) / 2
             scales = util.scale_range(num_scales, self._scale_step)
@@ -125,18 +130,17 @@ class SiamFC(interface.IterModel):
                 pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
                 feather=self._feather, feather_margin=self._feather_margin)
             self._info['search'].append(_to_uint8(search_ims[:, mid_scale]))
+
+            # Extract features, perform search, get receptive field of response wrt image.
             rfs = {'search': cnnutil.identity_rf()}
             search_input = self._preproc(search_ims)
             with tf.variable_scope('feature_net', reuse=True):
                 search_feat, rfs = _feature_net(search_input, rfs, padding=self._feature_padding,
                                                 is_training=self._is_training)
-            template_feat = prev_state['template_feat']
-            response, rfs = util.diag_xcorr_rf(search_feat, template_feat, rfs,
-                                               padding=self._xcorr_padding)
-            print 'receptive field:', str(rfs['search'])
-            # Reduce to a scalar response.
+            response, rfs = util.diag_xcorr_rf(
+                input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
+                padding=self._xcorr_padding)
             response = tf.reduce_sum(response, axis=-1, keep_dims=True)
-            # TODO: Does this need variable scope to be shared across time-steps?
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
                 if self._bnorm_after_xcorr:
                     response = slim.batch_norm(response, scale=True, is_training=self._is_training)
@@ -144,22 +148,16 @@ class SiamFC(interface.IterModel):
                     gain = tf.get_variable('gain', shape=[], dtype=tf.float32)
                     bias = tf.get_variable('bias', shape=[], dtype=tf.float32)
                     response = gain * response + bias
-            output_size = response.shape.as_list()[-3:-1]
-            assert_alignment_correct(self._search_size, output_size, rfs['search'])
+            response_size = response.shape.as_list()[-3:-1]
+            assert_center_alignment(self._search_size, response_size, rfs['search'])
             response_cmap = util.colormap(tf.sigmoid(response), _COLORMAP)
             self._info['response'].append(_to_uint8(response_cmap[:, mid_scale]))
 
-            # TODO: Draw final response on search image instead.
-            response_rect = _find_response_rect(self._search_size, output_size, rfs['search'])
-            response_in_search = util.crop(
-                response_cmap[:, mid_scale], geom.crop_inverse(response_rect), self._search_size)
-            response_in_search = overlay_alpha(search_ims[:, mid_scale], response_in_search, 0.5)
-            self._info['response_in_search'].append(response_in_search)
-
+            # TODO: Simplify!
             losses = {}
             if self._enable_loss:
                 # Obtain displacement from center of search image.
-                disp = util.displacement_from_center(output_size)
+                disp = util.displacement_from_center(response_size)
                 disp = tf.to_float(disp) * rfs['search'].stride / self._search_size
                 grid = 0.5 + disp
 
@@ -185,17 +183,29 @@ class SiamFC(interface.IterModel):
                 self._losses.setdefault(k, []).append(losses[k])
             loss = tf.add_n([float(self._loss_coeffs[k]) * v for k, v in losses.items()])
 
-            prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
-
             # Get relative translation and scale from response.
             response_final = _finalize_scores(response, rfs['search'].stride)
+            upsample_size = response_final.shape.as_list()[-2:]
             translation_in_search, scale = _find_peak(response_final, self._search_size, scales)
 
+            # Draw coarse response over search image.
+            rf_centers = _find_rf_centers(self._search_size, response_size, rfs['search'])
+            response_in_search = _align_corner_centers(rf_centers, response_size)
+            self._info['response_in_search'].append(_to_uint8(paste_image_at_rect(
+                search_ims[:, mid_scale], response_cmap[:, mid_scale], response_in_search, alpha=0.5)))
+            # Draw upsample, regularized response over original image.
             response_final_cmap = util.colormap(tf.expand_dims(response_final, -1), _COLORMAP)
             self._info['response_final'].append(_to_uint8(response_final_cmap[:, mid_scale]))
+            final_response_in_search = _align_corner_centers(rf_centers, upsample_size)
+            final_response_in_image = geom.crop_rect(final_response_in_search,
+                                                     geom.crop_inverse(search_rect))
+            self._info['response_final_in_image'].append(_to_uint8(paste_image_at_rect(
+                frame['x'], response_final_cmap[:, mid_scale], final_response_in_image, alpha=0.5)))
+
             # Damp the scale update towards 1.
             scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
             # Get rectangle in search image.
+            prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
             pred_in_search = _rect_translate_scale(prev_target_in_search, translation_in_search,
                                                    tf.expand_dims(scale, -1))
             # Move from search back to original image.
@@ -222,18 +232,11 @@ class SiamFC(interface.IterModel):
             for loss_name, values in self._losses.items():
                 tf.summary.scalar(loss_name, tf.reduce_mean(values))
         with tf.name_scope('summary'):
-            image_sequence_summary(
-                'search', tf.stack(self._info['search'], axis=1),
-                collections=self._image_summaries_collections)
-            image_sequence_summary(
-                'response', tf.stack(self._info['response'], axis=1),
-                collections=self._image_summaries_collections)
-            image_sequence_summary(
-                'response_final', tf.stack(self._info['response_final'], axis=1),
-                collections=self._image_summaries_collections)
-            image_sequence_summary(
-                'response_in_search', tf.stack(self._info['response_in_search'], axis=1),
-                collections=self._image_summaries_collections)
+            sequence_keys = ['search', 'response', 'response_in_search',
+                             'response_final', 'response_final_in_image']
+            for key in sequence_keys:
+                image_sequence_summary(key, tf.stack(self._info[key], axis=1),
+                                       collections=self._image_summaries_collections)
             if self._enable_loss:
                 image_sequence_summary('labels', tf.stack(self._info['labels'], axis=1),
                                        collections=self._image_summaries_collections)
@@ -315,6 +318,8 @@ def _finalize_scores(response, stride, name='finalize_scores'):
     '''
     Args:
         response: [b, s, h, w, c] where c is 1 or 2.
+
+    stride is (y, x) integer
     '''
     with tf.name_scope(name) as scope:
         response_size = response.shape.as_list()[-3:-1]
@@ -322,7 +327,6 @@ def _finalize_scores(response, stride, name='finalize_scores'):
         response_size = np.array(response_size)
         assert all(response_size % 2 == 1)
         stride = np.array(n_positive_integers(2, stride))
-        assert all(stride == stride[0])
         upsample_size = (response_size - 1) * stride + 1
         # Upsample.
         response, restore_fn = merge_dims(response, 0, 2)
@@ -340,6 +344,8 @@ def _find_peak(response, search_size, scales, name='find_peak'):
     '''
     Args:
         response: [b, s, h, w]
+
+    Assumes that response is centered and at same stride as search image.
     '''
     with tf.name_scope(name) as scope:
         upsample_size = response.shape.as_list()[-2:]
@@ -369,20 +375,21 @@ def _find_peak(response, search_size, scales, name='find_peak'):
         return translation, scale
 
 
-def hann(n):
-    n = tf.convert_to_tensor(n)
-    x = tf.to_float(tf.range(n)) / tf.to_float(n - 1)
-    return 0.5 * (1. - tf.cos(2.*math.pi*x))
+def hann(n, name='hann'):
+    with tf.name_scope(name) as scope:
+        n = tf.convert_to_tensor(n)
+        x = tf.to_float(tf.range(n)) / tf.to_float(n - 1)
+        return 0.5 * (1. - tf.cos(2.*math.pi*x))
+
+def hann_2d(im_size, name='hann_2d'):
+    with tf.name_scope(name) as scope:
+        size_0, size_1 = im_size
+        window_0 = hann(size_0)
+        window_1 = hann(size_1)
+        return tf.expand_dims(window_0, 1) * tf.expand_dims(window_1, 0)
 
 
-def hann_2d(im_size):
-    size_0, size_1 = im_size
-    window_0 = hann(size_0)
-    window_1 = hann(size_1)
-    return tf.expand_dims(window_0, 1) * tf.expand_dims(window_1, 0)
-
-
-def assert_alignment_correct(input_size, output_size, rf):
+def assert_center_alignment(input_size, output_size, rf):
     '''
     Args:
         input_size: (height, width)
@@ -401,31 +408,50 @@ def assert_alignment_correct(input_size, output_size, rf):
     np.testing.assert_array_equal(gap_before, gap_after)
 
 
-def _find_response_rect(input_size, output_size, rf, name='find_response_rect'):
-    input_size = np.asarray(n_positive_integers(2, input_size))
-    output_size = np.asarray(n_positive_integers(2, output_size))
-    min_pixel = np.asarray(rf.rect.int_center())
-    max_pixel = min_pixel + (output_size - 1) * rf.stride
-
+def _find_rf_centers(input_size_hw, output_size_hw, rf, name='rf_centers'):
+    input_size_hw = n_positive_integers(2, input_size_hw)
+    output_size_hw = n_positive_integers(2, output_size_hw)
+    min_pixel, max_pixel = cnnutil.rf_centers_in_input(output_size_hw, rf)
     with tf.name_scope(name) as scope:
         # Switch to (x, y) for rect.
-        input_size = tf.to_float(input_size[::-1])
-        output_size = tf.to_float(output_size[::-1])
-        min_pt = tf.to_float(min_pixel[::-1]) + 0.5
+        input_size = tf.to_float(input_size_hw[::-1])
+        output_size = tf.to_float(output_size_hw[::-1])
+        min_pt = tf.to_float(min_pixel[::-1]) + 0.5 # Take center point of pixel.
         max_pt = tf.to_float(max_pixel[::-1]) + 0.5
-        rect = geom.rect_mul(geom.make_rect(min_pt, max_pt), 1./input_size)
-        # Enlarge rectangle so that pixel center appears at correct location.
-        scale = output_size / (output_size - 1)
-        rect = geom.grow_rect(scale, rect)
-        return rect
+        scale = 1. / input_size
+        return geom.make_rect(scale * min_pt, scale * max_pt)
 
+def _align_corner_centers(rect, im_size_hw, name='align_corner_centers'):
+    with tf.name_scope(name) as scope:
+        min_pt, max_pt = geom.rect_min_max(rect)
+        # Switch to (x, y) for rect.
+        im_size = tf.to_float(im_size_hw[::-1])
+        return geom.grow_rect(im_size / (im_size - 1), rect)
 
-def overlay_alpha(target, overlay, alpha=1, name='overlay'):
+def paste_image_at_rect(target, overlay, rect, alpha=1, name='paste_image_at_rect'):
+    with tf.name_scope(name) as scope:
+        overlay = _ensure_rgba(overlay)
+        target_size = target.shape.as_list()[-3:-1]
+        overlay = util.crop(overlay, geom.crop_inverse(rect), target_size)
+        return paste_image(target, overlay, alpha=alpha)
+
+def paste_image(target, overlay, alpha=1, name='paste_image'):
     with tf.name_scope(name) as scope:
         overlay_rgb, overlay_a = tf.split(overlay, [3, 1], axis=-1)
         overlay_a *= alpha
         return overlay_a * overlay_rgb + (1-overlay_a) * target
 
+def _ensure_rgba(im, name='ensure_rgba'):
+    with tf.name_scope(name) as scope:
+        num_channels = im.shape.as_list()[-1]
+        assert num_channels is not None
+        if num_channels == 1:
+            return _ensure_rgba(tf.image.rgb_to_grayscale(im), name=name)
+        if num_channels == 4:
+            return tf.identity(im)
+        assert num_channels == 3
+        shape = most_static_shape(im)
+        return tf.concat([im, tf.ones(shape[:-1]+[1], im.dtype)], axis=-1)
 
 def _to_uint8(x):
     return tf.image.convert_image_dtype(x, tf.uint8, saturate=True)
