@@ -9,9 +9,9 @@ root="$1"
 name="$2"
 
 # Move to parent directory of script.
-script_file="$( realpath "${BASH_SOURCE[0]}" )"
+script_file="$( readlink -f "${BASH_SOURCE[0]}" )"
 script_dir="$( dirname "$script_file" )"
-src="$( dirname "$script_dir" )"
+src="$( dirname "$( dirname "$script_dir" )" )"
 
 date=$(date +%Y-%m-%d)
 fullname="$date-$name"
@@ -24,7 +24,7 @@ if ! mkdir "$dir" ; then
     exit 1
 fi
 
-if ! cp $src/workspace/install/* "$dir/" ; then
+if ! cp $script_dir/install/* "$dir/" ; then
     echo 'cannot copy workspace scripts'
     exit 1
 fi
@@ -60,7 +60,7 @@ fi
 ( cd $dir &&  ./create-experiment.sh )
 
 # TODO: Come up with a better place to put aux/ files?
-if ! rsync -a "$src/aux/" "$dir/repo/aux/" ; then
+if ! rsync -a "$src/seqtrack/aux/" "$dir/repo/aux/" ; then
     echo 'cannot copy auxiliary files'
     exit 1
 fi
