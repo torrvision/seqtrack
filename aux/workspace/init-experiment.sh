@@ -33,10 +33,10 @@ if ! mkdir "$dir/workspace" ; then
     echo 'cannot create workspace directory'
     exit 1
 fi
-if ! touch "$dir/workspace/run.sh" ; then
-    echo 'cannot touch run.sh'
-    exit 1
-fi
+# if ! touch "$dir/workspace/run.sh" ; then
+#     echo 'cannot touch run.sh'
+#     exit 1
+# fi
 if ! (cd "$script_dir" && git log -1 --format="%H") >"$dir/commit.txt" ; then
     echo 'cannot get git commit'
     exit 1
