@@ -25,6 +25,8 @@ class SiamFC(models_interface.IterModel):
             search_size=255,
             template_scale=2,
             aspect_method='perimeter', # TODO: Equivalent to SiamFC?
+            use_gt=True,
+            curr_as_prev=True,
             pad_with_mean=False, # Use mean of first image for padding.
             feather=True,
             feather_margin=0.05,
@@ -46,6 +48,8 @@ class SiamFC(models_interface.IterModel):
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
+        self._use_gt = use_gt
+        self._curr_as_prev = curr_as_prev
         self._pad_with_mean = pad_with_mean
         self._feather = feather
         self._feather_margin = feather_margin
@@ -113,7 +117,10 @@ class SiamFC(models_interface.IterModel):
             # During training, let the "previous location" be the current true location
             # so that the object is in the center of the search area (like SiamFC).
             gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y'])
-            prev_rect = tf.cond(self._is_tracking, lambda: prev_state['y'], lambda: gt_rect)
+            if self._curr_as_prev:
+                prev_rect = tf.cond(self._is_tracking, lambda: prev_state['y'], lambda: gt_rect)
+            else:
+                prev_rect = prev_state['y']
             # Coerce the aspect ratio of the rectangle to construct the search area.
             prev_rect_square = util.coerce_aspect(
                 prev_rect, im_aspect=self._aspect, aspect_method=self._aspect_method)
@@ -217,7 +224,10 @@ class SiamFC(models_interface.IterModel):
             # Rectangle to use in next frame for search area.
             # If using gt and rect not valid, use previous.
             # gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_rect)
-            next_prev_rect = tf.cond(self._is_training, lambda: gt_rect, lambda: pred)
+            if self._use_gt:
+                next_prev_rect = tf.cond(self._is_tracking, lambda: pred, lambda: gt_rect)
+            else:
+                next_prev_rect = pred
 
             self._num_frames += 1
             outputs = {'y': pred, 'vis': vis}
@@ -354,6 +364,7 @@ def _find_peak(response, search_size, scales, name='find_peak'):
         assert all(upsample_size)
         upsample_size = np.array(upsample_size)
         # Find arg max over all scales.
+        response = tf.verify_tensor_all_finite(response, 'response is not finite')
         max_val = tf.reduce_max(response, axis=(-3, -2, -1), keep_dims=True)
         is_max = tf.to_float(response >= max_val)
 
@@ -366,15 +377,25 @@ def _find_peak(response, search_size, scales, name='find_peak'):
         grid = tf.multiply(grid,                           # [h, w, 2]
                            expand_dims_n(scales, -1, n=3)) # [s, 1, 1, 1]
 
-        translation = tf.reduce_sum(
-            tf.multiply(tf.expand_dims(is_max, -1), # [b, s, h, w] -> [b, s, h, w, 1]
-                        grid),                      # [s, h, w, 2]
-            axis=(-4, -3, -2))                      # [b, s, h, w, 2] -> [b, 2]
-        scale = tf.reduce_sum(
-            tf.multiply(is_max,                          # [b, s, h, w]
-                        expand_dims_n(scales, -1, n=2)), # [b, s] -> [b, s, 1, 1]
-            axis=(-3, -2, -1))                           # [b, s, h, w] -> [b]
+        translation = _weighted_mean(grid,                       # [s, h, w, 2]
+                                     tf.expand_dims(is_max, -1), # [b, s, h, w] -> [b, s, h, w, 1]
+                                     axis=(-4, -3, -2))          # [b, s, h, w, 2] -> [b, 2]
+        scale = _weighted_mean(expand_dims_n(scales, -1, n=2), # [b, s] -> [b, s, 1, 1]
+                               is_max,                         # [b, s, h, w]
+                               axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
         return translation, scale
+
+
+def _weighted_mean(x, w, axis=None, name='weighted_mean'):
+    with tf.name_scope(name) as scope:
+        with tf.control_dependencies([tf.assert_greater_equal(w, 0.)]):
+            w = tf.identity(w)
+        num = tf.reduce_sum(x * w, axis=axis)
+        # TODO: Is this broadcasting necessary?
+        denom = tf.reduce_sum(w + tf.zeros_like(x), axis=axis)
+        with tf.control_dependencies([tf.assert_greater(denom, 0.)]):
+            denom = tf.identity(denom)
+        return num / denom
 
 
 def hann(n, name='hann'):

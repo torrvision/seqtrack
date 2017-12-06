@@ -78,16 +78,18 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
 
 
 def make_balanced_weights(labels, has_label, axis=None, name='make_balanced_weights'):
+    '''
+    Caution: Enforces minimum mass of 1 per label.
+    If there is almost zero weight for a label, this will make it effectively zero.
+    '''
     with tf.name_scope(name) as scope:
         mass_pos = tf.where(has_label, labels, tf.zeros_like(labels))
         mass_neg = tf.where(has_label, 1. - labels, tf.zeros_like(labels))
-        total_mass_pos = tf.reduce_sum(mass_pos, axis=axis, keep_dims=True)
-        total_mass_neg = tf.reduce_sum(mass_neg, axis=axis, keep_dims=True)
+        total_mass_pos = tf.maximum(1., tf.reduce_sum(mass_pos, axis=axis, keep_dims=True))
+        total_mass_neg = tf.maximum(1., tf.reduce_sum(mass_neg, axis=axis, keep_dims=True))
         weights_pos = mass_pos / total_mass_pos
         weights_neg = mass_neg / total_mass_neg
-        # Use tf.where to avoid nans if total_mass_* = 0
-        weights = (0.5 * tf.where(has_label, weights_pos, tf.zeros_like(weights_pos)) +
-                   0.5 * tf.where(has_label, weights_neg, tf.zeros_like(weights_neg)))
+        weights = 0.5 * weights_pos + 0.5 * weights_neg
         return weights
 
 
