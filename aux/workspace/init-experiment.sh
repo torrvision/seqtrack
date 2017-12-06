@@ -10,8 +10,9 @@ name="$2"
 
 # Move to parent directory of script.
 script_file="$( readlink -f "${BASH_SOURCE[0]}" )"
+# Get workspace/ from workspace/init-experiment.sh
 script_dir="$( dirname "$script_file" )"
-# root/aux/workspace/init-experiment.sh
+# Get root/ from root/aux/workspace/
 orig_repo_dir="$( dirname "$( dirname "$script_dir" )" )"
 
 date="$(date +%Y-%m-%d)"
@@ -59,7 +60,7 @@ fi
 #     fi
 # fi
 
-( cd "$dir" &&  ./create-experiment.sh )
+( cd "$dir" &&  ./create-experiment.sh ) || exit
 
 # TODO: Come up with a better place to put aux/ files? Maybe with data?
 aux_data_dir=seqtrack/aux
