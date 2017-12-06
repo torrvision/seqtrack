@@ -73,10 +73,7 @@ class SiamFC(models_interface.IterModel):
 
         self._num_frames = 0
         # For summaries in end():
-        self._info = {k: [] for k in [
-            'search', 'response', 'labels', 'response_in_search',
-            'response_final', 'response_final_in_image',
-        ]}
+        self._info = {}
         self._losses = {}
 
     def start(self, frame, aspect, run_opts, enable_loss,
@@ -139,7 +136,7 @@ class SiamFC(models_interface.IterModel):
                 frame['x'], search_rect, self._search_size, scales,
                 pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
                 feather=self._feather, feather_margin=self._feather_margin)
-            self._info['search'].append(_to_uint8(search_ims[:, mid_scale]))
+            self._info.setdefault('search', []).append(_to_uint8(search_ims[:, mid_scale]))
 
             # Extract features, perform search, get receptive field of response wrt image.
             rfs = {'search': cnnutil.identity_rf()}
@@ -161,9 +158,19 @@ class SiamFC(models_interface.IterModel):
                     bias = tf.get_variable('bias', shape=[], dtype=tf.float32)
                     response = gain * response + bias
                 if self._learnable_prior:
-                    response += tf.get_variable('prior', shape=response_size+[1], dtype=tf.float32)
+                    motion_prior = tf.get_variable(
+                        'prior', shape=response_size+[1], dtype=tf.float32,
+                        initializer=tf.zeros_initializer(dtype=tf.float32))
+                    self._info.setdefault('response_appearance', []).append(
+                        _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
+                    if self._num_frames == 0:
+                        tf.summary.image(
+                            'motion_prior', max_outputs=1,
+                            tensor=_to_uint8(util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
+                            collections=self._image_summaries_collections)
+                    response += motion_prior
             response_cmap = util.colormap(tf.sigmoid(response), _COLORMAP)
-            self._info['response'].append(_to_uint8(response_cmap[:, mid_scale]))
+            self._info.setdefault('response', []).append(_to_uint8(response_cmap[:, mid_scale]))
 
             # TODO: Simplify!
             losses = {}
@@ -178,7 +185,7 @@ class SiamFC(models_interface.IterModel):
                 labels, has_label = lossfunc.translation_labels(
                     grid, gt_rect_in_search, shape='gaussian', sigma=self._sigma/self._search_scale)
                 labels_cmap = util.colormap(tf.expand_dims(labels, -1), _COLORMAP)
-                self._info['labels'].append(_to_uint8(labels_cmap))
+                self._info.setdefault('labels', []).append(_to_uint8(labels_cmap))
                 if self._balance_classes:
                     weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
                 else:
@@ -204,18 +211,18 @@ class SiamFC(models_interface.IterModel):
             # Draw coarse response over search image.
             rf_centers = _find_rf_centers(self._search_size, response_size, rfs['search'])
             response_in_search = _align_corner_centers(rf_centers, response_size)
-            self._info['response_in_search'].append(_to_uint8(paste_image_at_rect(
+            self._info.setdefault('response_in_search', []).append(_to_uint8(paste_image_at_rect(
                 search_ims[:, mid_scale], response_cmap[:, mid_scale], response_in_search, alpha=0.5)))
             # Draw upsample, regularized response over original image.
             response_final_cmap = util.colormap(tf.expand_dims(response_final, -1), _COLORMAP)
-            self._info['response_final'].append(_to_uint8(response_final_cmap[:, mid_scale]))
+            self._info.setdefault('response_final', []).append(_to_uint8(response_final_cmap[:, mid_scale]))
             response_final_in_search = _align_corner_centers(rf_centers, upsample_size)
             response_final_in_image = geom.crop_rect(response_final_in_search,
                                                      geom.crop_inverse(search_rect))
             # TODO: How to visualize multi-scale responses?
             vis = paste_image_at_rect(frame['x'], response_final_cmap[:, mid_scale],
                                       response_final_in_image, alpha=0.5)
-            self._info['response_final_in_image'].append(_to_uint8(vis))
+            self._info.setdefault('response_final_in_image', []).append(_to_uint8(vis))
 
             # Damp the scale update towards 1.
             scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
@@ -250,13 +257,8 @@ class SiamFC(models_interface.IterModel):
             for loss_name, values in self._losses.items():
                 tf.summary.scalar(loss_name, tf.reduce_mean(values))
         with tf.name_scope('summary'):
-            sequence_keys = ['search', 'response', 'response_in_search',
-                             'response_final', 'response_final_in_image']
-            for key in sequence_keys:
+            for key in self._info:
                 image_sequence_summary(key, tf.stack(self._info[key], axis=1),
-                                       collections=self._image_summaries_collections)
-            if self._enable_loss:
-                image_sequence_summary('labels', tf.stack(self._info['labels'], axis=1),
                                        collections=self._image_summaries_collections)
         return extra_loss
 
