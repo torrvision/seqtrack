@@ -38,7 +38,7 @@ class SiamFC(models_interface.IterModel):
             scale_step=1.03,
             scale_update_rate=0.6,
             report_square=False,
-            upsample_rate=2,
+            enable_hann=True,
             # Loss parameters:
             sigma=0.3,
             balance_classes=False,
@@ -60,6 +60,7 @@ class SiamFC(models_interface.IterModel):
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
         self._report_square = report_square
+        self._enable_hann = enable_hann
         self._sigma = sigma
         self._balance_classes = balance_classes
         self._loss_coeffs = loss_coeffs or {}
@@ -184,7 +185,8 @@ class SiamFC(models_interface.IterModel):
             loss = tf.add_n([float(self._loss_coeffs[k]) * v for k, v in losses.items()])
 
             # Get relative translation and scale from response.
-            response_final = _finalize_scores(response, rfs['search'].stride)
+            response_final = _finalize_scores(
+                response, rfs['search'].stride, enable_hann=self._enable_hann)
             upsample_size = response_final.shape.as_list()[-2:]
             translation_in_search, scale = _find_peak(response_final, self._search_size, scales)
 
@@ -316,7 +318,7 @@ def _feature_net(x, rfs=None, padding=None,
             return x, rfs
 
 
-def _finalize_scores(response, stride, name='finalize_scores'):
+def _finalize_scores(response, stride, enable_hann, name='finalize_scores'):
     '''
     Args:
         response: [b, s, h, w, c] where c is 1 or 2.
@@ -338,7 +340,8 @@ def _finalize_scores(response, stride, name='finalize_scores'):
         # Map to range [0, 1]. Assume c == 1.
         response = tf.sigmoid(tf.squeeze(response, -1))
         # Apply motion penalty at all scales.
-        response = response * hann_2d(upsample_size)
+        if enable_hann:
+            response = response * hann_2d(upsample_size)
         return response
 
 
