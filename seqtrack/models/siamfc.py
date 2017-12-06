@@ -33,6 +33,7 @@ class SiamFC(models_interface.IterModel):
             feature_padding='VALID',
             xcorr_padding='VALID',
             bnorm_after_xcorr=False,
+            learnable_prior=False,
             # Tracking parameters:
             num_scales=5,
             scale_step=1.03,
@@ -56,6 +57,7 @@ class SiamFC(models_interface.IterModel):
         self._feature_padding = feature_padding
         self._xcorr_padding = xcorr_padding
         self._bnorm_after_xcorr = bnorm_after_xcorr
+        self._learnable_prior = learnable_prior
         self._num_scales = num_scales
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
@@ -142,6 +144,8 @@ class SiamFC(models_interface.IterModel):
                 input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
                 padding=self._xcorr_padding)
             response = tf.reduce_sum(response, axis=-1, keep_dims=True)
+            response_size = response.shape.as_list()[-3:-1]
+            assert_center_alignment(self._search_size, response_size, rfs['search'])
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
                 if self._bnorm_after_xcorr:
                     response = slim.batch_norm(response, scale=True, is_training=self._is_training)
@@ -149,8 +153,8 @@ class SiamFC(models_interface.IterModel):
                     gain = tf.get_variable('gain', shape=[], dtype=tf.float32)
                     bias = tf.get_variable('bias', shape=[], dtype=tf.float32)
                     response = gain * response + bias
-            response_size = response.shape.as_list()[-3:-1]
-            assert_center_alignment(self._search_size, response_size, rfs['search'])
+                if self._learnable_prior:
+                    response += tf.get_variable('prior', shape=response_size+[1], dtype=tf.float32)
             response_cmap = util.colormap(tf.sigmoid(response), _COLORMAP)
             self._info['response'].append(_to_uint8(response_cmap[:, mid_scale]))
 
