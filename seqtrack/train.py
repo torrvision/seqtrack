@@ -508,13 +508,20 @@ def generate_report(samplers, datasets, o,
                 for mode in modes:
                     print '==== evaluation: sampler {}, dataset {}, mode {} ===='.format(sampler, dataset, mode)
                     steps = sorted(results[dataset].keys())
-                    for step in steps:
-                        print 'iter {}:  {}'.format(step,
-                            '; '.join(['{}: {:.3g}'.format(metric, results[dataset][step][mode][metric])
-                                       for metric in metrics]))
+                    # for step in steps:
+                    #     print 'iter {}:  {}'.format(step,
+                    #         '; '.join(['{}: {:.3g}'.format(metric, results[dataset][step][mode][metric])
+                    #                    for metric in metrics]))
+                    # for metric in metrics:
+                    #     values = [results[dataset][step][mode][metric] for step in steps]
+                    #     print 'best {}: {:.3g}'.format(metric, np.asscalar(best_fn[metric](values)))
                     for metric in metrics:
-                        values = [results[dataset][step][mode][metric] for step in steps]
-                        print 'best {}: {:.3g}'.format(metric, np.asscalar(best_fn[metric](values)))
+                        r = {step: results[dataset][step][mode] for step in steps}
+                        print metric
+                        print ';'.join([str(step) for step in steps])
+                        print ';'.join(['{:04g}'.format(r[step][metric]) for step in steps])
+                        metric_stddev = metric + '_std_err'
+                        print ';'.join(['{:04g}'.format(r[step][metric_stddev]) for step in steps])
             for mode in modes:
                 # Generate plot for each metric.
                 # Take union of steps for all datasets.
