@@ -10,3 +10,4 @@ summary
 output
 aux/*.npy
 dbg
+docs/_*

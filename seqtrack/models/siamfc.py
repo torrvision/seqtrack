@@ -35,12 +35,13 @@ class SiamFC(models_interface.IterModel):
             feature_padding='VALID',
             xcorr_padding='VALID',
             bnorm_after_xcorr=False,
+            learnable_prior=False,
             # Tracking parameters:
             num_scales=5,
             scale_step=1.03,
             scale_update_rate=0.6,
             report_square=False,
-            upsample_rate=2,
+            enable_hann=True,
             # Loss parameters:
             sigma=0.3,
             balance_classes=False,
@@ -60,10 +61,12 @@ class SiamFC(models_interface.IterModel):
         self._feature_padding = feature_padding
         self._xcorr_padding = xcorr_padding
         self._bnorm_after_xcorr = bnorm_after_xcorr
+        self._learnable_prior = learnable_prior
         self._num_scales = num_scales
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
         self._report_square = report_square
+        self._enable_hann = enable_hann
         self._sigma = sigma
         self._balance_classes = balance_classes
         self._loss_coeffs = loss_coeffs or {}
@@ -148,6 +151,8 @@ class SiamFC(models_interface.IterModel):
                 input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
                 padding=self._xcorr_padding)
             response = tf.reduce_sum(response, axis=-1, keep_dims=True)
+            response_size = response.shape.as_list()[-3:-1]
+            assert_center_alignment(self._search_size, response_size, rfs['search'])
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
                 if self._bnorm_after_xcorr:
                     response = slim.batch_norm(response, scale=True, is_training=self._is_training)
@@ -155,8 +160,8 @@ class SiamFC(models_interface.IterModel):
                     gain = tf.get_variable('gain', shape=[], dtype=tf.float32)
                     bias = tf.get_variable('bias', shape=[], dtype=tf.float32)
                     response = gain * response + bias
-            response_size = response.shape.as_list()[-3:-1]
-            assert_center_alignment(self._search_size, response_size, rfs['search'])
+                if self._learnable_prior:
+                    response += tf.get_variable('prior', shape=response_size+[1], dtype=tf.float32)
             response_cmap = util.colormap(tf.sigmoid(response), _COLORMAP)
             self._info['response'].append(_to_uint8(response_cmap[:, mid_scale]))
 
@@ -191,7 +196,8 @@ class SiamFC(models_interface.IterModel):
             loss = tf.add_n([float(self._loss_coeffs[k]) * v for k, v in losses.items()])
 
             # Get relative translation and scale from response.
-            response_final = _finalize_scores(response, rfs['search'].stride)
+            response_final = _finalize_scores(
+                response, rfs['search'].stride, enable_hann=self._enable_hann)
             upsample_size = response_final.shape.as_list()[-2:]
             translation_in_search, scale = _find_peak(response_final, self._search_size, scales)
 
@@ -326,7 +332,7 @@ def _feature_net(x, rfs=None, padding=None,
             return x, rfs
 
 
-def _finalize_scores(response, stride, name='finalize_scores'):
+def _finalize_scores(response, stride, enable_hann, name='finalize_scores'):
     '''
     Args:
         response: [b, s, h, w, c] where c is 1 or 2.
@@ -348,7 +354,8 @@ def _finalize_scores(response, stride, name='finalize_scores'):
         # Map to range [0, 1]. Assume c == 1.
         response = tf.sigmoid(tf.squeeze(response, -1))
         # Apply motion penalty at all scales.
-        response = response * hann_2d(upsample_size)
+        if enable_hann:
+            response = response * hann_2d(upsample_size)
         return response
 
 
