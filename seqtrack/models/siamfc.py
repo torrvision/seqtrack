@@ -101,12 +101,16 @@ class SiamFC(models_interface.IterModel):
                 frame['x'], template_rect, self._template_size,
                 pad_value=mean_color if self._pad_with_mean else 0.5,
                 feather=self._feather, feather_margin=self._feather_margin)
+
+            rfs = {'template': cnnutil.identity_rf()}
             template_input = self._preproc(template_im)
             with tf.variable_scope('feature_net', reuse=False):
-                template_feat, _ = _feature_net(
-                    template_input, padding=self._feature_padding, arch=self._feature_arch,
+                template_feat, rfs = _feature_net(
+                    template_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
                     is_training=self._is_training)
+            feat_size = template_feat.shape.as_list()[-3:-1]
+            assert_center_alignment(self._template_size, feat_size, rfs['template'])
 
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
