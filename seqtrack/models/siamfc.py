@@ -33,6 +33,9 @@ class SiamFC(models_interface.IterModel):
             center_input_range=True, # Make range [-0.5, 0.5] instead of [0, 1].
             keep_uint8_range=False, # Use input range of 255 instead of 1.
             feature_padding='VALID',
+            feature_arch='alexnet',
+            feature_act='linear',
+            enable_feature_bnorm=True,
             xcorr_padding='VALID',
             bnorm_after_xcorr=False,
             learnable_prior=False,
@@ -59,6 +62,9 @@ class SiamFC(models_interface.IterModel):
         self._template_scale = template_scale
         self._search_scale = float(search_size) / template_size * template_scale
         self._feature_padding = feature_padding
+        self._feature_arch = feature_arch
+        self._feature_act = feature_act
+        self._enable_feature_bnorm = enable_feature_bnorm
         self._xcorr_padding = xcorr_padding
         self._bnorm_after_xcorr = bnorm_after_xcorr
         self._learnable_prior = learnable_prior
@@ -97,8 +103,10 @@ class SiamFC(models_interface.IterModel):
                 feather=self._feather, feather_margin=self._feather_margin)
             template_input = self._preproc(template_im)
             with tf.variable_scope('feature_net', reuse=False):
-                template_feat, _ = _feature_net(template_input, padding=self._feature_padding,
-                                                is_training=self._is_training)
+                template_feat, _ = _feature_net(
+                    template_input, padding=self._feature_padding, arch=self._feature_arch,
+                    output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
+                    is_training=self._is_training)
 
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
@@ -142,8 +150,11 @@ class SiamFC(models_interface.IterModel):
             rfs = {'search': cnnutil.identity_rf()}
             search_input = self._preproc(search_ims)
             with tf.variable_scope('feature_net', reuse=True):
-                search_feat, rfs = _feature_net(search_input, rfs, padding=self._feature_padding,
-                                                is_training=self._is_training)
+                search_feat, rfs = _feature_net(
+                    search_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
+                    output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
+                    is_training=self._is_training)
+
             response, rfs = util.diag_xcorr_rf(
                 input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
                 padding=self._xcorr_padding)
@@ -297,7 +308,7 @@ def _rect_translate_scale(rect, translate, scale, name='rect_translate_scale'):
 
 
 def _feature_net(x, rfs=None, padding=None,
-                 output_act='linear', enable_output_bnorm=False,
+                 arch='alexnet', output_act='linear', enable_bnorm=True,
                  is_training=None, name='feature_net'):
     '''
     Returns:
@@ -313,24 +324,44 @@ def _feature_net(x, rfs=None, padding=None,
     if len(x.shape) > 4:
         # Merge dims (0, ..., n-4), n-3, n-2, n-1
         x, restore = merge_dims(x, 0, len(x.shape)-3)
-        x, rfs = _feature_net(x, rfs, padding, output_act, enable_output_bnorm, is_training, name)
+        x, rfs = _feature_net(x, rfs=rfs, padding=padding, arch=arch, output_act=output_act,
+                              enable_bnorm=enable_bnorm, is_training=is_training, name=name)
         x = restore(x, 0)
         return x, rfs
 
     with tf.name_scope(name) as scope:
-        with slim.arg_scope([slim.conv2d], normalizer_fn=slim.batch_norm,
-                            normalizer_params=dict(is_training=is_training)):
-            # https://github.com/bertinetto/siamese-fc/blob/master/training/vid_create_net.m
-            # https://github.com/tensorflow/models/blob/master/research/slim/nets/alexnet.py
-            # TODO: Support arg_scope for padding?
-            x, rfs = util.conv2d_rf(x, rfs, 96, [11, 11], 2, padding=padding, scope='conv1')
-            x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool1')
-            x, rfs = util.conv2d_rf(x, rfs, 256, [5, 5], padding=padding, scope='conv2')
-            x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool2')
-            x, rfs = util.conv2d_rf(x, rfs, 384, [3, 3], padding=padding, scope='conv3')
-            x, rfs = util.conv2d_rf(x, rfs, 384, [3, 3], padding=padding, scope='conv4')
-            x, rfs = util.conv2d_rf(x, rfs, 256, [3, 3], padding=padding, scope='conv5',
-                                    activation_fn=get_act(output_act), normalizer_fn=None)
+        args = {}
+        if enable_bnorm:
+            args.update(dict(normalizer_fn=slim.batch_norm,
+                             normalizer_params=dict(is_training=is_training)))
+        with slim.arg_scope([slim.conv2d], **args):
+            if arch == 'alexnet':
+                # https://github.com/bertinetto/siamese-fc/blob/master/training/vid_create_net.m
+                # https://github.com/tensorflow/models/blob/master/research/slim/nets/alexnet.py
+                # TODO: Support arg_scope for padding?
+                x, rfs = util.conv2d_rf(x, rfs, 96, [11, 11], 2, padding=padding, scope='conv1')
+                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool1')
+                x, rfs = util.conv2d_rf(x, rfs, 256, [5, 5], padding=padding, scope='conv2')
+                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool2')
+                x, rfs = util.conv2d_rf(x, rfs, 384, [3, 3], padding=padding, scope='conv3')
+                x, rfs = util.conv2d_rf(x, rfs, 384, [3, 3], padding=padding, scope='conv4')
+                x, rfs = util.conv2d_rf(x, rfs, 256, [3, 3], padding=padding, scope='conv5',
+                                        activation_fn=get_act(output_act), normalizer_fn=None)
+            elif arch == 'darknet':
+                # https://github.com/pjreddie/darknet/blob/master/cfg/darknet.cfg
+                # TODO: Leaky ReLU?
+                x, rfs = util.conv2d_rf(x, rfs, 16, [3, 3], 1, padding=padding, scope='conv1')
+                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool1')
+                x, rfs = util.conv2d_rf(x, rfs, 32, [3, 3], 1, padding=padding, scope='conv2')
+                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool2')
+                x, rfs = util.conv2d_rf(x, rfs, 64, [3, 3], 1, padding=padding, scope='conv3')
+                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool3')
+                x, rfs = util.conv2d_rf(x, rfs, 128, [3, 3], 1, padding=padding, scope='conv4')
+                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool4')
+                x, rfs = util.conv2d_rf(x, rfs, 256, [3, 3], 1, padding=padding, scope='conv5',
+                                        activation_fn=get_act(output_act), normalizer_fn=None)
+            else:
+                raise ValueError('unknown architecture: {}'.format(arch))
             return x, rfs
 
 
