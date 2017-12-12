@@ -44,7 +44,8 @@ class SiamFC(models_interface.IterModel):
             scale_step=1.03,
             scale_update_rate=0.6,
             report_square=False,
-            enable_hann=True,
+            hann_method='mul_prob', # none, mul_prob, add_logit
+            hann_coeff=1.0,
             # Loss parameters:
             sigma=0.3,
             balance_classes=False,
@@ -72,7 +73,8 @@ class SiamFC(models_interface.IterModel):
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
         self._report_square = report_square
-        self._enable_hann = enable_hann
+        self._hann_method = hann_method
+        self._hann_coeff = hann_coeff
         self._sigma = sigma
         self._balance_classes = balance_classes
         self._loss_coeffs = loss_coeffs or {}
@@ -219,7 +221,8 @@ class SiamFC(models_interface.IterModel):
 
             # Get relative translation and scale from response.
             response_final = _finalize_scores(
-                response, rfs['search'].stride, enable_hann=self._enable_hann)
+                response, rfs['search'].stride,
+                hann_method=self._hann_method, hann_coeff=self._hann_coeff)
             upsample_size = response_final.shape.as_list()[-2:]
             translation_in_search, scale = _find_peak(response_final, self._search_size, scales)
 
@@ -369,10 +372,10 @@ def _feature_net(x, rfs=None, padding=None,
             return x, rfs
 
 
-def _finalize_scores(response, stride, enable_hann, name='finalize_scores'):
+def _finalize_scores(response, stride, hann_method, hann_coeff, name='finalize_scores'):
     '''
     Args:
-        response: [b, s, h, w, c] where c is 1 or 2.
+        response: [b, s, h, w, c] where c is 1
 
     stride is (y, x) integer
     '''
@@ -388,11 +391,16 @@ def _finalize_scores(response, stride, enable_hann, name='finalize_scores'):
         response = tf.image.resize_images(
             response, upsample_size, method=tf.image.ResizeMethod.BICUBIC, align_corners=True)
         response = restore_fn(response, 0)
-        # Map to range [0, 1]. Assume c == 1.
-        response = tf.sigmoid(tf.squeeze(response, -1))
+        response = tf.squeeze(response, -1)
         # Apply motion penalty at all scales.
-        if enable_hann:
-            response = response * hann_2d(upsample_size)
+        if hann_method == 'add_logit':
+            response = tf.sigmoid(response + hann_coeff * hann_2d(upsample_size))
+        elif hann_method == 'mul_prob':
+            response = tf.sigmoid(response) * hann_2d(upsample_size)
+        elif hann_method == 'none' or not hann_method:
+            pass
+        else:
+            raise ValueError('unknown hann method: {}'.format(hann_method))
         return response
 
 
