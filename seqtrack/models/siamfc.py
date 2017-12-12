@@ -11,7 +11,7 @@ from seqtrack import models
 from seqtrack.models import interface as models_interface
 from seqtrack.models import util
 
-from seqtrack.helpers import merge_dims, expand_dims_n, get_act
+from seqtrack.helpers import merge_dims, expand_dims_n, get_act, leaky_relu
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 _COLORMAP = 'viridis'
@@ -353,17 +353,17 @@ def _feature_net(x, rfs=None, padding=None,
                                         activation_fn=get_act(output_act), normalizer_fn=None)
             elif arch == 'darknet':
                 # https://github.com/pjreddie/darknet/blob/master/cfg/darknet.cfg
-                # TODO: Leaky ReLU?
-                x, rfs = util.conv2d_rf(x, rfs, 16, [3, 3], 1, padding=padding, scope='conv1')
-                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool1')
-                x, rfs = util.conv2d_rf(x, rfs, 32, [3, 3], 1, padding=padding, scope='conv2')
-                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool2')
-                x, rfs = util.conv2d_rf(x, rfs, 64, [3, 3], 1, padding=padding, scope='conv3')
-                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool3')
-                x, rfs = util.conv2d_rf(x, rfs, 128, [3, 3], 1, padding=padding, scope='conv4')
-                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool4')
-                x, rfs = util.conv2d_rf(x, rfs, 256, [3, 3], 1, padding=padding, scope='conv5',
-                                        activation_fn=get_act(output_act), normalizer_fn=None)
+                with slim.arg_scope([slim.conv2d], activation_fn=leaky_relu):
+                    x, rfs = util.conv2d_rf(x, rfs, 16, [3, 3], 1, padding=padding, scope='conv1')
+                    x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool1')
+                    x, rfs = util.conv2d_rf(x, rfs, 32, [3, 3], 1, padding=padding, scope='conv2')
+                    x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool2')
+                    x, rfs = util.conv2d_rf(x, rfs, 64, [3, 3], 1, padding=padding, scope='conv3')
+                    x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool3')
+                    x, rfs = util.conv2d_rf(x, rfs, 128, [3, 3], 1, padding=padding, scope='conv4')
+                    x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool4')
+                    x, rfs = util.conv2d_rf(x, rfs, 256, [3, 3], 1, padding=padding, scope='conv5',
+                                            activation_fn=get_act(output_act), normalizer_fn=None)
             else:
                 raise ValueError('unknown architecture: {}'.format(arch))
             return x, rfs

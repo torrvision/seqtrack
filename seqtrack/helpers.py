@@ -299,10 +299,17 @@ def get_act(act):
         return tf.nn.relu
     elif act =='tanh':
         return tf.nn.tanh
+    elif act == 'leaky':
+        return leaky_relu
     elif act == 'linear':
         return None
     else:
         raise ValueError('wrong activation type: {}'.format(act))
+
+
+def leaky_relu(x, name='leaky_relu'):
+    with tf.name_scope(name) as scope:
+        return tf.maximum(0.1*x, x, name=scope)
 
 
 def most_static_shape(x):
