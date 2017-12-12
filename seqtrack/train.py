@@ -206,6 +206,10 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
         print '\ntraining starts! --------------------------------------------'
         sys.stdout.flush()
 
+        if o.evaluate:
+            evaluate_at_existing_checkpoints(o, saver, eval_sets, sess, model_inst)
+            return
+
         # 1. resume (full restore), 2. initialize from scratch, 3. curriculume learning (partial restore)
         prev_ckpt = 0
         if o.resume:
@@ -284,37 +288,9 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                 # intermediate evaluation of model
                 period_assess = o.period_assess if not o.debugmode else 20
                 if global_step > 0 and global_step > o.period_skip and global_step % period_assess == 0:
-                    iter_id = 'iteration{}'.format(global_step)
                     for eval_id, sampler in eval_sets.iteritems():
-                        vis_dir = os.path.join(o.path_output, iter_id, eval_id)
-                        if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
-                        # visualizer = visualize.VideoFileWriter(vis_dir)
-                        # Run the tracker on a full epoch.
-                        print 'evaluation: {}'.format(eval_id)
                         eval_sequences = sampler()
-                        # eval_sequences = [
-                        #     motion.augment(sequence, rand=np.random,
-                        #         translate_kind='laplace',
-                        #         translate_amount=0.1,
-                        #         scale_kind='laplace',
-                        #         scale_exp_amount=math.exp(math.log(1.01)/30.))
-                        #     for sequence in eval_sequences
-                        # ]
-                        # Cache the results.
-                        result_file = os.path.join(o.path_output, 'assess', eval_id,
-                            iter_id+'.json')
-                        result = cache_json(result_file,
-                            lambda: evaluate.evaluate(sess, model_inst, eval_sequences,
-                                # visualize=visualizer.visualize if o.save_videos else None,
-                                visualize=True, vis_dir=vis_dir, save_frames=o.save_frames,
-                                use_gt=o.use_gt_eval, tre_num=o.eval_tre_num),
-                            makedir=True)
-                        assert 'OPE' in result
-                        modes = [mode for mode in ['OPE', 'TRE'] if mode in result]
-                        for mode in modes:
-                            print 'mode {}: IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
-                                mode, result[mode]['iou_mean'], result[mode]['auc'],
-                                result[mode]['cle_mean'], result[mode]['cle_representative'])
+                        _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences)
 
                 # Take a training step.
                 start = time.time()
@@ -612,3 +588,49 @@ def _draw_rectangles(im, gt, gt_is_valid=None, pred=None):
     boxes = map(geom.rect_to_tf_box, boxes)
     im = tf.image.draw_bounding_boxes(im, tf.stack(boxes, axis=1))
     return tf.image.convert_image_dtype(im, tf.uint8, saturate=True)
+
+
+def evaluate_at_existing_checkpoints(o, saver, eval_sets, sess, model_inst):
+    # Identify which checkpoints are available.
+    state = tf.train.get_checkpoint_state(o.path_ckpt)
+    model_files = {_index_from_checkpoint(os.path.basename(s)): s
+                   for s in state.all_model_checkpoint_paths}
+    # Identify which of these satisfy conditions.
+    subset = sorted([index for index in model_files if index >= o.period_skip and
+                                                       index % o.period_assess == 0])
+    # Evaluate each (with cache).
+    for global_step in subset:
+        saver.restore(sess, model_files[global_step])
+        for eval_id, sampler in eval_sets.iteritems():
+            eval_sequences = sampler()
+            _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences)
+
+
+def _index_from_checkpoint(s):
+    parts = s.split('-')
+    assert len(parts) == 2
+    return int(parts[1])
+
+
+def _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences):
+    iter_id = 'iteration{}'.format(global_step)
+    vis_dir = os.path.join(o.path_output, iter_id, eval_id)
+    if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
+    # visualizer = visualize.VideoFileWriter(vis_dir)
+    # Run the tracker on a full epoch.
+    print 'evaluation: {}'.format(eval_id)
+    # Cache the results.
+    result_file = os.path.join(o.path_output, 'assess', eval_id, iter_id+'.json')
+    result = cache_json(result_file,
+        lambda: evaluate.evaluate(
+            sess, model_inst, eval_sequences,
+            # visualize=visualizer.visualize if o.save_videos else None,
+            visualize=True, vis_dir=vis_dir, save_frames=o.save_frames,
+            use_gt=o.use_gt_eval, tre_num=o.eval_tre_num),
+        makedir=True)
+    assert 'OPE' in result
+    modes = [mode for mode in ['OPE', 'TRE'] if mode in result]
+    for mode in modes:
+        print 'mode {}: IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
+            mode, result[mode]['iou_mean'], result[mode]['auc'],
+            result[mode]['cle_mean'], result[mode]['cle_representative'])

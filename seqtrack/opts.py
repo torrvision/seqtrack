@@ -16,6 +16,7 @@ class Opts(object):
         # settings 
         self.verbose_train      = False
         self.report             = False
+        self.evaluate           = False
         self.debugmode          = False # True or False
         self.histograms         = False # True or False
         self.tfdb               = False # True or False

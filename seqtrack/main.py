@@ -31,7 +31,10 @@ def parse_arguments():
             '--verbose_train', help='print train losses during train',
             action='store_true')
     parser.add_argument(
-            '--report', help='generate report after training',
+            '--report', help='do not train; print report of evaluation results',
+            action='store_true')
+    parser.add_argument(
+            '--evaluate', help='do not train; simply evaluate tracker',
             action='store_true')
     parser.add_argument(
             '--debugmode', help='used for debugging',
