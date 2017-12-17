@@ -130,15 +130,15 @@ class Nornn(interface.Model):
         self.image_summaries_collections = image_summaries_collections
         outputs, init_state, final_state = self._load_model(example, run_opts)
         if enable_loss:
-            loss, gt = get_loss(
+            losses, gt = get_loss(
                 example, outputs, search_scale=self.search_scale, search_size=self.search_size,
                 losses=self.losses, perspective='oc', heatmap_params=self.heatmap_params)
         else:
-            loss = 0.
+            losses = {}
         with tf.name_scope('summary'):
             add_summaries(example, outputs, gt, self.image_summaries_collections)
         outputs = {'y': outputs['y']['ic']}
-        return outputs, loss, init_state, final_state
+        return outputs, losses, init_state, final_state
 
 
     def _load_model(self, example, run_opts):
@@ -1384,14 +1384,15 @@ def get_loss(example, outputs, search_scale, search_size, losses, perspective, h
             charbonnier_penalty = tf.pow(tf.square(s_prev_valid - s_recon_valid) + 1e-10, alpha)
             loss_vars['recon'] = tf.reduce_mean(charbonnier_penalty)
 
-        with tf.name_scope('summary'):
-            for name, loss in loss_vars.iteritems():
-                tf.summary.scalar(name, loss)
+        # with tf.name_scope('summary'):
+        #     for name, loss in loss_vars.iteritems():
+        #         tf.summary.scalar(name, loss)
 
         gt = {}
         #gt['y']    = {'ic': y_gt['ic'],    'oc': y_gt['oc']}
         gt['hmap'] = {'ic': hmap_gt['ic'], 'oc': hmap_gt['oc']} # for visualization in summary.
-        return tf.reduce_sum(loss_vars.values(), name=scope), gt
+        # return tf.reduce_sum(loss_vars.values(), name=scope), gt
+        return loss_vars, gt
 
 
 def compute_scale_classification_gt(example, scales):

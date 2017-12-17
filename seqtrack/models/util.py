@@ -246,6 +246,50 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
     return center
 
 
+def find_peak_pyr(response, scales, name='find_peak_pyr'):
+    '''
+    Args:
+        response: [b, s, h, w]
+
+    Assumes that response is centered and at same stride as search image.
+    '''
+    with tf.name_scope(name) as scope:
+        upsample_size = response.shape.as_list()[-2:]
+        assert all(upsample_size)
+        upsample_size = np.array(upsample_size)
+        # Find arg max over all scales.
+        response = tf.verify_tensor_all_finite(response, 'response is not finite')
+        max_val = tf.reduce_max(response, axis=(-3, -2, -1), keep_dims=True)
+        is_max = tf.to_float(response >= max_val)
+
+        grid = tf.to_float(util.displacement_from_center(upsample_size))
+
+        # Grid now has translation from center in search image co-ords.
+        # Transform into co-ordinate frame of each scale.
+        grid = tf.multiply(grid,                           # [h, w, 2]
+                           expand_dims_n(scales, -1, n=3)) # [s, 1, 1, 1]
+
+        translation = _weighted_mean(grid,                       # [s, h, w, 2]
+                                     tf.expand_dims(is_max, -1), # [b, s, h, w] -> [b, s, h, w, 1]
+                                     axis=(-4, -3, -2))          # [b, s, h, w, 2] -> [b, 2]
+        scale = _weighted_mean(expand_dims_n(scales, -1, n=2), # [b, s] -> [b, s, 1, 1]
+                               is_max,                         # [b, s, h, w]
+                               axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
+        return translation, scale
+
+
+def _weighted_mean(x, w, axis=None, name='weighted_mean'):
+    with tf.name_scope(name) as scope:
+        with tf.control_dependencies([tf.assert_greater_equal(w, 0.)]):
+            w = tf.identity(w)
+        num = tf.reduce_sum(x * w, axis=axis)
+        # TODO: Is this broadcasting necessary?
+        denom = tf.reduce_sum(w + tf.zeros_like(x), axis=axis)
+        with tf.control_dependencies([tf.assert_greater(denom, 0.)]):
+            denom = tf.identity(denom)
+        return num / denom
+
+
 def make_grid_centers(im_size, name='make_grid_centers'):
     '''Make grid of center positions of each pixel.
 

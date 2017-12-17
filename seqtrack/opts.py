@@ -42,7 +42,8 @@ class Opts(object):
         # model - general
         self.model              = '' # {rnn_basic, rnn_attention_s, rnn_attention_t}
         self.model_params       = {}
-        self.losses             = None
+        # self.losses             = None
+        self.loss_coeffs        = {}
         self.search_scale       = 4 # size of search space relative to target.
         self.target_scale       = 1 # size of context relative to target.
         self.perspective        = 'oc' # ic: image-centric, oc: object-centric

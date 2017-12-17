@@ -19,7 +19,9 @@ class Model(object):
             enable_loss is True to add loss terms to the graph.
 
         Returns: 
-            outputs, loss, init_state, final_state
+            outputs, losses, init_state, final_state
+
+        The losses are returned as a dictionary.
         '''
         raise NotImplementedError()
 
@@ -68,13 +70,14 @@ class IterModel(object):
                 It may have 'y' (and 'y_is_valid') but at test time these will be invalid.
 
         Returns:
-            outputs, state, loss
+            outputs, state, losses
 
         The method next() should not modify member variables of the model.
         Instead, it should pass all information to the next frame using state.
 
         The method next() should only use frame['y'] during training.
 
+        The losses are returned as a dict in each frame.
         The overall loss will be the mean of the per-frame losses.
 
         The loss operations are only added to the graph if enable_loss is true.
@@ -85,8 +88,6 @@ class IterModel(object):
         '''end() provides a final chance to add summaries, losses, etc.
         
         Returns:
-            An additional loss term.
+            An additional loss dict.
         '''
         raise NotImplementedError()
-
-

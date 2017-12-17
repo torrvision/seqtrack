@@ -48,8 +48,7 @@ class SiamFC(models_interface.IterModel):
             hann_coeff=1.0,
             # Loss parameters:
             sigma=0.3,
-            balance_classes=False,
-            loss_coeffs=None):
+            balance_classes=False):
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
@@ -77,7 +76,6 @@ class SiamFC(models_interface.IterModel):
         self._hann_coeff = hann_coeff
         self._sigma = sigma
         self._balance_classes = balance_classes
-        self._loss_coeffs = loss_coeffs or {}
 
         self._num_frames = 0
         # For summaries in end():
@@ -91,28 +89,19 @@ class SiamFC(models_interface.IterModel):
             self._is_training = run_opts['is_training']
             self._is_tracking = run_opts['is_tracking']
             self._enable_loss = enable_loss
-            # self._init_rect = frame['y']
             self._image_summaries_collections = image_summaries_collections
 
             mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keep_dims=True)
             # TODO: frame['image'] and template_im have a viewport
-            rect_square = util.coerce_aspect(frame['y'], im_aspect=self._aspect,
-                                             aspect_method=self._aspect_method)
-            template_rect = geom.grow_rect(self._template_scale, rect_square)
-            template_im = util.crop(
-                frame['x'], template_rect, self._template_size,
-                pad_value=mean_color if self._pad_with_mean else 0.5,
-                feather=self._feather, feather_margin=self._feather_margin)
+            template_rect, _ = self._get_template_rect(frame['y'])
+            template_im = self._crop(frame['x'], template_rect, self._template_size, mean_color)
 
             rfs = {'template': cnnutil.identity_rf()}
             template_input = self._preproc(template_im)
             with tf.variable_scope('feature_net', reuse=False):
-                template_feat, rfs = _feature_net(
-                    template_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
-                    output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training)
+                template_feat, rfs = self._feature_net(template_input, rfs)
             feat_size = template_feat.shape.as_list()[-3:-1]
-            assert_center_alignment(self._template_size, feat_size, rfs['template'])
+            cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
 
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
@@ -136,111 +125,55 @@ class SiamFC(models_interface.IterModel):
             else:
                 prev_rect = prev_state['y']
             # Coerce the aspect ratio of the rectangle to construct the search area.
-            prev_rect_square = util.coerce_aspect(
-                prev_rect, im_aspect=self._aspect, aspect_method=self._aspect_method)
+            template_rect, prev_rect_square = self._get_search_rect(prev_rect)
             if self._report_square:
                 prev_rect = prev_rect_square
-            search_rect = geom.grow_rect(self._search_scale, prev_rect_square)
 
             # Extract an image pyramid (use 1 scale when not in tracking mode).
             num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
             mid_scale = (num_scales - 1) / 2
             scales = util.scale_range(num_scales, self._scale_step)
-            search_ims, search_rects = util.crop_pyr(
-                frame['x'], search_rect, self._search_size, scales,
-                pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
-                feather=self._feather, feather_margin=self._feather_margin)
+            search_ims, search_rects = self._crop_pyr(
+                frame['x'], search_rect, self._search_size, scales, prev_state['mean_color'])
             self._info.setdefault('search', []).append(_to_uint8(search_ims[:, mid_scale]))
 
             # Extract features, perform search, get receptive field of response wrt image.
             rfs = {'search': cnnutil.identity_rf()}
             search_input = self._preproc(search_ims)
             with tf.variable_scope('feature_net', reuse=True):
-                search_feat, rfs = _feature_net(
-                    search_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
-                    output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training)
+                search_feat, rfs = self._feature_net(search_input, rfs)
 
             response, rfs = util.diag_xcorr_rf(
                 input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
                 padding=self._xcorr_padding)
             response = tf.reduce_sum(response, axis=-1, keep_dims=True)
             response_size = response.shape.as_list()[-3:-1]
-            assert_center_alignment(self._search_size, response_size, rfs['search'])
+            cnnutil.assert_center_alignment(self._search_size, response_size, rfs['search'])
+
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
                 if self._bnorm_after_xcorr:
                     response = slim.batch_norm(response, scale=True, is_training=self._is_training)
                 else:
-                    gain = tf.get_variable('gain', shape=[], dtype=tf.float32)
-                    bias = tf.get_variable('bias', shape=[], dtype=tf.float32)
-                    response = gain * response + bias
+                    response = _affine_scalar(response)
                 if self._learnable_prior:
-                    motion_prior = tf.get_variable(
-                        'prior', shape=response_size+[1], dtype=tf.float32,
-                        initializer=tf.zeros_initializer(dtype=tf.float32))
-                    self._info.setdefault('response_appearance', []).append(
-                        _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
-                    if self._num_frames == 0:
-                        tf.summary.image(
-                            'motion_prior', max_outputs=1,
-                            tensor=_to_uint8(util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
-                            collections=self._image_summaries_collections)
-                    response += motion_prior
-            response_cmap = util.colormap(tf.sigmoid(response), _COLORMAP)
-            self._info.setdefault('response', []).append(_to_uint8(response_cmap[:, mid_scale]))
+                    response = self._add_motion_prior(response)
 
-            # TODO: Simplify!
             losses = {}
             if self._enable_loss:
-                # Obtain displacement from center of search image.
-                disp = util.displacement_from_center(response_size)
-                disp = tf.to_float(disp) * rfs['search'].stride / self._search_size
-                grid = 0.5 + disp
-
-                gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
-                # labels, has_label = lossfunc.translation_labels(grid, gt_rect_in_search, **kwargs)
-                labels, has_label = lossfunc.translation_labels(
-                    grid, gt_rect_in_search, shape='gaussian', sigma=self._sigma/self._search_scale)
+                losses['ce'], labels = self._translation_loss(
+                    response, rfs['search'], gt_rect, frame['y_is_valid'], search_rect)
                 labels_cmap = util.colormap(tf.expand_dims(labels, -1), _COLORMAP)
                 self._info.setdefault('labels', []).append(_to_uint8(labels_cmap))
-                if self._balance_classes:
-                    weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
-                else:
-                    weights = lossfunc.make_uniform_weights(has_label, axis=(-2, -1))
-                # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
-                losses['ce'] = tf.nn.sigmoid_cross_entropy_with_logits(
-                    labels=labels,                            # [b, h, w]
-                    logits=tf.squeeze(response, axis=(1, 4))) # [b, s, h, w, 1] -> [b, h, w]
-                # TODO: Is this the best way to handle y_is_valid?
-                losses['ce'] = tf.where(frame['y_is_valid'], losses['ce'], tf.zeros_like(losses['ce']))
-                losses['ce'] = tf.reduce_mean(tf.reduce_sum(weights * losses['ce'], axis=(1, 2)))
-
-            for k in losses:
-                self._losses.setdefault(k, []).append(losses[k])
-            loss = tf.add_n([float(self._loss_coeffs[k]) * v for k, v in losses.items()])
 
             # Get relative translation and scale from response.
-            response_final = _finalize_scores(
-                response, rfs['search'].stride,
-                hann_method=self._hann_method, hann_coeff=self._hann_coeff)
-            upsample_size = response_final.shape.as_list()[-2:]
-            translation_in_search, scale = _find_peak(response_final, self._search_size, scales)
+            response_final = self._finalize_scores(response, rfs['search'].stride)
+            # upsample_response_size = response_final.shape.as_list()[-3:-1]
+            # assert np.all(upsample_response_size <= self._search_size)
+            translation, scale = util.find_peak_pyr(response_final, scales)
+            translation = translation / self._search_size
 
-            # Draw coarse response over search image.
-            rf_centers = _find_rf_centers(self._search_size, response_size, rfs['search'])
-            response_in_search = _align_corner_centers(rf_centers, response_size)
-            self._info.setdefault('response_in_search', []).append(_to_uint8(paste_image_at_rect(
-                search_ims[:, mid_scale], response_cmap[:, mid_scale], response_in_search, alpha=0.5)))
-            # Draw upsample, regularized response over original image.
-            response_final_cmap = util.colormap(tf.expand_dims(response_final, -1), _COLORMAP)
-            self._info.setdefault('response_final', []).append(_to_uint8(response_final_cmap[:, mid_scale]))
-            response_final_in_search = _align_corner_centers(rf_centers, upsample_size)
-            response_final_in_image = geom.crop_rect(response_final_in_search,
-                                                     geom.crop_inverse(search_rect))
-            # TODO: How to visualize multi-scale responses?
-            vis = paste_image_at_rect(frame['x'], response_final_cmap[:, mid_scale],
-                                      response_final_in_image, alpha=0.5)
-            self._info.setdefault('response_final_in_image', []).append(_to_uint8(vis))
+            self._visualize_response(response[:, mid_scale], response_final[:, mid_scale], rfs['search'],
+                                     frame['x'], search_ims[:, mid_scale])
 
             # Damp the scale update towards 1.
             scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
@@ -270,15 +203,12 @@ class SiamFC(models_interface.IterModel):
             return outputs, state, loss
 
     def end(self):
-        extra_loss = 0.
-        with tf.name_scope('loss_summary'):
-            for loss_name, values in self._losses.items():
-                tf.summary.scalar(loss_name, tf.reduce_mean(values))
+        losses = {}
         with tf.name_scope('summary'):
             for key in self._info:
-                image_sequence_summary(key, tf.stack(self._info[key], axis=1),
-                                       collections=self._image_summaries_collections)
-        return extra_loss
+                _image_sequence_summary(key, tf.stack(self._info[key], axis=1),
+                                        collections=self._image_summaries_collections)
+        return losses
 
     def _preproc(self, im, name='preproc'):
         with tf.name_scope(name) as scope:
@@ -288,8 +218,138 @@ class SiamFC(models_interface.IterModel):
                 im *= 255.
             return tf.identity(im, scope)
 
+    def _get_template_rect(self, target):
+        target_square = util.coerce_aspect(
+            target, im_aspect=self._aspect, aspect_method=self._aspect_method)
+        search = geom.grow_rect(self._template_scale, target_square)
+        return search, target_square
 
-def image_sequence_summary(name, tensor, **kwargs):
+    def _get_search_rect(self, target):
+        target_square = util.coerce_aspect(
+            target, im_aspect=self._aspect, aspect_method=self._aspect_method)
+        search = geom.grow_rect(self._search_scale, target_square)
+        return search, target_square
+
+    def _feature_net(self, x, rfs):
+        return _feature_net(
+            x, rfs, padding=self._feature_padding, arch=self._feature_arch,
+            output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
+            is_training=self._is_training)
+
+    def _crop(self, im, rect, im_size, mean_color):
+        return util.crop(
+            x, rect, im_size,
+            pad_value=mean_color if self._pad_with_mean else 0.5,
+            feather=self._feather, feather_margin=self._feather_margin)
+
+    def _crop_pyr(self, im, rect, im_size, scales, mean_color):
+        return util.crop_pyr(
+            x, rect, search_size, scales,
+            pad_value=mean_color if self._pad_with_mean else 0.5,
+            feather=self._feather, feather_margin=self._feather_margin)
+
+    def _add_motion_prior(self, response, name='motion_prior')
+        with tf.name_scope(name) as scope:
+            response_shape = response.shape.as_list()[-3:]
+            assert response_shape[-1] == 1
+            prior = tf.get_variable('prior', shape=response_shape, dtype=tf.float32,
+                                    initializer=tf.zeros_initializer(dtype=tf.float32))
+            self._info.setdefault('response_appearance', []).append(
+                _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
+            if self._num_frames == 0:
+                tf.summary.image(
+                    'motion_prior', max_outputs=1,
+                    tensor=_to_uint8(util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
+                    collections=self._image_summaries_collections)
+            return response + prior
+
+    def _translation_loss(self, response, response_rf, gt_rect, gt_is_valid, search_rect,
+                          name='translation_loss'):
+        with tf.name_scope(name) as scope:
+            response_size = response.shape.as_list()[-3:-1]
+            # Obtain displacement from center of search image.
+            disp = util.displacement_from_center(response_size)
+            disp = tf.to_float(disp) * response_rf.stride / self._search_size
+            # Get centers of receptive field of each pixel.
+            centers = 0.5 + disp
+
+            gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
+            labels, has_label = lossfunc.translation_labels(
+                centers, gt_rect_in_search, shape='gaussian', sigma=self._sigma/self._search_scale)
+            # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
+            loss = tf.nn.sigmoid_cross_entropy_with_logits(
+                labels=labels,                            # [b, h, w]
+                logits=tf.squeeze(response, axis=(1, 4))) # [b, s, h, w, 1] -> [b, h, w]
+
+            if self._balance_classes:
+                weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
+            else:
+                weights = lossfunc.make_uniform_weights(has_label, axis=(-2, -1))
+            loss = tf.reduce_sum(weights * loss, axis=(1, 2))
+
+            # TODO: Is this the best way to handle gt_is_valid?
+            loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
+            return loss, labels
+
+    def _finalize_scores(self, response, stride, name='finalize_scores'):
+        '''Modify scores before finding arg max.
+
+        Includes upsampling, sigmoid and Hann window.
+
+        Args:
+            response: [b, s, h, w, c] where c is 1
+
+        Returns:
+            [b, s, h', w', 1]
+
+        stride is (y, x) integer
+        '''
+        with tf.name_scope(name) as scope:
+            response_size = response.shape.as_list()[-3:-1]
+            assert all(response_size)
+            response_size = np.array(response_size)
+            assert all(response_size % 2 == 1)
+            stride = np.array(n_positive_integers(2, stride))
+            upsample_size = (response_size - 1) * stride + 1
+            # Upsample.
+            response, restore_fn = merge_dims(response, 0, 2)
+            response = tf.image.resize_images(
+                response, upsample_size, method=tf.image.ResizeMethod.BICUBIC, align_corners=True)
+            response = restore_fn(response, 0)
+            # Apply motion penalty at all scales.
+            if self._hann_method == 'add_logit':
+                response = tf.sigmoid(response + self._hann_coeff * hann_2d(upsample_size))
+            elif self._hann_method == 'mul_prob':
+                response = tf.sigmoid(response) * hann_2d(upsample_size)
+            elif self._hann_method == 'none' or not self._hann_method:
+                pass
+            else:
+                raise ValueError('unknown hann method: {}'.format(self._hann_method))
+            return response
+
+    def _visualize_response(self, response, response_final, response_rf, im, search_ims,
+                            name='visualize_response'):
+        with tf.name_scope(name) as scope:
+            response_size = response.shape.as_list()[-3:-1]
+            upsample_response_size = response_final.shape.as_list()[-3:-1]
+            response_cmap = util.colormap(tf.sigmoid(response), _COLORMAP)
+            self._info.setdefault('response', []).append(_to_uint8(response_cmap))
+            response_final_cmap = util.colormap(tf.expand_dims(response_final, -1), _COLORMAP)
+            self._info.setdefault('response_final', []).append(_to_uint8(response_final_cmap))
+            # Draw coarse response over search image.
+            rf_centers = _find_rf_centers(self._search_size, response_size, response_rf)
+            response_in_search = _align_corner_centers(rf_centers, response_size)
+            self._info.setdefault('response_in_search', []).append(_to_uint8(_paste_image_at_rect(
+                search_ims, response_cmap, response_in_search, alpha=0.5)))
+            # Draw upsample, regularized response over original image.
+            response_final_in_search = _align_corner_centers(rf_centers, upsample_response_size)
+            response_final_in_image = geom.crop_rect(response_final_in_search, geom.crop_inverse(search_rect))
+            # TODO: How to visualize multi-scale responses?
+            self._info.setdefault('response_final_in_image', []).append(_to_uint8(_paste_image_at_rect(
+                im, response_final_cmap, response_final_in_image, alpha=0.5)))
+
+
+def _image_sequence_summary(name, tensor, **kwargs):
     '''
     Args:
         tensor: [b, t, h, w, c]
@@ -320,8 +380,6 @@ def _feature_net(x, rfs=None, padding=None,
     '''
     Returns:
         Tuple of (feature map, receptive fields).
-
-    To use bnorm, use an external slim.arg_scope.
     '''
     assert padding is not None
     assert is_training is not None
@@ -372,84 +430,6 @@ def _feature_net(x, rfs=None, padding=None,
             return x, rfs
 
 
-def _finalize_scores(response, stride, hann_method, hann_coeff, name='finalize_scores'):
-    '''
-    Args:
-        response: [b, s, h, w, c] where c is 1
-
-    stride is (y, x) integer
-    '''
-    with tf.name_scope(name) as scope:
-        response_size = response.shape.as_list()[-3:-1]
-        assert all(response_size)
-        response_size = np.array(response_size)
-        assert all(response_size % 2 == 1)
-        stride = np.array(n_positive_integers(2, stride))
-        upsample_size = (response_size - 1) * stride + 1
-        # Upsample.
-        response, restore_fn = merge_dims(response, 0, 2)
-        response = tf.image.resize_images(
-            response, upsample_size, method=tf.image.ResizeMethod.BICUBIC, align_corners=True)
-        response = restore_fn(response, 0)
-        response = tf.squeeze(response, -1)
-        # Apply motion penalty at all scales.
-        if hann_method == 'add_logit':
-            response = tf.sigmoid(response + hann_coeff * hann_2d(upsample_size))
-        elif hann_method == 'mul_prob':
-            response = tf.sigmoid(response) * hann_2d(upsample_size)
-        elif hann_method == 'none' or not hann_method:
-            pass
-        else:
-            raise ValueError('unknown hann method: {}'.format(hann_method))
-        return response
-
-
-def _find_peak(response, search_size, scales, name='find_peak'):
-    '''
-    Args:
-        response: [b, s, h, w]
-
-    Assumes that response is centered and at same stride as search image.
-    '''
-    with tf.name_scope(name) as scope:
-        upsample_size = response.shape.as_list()[-2:]
-        assert all(upsample_size)
-        upsample_size = np.array(upsample_size)
-        # Find arg max over all scales.
-        response = tf.verify_tensor_all_finite(response, 'response is not finite')
-        max_val = tf.reduce_max(response, axis=(-3, -2, -1), keep_dims=True)
-        is_max = tf.to_float(response >= max_val)
-
-        grid = tf.to_float(util.displacement_from_center(upsample_size))
-        assert np.all(upsample_size <= search_size)
-        grid = grid / search_size
-
-        # Grid now has translation from center in search image co-ords.
-        # Transform into co-ordinate frame of each scale.
-        grid = tf.multiply(grid,                           # [h, w, 2]
-                           expand_dims_n(scales, -1, n=3)) # [s, 1, 1, 1]
-
-        translation = _weighted_mean(grid,                       # [s, h, w, 2]
-                                     tf.expand_dims(is_max, -1), # [b, s, h, w] -> [b, s, h, w, 1]
-                                     axis=(-4, -3, -2))          # [b, s, h, w, 2] -> [b, 2]
-        scale = _weighted_mean(expand_dims_n(scales, -1, n=2), # [b, s] -> [b, s, 1, 1]
-                               is_max,                         # [b, s, h, w]
-                               axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
-        return translation, scale
-
-
-def _weighted_mean(x, w, axis=None, name='weighted_mean'):
-    with tf.name_scope(name) as scope:
-        with tf.control_dependencies([tf.assert_greater_equal(w, 0.)]):
-            w = tf.identity(w)
-        num = tf.reduce_sum(x * w, axis=axis)
-        # TODO: Is this broadcasting necessary?
-        denom = tf.reduce_sum(w + tf.zeros_like(x), axis=axis)
-        with tf.control_dependencies([tf.assert_greater(denom, 0.)]):
-            denom = tf.identity(denom)
-        return num / denom
-
-
 def hann(n, name='hann'):
     with tf.name_scope(name) as scope:
         n = tf.convert_to_tensor(n)
@@ -462,25 +442,6 @@ def hann_2d(im_size, name='hann_2d'):
         window_0 = hann(size_0)
         window_1 = hann(size_1)
         return tf.expand_dims(window_0, 1) * tf.expand_dims(window_1, 0)
-
-
-def assert_center_alignment(input_size, output_size, rf):
-    '''
-    Args:
-        input_size: (height, width)
-        output_size: (height, width)
-        rf: cnnutil.ReceptiveField, which uses (height, width)
-    '''
-    input_size = np.array(n_positive_integers(2, input_size))
-    output_size = np.array(n_positive_integers(2, output_size))
-
-    min_pt = rf.rect.int_center()
-    max_pt = min_pt + rf.stride * (output_size - 1) + 1
-    gap_before = min_pt
-    gap_after = input_size - max_pt
-    # If gap_before is equal to gap_after, then center of response map
-    # corresponds to center of search image.
-    np.testing.assert_array_equal(gap_before, gap_after)
 
 
 def _find_rf_centers(input_size_hw, output_size_hw, rf, name='rf_centers'):
@@ -503,14 +464,14 @@ def _align_corner_centers(rect, im_size_hw, name='align_corner_centers'):
         im_size = tf.to_float(im_size_hw[::-1])
         return geom.grow_rect(im_size / (im_size - 1), rect)
 
-def paste_image_at_rect(target, overlay, rect, alpha=1, name='paste_image_at_rect'):
+def _paste_image_at_rect(target, overlay, rect, alpha=1, name='paste_image_at_rect'):
     with tf.name_scope(name) as scope:
         overlay = _ensure_rgba(overlay)
         target_size = target.shape.as_list()[-3:-1]
         overlay = util.crop(overlay, geom.crop_inverse(rect), target_size)
-        return paste_image(target, overlay, alpha=alpha)
+        return _paste_image(target, overlay, alpha=alpha)
 
-def paste_image(target, overlay, alpha=1, name='paste_image'):
+def _paste_image(target, overlay, alpha=1, name='paste_image'):
     with tf.name_scope(name) as scope:
         overlay_rgb, overlay_a = tf.split(overlay, [3, 1], axis=-1)
         overlay_a *= alpha
@@ -530,3 +491,9 @@ def _ensure_rgba(im, name='ensure_rgba'):
 
 def _to_uint8(x):
     return tf.image.convert_image_dtype(x, tf.uint8, saturate=True)
+
+def _affine_scalar(x, name='affine'):
+    with tf.name_scope(name) as scope:
+        gain = tf.get_variable('gain', shape=[], dtype=tf.float32)
+        bias = tf.get_variable('bias', shape=[], dtype=tf.float32)
+        return gain * x + bias
