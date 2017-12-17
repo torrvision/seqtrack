@@ -29,7 +29,7 @@ class SiamFC(models_interface.IterModel):
             curr_as_prev=True,
             pad_with_mean=False, # Use mean of first image for padding.
             feather=True,
-            feather_margin=0.05,
+            feather_margin=0.1,
             center_input_range=True, # Make range [-0.5, 0.5] instead of [0, 1].
             keep_uint8_range=False, # Use input range of 255 instead of 1.
             feature_padding='VALID',
@@ -37,18 +37,18 @@ class SiamFC(models_interface.IterModel):
             feature_act='linear',
             enable_feature_bnorm=True,
             xcorr_padding='VALID',
-            bnorm_after_xcorr=False,
+            bnorm_after_xcorr=True,
             learnable_prior=False,
             # Tracking parameters:
             num_scales=5,
             scale_step=1.03,
             scale_update_rate=0.6,
             report_square=False,
-            hann_method='mul_prob', # none, mul_prob, add_logit
+            hann_method='none', # none, mul_prob, add_logit
             hann_coeff=1.0,
             # Loss parameters:
-            sigma=0.3,
-            balance_classes=False):
+            sigma=0.2,
+            balance_classes=True):
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
@@ -80,7 +80,6 @@ class SiamFC(models_interface.IterModel):
         self._num_frames = 0
         # For summaries in end():
         self._info = {}
-        self._losses = {}
 
     def start(self, frame, aspect, run_opts, enable_loss,
               image_summaries_collections=None, name='start'):
