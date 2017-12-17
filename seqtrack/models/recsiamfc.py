@@ -175,9 +175,11 @@ class RecSiamFC(models_interface.IterModel):
                 padding=self._xcorr_padding)
 
             # HglassRNN
-            response, rnn_state = _hglass_rnn(response, prev_state['rnn'],
-                                              enable_bnorm=self._enable_rnn_bnorm,
-                                              is_training=self._is_training)
+            with tf.variable_scope('hglass_rnn', reuse=(self._num_frames > 0)):
+                response, rnn_state = _hglass_rnn(
+                    response, prev_state['rnn'],
+                    enable_bnorm=self._enable_rnn_bnorm,
+                    is_training=self._is_training)
 
             response = tf.reduce_sum(response, axis=-1, keep_dims=True)
             response_size = response.shape.as_list()[-3:-1]
