@@ -18,6 +18,7 @@ from seqtrack.helpers import LazyDict
 from seqtrack.models.nornn import Nornn
 from seqtrack.models.itermodel import ModelFromIterModel
 from seqtrack.models.siamfc import SiamFC
+from seqtrack.models.recsiamfc import RecSiamFC
 
 
 def parse_arguments():
@@ -293,6 +294,8 @@ def main():
         model = Nornn(**o.model_params)
     elif o.model == 'SiamFC':
         model = ModelFromIterModel(SiamFC(**o.model_params))
+    elif o.model == 'RecSiamFC':
+        model = ModelFromIterModel(RecSiamFC(**o.model_params))
     else:
         raise ValueError('unknown model: {}'.format(o.model))
 
