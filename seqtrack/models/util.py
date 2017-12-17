@@ -9,7 +9,7 @@ from seqtrack import cnnutil
 from seqtrack import geom
 
 from seqtrack.cnnutil import ReceptiveField, IntRect
-from seqtrack.helpers import merge_dims, modify_aspect_ratio, diag_xcorr
+from seqtrack.helpers import merge_dims, modify_aspect_ratio, diag_xcorr, expand_dims_n
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
@@ -249,11 +249,12 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
 def find_peak_pyr(response, scales, name='find_peak_pyr'):
     '''
     Args:
-        response: [b, s, h, w]
+        response: [b, s, h, w, 1]
 
     Assumes that response is centered and at same stride as search image.
     '''
     with tf.name_scope(name) as scope:
+        response = tf.squeeze(response, axis=-1)
         upsample_size = response.shape.as_list()[-2:]
         assert all(upsample_size)
         upsample_size = np.array(upsample_size)
@@ -262,7 +263,7 @@ def find_peak_pyr(response, scales, name='find_peak_pyr'):
         max_val = tf.reduce_max(response, axis=(-3, -2, -1), keep_dims=True)
         is_max = tf.to_float(response >= max_val)
 
-        grid = tf.to_float(util.displacement_from_center(upsample_size))
+        grid = tf.to_float(displacement_from_center(upsample_size))
 
         # Grid now has translation from center in search image co-ords.
         # Transform into co-ordinate frame of each scale.

@@ -54,7 +54,9 @@ class ModelFromIterModel(models_interface.Model):
             outputs[i], state, losses[i] = self._model.next(frames[i], state)
             assert 'y' in outputs[i]
         outputs = stack_dict(outputs, axis=1)
-        losses = stack_dict(losses, axis=1)
+        losses = stack_dict(losses)
+        # Compute mean over frames.
+        losses = {k: tf.reduce_mean(v) for k, v in losses.items()}
         final_state = state
 
         extra_losses = self._model.end()
@@ -64,6 +66,6 @@ class ModelFromIterModel(models_interface.Model):
 
 
 def _assert_no_keys_in_common(a, b):
-    intersection = set(a.keys()).intersect(set(b.keys()))
+    intersection = set(a.keys()).intersection(set(b.keys()))
     if intersection:
         raise ValueError('keys in common: {}'.format(str(intersection)))

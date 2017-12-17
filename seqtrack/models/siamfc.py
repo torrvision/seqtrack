@@ -11,7 +11,7 @@ from seqtrack import models
 from seqtrack.models import interface as models_interface
 from seqtrack.models import util
 
-from seqtrack.helpers import merge_dims, expand_dims_n, get_act, leaky_relu
+from seqtrack.helpers import merge_dims, get_act, leaky_relu
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 _COLORMAP = 'viridis'
@@ -125,7 +125,7 @@ class SiamFC(models_interface.IterModel):
             else:
                 prev_rect = prev_state['y']
             # Coerce the aspect ratio of the rectangle to construct the search area.
-            template_rect, prev_rect_square = self._get_search_rect(prev_rect)
+            search_rect, prev_rect_square = self._get_search_rect(prev_rect)
             if self._report_square:
                 prev_rect = prev_rect_square
 
@@ -172,14 +172,15 @@ class SiamFC(models_interface.IterModel):
             translation, scale = util.find_peak_pyr(response_final, scales)
             translation = translation / self._search_size
 
-            self._visualize_response(response[:, mid_scale], response_final[:, mid_scale], rfs['search'],
-                                     frame['x'], search_ims[:, mid_scale])
+            vis = self._visualize_response(
+                response[:, mid_scale], response_final[:, mid_scale],
+                search_ims[:, mid_scale], rfs['search'], frame['x'], search_rect)
 
             # Damp the scale update towards 1.
             scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
             # Get rectangle in search image.
             prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
-            pred_in_search = _rect_translate_scale(prev_target_in_search, translation_in_search,
+            pred_in_search = _rect_translate_scale(prev_target_in_search, translation,
                                                    tf.expand_dims(scale, -1))
             # Move from search back to original image.
             # TODO: Test that this is equivalent to scaling translation?
@@ -200,7 +201,7 @@ class SiamFC(models_interface.IterModel):
                 'template_feat': prev_state['template_feat'],
                 'mean_color':    prev_state['mean_color'],
             }
-            return outputs, state, loss
+            return outputs, state, losses
 
     def end(self):
         losses = {}
@@ -238,17 +239,17 @@ class SiamFC(models_interface.IterModel):
 
     def _crop(self, im, rect, im_size, mean_color):
         return util.crop(
-            x, rect, im_size,
+            im, rect, im_size,
             pad_value=mean_color if self._pad_with_mean else 0.5,
             feather=self._feather, feather_margin=self._feather_margin)
 
     def _crop_pyr(self, im, rect, im_size, scales, mean_color):
         return util.crop_pyr(
-            x, rect, search_size, scales,
+            im, rect, im_size, scales,
             pad_value=mean_color if self._pad_with_mean else 0.5,
             feather=self._feather, feather_margin=self._feather_margin)
 
-    def _add_motion_prior(self, response, name='motion_prior')
+    def _add_motion_prior(self, response, name='motion_prior'):
         with tf.name_scope(name) as scope:
             response_shape = response.shape.as_list()[-3:]
             assert response_shape[-1] == 1
@@ -288,7 +289,9 @@ class SiamFC(models_interface.IterModel):
             loss = tf.reduce_sum(weights * loss, axis=(1, 2))
 
             # TODO: Is this the best way to handle gt_is_valid?
+            # (set loss to zero and include in mean)
             loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
+            loss = tf.reduce_mean(loss)
             return loss, labels
 
     def _finalize_scores(self, response, stride, name='finalize_scores'):
@@ -297,7 +300,7 @@ class SiamFC(models_interface.IterModel):
         Includes upsampling, sigmoid and Hann window.
 
         Args:
-            response: [b, s, h, w, c] where c is 1
+            response: [b, s, h, w, 1]
 
         Returns:
             [b, s, h', w', 1]
@@ -318,35 +321,44 @@ class SiamFC(models_interface.IterModel):
             response = restore_fn(response, 0)
             # Apply motion penalty at all scales.
             if self._hann_method == 'add_logit':
-                response = tf.sigmoid(response + self._hann_coeff * hann_2d(upsample_size))
+                response += self._hann_coeff * tf.expand_dims(hann_2d(upsample_size), -1)
+                response = tf.sigmoid(response)
             elif self._hann_method == 'mul_prob':
-                response = tf.sigmoid(response) * hann_2d(upsample_size)
+                response = tf.sigmoid(response)
+                response *= tf.expand_dims(hann_2d(upsample_size), -1)
             elif self._hann_method == 'none' or not self._hann_method:
                 pass
             else:
                 raise ValueError('unknown hann method: {}'.format(self._hann_method))
             return response
 
-    def _visualize_response(self, response, response_final, response_rf, im, search_ims,
-                            name='visualize_response'):
+    def _visualize_response(self, response, response_final, search_im, response_rf,
+                            im, search_rect, name='visualize_response'):
         with tf.name_scope(name) as scope:
             response_size = response.shape.as_list()[-3:-1]
-            upsample_response_size = response_final.shape.as_list()[-3:-1]
+            rf_centers = _find_rf_centers(self._search_size, response_size, response_rf)
+
+            # response is logits
             response_cmap = util.colormap(tf.sigmoid(response), _COLORMAP)
             self._info.setdefault('response', []).append(_to_uint8(response_cmap))
-            response_final_cmap = util.colormap(tf.expand_dims(response_final, -1), _COLORMAP)
-            self._info.setdefault('response_final', []).append(_to_uint8(response_final_cmap))
             # Draw coarse response over search image.
-            rf_centers = _find_rf_centers(self._search_size, response_size, response_rf)
             response_in_search = _align_corner_centers(rf_centers, response_size)
             self._info.setdefault('response_in_search', []).append(_to_uint8(_paste_image_at_rect(
-                search_ims, response_cmap, response_in_search, alpha=0.5)))
+                search_im, response_cmap, response_in_search, alpha=0.5)))
+
+            # response_final is probability
+            response_final_cmap = util.colormap(response_final, _COLORMAP)
+            self._info.setdefault('response_final', []).append(_to_uint8(response_final_cmap))
             # Draw upsample, regularized response over original image.
+            upsample_response_size = response_final.shape.as_list()[-3:-1]
             response_final_in_search = _align_corner_centers(rf_centers, upsample_response_size)
             response_final_in_image = geom.crop_rect(response_final_in_search, geom.crop_inverse(search_rect))
             # TODO: How to visualize multi-scale responses?
-            self._info.setdefault('response_final_in_image', []).append(_to_uint8(_paste_image_at_rect(
-                im, response_final_cmap, response_final_in_image, alpha=0.5)))
+            response_final_in_image = _paste_image_at_rect(
+                im, response_final_cmap, response_final_in_image, alpha=0.5)
+            self._info.setdefault('response_final_in_image', []).append(_to_uint8(response_final_in_image))
+
+            return response_final_in_image
 
 
 def _image_sequence_summary(name, tensor, **kwargs):
