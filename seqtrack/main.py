@@ -190,6 +190,9 @@ def parse_arguments():
             '--gpu_device', help='set `CUDA_VISIBLE_DEVICES`',
             type=int, default=0)
     parser.add_argument(
+            '--no_gpu_manctrl', help='disable manual gpu management',
+            dest='gpu_manctrl', action='store_false')
+    parser.add_argument(
             '--gpu_frac', help='fraction of gpu memory',
             type=float, default=0.4)
 
