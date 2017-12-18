@@ -15,9 +15,9 @@ from seqtrack import train
 from seqtrack import sample
 from seqtrack.helpers import LazyDict
 
-from seqtrack.models.nornn import Nornn
-from seqtrack.models.itermodel import ModelFromIterModel
-from seqtrack.models.siamfc import SiamFC
+# import seqtrack.models as models
+import seqtrack.models.siamfc as siamfc
+import seqtrack.models.nornn as nornn
 
 
 def parse_arguments():
@@ -296,9 +296,11 @@ def main():
     # TODO: Set model_opts from command-line or JSON file?
     # m = model.load_model(o, model_params=o.model_params)
     if o.model == 'Nornn':
-        model = Nornn(**o.model_params)
+        model = nornn.Nornn(**o.model_params)
     elif o.model == 'SiamFC':
-        model = ModelFromIterModel(SiamFC(**o.model_params))
+        model = ModelFromIterModel(siamfc.SiamFC(**o.model_params))
+    elif o.model == 'SiamFCNormalizeTogether':
+        model = siamfc.SiamFCNormalizeTogether(**o.model_params)
     else:
         raise ValueError('unknown model: {}'.format(o.model))
 
