@@ -320,7 +320,8 @@ def displacement_from_center(im_size, name='displacement_grid'):
     with tf.name_scope(name) as scope:
         # Get the translation from the center.
         im_size = np.asarray(im_size)
-        assert all(im_size % 2 == 1)
+        if not all(im_size % 2 == 1):
+            raise AssertionError('image size is not odd: {}'.format(im_size))
         center = (im_size - 1) / 2
         size_y, size_x = im_size
         center_y, center_x = center
