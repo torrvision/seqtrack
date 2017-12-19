@@ -16,6 +16,7 @@ from seqtrack import sample
 from seqtrack.helpers import LazyDict
 
 # import seqtrack.models as models
+import seqtrack.models.itermodel as itermodel
 import seqtrack.models.siamfc as siamfc
 import seqtrack.models.nornn as nornn
 
@@ -298,9 +299,7 @@ def main():
     if o.model == 'Nornn':
         model = nornn.Nornn(**o.model_params)
     elif o.model == 'SiamFC':
-        model = ModelFromIterModel(siamfc.SiamFC(**o.model_params))
-    elif o.model == 'SiamFCNormalizeTogether':
-        model = siamfc.SiamFCNormalizeTogether(**o.model_params)
+        model = itermodel.ModelFromIterModel(siamfc.SiamFC(**o.model_params))
     else:
         raise ValueError('unknown model: {}'.format(o.model))
 
