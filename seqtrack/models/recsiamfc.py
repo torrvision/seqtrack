@@ -435,12 +435,19 @@ def _lstm(x, state):
             num_outputs=h_prev.shape.as_list()[-1],
             kernel_size=3,
             activation_fn=None):
-        it = tf.nn.sigmoid(slim.conv2d(tf.concat([x, h_prev], -1), scope='i'))
-        ft = tf.nn.sigmoid(slim.conv2d(tf.concat([x, h_prev], -1), scope='f'))
-        ct_tilda = tf.nn.tanh(slim.conv2d(tf.concat([x, h_prev], -1), scope='c'))
+        # To avoid concat error due to dimension difference between x and h for multi-scale case.
+        it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') + slim.conv2d(h_prev, scope='hi'))
+        ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') + slim.conv2d(h_prev, scope='hf'))
+        ct_tilda = tf.nn.tanh(slim.conv2d(x, scope='xc') + slim.conv2d(h_prev, scope='hc'))
         ct = (ft * c_prev) + (it * ct_tilda)
-        ot = tf.nn.sigmoid(slim.conv2d(tf.concat([x, h_prev], -1), scope='o'))
+        ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') + slim.conv2d(h_prev, scope='ho'))
         ht = ot * tf.nn.tanh(ct)
+        #it = tf.nn.sigmoid(slim.conv2d(tf.concat([x, h_prev], -1), scope='i'))
+        #ft = tf.nn.sigmoid(slim.conv2d(tf.concat([x, h_prev], -1), scope='f'))
+        #ct_tilda = tf.nn.tanh(slim.conv2d(tf.concat([x, h_prev], -1), scope='c'))
+        #ct = (ft * c_prev) + (it * ct_tilda)
+        #ot = tf.nn.sigmoid(slim.conv2d(tf.concat([x, h_prev], -1), scope='o'))
+        #ht = ot * tf.nn.tanh(ct)
     output = tf.identity(ht)
     state['h'] = ht
     state['c'] = ct
