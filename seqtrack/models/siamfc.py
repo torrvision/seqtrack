@@ -46,6 +46,7 @@ class SiamFC(models_interface.IterModel):
             report_square=False,
             hann_method='none', # none, mul_prob, add_logit
             hann_coeff=1.0,
+            arg_max_eps_rel=0.05,
             # Loss parameters:
             sigma=0.2,
             balance_classes=True):
@@ -74,6 +75,7 @@ class SiamFC(models_interface.IterModel):
         self._report_square = report_square
         self._hann_method = hann_method
         self._hann_coeff = hann_coeff
+        self._arg_max_eps_rel = arg_max_eps_rel
         self._sigma = sigma
         self._balance_classes = balance_classes
 
@@ -168,7 +170,8 @@ class SiamFC(models_interface.IterModel):
             response_final = self._finalize_scores(response, rfs['search'].stride)
             # upsample_response_size = response_final.shape.as_list()[-3:-1]
             # assert np.all(upsample_response_size <= self._search_size)
-            translation, scale = util.find_peak_pyr(response_final, scales)
+            translation, scale = util.find_peak_pyr(response_final, scales,
+                                                    eps_rel=self._arg_max_eps_rel)
             translation = translation / self._search_size
 
             vis = self._visualize_response(

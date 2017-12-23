@@ -246,7 +246,7 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
     return center
 
 
-def find_peak_pyr(response, scales, name='find_peak_pyr'):
+def find_peak_pyr(response, scales, eps_rel=0.0, name='find_peak_pyr'):
     '''
     Args:
         response: [b, s, h, w, 1]
@@ -261,7 +261,7 @@ def find_peak_pyr(response, scales, name='find_peak_pyr'):
         # Find arg max over all scales.
         response = tf.verify_tensor_all_finite(response, 'response is not finite')
         max_val = tf.reduce_max(response, axis=(-3, -2, -1), keep_dims=True)
-        is_max = tf.to_float(response >= max_val)
+        is_max = tf.to_float(response >= (1.0 - eps_rel) * max_val)
 
         grid = tf.to_float(displacement_from_center(upsample_size))
 
@@ -279,16 +279,16 @@ def find_peak_pyr(response, scales, name='find_peak_pyr'):
         return translation, scale
 
 
-def _weighted_mean(x, w, axis=None, name='weighted_mean'):
+def _weighted_mean(x, w, axis=None, keep_dims=False, name='weighted_mean'):
     with tf.name_scope(name) as scope:
         with tf.control_dependencies([tf.assert_greater_equal(w, 0.)]):
             w = tf.identity(w)
-        num = tf.reduce_sum(x * w, axis=axis)
+        # num = tf.reduce_sum(w * x, axis=axis)
         # TODO: Is this broadcasting necessary?
-        denom = tf.reduce_sum(w + tf.zeros_like(x), axis=axis)
-        with tf.control_dependencies([tf.assert_greater(denom, 0.)]):
-            denom = tf.identity(denom)
-        return num / denom
+        mass = tf.reduce_sum(w * tf.ones_like(x), axis=axis, keep_dims=True)
+        with tf.control_dependencies([tf.assert_positive(mass)]):
+            p = w / mass
+        return tf.reduce_sum(p * x, axis=axis, keep_dims=keep_dims)
 
 
 def make_grid_centers(im_size, name='make_grid_centers'):
