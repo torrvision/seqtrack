@@ -246,10 +246,11 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
     return center
 
 
-def find_peak_pyr(response, scales, eps_rel=0.0, name='find_peak_pyr'):
+def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_pyr'):
     '''
     Args:
         response: [b, s, h, w, 1]
+        scales: [s]
 
     Assumes that response is centered and at same stride as search image.
     '''
@@ -261,7 +262,11 @@ def find_peak_pyr(response, scales, eps_rel=0.0, name='find_peak_pyr'):
         # Find arg max over all scales.
         response = tf.verify_tensor_all_finite(response, 'response is not finite')
         max_val = tf.reduce_max(response, axis=(-3, -2, -1), keep_dims=True)
-        is_max = tf.to_float(response >= (1.0 - eps_rel) * max_val)
+        with tf.control_dependencies([tf.assert_non_negative(response)]):
+            # is_max = tf.to_float(response >= (1.0 - eps_rel) * max_val)
+            is_max = tf.logical_or(tf.greater_equal(response, max_val - eps_rel*tf.abs(max_val)),
+                                   tf.greater_equal(response, max_val - eps_abs))
+        is_max = tf.to_float(is_max)
 
         grid = tf.to_float(displacement_from_center(upsample_size))
 
@@ -281,7 +286,7 @@ def find_peak_pyr(response, scales, eps_rel=0.0, name='find_peak_pyr'):
 
 def _weighted_mean(x, w, axis=None, keep_dims=False, name='weighted_mean'):
     with tf.name_scope(name) as scope:
-        with tf.control_dependencies([tf.assert_greater_equal(w, 0.)]):
+        with tf.control_dependencies([tf.assert_non_negative(w)]):
             w = tf.identity(w)
         # num = tf.reduce_sum(w * x, axis=axis)
         # TODO: Is this broadcasting necessary?

@@ -329,7 +329,7 @@ class SiamFC(models_interface.IterModel):
                 response = tf.sigmoid(response)
                 response *= tf.expand_dims(hann_2d(upsample_size), -1)
             elif self._hann_method == 'none' or not self._hann_method:
-                pass
+                response = tf.sigmoid(response)
             else:
                 raise ValueError('unknown hann method: {}'.format(self._hann_method))
             return response
