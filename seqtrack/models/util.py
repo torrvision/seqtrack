@@ -351,3 +351,17 @@ def _colormap_np(cmap_name, x):
     x = cmap(x)
     x = np.asfarray(x, np.float32)
     return x
+
+
+def crop_margin(image, image_rfs, margin, name):
+    with tf.name_scope(name) as scope:
+        margin_y, margin_x = n_positive_integers(2, margin)
+        shape = image.shape.as_list()
+        begin = [0 for _ in shape]
+        size = [-1 for _ in shape]
+        begin[-3], size[-3] = margin_y, shape[-3] - margin_y
+        begin[-2], size[-2] = margin_x, shape[-2] - margin_x
+        crop = tf.slice(image, begin, size)
+        crop_rfs = {k: ReceptiveField(rect=rf.rect+margin, stride=rf.stride)
+                    for k, rf in image_rfs.items()}
+        return crop, crop_rfs

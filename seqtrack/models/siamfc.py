@@ -61,6 +61,7 @@ class SiamFC(models_interface.IterModel):
         self._keep_uint8_range = keep_uint8_range
         self._center_input_range = center_input_range
         self._template_scale = template_scale
+        # Size of search area relative to object.
         self._search_scale = float(search_size) / template_size * template_scale
         self._feature_padding = feature_padding
         self._feature_arch = feature_arch
@@ -169,7 +170,7 @@ class SiamFC(models_interface.IterModel):
                 else:
                     response = _affine_scalar(response)
                 if self._learnable_prior:
-                    response = self._add_motion_prior(response)
+                    response = _add_motion_prior(response)
 
             losses = {}
             if self._enable_loss:
@@ -215,6 +216,250 @@ class SiamFC(models_interface.IterModel):
             outputs = {'y': pred, 'vis': vis}
             state = {
                 'y': next_prev_rect,
+                'template_feat': prev_state['template_feat'],
+                'mean_color':    prev_state['mean_color'],
+            }
+            return outputs, state, losses
+
+    def end(self):
+        losses = {}
+        with tf.name_scope('summary'):
+            for key in self._info:
+                _image_sequence_summary(key, tf.stack(self._info[key], axis=1),
+                                        collections=self._image_summaries_collections)
+        return losses
+
+
+class CrossCorrFirstConcatPrev(models_interface.IterModel):
+
+    def __init__(
+            self,
+            template_size=127,
+            search_size=255,
+            pair_size=141,
+            template_scale=2,
+            aspect_method='perimeter', # TODO: Equivalent to SiamFC?
+            use_gt=True,
+            pad_with_mean=False, # Use mean of first image for padding.
+            feather=True,
+            feather_margin=0.1,
+            center_input_range=True, # Make range [-0.5, 0.5] instead of [0, 1].
+            keep_uint8_range=False, # Use input range of 255 instead of 1.
+            feature_padding='VALID',
+            feature_arch='alexnet',
+            feature_act='linear',
+            enable_feature_bnorm=True,
+            xcorr_padding='VALID',
+            bnorm_after_xcorr=True,
+            learnable_prior=False,
+            # Tracking parameters:
+            num_scales=5,
+            scale_step=1.03,
+            scale_update_rate=0.6,
+            report_square=False,
+            hann_method='none', # none, mul_prob, add_logit
+            hann_coeff=1.0,
+            arg_max_eps_rel=0.05,
+            # Loss parameters:
+            sigma=0.2,
+            balance_classes=True):
+        self._template_size = template_size
+        self._search_size = search_size
+        self._pair_size = pair_size
+        self._aspect_method = aspect_method
+        self._use_gt = use_gt
+        self._pad_with_mean = pad_with_mean
+        self._feather = feather
+        self._feather_margin = feather_margin
+        self._keep_uint8_range = keep_uint8_range
+        self._center_input_range = center_input_range
+        self._template_scale = template_scale
+        # Size of search area relative to object.
+        self._search_scale = float(search_size) / template_size * template_scale
+        self._pair_scale = float(pair_size) / template_size * template_scale
+        self._feature_padding = feature_padding
+        self._feature_arch = feature_arch
+        self._feature_act = feature_act
+        self._enable_feature_bnorm = enable_feature_bnorm
+        self._xcorr_padding = xcorr_padding
+        self._bnorm_after_xcorr = bnorm_after_xcorr
+        self._learnable_prior = learnable_prior
+        self._num_scales = num_scales
+        self._scale_step = scale_step
+        self._scale_update_rate = scale_update_rate
+        self._hann_method = hann_method
+        self._hann_coeff = hann_coeff
+        self._arg_max_eps_rel = arg_max_eps_rel
+        self._sigma = sigma
+        self._balance_classes = balance_classes
+
+        self._num_frames = 0
+        # For summaries in end():
+        self._info = {}
+
+    def start(self, frame, aspect, run_opts, enable_loss,
+              image_summaries_collections=None, name='start'):
+        with tf.name_scope(name) as scope:
+            self._aspect = aspect
+            self._is_training = run_opts['is_training']
+            self._is_tracking = run_opts['is_tracking']
+            self._enable_loss = enable_loss
+            self._image_summaries_collections = image_summaries_collections
+
+            mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keep_dims=True)
+            # TODO: frame['image'] and template_im have a viewport
+            template_rect, _ = _get_context_rect(frame['y'], context_amount=self._template_scale,
+                                                 aspect=self._aspect, aspect_method=self._aspect_method)
+            template_im = util.crop(frame['x'], template_rect, self._template_size,
+                                    pad_value=mean_color if self._pad_with_mean else 0.5,
+                                    feather=self._feather, feather_margin=self._feather_margin)
+
+            rfs = {'template': cnnutil.identity_rf()}
+            template_input = _preproc(template_im, center_input_range=self._center_input_range,
+                                      keep_uint8_range=self._keep_uint8_range)
+            with tf.variable_scope('feature_net', reuse=False):
+                template_feat, rfs = _feature_net(
+                    template_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
+                    output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
+                    is_training=self._is_training)
+            feat_size = template_feat.shape.as_list()[-3:-1]
+            cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
+
+            with tf.name_scope('summary'):
+                tf.summary.image('template', _to_uint8(template_im[0:1]),
+                                 max_outputs=1, collections=self._image_summaries_collections)
+
+            # TODO: Avoid passing template_feat to and from GPU (or re-computing).
+            state = {
+                'x':             tf.identity(frame['x']),
+                'y':             tf.identity(frame['y']),
+                'template_feat': tf.identity(template_feat),
+                'mean_color':    tf.identity(mean_color),
+            }
+            return state
+
+    def next(self, frame, prev_state, name='timestep'):
+        with tf.name_scope(name) as scope:
+            gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y'])
+            # Coerce the aspect ratio of the rectangle to construct the search area.
+            search_rect, _ = _get_context_rect(prev_state['y'], self._search_scale,
+                                               aspect=self._aspect, aspect_method=self._aspect_method)
+
+            # Extract an image pyramid (use 1 scale when not in tracking mode).
+            num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
+            mid_scale = (num_scales - 1) / 2
+            scales = util.scale_range(num_scales, self._scale_step)
+            search_ims, _ = util.crop_pyr(
+                frame['x'], search_rect, self._search_size, scales,
+                pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
+                feather=self._feather, feather_margin=self._feather_margin)
+
+            pair_rect, _ = _get_context_rect(prev_state['y'], self._pair_scale,
+                                             aspect=self._aspect, aspect_method=self._aspect_method)
+            curr_ims, _ = util.crop_pyr(
+                frame['x'], pair_rect, self._pair_size, scales,
+                pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
+                feather=self._feather, feather_margin=self._feather_margin)
+            curr_inputs = _preproc(curr_ims, center_input_range=self._center_input_range,
+                                   keep_uint8_range=self._keep_uint8_range)
+            # Crop the same rectangle from the previous image.
+            prev_im = util.crop(
+                prev_state['x'], pair_rect, self._pair_size,
+                pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
+                feather=self._feather, feather_margin=self._feather_margin)
+            prev_input = _preproc(prev_im, center_input_range=self._center_input_range,
+                                  keep_uint8_range=self._keep_uint8_range)
+            # Copy same previous image to all scales. (Could be avoided with broadcast?)
+            prev_inputs = tf.tile(tf.expand_dims(prev_input, axis=1), [1, num_scales, 1, 1, 1])
+            pair_inputs = tf.concat((prev_inputs, curr_inputs), axis=-1)
+
+            self._info.setdefault('search', []).append(_to_uint8(search_ims[:, mid_scale]))
+
+            # Extract features, perform search, get receptive field of response wrt image.
+            xcorr_rfs = {'search': cnnutil.identity_rf()}
+            search_input = _preproc(search_ims, center_input_range=self._center_input_range,
+                                    keep_uint8_range=self._keep_uint8_range)
+            with tf.variable_scope('feature_net', reuse=True):
+                search_feat, xcorr_rfs = _feature_net(
+                    search_input, xcorr_rfs, padding=self._feature_padding, arch=self._feature_arch,
+                    output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
+                    is_training=self._is_training)
+
+            response, xcorr_rfs = util.diag_xcorr_rf(
+                input=search_feat, filter=prev_state['template_feat'], input_rfs=xcorr_rfs,
+                padding=self._xcorr_padding)
+            response = tf.reduce_sum(response, axis=-1, keep_dims=True)
+            response_size = response.shape.as_list()[-3:-1]
+            cnnutil.assert_center_alignment(self._search_size, response_size, xcorr_rfs['search'])
+
+            with tf.variable_scope('output', reuse=(self._num_frames > 0)):
+                if self._bnorm_after_xcorr:
+                    response = slim.batch_norm(response, scale=True, is_training=self._is_training)
+                else:
+                    response = _affine_scalar(response)
+
+            pair_rfs = {'input': cnnutil.identity_rf()}
+            with tf.variable_scope('pair_net', reuse=(self._num_frames > 0)):
+                pair_output, pair_rfs = _pair_net(
+                    pair_inputs, pair_rfs, is_training=self._is_training)
+            pair_output_size = pair_output.shape.as_list()[-3:-1]
+            # Check that receptive field centers are centered.
+            cnnutil.assert_center_alignment(self._pair_size, pair_output_size, pair_rfs['input'])
+
+            # Check that receptive fields align.
+            np.testing.assert_array_equal(xcorr_rfs['search'].stride, pair_rfs['input'].stride)
+            np.testing.assert_array_equal(response_size, pair_output_size,
+                                          err_msg='output sizes different')
+            output = response + pair_output
+            if self._learnable_prior:
+                with tf.variable_scope('motion_prior', reuse=(self._num_frames > 0)):
+                    output = _add_motion_prior(output)
+
+            losses = {}
+            if self._enable_loss:
+                losses['ce'], labels = _translation_loss(
+                    response, xcorr_rfs['search'], gt_rect, frame['y_is_valid'], search_rect,
+                    search_size=self._search_size, sigma=self._sigma, search_scale=self._search_scale,
+                    balance_classes=self._balance_classes)
+                labels_cmap = util.colormap(tf.expand_dims(labels, -1), _COLORMAP)
+                self._info.setdefault('labels', []).append(_to_uint8(labels_cmap))
+
+            # Get relative translation and scale from response.
+            response_final = _finalize_scores(response, xcorr_rfs['search'].stride,
+                                              self._hann_method, self._hann_coeff)
+            # upsample_response_size = response_final.shape.as_list()[-3:-1]
+            # assert np.all(upsample_response_size <= self._search_size)
+            translation, scale = util.find_peak_pyr(response_final, scales,
+                                                    eps_rel=self._arg_max_eps_rel)
+            translation = translation / self._search_size
+
+            vis = _visualize_response(
+                response[:, mid_scale], response_final[:, mid_scale],
+                search_ims[:, mid_scale], xcorr_rfs['search'], frame['x'], search_rect)
+
+            # Damp the scale update towards 1.
+            scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
+            # Get rectangle in search image.
+            prev_target_in_search = geom.crop_rect(prev_state['y'], search_rect)
+            pred_in_search = _rect_translate_scale(prev_target_in_search, translation,
+                                                   tf.expand_dims(scale, -1))
+            # Move from search back to original image.
+            # TODO: Test that this is equivalent to scaling translation?
+            pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
+
+            # Rectangle to use in next frame for search area.
+            # If using gt and rect not valid, use previous.
+            # gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_rect)
+            if self._use_gt:
+                next_prev_rect = tf.cond(self._is_tracking, lambda: pred, lambda: gt_rect)
+            else:
+                next_prev_rect = pred
+
+            self._num_frames += 1
+            outputs = {'y': pred, 'vis': vis}
+            state = {
+                'x':             frame['x'],
+                'y':             next_prev_rect,
                 'template_feat': prev_state['template_feat'],
                 'mean_color':    prev_state['mean_color'],
             }
@@ -282,6 +527,39 @@ def _feature_net(x, rfs=None, padding=None,
                                             activation_fn=get_act(output_act), normalizer_fn=None)
             else:
                 raise ValueError('unknown architecture: {}'.format(arch))
+            return x, rfs
+
+
+def _pair_net(x, rfs=None, is_training=None, name='pair_net'):
+    '''
+    Returns:
+        Tuple of (feature map, receptive fields).
+    '''
+    assert is_training is not None
+    if rfs is None:
+        rfs = {}
+    # For feature pyramid, support rank > 4.
+    if len(x.shape) > 4:
+        # Merge dims (0, ..., n-4), n-3, n-2, n-1
+        x, restore = merge_dims(x, 0, len(x.shape)-3)
+        x, rfs = _pair_net(x, rfs, is_training=is_training, name=name)
+        x = restore(x, 0)
+        return x, rfs
+
+    with tf.name_scope(name) as scope:
+        args = dict(normalizer_fn=slim.batch_norm,
+                    normalizer_params=dict(is_training=is_training))
+        with slim.arg_scope([slim.conv2d], **args):
+            x, rfs = util.conv2d_rf(x, rfs, 96, [11, 11], 2, scope='conv1')
+            x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, scope='pool1')
+            x, rfs = util.conv2d_rf(x, rfs, 256, [5, 5], scope='conv2')
+            x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, scope='pool2')
+            x, rfs = util.conv2d_rf(x, rfs, 384, [3, 3], scope='conv3')
+            x, rfs = util.conv2d_rf(x, rfs, 384, [3, 3], scope='conv4')
+            x, rfs = util.conv2d_rf(x, rfs, 256, [3, 3], scope='conv5')
+            # x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, scope='pool5')
+            x, rfs = util.conv2d_rf(x, rfs, 1, [3, 3], scope='conv6',
+                                    activation_fn=None, normalizer_fn=None)
             return x, rfs
 
 
@@ -369,19 +647,19 @@ def _get_context_rect(rect, context_amount, aspect, aspect_method):
     return context, square
 
 
-def _add_motion_prior(self, response, name='motion_prior'):
+def _add_motion_prior(response, name='motion_prior'):
     with tf.name_scope(name) as scope:
         response_shape = response.shape.as_list()[-3:]
         assert response_shape[-1] == 1
         prior = tf.get_variable('prior', shape=response_shape, dtype=tf.float32,
                                 initializer=tf.zeros_initializer(dtype=tf.float32))
-        self._info.setdefault('response_appearance', []).append(
-            _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
-        if self._num_frames == 0:
-            tf.summary.image(
-                'motion_prior', max_outputs=1,
-                tensor=_to_uint8(util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
-                collections=self._image_summaries_collections)
+        # self._info.setdefault('response_appearance', []).append(
+        #     _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
+        # if self._num_frames == 0:
+        #     tf.summary.image(
+        #         'motion_prior', max_outputs=1,
+        #         tensor=_to_uint8(util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
+        #         collections=self._image_summaries_collections)
         return response + prior
 
 

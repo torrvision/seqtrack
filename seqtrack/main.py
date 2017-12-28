@@ -300,6 +300,8 @@ def main():
         model = nornn.Nornn(**o.model_params)
     elif o.model == 'SiamFC':
         model = itermodel.ModelFromIterModel(siamfc.SiamFC(**o.model_params))
+    elif o.model == 'CrossCorrFirstConcatPrev':
+        model = itermodel.ModelFromIterModel(siamfc.CrossCorrFirstConcatPrev(**o.model_params))
     elif o.model == 'PairConcat':
         model = itermodel.ModelFromIterModel(pair.PairConcat(**o.model_params))
     else:

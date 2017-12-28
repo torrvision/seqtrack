@@ -19,6 +19,9 @@ class IntRect:
     def __str__(self):
         return '{}-{}'.format(tuple(self.min), tuple(self.max))
 
+    def __add__(self, x):
+        return IntRect(min=self.min+x, max=self.max+x)
+
     def empty(self):
         return not all(self.min < self.max)
 
@@ -178,4 +181,5 @@ def assert_center_alignment(input_size, output_size, rf):
     gap_after = input_size - max_pt
     # If gap_before is equal to gap_after, then center of response map
     # corresponds to center of search image.
-    np.testing.assert_array_equal(gap_before, gap_after)
+    np.testing.assert_array_equal(gap_before, gap_after,
+                                  err_msg='receptive fields not centered')
