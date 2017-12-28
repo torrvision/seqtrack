@@ -37,8 +37,9 @@ class RecSiamFC(models_interface.IterModel):
             feature_arch='alexnet',
             feature_act='linear',
             enable_feature_bnorm=True,
-            enable_rnn_bnorm=True,
             xcorr_padding='VALID',
+            enable_rnn_bnorm=True,
+            enable_recurrency=True,
             bnorm_after_xcorr=False,
             learnable_prior=False,
             # Tracking parameters:
@@ -68,8 +69,9 @@ class RecSiamFC(models_interface.IterModel):
         self._feature_arch = feature_arch
         self._feature_act = feature_act
         self._enable_feature_bnorm = enable_feature_bnorm
-        self._enable_rnn_bnorm = enable_rnn_bnorm
         self._xcorr_padding = xcorr_padding
+        self._enable_rnn_bnorm = enable_rnn_bnorm
+        self._enable_recurrency = enable_recurrency
         self._bnorm_after_xcorr = bnorm_after_xcorr
         self._learnable_prior = learnable_prior
         self._num_scales = num_scales
@@ -179,6 +181,7 @@ class RecSiamFC(models_interface.IterModel):
                 response, rnn_state = _hglass_rnn(
                     response, prev_state['rnn'],
                     enable_bnorm=self._enable_rnn_bnorm,
+                    enable_recurrency=self._enable_recurrency,
                     is_training=self._is_training)
 
             response = tf.reduce_sum(response, axis=-1, keep_dims=True)
@@ -390,7 +393,7 @@ def _feature_net(x, rfs=None, padding=None,
             return x, rfs
 
 
-def _hglass_rnn(x, rnn_state, enable_bnorm=True, is_training=None,
+def _hglass_rnn(x, rnn_state, enable_bnorm=True, enable_recurrency=True, is_training=None,
                 name='hglass_rnn'):
     assert is_training is not None
 
@@ -416,7 +419,10 @@ def _hglass_rnn(x, rnn_state, enable_bnorm=True, is_training=None,
             x_skip.append(x)
             x = slim.conv2d(x, dims[-1]*2, 5, 1, padding='VALID', scope='enc2')
             x_skip.append(x)
-            x, rnn_state = _lstm(x, rnn_state)
+            if enable_recurrency:
+                x, rnn_state = _lstm(x, rnn_state)
+            else:
+                x = slim.conv2d(x, dims[-1]*2, 3, 1, scope='rnn_replace')
             x = slim.conv2d(tf.image.resize_images(x + x_skip[2], [7, 7],
                                                    align_corners=True),
                             dims[-1]*2, 3, 1, scope='dec1')
@@ -424,6 +430,13 @@ def _hglass_rnn(x, rnn_state, enable_bnorm=True, is_training=None,
                                                    align_corners=True),
                             dims[-1], 3, 1, scope='dec2')
             x = slim.conv2d(x + x_skip[0], dims[-1], 3, 1, scope='dec3')
+        # Additional 2 conv layers as previously done (Must not have activation at last)
+        with slim.arg_scope([slim.conv2d],
+                            normalizer_fn=slim.batch_norm,
+                            normalizer_params={'is_training': is_training}):
+            x = slim.conv2d(x, dims[-1], 3, 1, scope='conv1')
+            x = slim.conv2d(x, dims[-1], 1, 1,
+                            activation_fn=None, normalizer_fn=None, scope='conv2')
         return x, rnn_state
 
 
