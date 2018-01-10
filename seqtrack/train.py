@@ -108,10 +108,12 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
     # example_input = graph.whiten(graph.guard_labels(example), stat=stat)
     example_input = graph.whiten(example, stat=stat)
     with tf.name_scope('model'):
-        outputs, loss_var, init_state, final_state = model.instantiate(
+        outputs, losses, init_state, final_state = model.instantiate(
             example_input, run_opts, enable_loss=True,
             image_summaries_collections=['IMAGE_SUMMARIES'])
-    _draw_summaries(example, outputs)
+    _loss_summary(losses)
+    _image_summary(example, outputs)
+    loss_var = _add_losses(losses, o.loss_coeffs)
 
     model_inst = graph.ModelInstance(
         example, run_opts, outputs, init_state, final_state,
@@ -119,8 +121,8 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
         imheight=o.imheight, imwidth=o.imwidth)
 
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-    tf.summary.scalar('regularization', r)
     loss_var += r
+    tf.summary.scalar('regularization', r)
     tf.summary.scalar('total', loss_var)
 
     nepoch     = o.nepoch if not o.debugmode else 2
@@ -564,8 +566,22 @@ def gnuplot_str(x):
     return str(x)
 
 
-def _draw_summaries(example, outputs):
-    with tf.name_scope('image_summary'):
+def _add_losses(losses, loss_coeffs, name='add_losses'):
+    with tf.name_scope(name) as scope:
+        assert isinstance(losses, dict)
+        assert isinstance(loss_coeffs, dict)
+        for k in loss_coeffs:
+            if k not in losses:
+                raise AssertionError('loss not found: {}'.format(k))
+        return tf.add_n([float(loss_coeffs.get(k, 1)) * v for k, v in losses.items()], name=scope)
+
+def _loss_summary(losses, name='loss_summary'):
+    with tf.name_scope(name) as scope:
+        for key, loss in losses.items():
+            tf.summary.scalar(key, loss)
+
+def _image_summary(example, outputs, name='image_summary'):
+    with tf.name_scope(name) as scope:
         ntimesteps = example['x'].shape.as_list()[1]
         assert ntimesteps is not None
         tf.summary.image(

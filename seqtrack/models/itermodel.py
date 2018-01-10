@@ -1,7 +1,6 @@
 import tensorflow as tf
 
 from seqtrack.models import interface as models_interface
-
 from seqtrack.helpers import stack_dict
 
 
@@ -54,10 +53,19 @@ class ModelFromIterModel(models_interface.Model):
         for i in range(ntimesteps):
             outputs[i], state, losses[i] = self._model.next(frames[i], state)
             assert 'y' in outputs[i]
+        outputs = stack_dict(outputs, axis=1)
+        losses = stack_dict(losses)
+        # Compute mean over frames.
+        losses = {k: tf.reduce_mean(v) for k, v in losses.items()}
         final_state = state
 
-        extra_loss = self._model.end()
-        loss = tf.reduce_mean(losses) + extra_loss
+        extra_losses = self._model.end()
+        _assert_no_keys_in_common(losses, extra_losses)
+        losses.update(extra_losses)
+        return outputs, losses, init_state, final_state
 
-        outputs = stack_dict(outputs, axis=1)
-        return outputs, loss, init_state, final_state
+
+def _assert_no_keys_in_common(a, b):
+    intersection = set(a.keys()).intersection(set(b.keys()))
+    if intersection:
+        raise ValueError('keys in common: {}'.format(str(intersection)))

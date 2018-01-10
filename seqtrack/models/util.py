@@ -9,7 +9,7 @@ from seqtrack import cnnutil
 from seqtrack import geom
 
 from seqtrack.cnnutil import ReceptiveField, IntRect
-from seqtrack.helpers import merge_dims, modify_aspect_ratio, diag_xcorr
+from seqtrack.helpers import merge_dims, modify_aspect_ratio, diag_xcorr, expand_dims_n
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
@@ -244,6 +244,56 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
                                   tf.assert_less_equal(center, 1.0+EPSILON)]):
         center = tf.identity(center)
     return center
+
+
+def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_pyr'):
+    '''
+    Args:
+        response: [b, s, h, w, 1]
+        scales: [s]
+
+    Assumes that response is centered and at same stride as search image.
+    '''
+    with tf.name_scope(name) as scope:
+        response = tf.squeeze(response, axis=-1)
+        upsample_size = response.shape.as_list()[-2:]
+        assert all(upsample_size)
+        upsample_size = np.array(upsample_size)
+        # Find arg max over all scales.
+        response = tf.verify_tensor_all_finite(response, 'response is not finite')
+        max_val = tf.reduce_max(response, axis=(-3, -2, -1), keep_dims=True)
+        with tf.control_dependencies([tf.assert_non_negative(response)]):
+            # is_max = tf.to_float(response >= (1.0 - eps_rel) * max_val)
+            is_max = tf.logical_or(tf.greater_equal(response, max_val - eps_rel*tf.abs(max_val)),
+                                   tf.greater_equal(response, max_val - eps_abs))
+        is_max = tf.to_float(is_max)
+
+        grid = tf.to_float(displacement_from_center(upsample_size))
+
+        # Grid now has translation from center in search image co-ords.
+        # Transform into co-ordinate frame of each scale.
+        grid = tf.multiply(grid,                           # [h, w, 2]
+                           expand_dims_n(scales, -1, n=3)) # [s, 1, 1, 1]
+
+        translation = _weighted_mean(grid,                       # [s, h, w, 2]
+                                     tf.expand_dims(is_max, -1), # [b, s, h, w] -> [b, s, h, w, 1]
+                                     axis=(-4, -3, -2))          # [b, s, h, w, 2] -> [b, 2]
+        scale = _weighted_mean(expand_dims_n(scales, -1, n=2), # [b, s] -> [b, s, 1, 1]
+                               is_max,                         # [b, s, h, w]
+                               axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
+        return translation, scale
+
+
+def _weighted_mean(x, w, axis=None, keep_dims=False, name='weighted_mean'):
+    with tf.name_scope(name) as scope:
+        with tf.control_dependencies([tf.assert_non_negative(w)]):
+            w = tf.identity(w)
+        # num = tf.reduce_sum(w * x, axis=axis)
+        # TODO: Is this broadcasting necessary?
+        mass = tf.reduce_sum(w * tf.ones_like(x), axis=axis, keep_dims=True)
+        with tf.control_dependencies([tf.assert_positive(mass)]):
+            p = w / mass
+        return tf.reduce_sum(p * x, axis=axis, keep_dims=keep_dims)
 
 
 def make_grid_centers(im_size, name='make_grid_centers'):

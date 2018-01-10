@@ -160,3 +160,22 @@ def resolve_rfs(a, b):
     if a != b:
         raise ValueError('receptive fields differ: {} vs {}'.format(str(a), str(b)))
     return a
+
+
+def assert_center_alignment(input_size, output_size, rf):
+    '''
+    Args:
+        input_size: (height, width)
+        output_size: (height, width)
+        rf: cnnutil.ReceptiveField, which uses (height, width)
+    '''
+    input_size = np.array(n_positive_integers(2, input_size))
+    output_size = np.array(n_positive_integers(2, output_size))
+
+    min_pt = rf.rect.int_center()
+    max_pt = min_pt + rf.stride * (output_size - 1) + 1
+    gap_before = min_pt
+    gap_after = input_size - max_pt
+    # If gap_before is equal to gap_after, then center of response map
+    # corresponds to center of search image.
+    np.testing.assert_array_equal(gap_before, gap_after)

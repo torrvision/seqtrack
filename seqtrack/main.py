@@ -80,14 +80,17 @@ def parse_arguments():
     parser.add_argument(
             '--use_queues', help='enable queues for asynchronous data loading',
             action='store_true')
-    parser.add_argument(
-            '--heatmap_params', help='JSON string specifying heatmap options',
-            type=json.loads, default={'Gaussian': True})
+    # parser.add_argument(
+    #         '--heatmap_params', help='JSON string specifying heatmap options',
+    #         type=json.loads, default={'Gaussian': True})
 
     # JV: Move to model.
     # parser.add_argument(
     #         '--losses', nargs='+', help='list of losses to be used',
     #         type=str) # example [l1, iou]
+    parser.add_argument(
+            '--loss_coeffs', help='list of losses to be used',
+            type=json.loads, default='{}')
 
     parser.add_argument(
             '--cnn_pretrain', help='specify if using pretrained model',
@@ -187,6 +190,9 @@ def parse_arguments():
     parser.add_argument(
             '--gpu_device', help='set `CUDA_VISIBLE_DEVICES`',
             type=int, default=0)
+    parser.add_argument(
+            '--no_gpu_manctrl', help='disable manual gpu management',
+            dest='gpu_manctrl', action='store_false')
     parser.add_argument(
             '--gpu_frac', help='fraction of gpu memory',
             type=float, default=0.4)
