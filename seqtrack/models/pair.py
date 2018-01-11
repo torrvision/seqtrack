@@ -25,6 +25,8 @@ class PairConcat(models_interface.IterModel):
             search_size=263,
             template_scale=2,
             aspect_method='perimeter', # TODO: Equivalent to SiamFC?
+            use_prev_frame=True,
+            use_init_frame=False,
             use_gt=True,
             curr_as_prev=True,
             pad_with_mean=False, # Use mean of first image for padding.
@@ -53,6 +55,8 @@ class PairConcat(models_interface.IterModel):
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
+        self._use_prev_frame = use_prev_frame
+        self._use_init_frame = use_init_frame
         self._use_gt = use_gt
         self._curr_as_prev = curr_as_prev
         self._pad_with_mean = pad_with_mean
@@ -96,6 +100,8 @@ class PairConcat(models_interface.IterModel):
             state = {
                 'x':          tf.identity(frame['x']),
                 'y':          tf.identity(frame['y']),
+                'x_init':     tf.identity(frame['x']),
+                'y_init':     tf.identity(frame['y']),
                 'mean_color': tf.identity(mean_color),
             }
             return state
@@ -117,9 +123,19 @@ class PairConcat(models_interface.IterModel):
             # Extract same rectangle from previous image.
             prev_im = self._crop(prev_state['x'], search_rect, self._search_size, prev_state['mean_color'])
             prev_ims = tf.tile(tf.expand_dims(prev_im, axis=1), [1, num_scales, 1, 1, 1])
+            # Extract initial rectangle.
+            init_search_rect, _ = self._get_search_rect(prev_state['y_init'])
+            init_im = self._crop(prev_state['x_init'], init_search_rect, self._search_size,
+                                 prev_state['mean_color'])
+            init_ims = tf.tile(tf.expand_dims(init_im, axis=1), [1, num_scales, 1, 1, 1])
 
             # Extract features, perform search, get receptive field of response wrt image.
-            search_input = tf.concat((self._preproc(search_ims), self._preproc(prev_ims)), axis=-1)
+            search_inputs = [search_ims]
+            if self._use_prev_frame:
+                search_inputs += [prev_ims]
+            if self._use_init_frame:
+                search_inputs += [init_ims]
+            search_input = tf.concat([self._preproc(im) for im in search_inputs], axis=-1)
 
             rfs = {'search': cnnutil.identity_rf()}
             with tf.variable_scope('feature_net', reuse=(self._num_frames > 0)):
@@ -174,6 +190,8 @@ class PairConcat(models_interface.IterModel):
             state = {
                 'x':          frame['x'],
                 'y':          next_prev_rect,
+                'x_init':     prev_state['x_init'],
+                'y_init':     prev_state['y_init'],
                 'mean_color': prev_state['mean_color'],
             }
             return outputs, state, losses
