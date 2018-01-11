@@ -36,6 +36,7 @@ class SiamFC(models_interface.IterModel):
             feature_arch='alexnet',
             feature_act='linear',
             enable_feature_bnorm=True,
+            enable_template_mask=False,
             xcorr_padding='VALID',
             bnorm_after_xcorr=True,
             learnable_prior=False,
@@ -67,6 +68,7 @@ class SiamFC(models_interface.IterModel):
         self._feature_arch = feature_arch
         self._feature_act = feature_act
         self._enable_feature_bnorm = enable_feature_bnorm
+        self._enable_template_mask = enable_template_mask
         self._xcorr_padding = xcorr_padding
         self._bnorm_after_xcorr = bnorm_after_xcorr
         self._learnable_prior = learnable_prior
@@ -110,6 +112,11 @@ class SiamFC(models_interface.IterModel):
                     is_training=self._is_training)
             feat_size = template_feat.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
+            if self._enable_template_mask:
+                template_mask = tf.get_variable(
+                    'template_mask', template_feat.shape.as_list()[-3:],
+                    initializer=tf.ones_initializer())
+                template_feat *= template_mask
 
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
