@@ -111,7 +111,8 @@ class SiamFC(models_interface.IterModel):
                 template_feat, rfs = _feature_net(
                     template_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training, variables_collections=['siamese'])
+                    is_training=self._is_training, variables_collections=['siamese'],
+                    trainable=(not self._freeze_siamese))
             feat_size = template_feat.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
             if self._enable_template_mask:
@@ -164,7 +165,8 @@ class SiamFC(models_interface.IterModel):
                 search_feat, rfs = _feature_net(
                     search_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training, variables_collections=['siamese'])
+                    is_training=self._is_training, variables_collections=['siamese'],
+                    trainable=(not self._freeze_siamese))
 
             response, rfs = util.diag_xcorr_rf(
                 input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
@@ -245,7 +247,7 @@ class SiamFC(models_interface.IterModel):
 
 
 def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear', enable_bnorm=True,
-                 is_training=None, name='feature_net', variables_collections=None):
+                 is_training=None, name='feature_net', variables_collections=None, trainable=False):
     '''
     Returns:
         Tuple of (feature map, receptive fields).
@@ -261,17 +263,17 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
         x, rfs = _feature_net(
             x, rfs=rfs, padding=padding, arch=arch, output_act=output_act,
             enable_bnorm=enable_bnorm, is_training=is_training, name=name,
-            variables_collections=variables_collections)
+            variables_collections=variables_collections, trainable=trainable)
         x = restore(x, 0)
         return x, rfs
 
     with tf.name_scope(name) as scope:
-        conv_args = dict(variables_collections=variables_collections)
+        conv_args = dict(variables_collections=variables_collections, trainable=trainable)
         if enable_bnorm:
             conv_args.update(dict(
                 normalizer_fn=slim.batch_norm,
                 normalizer_params=dict(
-                    is_training=is_training,
+                    is_training=is_training if trainable else False, # Fix bnorm if not trainable.
                     variables_collections=variables_collections)))
         with slim.arg_scope([slim.conv2d], **conv_args):
             if arch == 'alexnet':
