@@ -39,6 +39,7 @@ class SiamFC(models_interface.IterModel):
             enable_template_mask=False,
             xcorr_padding='VALID',
             bnorm_after_xcorr=True,
+            freeze_siamese=False,
             learnable_prior=False,
             # Tracking parameters:
             num_scales=5,
@@ -71,6 +72,7 @@ class SiamFC(models_interface.IterModel):
         self._enable_template_mask = enable_template_mask
         self._xcorr_padding = xcorr_padding
         self._bnorm_after_xcorr = bnorm_after_xcorr
+        self._freeze_siamese = freeze_siamese
         self._learnable_prior = learnable_prior
         self._num_scales = num_scales
         self._scale_step = scale_step
@@ -109,13 +111,13 @@ class SiamFC(models_interface.IterModel):
                 template_feat, rfs = _feature_net(
                     template_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training)
+                    is_training=self._is_training, variables_collections=['siamese'])
             feat_size = template_feat.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
             if self._enable_template_mask:
                 template_mask = tf.get_variable(
                     'template_mask', template_feat.shape.as_list()[-3:],
-                    initializer=tf.ones_initializer())
+                    initializer=tf.ones_initializer(), collections=['siamese'])
                 template_feat *= template_mask
 
             with tf.name_scope('summary'):
@@ -162,7 +164,7 @@ class SiamFC(models_interface.IterModel):
                 search_feat, rfs = _feature_net(
                     search_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training)
+                    is_training=self._is_training, variables_collections=['siamese'])
 
             response, rfs = util.diag_xcorr_rf(
                 input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
@@ -173,9 +175,14 @@ class SiamFC(models_interface.IterModel):
 
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
                 if self._bnorm_after_xcorr:
-                    response = slim.batch_norm(response, scale=True, is_training=self._is_training)
+                    response = slim.batch_norm(response, scale=True, is_training=self._is_training,
+                                               variables_collections=['siamese'])
                 else:
-                    response = _affine_scalar(response)
+                    response = _affine_scalar(response, variables_collections=['siamese'])
+                if self._freeze_siamese:
+                    # TODO: Prevent batch-norm updates as well.
+                    # TODO: Set trainable=False for all variables above.
+                    response = tf.stop_gradient(response)
                 if self._learnable_prior:
                     response = _add_motion_prior(response)
 
@@ -237,9 +244,8 @@ class SiamFC(models_interface.IterModel):
         return losses
 
 
-def _feature_net(x, rfs=None, padding=None,
-                 arch='alexnet', output_act='linear', enable_bnorm=True,
-                 is_training=None, name='feature_net'):
+def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear', enable_bnorm=True,
+                 is_training=None, name='feature_net', variables_collections=None):
     '''
     Returns:
         Tuple of (feature map, receptive fields).
@@ -252,17 +258,22 @@ def _feature_net(x, rfs=None, padding=None,
     if len(x.shape) > 4:
         # Merge dims (0, ..., n-4), n-3, n-2, n-1
         x, restore = merge_dims(x, 0, len(x.shape)-3)
-        x, rfs = _feature_net(x, rfs=rfs, padding=padding, arch=arch, output_act=output_act,
-                              enable_bnorm=enable_bnorm, is_training=is_training, name=name)
+        x, rfs = _feature_net(
+            x, rfs=rfs, padding=padding, arch=arch, output_act=output_act,
+            enable_bnorm=enable_bnorm, is_training=is_training, name=name,
+            variables_collections=variables_collections)
         x = restore(x, 0)
         return x, rfs
 
     with tf.name_scope(name) as scope:
-        args = {}
+        conv_args = dict(variables_collections=variables_collections)
         if enable_bnorm:
-            args.update(dict(normalizer_fn=slim.batch_norm,
-                             normalizer_params=dict(is_training=is_training)))
-        with slim.arg_scope([slim.conv2d], **args):
+            conv_args.update(dict(
+                normalizer_fn=slim.batch_norm,
+                normalizer_params=dict(
+                    is_training=is_training,
+                    variables_collections=variables_collections)))
+        with slim.arg_scope([slim.conv2d], **conv_args):
             if arch == 'alexnet':
                 # https://github.com/bertinetto/siamese-fc/blob/master/training/vid_create_net.m
                 # https://github.com/tensorflow/models/blob/master/research/slim/nets/alexnet.py
@@ -355,10 +366,12 @@ def _ensure_rgba(im, name='ensure_rgba'):
 def _to_uint8(x):
     return tf.image.convert_image_dtype(x, tf.uint8, saturate=True)
 
-def _affine_scalar(x, name='affine'):
+def _affine_scalar(x, name='affine', variables_collections=None):
     with tf.name_scope(name) as scope:
-        gain = tf.get_variable('gain', shape=[], dtype=tf.float32)
-        bias = tf.get_variable('bias', shape=[], dtype=tf.float32)
+        gain = tf.get_variable('gain', shape=[], dtype=tf.float32,
+                               variables_collections=variables_collections)
+        bias = tf.get_variable('bias', shape=[], dtype=tf.float32,
+                               variables_collections=variables_collections)
         return gain * x + bias
 
 

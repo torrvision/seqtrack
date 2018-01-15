@@ -54,6 +54,8 @@ class Opts(object):
         self.cnn_model          = 'custom' # custom, vgg_16, etc.
         self.cnn_pretrain       = False # specify whether to load pretrained params.
         self.cnn_trainable      = False # set True to also learn pretrained params.
+        self.siamese_pretrain   = False # specify whether to load pretrained params.
+        self.siamese_model_file = '' # specify whether to load pretrained params.
 
         #----------------------------------------------------------------------
         # model parameters - rnn

@@ -98,6 +98,11 @@ def parse_arguments():
     # parser.add_argument(
     #         '--cnn_trainable', help='set False to fix pretrained params',
     #         action='store_true')
+    parser.add_argument(
+            '--siamese_pretrain', help='specify if using pretrained model',
+            action='store_true')
+    parser.add_argument(
+            '--siamese_model_file', help='specify if using pretrained model')
 
     parser.add_argument(
             '--nepoch', help='number of epochs',
