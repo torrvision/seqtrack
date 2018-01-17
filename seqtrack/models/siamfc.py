@@ -55,6 +55,7 @@ class SiamFC(models_interface.IterModel):
             arg_max_eps_rel=0.05,
             # Loss parameters:
             enable_ce_loss=True,
+            ce_label='gaussian_distance',
             sigma=0.2,
             balance_classes=True,
             enable_margin_loss=False,
@@ -89,6 +90,7 @@ class SiamFC(models_interface.IterModel):
         self._hann_coeff = hann_coeff
         self._arg_max_eps_rel = arg_max_eps_rel
         self._enable_ce_loss = enable_ce_loss
+        self._ce_label = ce_label
         self._sigma = sigma
         self._balance_classes = balance_classes
         self._enable_margin_loss = enable_margin_loss
@@ -206,9 +208,10 @@ class SiamFC(models_interface.IterModel):
             losses = {}
             if self._enable_loss:
                 if self._enable_ce_loss:
-                    losses['ce'], labels = _cross_entropy_translation(
-                        response, rfs['search'], gt_rect, frame['y_is_valid'], search_rect,
-                        search_size=self._search_size, sigma=self._sigma, search_scale=self._search_scale,
+                    losses['ce'], labels = _cross_entropy_loss(
+                        response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
+                        search_size=self._search_size, search_scale=self._search_scale,
+                        label_method=self._ce_label, sigma=self._sigma,
                         balance_classes=self._balance_classes)
                     self._info.setdefault('ce_labels', []).append(
                         _to_uint8(util.colormap(tf.expand_dims(labels, -1), _COLORMAP)))
@@ -432,10 +435,10 @@ def _add_motion_prior(response, name='motion_prior'):
         return response + prior
 
 
-def _cross_entropy_translation(
-        response, response_rf, gt_rect, gt_is_valid, search_rect,
+def _cross_entropy_loss(
+        response, response_rf, prev_rect, gt_rect, gt_is_valid, search_rect,
         search_size, sigma, search_scale, balance_classes,
-        name='cross_entropy_translation'):
+        label_method='gaussian_distance', name='cross_entropy_translation'):
     '''Computes the loss for a 2D map of logits.
 
     Args:
@@ -450,7 +453,11 @@ def _cross_entropy_translation(
         balance_classes -- Should classes be balanced?
     '''
     with tf.name_scope(name) as scope:
-        response_size = response.shape.as_list()[-3:-1]
+        # [b, s, h, w, 1] -> [b, h, w]
+        response = tf.squeeze(response, 1) # Remove the scales dimension.
+        response = tf.squeeze(response, -1) # Remove the trailing dimension.
+        response_size = response.shape.as_list()[-2:]
+
         # Obtain displacement from center of search image.
         disp = util.displacement_from_center(response_size)
         disp = tf.to_float(disp) * response_rf.stride / search_size
@@ -458,12 +465,24 @@ def _cross_entropy_translation(
         centers = 0.5 + disp
 
         gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
-        labels, has_label = lossfunc.translation_labels(
-            centers, gt_rect_in_search, shape='gaussian', sigma=sigma/search_scale)
+        prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
+        rect_grid = util.rect_grid(response_size, response_rf, search_size,
+                                   geom.rect_size(prev_rect_in_search))
+
+        if label_method == 'gaussian_distance':
+            labels, has_label = lossfunc.translation_labels(
+                centers, gt_rect_in_search, shape='gaussian', sigma=sigma/search_scale)
+        elif label_method == 'best_iou':
+            gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 2)
+            iou = geom.rect_iou(rect_grid, gt_rect_in_search)
+            is_pos = (iou >= tf.reduce_max(iou, axis=[-2, -1], keep_dims=True))
+            labels = tf.to_float(is_pos)
+            has_label = tf.ones_like(labels, dtype=tf.bool)
+        else:
+            raise ValueError('unknown label method: {}'.format(label_method))
+
         # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
-        loss = tf.nn.sigmoid_cross_entropy_with_logits(
-            labels=labels,                            # [b, h, w]
-            logits=tf.squeeze(response, axis=(1, 4))) # [b, s, h, w, 1] -> [b, h, w]
+        loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=response)
 
         if balance_classes:
             weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
