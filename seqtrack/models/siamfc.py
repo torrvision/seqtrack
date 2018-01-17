@@ -11,7 +11,11 @@ from seqtrack import models
 from seqtrack.models import interface as models_interface
 from seqtrack.models import util
 
-from seqtrack.helpers import merge_dims, get_act, leaky_relu
+from seqtrack.helpers import merge_dims
+from seqtrack.helpers import get_act
+from seqtrack.helpers import leaky_relu
+from seqtrack.helpers import expand_dims_n
+from seqtrack.helpers import weighted_mean
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 _COLORMAP = 'viridis'
@@ -50,8 +54,11 @@ class SiamFC(models_interface.IterModel):
             hann_coeff=1.0,
             arg_max_eps_rel=0.05,
             # Loss parameters:
+            enable_ce_loss=True,
             sigma=0.2,
-            balance_classes=True):
+            balance_classes=True,
+            enable_margin_loss=False,
+            margin_cost='iou'):
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
@@ -80,8 +87,11 @@ class SiamFC(models_interface.IterModel):
         self._hann_method = hann_method
         self._hann_coeff = hann_coeff
         self._arg_max_eps_rel = arg_max_eps_rel
+        self._enable_ce_loss = enable_ce_loss
         self._sigma = sigma
         self._balance_classes = balance_classes
+        self._enable_margin_loss = enable_margin_loss
+        self._margin_cost = margin_cost
 
         self._num_frames = 0
         # For summaries in end():
@@ -188,14 +198,25 @@ class SiamFC(models_interface.IterModel):
                 if self._learnable_prior:
                     response = _add_motion_prior(response)
 
+            self._info.setdefault('response', []).append(
+                _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
+
             losses = {}
             if self._enable_loss:
-                losses['ce'], labels = _translation_loss(
-                    response, rfs['search'], gt_rect, frame['y_is_valid'], search_rect,
-                    search_size=self._search_size, sigma=self._sigma, search_scale=self._search_scale,
-                    balance_classes=self._balance_classes)
-                labels_cmap = util.colormap(tf.expand_dims(labels, -1), _COLORMAP)
-                self._info.setdefault('labels', []).append(_to_uint8(labels_cmap))
+                if self._enable_ce_loss:
+                    losses['ce'], labels = _cross_entropy_translation(
+                        response, rfs['search'], gt_rect, frame['y_is_valid'], search_rect,
+                        search_size=self._search_size, sigma=self._sigma, search_scale=self._search_scale,
+                        balance_classes=self._balance_classes)
+                    self._info.setdefault('ce_labels', []).append(
+                        _to_uint8(util.colormap(tf.expand_dims(labels, -1), _COLORMAP)))
+                if self._enable_margin_loss:
+                    losses['margin'], cost = _max_margin_loss(
+                        response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
+                        search_size=self._search_size, search_scale=self._search_scale,
+                        cost_method=self._margin_cost)
+                    self._info.setdefault('margin_cost', []).append(
+                        _to_uint8(util.colormap(tf.expand_dims(cost, -1), _COLORMAP)))
 
             # Get relative translation and scale from response.
             response_final = _finalize_scores(response, rfs['search'].stride,
@@ -209,6 +230,7 @@ class SiamFC(models_interface.IterModel):
             vis = _visualize_response(
                 response[:, mid_scale], response_final[:, mid_scale],
                 search_ims[:, mid_scale], rfs['search'], frame['x'], search_rect)
+            self._info.setdefault('vis', []).append(_to_uint8(vis))
 
             # Damp the scale update towards 1.
             scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
@@ -408,15 +430,15 @@ def _add_motion_prior(response, name='motion_prior'):
         return response + prior
 
 
-def _translation_loss(response, response_rf, gt_rect, gt_is_valid, search_rect,
-                      search_size, sigma, search_scale, balance_classes,
-                      name='translation_loss'):
+def _cross_entropy_translation(
+        response, response_rf, gt_rect, gt_is_valid, search_rect,
+        search_size, sigma, search_scale, balance_classes,
+        name='cross_entropy_translation'):
     '''Computes the loss for a 2D map of logits.
 
     Args:
         response -- 2D map of logits.
         response_rf -- Receptive field of response BEFORE upsampling.
-        upsample_factor -- Response has been upsampled by this factor.
         gt_rect -- Ground-truth rectangle in original image frame.
         gt_is_valid -- Whether ground-truth label is present (valid).
         search_rect -- Rectangle that describes search area in original image.
@@ -452,6 +474,68 @@ def _translation_loss(response, response_rf, gt_rect, gt_is_valid, search_rect,
         loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
         loss = tf.reduce_mean(loss)
         return loss, labels
+
+
+def _max_margin_loss(
+        score, score_rf, prev_rect, gt_rect, gt_is_valid, search_rect,
+        search_size, search_scale, cost_method='iou', name='max_margin_loss'):
+    '''Computes the loss for a 2D map of logits.
+
+    Args:
+        score -- 2D map of logits.
+        score_rf -- Receptive field of score BEFORE upsampling.
+        prev_rect -- Rectangle in previous frame (used to set size of predicted rectangle).
+        gt_rect -- Ground-truth rectangle in original image frame.
+        gt_is_valid -- Whether ground-truth label is present (valid).
+        search_rect -- Rectangle that describes search area in original image.
+        search_size -- Size of search image cropped from original image.
+    '''
+    with tf.name_scope(name) as scope:
+        # [b, s, h, w, 1] -> [b, h, w]
+        score = tf.squeeze(score, 1) # Remove the scales dimension.
+        score = tf.squeeze(score, -1) # Remove the trailing dimension.
+        score_size = score.shape.as_list()[-2:]
+        gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
+        prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
+        rect_grid = util.rect_grid(score_size, score_rf, search_size,
+                                   geom.rect_size(prev_rect_in_search))
+        # rect_grid -- [b, h, w, 4]
+        # gt_rect_in_search -- [b, 4]
+        gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 2)
+        if cost_method == 'iou':
+            iou = geom.rect_iou(rect_grid, gt_rect_in_search)
+            cost = 1. - iou
+        elif cost_method == 'iou_correct':
+            iou = geom.rect_iou(rect_grid, gt_rect_in_search)
+            cost = tf.to_float(iou >= tf.reduce_max(iou, axis=[-2, -1], keep_dims=True))
+        elif cost_method == 'distance':
+            delta = geom.rect_center(rect_grid) - geom.rect_center(gt_rect_in_search)
+            # Distance in "object" units.
+            cost = tf.norm(delta, axis=-1) * search_scale
+        else:
+            raise ValueError('unknown cost method: {}'.format(cost_method))
+        loss = _max_margin(score, cost, axis=[-2, -1])
+        # TODO: Is this the best way to handle gt_is_valid?
+        # (set loss to zero and include in mean)
+        loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
+        loss = tf.reduce_mean(loss)
+        return loss, cost
+
+
+def _max_margin(score, cost, axis=None, name='max_margin'):
+    '''Computes the max-margin loss.'''
+    with tf.name_scope(name) as scope:
+        is_best = tf.to_float(cost >= tf.reduce_min(cost, axis=axis, keep_dims=True))
+        cost_best = weighted_mean(cost, is_best, axis=axis, keep_dims=True)
+        score_best = weighted_mean(score, is_best, axis=axis, keep_dims=True)
+        # We want the rectangle with the minimum cost to have the highest score.
+        # => Ensure that the gap in score is at least the difference in cost.
+        # i.e. score_best - score >= cost - cost_best
+        # i.e. (cost - cost_best) - (score_best - score) <= 0
+        # Therefore penalize max(0, above expr).
+        violation = tf.maximum(0., (cost - cost_best) - (score_best - score))
+        loss = tf.reduce_max(violation, axis=axis)
+        return loss
 
 
 def _finalize_scores(response, stride, hann_method, hann_coeff, name='finalize_scores'):
