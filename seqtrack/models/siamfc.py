@@ -529,7 +529,8 @@ def _max_margin_loss(
             cost = 1. - iou
         elif cost_method == 'iou_correct':
             iou = geom.rect_iou(rect_grid, gt_rect_in_search)
-            cost = tf.to_float(iou >= tf.reduce_max(iou, axis=[-2, -1], keep_dims=True))
+            max_iou = tf.reduce_max(iou, axis=[-2, -1], keep_dims=True)
+            cost = tf.to_float(tf.logical_not(iou >= max_iou))
         elif cost_method == 'distance':
             delta = geom.rect_center(rect_grid) - geom.rect_center(gt_rect_in_search)
             # Distance in "object" units.
@@ -547,7 +548,7 @@ def _max_margin_loss(
 def _max_margin(score, cost, axis=None, structured=True, name='max_margin'):
     '''Computes the max-margin loss.'''
     with tf.name_scope(name) as scope:
-        is_best = tf.to_float(cost >= tf.reduce_min(cost, axis=axis, keep_dims=True))
+        is_best = tf.to_float(cost <= tf.reduce_min(cost, axis=axis, keep_dims=True))
         cost_best = weighted_mean(cost, is_best, axis=axis, keep_dims=True)
         score_best = weighted_mean(score, is_best, axis=axis, keep_dims=True)
         # We want the rectangle with the minimum cost to have the highest score.
