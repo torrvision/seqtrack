@@ -144,9 +144,11 @@ def merge_dims(x, a, b, name='merge_dims'):
         n = len(x_static)
 
         # Substitute the static size where possible.
-        y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, a)] +
-                     [tf.reduce_prod(x_dynamic[a:b])] +
-                     [x_static[i] or x_dynamic[i] for i in range(b, n)])
+        prod = lambda s: reduce(lambda x, y: None if x is None or y is None else x * y, s)
+        y_dynamic = (
+            [x_static[i] or x_dynamic[i] for i in range(0, a)] +
+            [prod(x_static[a:b]) or tf.reduce_prod(x_dynamic[a:b])] +
+            [x_static[i] or x_dynamic[i] for i in range(b, n)])
         y = tf.reshape(x, y_dynamic)
         restore_fn = functools.partial(restore, x_static=x_static, x_dynamic=x_dynamic)
         return y, restore_fn
@@ -338,6 +340,35 @@ def stack_dict(frames, axis=0, keys=None):
     }
 
 
+def unique_argmax(x, axis=None, output_type=tf.int64, name='unique_argmax'):
+    # TODO: Add rel_eps, abs_eps.
+    with tf.name_scope(name) as scope:
+        # Find set of maximizers.
+        is_max = (x >= tf.reduce_max(x, axis=axis, keep_dims=True))
+        # Ensure that there is at least one maximizer.
+        max_exists = tf.reduce_any(is_max, axis=axis)
+        assert_op = tf.Assert(tf.reduce_all(max_exists), [max_exists])
+        with tf.control_dependencies([assert_op]):
+            is_max = tf.identity(is_max)
+        # Add a random number to break ties.
+        is_max = tf.to_float(is_max) + tf.random_uniform(most_static_shape(x))
+        return tf.argmax(is_max, axis=axis, output_type=output_type)
+
+
+def lookup_each(value, index, name='lookup_each'):
+    '''
+    Args:
+        value -- size [b, n]
+        index -- size [b], type integer
+
+    Returns:
+        size [b]
+    '''
+    with tf.name_scope(name) as scope:
+        full_index = tf.stack((tf.range(most_static_shape(index)[0]), index), axis=-1)
+        return tf.gather_nd(value, full_index)
+
+
 # def unstack_dict(d, keys, axis):
 #     '''Converts dictionary of tensors to list of dictionaries.'''
 #     # Gather lists of all elements at same index.
@@ -346,3 +377,20 @@ def stack_dict(frames, axis=0, keys=None):
 #     # Create a dictionary from each.
 #     # [[x0, y0], [x1, y1]] => [{'x': x0, 'y': y0}, {'x': x1, 'y': y1}]
 #     return [dict(zip(keys, vals)) for vals in value_lists]
+
+
+class Buffer:
+
+    def __init__(self, max_len):
+        self.elems = []
+        self._max_len = max_len
+        self._pos = 0
+
+    def push(self, x):
+        if len(self.elems) >= self._max_len:
+            # Over-write oldest element.
+            self.elems[self._pos] = x
+        else:
+            # Add a new element.
+            self.elems.append(x)
+        self._pos = (self._pos + 1) % self._max_len

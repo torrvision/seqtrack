@@ -123,10 +123,11 @@ def feather_mask(im_size, margin, name='feather_mask'):
 def scale_range(num, step, name='scale_range'):
     '''Creates a geometric progression with 1 at the center.'''
     with tf.name_scope(name) as scope:
-        assert isinstance(num, tf.Tensor)
-        with tf.control_dependencies(
-                [tf.assert_equal(num % 2, 1, message='number of scales must be odd')]):
-            half = (num - 1) / 2
+        # assert isinstance(num, tf.Tensor)
+        # with tf.control_dependencies(
+        #         [tf.assert_equal(num % 2, 1, message='number of scales must be odd')]):
+        #     half = (num - 1) / 2
+        half = (num - 1) / 2
         log_step = tf.abs(tf.log(step))
         return tf.exp(log_step * tf.to_float(tf.range(-half, half+1)))
 
