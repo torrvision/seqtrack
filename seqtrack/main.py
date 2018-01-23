@@ -156,6 +156,10 @@ def parse_arguments():
                                       'grayscale': False})
 
     parser.add_argument(
+            '--max_seq_len', help='length of sequences to sample',
+            type=int, default=100)
+
+    parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
             type=json.loads, default={'kind': 'regular', 'freq': 10})
     parser.add_argument('--augment_motion', help='enable motion augmentation?', action='store_true')

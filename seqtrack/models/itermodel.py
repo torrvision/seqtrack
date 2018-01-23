@@ -23,7 +23,7 @@ class ModelFromIterModel(models_interface.Model):
 
         Args:
             example has fields:
-                x0, y0, x, y, y_is_valid
+                x0, y0, x, y, y_is_valid, aspect, continue
 
         Returns:
             prediction_crop: Model prediction in reference frame of viewport.
@@ -36,8 +36,10 @@ class ModelFromIterModel(models_interface.Model):
         '''
         # TODO: Aspect, viewport.
         frame = {'x': example['x0'], 'y': example['y0']}
-        init_state = self._model.start(frame, example['aspect'], run_opts, enable_loss=enable_loss,
-                                       image_summaries_collections=image_summaries_collections)
+        init_state, init_state_feed = self._model.start(
+            frame, example['aspect'], example['continue'], run_opts,
+            enable_loss=enable_loss,
+            image_summaries_collections=image_summaries_collections)
 
         frames = {
             'x': tf.unstack(example['x'], axis=1),
@@ -62,7 +64,7 @@ class ModelFromIterModel(models_interface.Model):
         extra_losses = self._model.end()
         _assert_no_keys_in_common(losses, extra_losses)
         losses.update(extra_losses)
-        return outputs, losses, init_state, final_state
+        return outputs, losses, init_state_feed, final_state
 
 
 def _assert_no_keys_in_common(a, b):

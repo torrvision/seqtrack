@@ -5,7 +5,7 @@ import numpy as np
 
 from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to
 
-EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect']
+EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect', 'continue']
 
 
 class ModelInstance:
@@ -52,8 +52,13 @@ def make_placeholders(ntimesteps, im_size, default=None):
         'y':          [None, ntimesteps, 4],
         'y_is_valid': [None, ntimesteps],
         'aspect':     [None],
+        'continue':   [None],
     }
-    dtype = lambda k: tf.bool if k.endswith('_is_valid') else tf.float32
+    dtypes = {
+        'y_is_valid': tf.bool,
+        'continue':   tf.bool,
+    }
+    dtype = lambda k: dtypes.get(k, tf.float32)
 
     if default is not None:
         assert(set(default.keys()) == set(shapes.keys()))
@@ -148,9 +153,9 @@ def load_batch(seqs, ntimesteps, im_size):
         im_size: (height, width)
 
     Example has keys:
-        'x0'     # First image in sequence, shape [h, w, 3]
+        'x0'         # First image in sequence, shape [h, w, 3]
         'y0'         # Position of target in first image, shape [4]
-        'x'      # Input images, shape [n-1, h, w, 3]
+        'x'          # Input images, shape [n-1, h, w, 3]
         'y'          # Position of target in following frames, shape [n-1, 4]
         'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
         'aspect'     # Aspect ratio of original image.

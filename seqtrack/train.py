@@ -28,6 +28,10 @@ from seqtrack import visualize
 
 from seqtrack.helpers import cache_json
 from seqtrack.helpers import Buffer
+from seqtrack.helpers import im_to_arr
+from seqtrack.helpers import load_image_viewport
+from seqtrack.helpers import map_nested
+from tensorflow.python.util import nest
 
 
 def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
@@ -284,7 +288,10 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                 writer[mode] = tf.summary.FileWriter(path_summary)
 
         replay_buffer = Buffer(100000)
-        curr_seq = []
+        curr_rest = None
+        curr_state = None
+        curr_aspect = None
+        batch_ind = None
 
         while True: # Loop over epochs
             global_step = global_step_var.eval() # Number of steps taken.
@@ -321,26 +328,59 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                         eval_sequences = sampler()
                         _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences)
 
-                # # Take another steps in the current sequence and add to the buffer
-                # # TODO: Batch?
-                # min_buffer_size = 100
-                # if len(replay_buffer.elems) < min_buffer_size:
-                #     # DO SOMETHING
-                #     pass
-                # # Sample b-1 segments from the replay buffer.
-                # ind = np.random.choice(len(replay_buffer.elems), o.batchsz-1, replace=True)
-                # batch_seqs = [replay_buffer.elems[i] for i in ind]
+                # Store in replay buffer:
+                # (init_frame, frames, init_state, use_init_state)
 
-                # while len(curr_seq) < o.ntimesteps: # ntimesteps
-                #     print 'sample new sequence'
-                #     # Sample new sequence.
-                #     curr_seq = next(sequences['train'])
-                #     first_frame, curr_seq = curr_seq[0], curr_seq[1:]
-                # # Take next chunk of ntimesteps frames.
-                # subseq, curr_seq = curr_seq[:o.ntimesteps], curr_seq[o.ntimesteps:]
-                # batch_seqs.append(subseq)
-
-                batch_seqs = [next(sequences['train']) for _ in range(o.batchsz)]
+                # Take another steps in the current sequence and add to the buffer
+                # TODO: Batch?
+                min_buffer_size = o.batchsz * o.max_seq_len
+                if len(replay_buffer.elems) < min_buffer_size:
+                    # Sample entire batch of new sequences.
+                    batch_seqs = []
+                    for _ in range(o.batchsz):
+                        # Get full sequence.
+                        seq = next(sequences['train'])
+                        first, rest = _split_sequence(seq, 1)
+                        assert len(rest['image_files']) >= o.ntimesteps
+                        curr, rest = _split_sequence(rest, o.ntimesteps)
+                        segment = {
+                            'init_frame':   first,
+                            'frames':       curr,
+                            'init_state':   None,
+                            'continue':     False,
+                            'aspect':       seq['aspect'],
+                        }
+                        batch_seqs.append(segment)
+                    # Append each to replay buffer.
+                    for segment in batch_seqs:
+                        replay_buffer.push(segment)
+                else:
+                    # Sample b-1 segments from the replay buffer.
+                    ind = np.random.choice(len(replay_buffer.elems), o.batchsz-1, replace=True)
+                    batch_seqs = [replay_buffer.elems[i] for i in ind]
+                    first = None
+                    cont = True
+                    while curr_rest is None or len(curr_rest['image_files']) < o.ntimesteps+1:
+                        print 'sample new sequence'
+                        # Sample new full sequence.
+                        seq = next(sequences['train'])
+                        curr_aspect = seq['aspect']
+                        first, curr_rest = _split_sequence(seq, 1)
+                        cont = False
+                        curr_state = None
+                    curr_frames, curr_rest = _split_sequence(curr_rest, o.ntimesteps)
+                    segment = {
+                        'init_frame':   first,          # None if continuing.
+                        'frames':       curr_frames,
+                        'init_state':   curr_state,     # None if starting new sequence.
+                        'continue':     cont,
+                        'aspect':       curr_aspect,
+                    }
+                    batch_seqs = [segment] + batch_seqs
+                    batch_ind = 0
+                    # batch_seqs.append(segment)
+                    # batch_ind = o.batchsz - 1
+                    replay_buffer.push(segment)
 
                 # Take a training step.
                 start = time.time()
@@ -355,21 +395,34 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                 else:
                     # batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
                     # batch = _load_batch(batch_seqs, o)
-                    batch = graph.load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
-                    feed_dict.update({example[k]: v for k, v in batch.iteritems()})
+                    example_value, init_state_value = load_batch(
+                        batch_seqs, init_state,
+                        ntimesteps=o.ntimesteps, im_size=(o.imheight, o.imwidth))
+                    # feed_dict.update({example[k]: v for k, v in example_value.iteritems()})
+                    nest.assert_same_structure(example, example_value)
+                    nest.assert_same_structure(init_state, init_state_value)
+                    feed_dict.update(dict(zip(nest.flatten(example),
+                                              nest.flatten(example_value))))
+                    feed_dict.update(dict(zip(nest.flatten(init_state),
+                                              nest.flatten(init_state_value))))
                     dur_load = time.time() - start
                 if global_step % o.period_summary == 0:
                     summary_var = (summary_vars_with_preview['train']
                                    if global_step % o.period_preview == 0
                                    else summary_vars['train'])
-                    _, loss, reward, summary = sess.run(
-                        [optimize_op, loss_var, outputs['reward'], summary_var], feed_dict=feed_dict)
+                    _, loss, reward, curr_state, summary = sess.run(
+                        [optimize_op, loss_var, outputs['reward'], final_state, summary_var],
+                        feed_dict=feed_dict)
                     dur = time.time() - start
                     writer['train'].add_summary(summary, global_step=global_step)
                 else:
-                    _, loss, reward = sess.run(
-                        [optimize_op, loss_var, outputs['reward']], feed_dict=feed_dict)
+                    _, loss, reward, curr_state = sess.run(
+                        [optimize_op, loss_var, outputs['reward'], final_state],
+                        feed_dict=feed_dict)
                     dur = time.time() - start
+                # Take last element of batch.
+                if batch_ind is not None:
+                    curr_state = {k: v[batch_ind] for k, v in curr_state.items()}
                 mean_reward = np.mean(reward)
                 reward_ep.append(mean_reward)
 
@@ -505,7 +558,7 @@ def iter_examples(dataset, o, rand=None, num_epochs=None):
         epochs = itertools.count()
     for i in epochs:
         sequences = sample.sample(dataset, rand=rand,
-                                  shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
+                                  shuffle=True, max_objects=1, ntimesteps=o.max_seq_len,
                                   **o.sampler_params)
         for sequence in sequences:
             # JV: Add motion augmentation.
@@ -719,3 +772,96 @@ def _make_update_value_func_op():
         if curr is not None
     ]
     return copy_ops
+
+
+def _split_sequence(seq, n):
+    first = dict(seq)
+    rest = dict(seq)
+    SEQUENCE_KEYS = ['image_files', 'viewports', 'labels', 'label_is_valid']
+    for k in SEQUENCE_KEYS:
+        first[k], rest[k] = seq[k][:n], seq[k][n:]
+    return first, rest
+
+
+def load_sequence(seq, im_size):
+    '''
+    Args:
+        im_size: (height, width)
+
+    Sequence has keys:
+        'image_files'    # Tensor with shape [n] containing strings.
+        'viewports'
+    '''
+    seq_len = len(seq['image_files'])
+    # f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
+    #                         dtype=np.float32)
+    images = [
+        im_to_arr(load_image_viewport(seq['image_files'][t], seq['viewports'][t], im_size))
+        for t in range(seq_len)
+    ]
+    return images
+
+
+def load_batch(segments, init_state_var, ntimesteps, im_size):
+    '''
+    Args:
+        im_size: (height, width)
+
+    Example has keys:
+        'x0'     # First image in sequence, shape [h, w, 3]
+        'y0'         # Position of target in first image, shape [4]
+        'x'      # Input images, shape [n-1, h, w, 3]
+        'y'          # Position of target in following frames, shape [n-1, 4]
+        'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
+        'aspect'     # Aspect ratio of original image.
+    '''
+    imheight, imwidth = im_size
+    examples = []
+    init_state_values = []
+    for segment in segments:
+        example = {}
+        init_state_value = {}
+        example['x'] = load_sequence(segment['frames'], im_size)
+        example['y'] = segment['frames']['labels']
+        example['y_is_valid'] = segment['frames']['label_is_valid']
+        example['aspect'] = segment['aspect']
+        example['continue'] = segment['continue']
+        if segment['continue']:
+            init_state_value = segment['init_state']
+            # Set initial image to zeros.
+            example['x0'] = np.zeros([imheight, imwidth, 3], dtype=np.float32)
+            example['y0'] = np.zeros([4], dtype=np.float32)
+        else:
+            example['x0'] = load_sequence(segment['init_frame'], im_size)[0]
+            example['y0'] = segment['init_frame']['labels'][0]
+            y0_valid = segment['init_frame']['label_is_valid'][0]
+            assert y0_valid
+            # Set initial state to zeros.
+            init_state_value = map_nested(
+                lambda x: np.zeros(shape=x.shape.as_list()[1:],
+                                   dtype=x.dtype.as_numpy_dtype()),
+                init_state_var)
+        examples.append(example)
+        init_state_values.append(init_state_value)
+
+    # Convert list of nested structures to nested structure of lists.
+    examples = stack_nested(examples)
+    init_state_values = stack_nested(init_state_values)
+    return examples, init_state_values
+
+
+def stack_nested(l):
+    '''Converts list of dictionaries to dictionary of lists.'''
+    d = {}
+    assert isinstance(l, list)
+    assert len(l) > 0
+    first = l[0]
+    if isinstance(first, dict):
+        # Stack each key.
+        for k in first:
+            d[k] = stack_nested([x[k] for x in l])
+        return d
+    # elif isinstance(first, np.ndarray):
+    #     return np.asarray(l)
+    else:
+        return np.asarray(l)

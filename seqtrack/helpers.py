@@ -394,3 +394,8 @@ class Buffer:
             # Add a new element.
             self.elems.append(x)
         self._pos = (self._pos + 1) % self._max_len
+
+
+def placeholder_like(x, *args, **kwargs):
+    # return tf.placeholder(x.dtype, x.shape.as_list(), *args, **kwargs)
+    return tf.placeholder_with_default(tf.zeros_like(x), x.shape.as_list(), *args, **kwargs)

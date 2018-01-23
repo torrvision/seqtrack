@@ -90,6 +90,7 @@ class Opts(object):
                                    'contrast': False,
                                    'grayscale': False}
 
+        self.max_seq_len = 100
         #----------------------------------------------------------------------
         # Options for sampler
         # The sampler to use for training.

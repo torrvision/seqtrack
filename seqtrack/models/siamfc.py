@@ -19,6 +19,7 @@ from seqtrack.helpers import expand_dims_n
 from seqtrack.helpers import weighted_mean
 from seqtrack.helpers import unique_argmax
 from seqtrack.helpers import lookup_each
+from seqtrack.helpers import placeholder_like
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 _COLORMAP = 'viridis'
@@ -96,7 +97,7 @@ class SiamFC(models_interface.IterModel):
         self._feature_arch = feature_arch
         self._feature_act = feature_act
         self._enable_feature_bnorm = enable_feature_bnorm
-        self._enable_template_mask = enable_template_mask
+        # self._enable_template_mask = enable_template_mask
         self._xcorr_padding = xcorr_padding
         self._bnorm_after_xcorr = bnorm_after_xcorr
         self._freeze_siamese = freeze_siamese
@@ -128,18 +129,27 @@ class SiamFC(models_interface.IterModel):
         self._action_value = []
         self._reward = []
 
-    def start(self, frame, aspect, run_opts, enable_loss,
+    def start(self, frame, aspect, cont, run_opts, enable_loss,
               image_summaries_collections=None, name='start'):
         with tf.name_scope(name) as scope:
             self._aspect = aspect
+            self._cont = cont
             self._is_training = run_opts['is_training']
             self._is_tracking = run_opts['is_tracking']
             self._enable_loss = enable_loss
             self._image_summaries_collections = image_summaries_collections
+            # When tracking is continued, the state will be fed here.
+            state_feed = {}
+
+            y = frame['y']
+            state_feed['y'] = placeholder_like(y, 'y')
+            y = tf.where(self._cont, state_feed['y'], y)
 
             mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keep_dims=True)
+            state_feed['mean_color'] = placeholder_like(mean_color, 'mean_color')
+            mean_color = tf.where(self._cont, state_feed['mean_color'], mean_color)
             # TODO: frame['image'] and template_im have a viewport
-            template_rect, _ = _get_context_rect(frame['y'], context_amount=self._template_scale,
+            template_rect, _ = _get_context_rect(y, context_amount=self._template_scale,
                                                  aspect=self._aspect, aspect_method=self._aspect_method)
             template_im = util.crop(frame['x'], template_rect, self._template_size,
                                     pad_value=mean_color if self._pad_with_mean else 0.5,
@@ -156,11 +166,13 @@ class SiamFC(models_interface.IterModel):
                     trainable=(not self._freeze_siamese))
             feat_size = template_feat.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
-            if self._enable_template_mask:
-                template_mask = tf.get_variable(
-                    'template_mask', template_feat.shape.as_list()[-3:],
-                    initializer=tf.ones_initializer(), collections=['siamese'])
-                template_feat *= template_mask
+            # if self._enable_template_mask:
+            #     template_mask = tf.get_variable(
+            #         'template_mask', template_feat.shape.as_list()[-3:],
+            #         initializer=tf.ones_initializer(), collections=['siamese'])
+            #     template_feat *= template_mask
+            state_feed['template_feat'] = placeholder_like(template_feat, 'template_feat')
+            template_feat = tf.where(self._cont, state_feed['template_feat'], template_feat)
 
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
@@ -187,11 +199,11 @@ class SiamFC(models_interface.IterModel):
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
-                'y':             tf.identity(frame['y']),
-                'template_feat': tf.identity(template_feat),
-                'mean_color':    tf.identity(mean_color),
+                'y':             y,
+                'template_feat': template_feat,
+                'mean_color':    mean_color,
             }
-            return state
+            return state, state_feed
 
     def next(self, frame, prev_state, name='timestep'):
         with tf.name_scope(name) as scope:
