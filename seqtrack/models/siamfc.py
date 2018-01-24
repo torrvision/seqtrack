@@ -60,7 +60,7 @@ class SiamFC(models_interface.IterModel):
             balance_classes=True,
             enable_margin_loss=False,
             margin_cost='iou',
-            margin_reduce_method=True):
+            margin_reduce_method='max'):
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
