@@ -60,7 +60,7 @@ class SiamFC(models_interface.IterModel):
             balance_classes=True,
             enable_margin_loss=False,
             margin_cost='iou',
-            margin_structured=True):
+            margin_reduce_method=True):
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
@@ -95,7 +95,7 @@ class SiamFC(models_interface.IterModel):
         self._balance_classes = balance_classes
         self._enable_margin_loss = enable_margin_loss
         self._margin_cost = margin_cost
-        self._margin_structured = margin_structured
+        self._margin_reduce_method = margin_reduce_method
 
         self._num_frames = 0
         # For summaries in end():
@@ -219,7 +219,7 @@ class SiamFC(models_interface.IterModel):
                     losses['margin'], cost = _max_margin_loss(
                         response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
                         search_size=self._search_size, search_scale=self._search_scale,
-                        cost_method=self._margin_cost, structured=self._margin_structured)
+                        cost_method=self._margin_cost, reduce_method=self._margin_reduce_method)
                     self._info.setdefault('margin_cost', []).append(
                         _to_uint8(util.colormap(tf.expand_dims(cost, -1), _COLORMAP)))
 
@@ -499,7 +499,7 @@ def _cross_entropy_loss(
 
 def _max_margin_loss(
         score, score_rf, prev_rect, gt_rect, gt_is_valid, search_rect,
-        search_size, search_scale, cost_method='iou', structured=True,
+        search_size, search_scale, cost_method='iou', reduce_method='max',
         name='max_margin_loss'):
     '''Computes the loss for a 2D map of logits.
 
@@ -537,7 +537,7 @@ def _max_margin_loss(
             cost = tf.norm(delta, axis=-1) * search_scale
         else:
             raise ValueError('unknown cost method: {}'.format(cost_method))
-        loss = _max_margin(score, cost, axis=[-2, -1], structured=structured)
+        loss = _max_margin(score, cost, axis=[-2, -1], reduce_method=reduce_method)
         # TODO: Is this the best way to handle gt_is_valid?
         # (set loss to zero and include in mean)
         loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
@@ -545,7 +545,7 @@ def _max_margin_loss(
         return loss, cost
 
 
-def _max_margin(score, cost, axis=None, structured=True, name='max_margin'):
+def _max_margin(score, cost, axis=None, reduce_method='max', name='max_margin'):
     '''Computes the max-margin loss.'''
     with tf.name_scope(name) as scope:
         is_best = tf.to_float(cost <= tf.reduce_min(cost, axis=axis, keep_dims=True))
@@ -557,12 +557,16 @@ def _max_margin(score, cost, axis=None, structured=True, name='max_margin'):
         # i.e. (cost - cost_best) - (score_best - score) <= 0
         # Therefore penalize max(0, above expr).
         violation = tf.maximum(0., (cost - cost_best) - (score_best - score))
-        if structured:
+        if reduce_method == 'max':
             # Structured output loss.
             loss = tf.reduce_max(violation, axis=axis)
-        else:
+        elif reduce_method == 'mean':
             # Mean over all hinges; like triplet loss.
             loss = tf.reduce_mean(violation, axis=axis)
+        elif reduce_method == 'sum':
+            loss = tf.reduce_sum(violation, axis=axis)
+        else:
+            raise ValueError('unknown reduce method: {}'.format(reduce_method))
         return loss
 
 
