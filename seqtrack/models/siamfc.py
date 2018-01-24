@@ -54,6 +54,7 @@ class SiamFC(models_interface.IterModel):
             hann_coeff=1.0,
             arg_max_eps_rel=0.05,
             # Loss parameters:
+            wd=0.0,
             enable_ce_loss=True,
             ce_label='gaussian_distance',
             sigma=0.2,
@@ -89,6 +90,7 @@ class SiamFC(models_interface.IterModel):
         self._hann_method = hann_method
         self._hann_coeff = hann_coeff
         self._arg_max_eps_rel = arg_max_eps_rel
+        self._wd = wd
         self._enable_ce_loss = enable_ce_loss
         self._ce_label = ce_label
         self._sigma = sigma
@@ -125,8 +127,8 @@ class SiamFC(models_interface.IterModel):
                 template_feat, rfs = _feature_net(
                     template_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training, variables_collections=['siamese'],
-                    trainable=(not self._freeze_siamese))
+                    wd=self._wd, is_training=self._is_training,
+                    variables_collections=['siamese'], trainable=(not self._freeze_siamese))
             feat_size = template_feat.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
             if self._enable_template_mask:
@@ -179,8 +181,8 @@ class SiamFC(models_interface.IterModel):
                 search_feat, rfs = _feature_net(
                     search_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training, variables_collections=['siamese'],
-                    trainable=(not self._freeze_siamese))
+                    wd=self._wd, is_training=self._is_training,
+                    variables_collections=['siamese'], trainable=(not self._freeze_siamese))
 
             response, rfs = util.diag_xcorr_rf(
                 input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
@@ -274,7 +276,8 @@ class SiamFC(models_interface.IterModel):
 
 
 def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear', enable_bnorm=True,
-                 is_training=None, name='feature_net', variables_collections=None, trainable=False):
+                 wd=0.0, is_training=None, variables_collections=None, trainable=False,
+                 name='feature_net'):
     '''
     Returns:
         Tuple of (feature map, receptive fields).
@@ -289,13 +292,15 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
         x, restore = merge_dims(x, 0, len(x.shape)-3)
         x, rfs = _feature_net(
             x, rfs=rfs, padding=padding, arch=arch, output_act=output_act,
-            enable_bnorm=enable_bnorm, is_training=is_training, name=name,
-            variables_collections=variables_collections, trainable=trainable)
+            enable_bnorm=enable_bnorm, wd=wd, is_training=is_training,
+            variables_collections=variables_collections, trainable=trainable, name=name)
         x = restore(x, 0)
         return x, rfs
 
     with tf.name_scope(name) as scope:
-        conv_args = dict(variables_collections=variables_collections, trainable=trainable)
+        conv_args = dict(weights_regularizer=slim.l2_regularizer(wd) if wd > 0 else None,
+                         variables_collections=variables_collections,
+                         trainable=trainable)
         if enable_bnorm:
             conv_args.update(dict(
                 normalizer_fn=slim.batch_norm,
