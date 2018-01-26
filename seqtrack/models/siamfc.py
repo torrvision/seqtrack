@@ -87,6 +87,7 @@ class SiamFC(models_interface.IterModel):
         self._num_scales = num_scales
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
+        self._report_square = report_square
         self._hann_method = hann_method
         self._hann_coeff = hann_coeff
         self._arg_max_eps_rel = arg_max_eps_rel
@@ -112,10 +113,14 @@ class SiamFC(models_interface.IterModel):
             self._enable_loss = enable_loss
             self._image_summaries_collections = image_summaries_collections
 
+            y = frame['y']
             mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keep_dims=True)
             # TODO: frame['image'] and template_im have a viewport
-            template_rect, _ = _get_context_rect(frame['y'], context_amount=self._template_scale,
-                                                 aspect=self._aspect, aspect_method=self._aspect_method)
+            template_rect, y_square = _get_context_rect(
+                y, context_amount=self._template_scale, aspect=self._aspect,
+                aspect_method=self._aspect_method)
+            if self._report_square:
+                y = y_square
             template_im = util.crop(frame['x'], template_rect, self._template_size,
                                     pad_value=mean_color if self._pad_with_mean else 0.5,
                                     feather=self._feather, feather_margin=self._feather_margin)
@@ -143,7 +148,7 @@ class SiamFC(models_interface.IterModel):
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
-                'y':             tf.identity(frame['y']),
+                'y':             tf.identity(y),
                 'template_feat': tf.identity(template_feat),
                 'mean_color':    tf.identity(mean_color),
             }
