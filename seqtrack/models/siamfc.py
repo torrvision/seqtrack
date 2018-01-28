@@ -149,6 +149,7 @@ class SiamFC(models_interface.IterModel):
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
+                'x':             tf.identity(frame['x']),
                 'y':             tf.identity(y),
                 'template_feat': tf.identity(template_feat),
                 'mean_color':    tf.identity(mean_color),
