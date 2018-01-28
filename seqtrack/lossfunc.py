@@ -36,7 +36,8 @@ def foreground_labels(position, rect, shape='rect', sigma=0.3, name='foreground_
         return labels, has_label
 
 
-def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, sigma=0.3, name='translation_labels'):
+def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, sigma=0.3,
+                       name='translation_labels'):
     '''
     Args:
         position: Tensor with shape [h, w, 2]
@@ -51,7 +52,7 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
     reduce_sum(weight, axis=(-2, -1)) = 1
     '''
     with tf.name_scope(name) as scope:
-        label_shape = most_static_shape(rect)[0:1] + most_static_shape(position)[0:2]
+        label_shape = most_static_shape(rect)[0:1] + most_static_shape(position)[-3:-1]
 
         rect = expand_dims_n(rect, -2, n=2) # [b, 4] -> [b, 1, 1, 4]
         min_pt, max_pt = geom.rect_min_max(rect)

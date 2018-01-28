@@ -9,7 +9,11 @@ from seqtrack import cnnutil
 from seqtrack import geom
 
 from seqtrack.cnnutil import ReceptiveField, IntRect
-from seqtrack.helpers import merge_dims, modify_aspect_ratio, diag_xcorr, expand_dims_n
+from seqtrack.helpers import merge_dims
+from seqtrack.helpers import modify_aspect_ratio
+from seqtrack.helpers import diag_xcorr
+from seqtrack.helpers import expand_dims_n
+from seqtrack.helpers import weighted_mean
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
@@ -275,25 +279,13 @@ def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_py
         grid = tf.multiply(grid,                           # [h, w, 2]
                            expand_dims_n(scales, -1, n=3)) # [s, 1, 1, 1]
 
-        translation = _weighted_mean(grid,                       # [s, h, w, 2]
-                                     tf.expand_dims(is_max, -1), # [b, s, h, w] -> [b, s, h, w, 1]
-                                     axis=(-4, -3, -2))          # [b, s, h, w, 2] -> [b, 2]
-        scale = _weighted_mean(expand_dims_n(scales, -1, n=2), # [b, s] -> [b, s, 1, 1]
-                               is_max,                         # [b, s, h, w]
-                               axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
+        translation = weighted_mean(grid,                       # [s, h, w, 2]
+                                    tf.expand_dims(is_max, -1), # [b, s, h, w] -> [b, s, h, w, 1]
+                                    axis=(-4, -3, -2))          # [b, s, h, w, 2] -> [b, 2]
+        scale = weighted_mean(expand_dims_n(scales, -1, n=2), # [b, s] -> [b, s, 1, 1]
+                              is_max,                         # [b, s, h, w]
+                              axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
         return translation, scale
-
-
-def _weighted_mean(x, w, axis=None, keep_dims=False, name='weighted_mean'):
-    with tf.name_scope(name) as scope:
-        with tf.control_dependencies([tf.assert_non_negative(w)]):
-            w = tf.identity(w)
-        # num = tf.reduce_sum(w * x, axis=axis)
-        # TODO: Is this broadcasting necessary?
-        mass = tf.reduce_sum(w * tf.ones_like(x), axis=axis, keep_dims=True)
-        with tf.control_dependencies([tf.assert_positive(mass)]):
-            p = w / mass
-        return tf.reduce_sum(p * x, axis=axis, keep_dims=keep_dims)
 
 
 def make_grid_centers(im_size, name='make_grid_centers'):
@@ -335,6 +327,29 @@ def displacement_from_center(im_size, name='displacement_grid'):
         grid = tf.stack((tf.tile(tf.expand_dims(grid_x, 0), [size_y, 1]),
                          tf.tile(tf.expand_dims(grid_y, 1), [1, size_x])), axis=-1)
         return grid
+
+
+def rect_grid(response_size, rf, search_size, rect_size, name='rect_grid'):
+    '''Obtains the rectangles for a translation scoremap.
+
+    Args:
+        response_size -- Dimension of scoremap. (height, width)
+        rf -- Receptive field of scoremap.
+        search_size -- Dimension of search image in pixels. (height, width)
+        rect_size -- Size of rectangle in normalized co-ords in search image. [b, 2]
+    '''
+    with tf.name_scope(name) as scope:
+        # Assert that receptive fields are centered.
+        cnnutil.assert_center_alignment(search_size, response_size, rf)
+        # Obtain displacement from center of search image.
+        # Not necessary to use receptive field offset because it is centered.
+        disp = displacement_from_center(response_size)
+        disp = tf.to_float(disp) * rf.stride / search_size
+        # Get centers of receptive field of each pixel.
+        centers = 0.5 + disp
+        # centers is [h, w, 2]
+        rect_size = expand_dims_n(rect_size, -2, 2) # [b, 2] -> [b, 1, 1, 2]
+        return geom.make_rect_center_size(centers, rect_size)
 
 
 def colormap(x, cmap_name, name='colormap'):

@@ -312,6 +312,18 @@ def leaky_relu(x, name='leaky_relu'):
         return tf.maximum(0.1*x, x, name=scope)
 
 
+def weighted_mean(x, w, axis=None, keep_dims=False, name='weighted_mean'):
+    with tf.name_scope(name) as scope:
+        with tf.control_dependencies([tf.assert_non_negative(w)]):
+            w = tf.identity(w)
+        # num = tf.reduce_sum(w * x, axis=axis)
+        # TODO: Is this broadcasting necessary?
+        mass = tf.reduce_sum(w * tf.ones_like(x), axis=axis, keep_dims=True)
+        with tf.control_dependencies([tf.assert_positive(mass)]):
+            p = (1. / mass) * w
+        return tf.reduce_sum(p * x, axis=axis, keep_dims=keep_dims)
+
+
 def most_static_shape(x):
     return [s or d for s, d in zip(x.shape.as_list(), tf.unstack(tf.shape(x)))]
 

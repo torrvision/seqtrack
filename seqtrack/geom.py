@@ -60,6 +60,26 @@ def make_rect(min_pt, max_pt, name='make_rect'):
         return tf.stack([x_min, y_min, x_max, y_max], axis=-1, name=scope)
 
 
+def rect_center_size(rect, name='rect_center_size'):
+    with tf.name_scope(name) as scope:
+        min_pt, max_pt = rect_min_max(rect)
+        return 0.5*(min_pt+max_pt), max_pt-min_pt
+
+def rect_center(rect, name='rect_center'):
+    with tf.name_scope(name) as scope:
+        min_pt, max_pt = rect_min_max(rect)
+        return 0.5*(min_pt+max_pt)
+
+def rect_size(rect, name='rect_size'):
+    with tf.name_scope(name) as scope:
+        min_pt, max_pt = rect_min_max(rect)
+        return max_pt-min_pt
+
+def make_rect_center_size(center, size, name='make_rect_center_size'):
+    with tf.name_scope(name) as scope:
+        return make_rect(center-0.5*size, center+0.5*size)
+
+
 def rect_iou(a_rect, b_rect, name='rect_iou'):
     '''Supports broadcasting.'''
     # Assumes that rectangles are valid (min <= max).

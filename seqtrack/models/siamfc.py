@@ -11,7 +11,11 @@ from seqtrack import models
 from seqtrack.models import interface as models_interface
 from seqtrack.models import util
 
-from seqtrack.helpers import merge_dims, get_act, leaky_relu
+from seqtrack.helpers import merge_dims
+from seqtrack.helpers import get_act
+from seqtrack.helpers import leaky_relu
+from seqtrack.helpers import expand_dims_n
+from seqtrack.helpers import weighted_mean
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 _COLORMAP = 'viridis'
@@ -36,8 +40,10 @@ class SiamFC(models_interface.IterModel):
             feature_arch='alexnet',
             feature_act='linear',
             enable_feature_bnorm=True,
+            enable_template_mask=False,
             xcorr_padding='VALID',
             bnorm_after_xcorr=True,
+            freeze_siamese=False,
             learnable_prior=False,
             # Tracking parameters:
             num_scales=5,
@@ -48,8 +54,14 @@ class SiamFC(models_interface.IterModel):
             hann_coeff=1.0,
             arg_max_eps_rel=0.05,
             # Loss parameters:
+            wd=0.0,
+            enable_ce_loss=True,
+            ce_label='gaussian_distance',
             sigma=0.2,
-            balance_classes=True):
+            balance_classes=True,
+            enable_margin_loss=False,
+            margin_cost='iou',
+            margin_reduce_method='max'):
         self._template_size = template_size
         self._search_size = search_size
         self._pair_size = pair_size
@@ -68,17 +80,26 @@ class SiamFC(models_interface.IterModel):
         self._feature_arch = feature_arch
         self._feature_act = feature_act
         self._enable_feature_bnorm = enable_feature_bnorm
+        self._enable_template_mask = enable_template_mask
         self._xcorr_padding = xcorr_padding
         self._bnorm_after_xcorr = bnorm_after_xcorr
+        self._freeze_siamese = freeze_siamese
         self._learnable_prior = learnable_prior
         self._num_scales = num_scales
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
+        self._report_square = report_square
         self._hann_method = hann_method
         self._hann_coeff = hann_coeff
         self._arg_max_eps_rel = arg_max_eps_rel
+        self._wd = wd
+        self._enable_ce_loss = enable_ce_loss
+        self._ce_label = ce_label
         self._sigma = sigma
         self._balance_classes = balance_classes
+        self._enable_margin_loss = enable_margin_loss
+        self._margin_cost = margin_cost
+        self._margin_reduce_method = margin_reduce_method
 
         self._num_frames = 0
         # For summaries in end():
@@ -93,10 +114,14 @@ class SiamFC(models_interface.IterModel):
             self._enable_loss = enable_loss
             self._image_summaries_collections = image_summaries_collections
 
+            y = frame['y']
             mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keep_dims=True)
             # TODO: frame['image'] and template_im have a viewport
-            template_rect, _ = _get_context_rect(frame['y'], context_amount=self._template_scale,
-                                                 aspect=self._aspect, aspect_method=self._aspect_method)
+            template_rect, y_square = _get_context_rect(
+                y, context_amount=self._template_scale, aspect=self._aspect,
+                aspect_method=self._aspect_method)
+            if self._report_square:
+                y = y_square
             template_im = util.crop(frame['x'], template_rect, self._template_size,
                                     pad_value=mean_color if self._pad_with_mean else 0.5,
                                     feather=self._feather, feather_margin=self._feather_margin)
@@ -108,9 +133,15 @@ class SiamFC(models_interface.IterModel):
                 template_feat, rfs = _feature_net(
                     template_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training)
+                    wd=self._wd, is_training=self._is_training,
+                    variables_collections=['siamese'], trainable=(not self._freeze_siamese))
             feat_size = template_feat.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
+            if self._enable_template_mask:
+                template_mask = tf.get_variable(
+                    'template_mask', template_feat.shape.as_list()[-3:],
+                    initializer=tf.ones_initializer(), collections=['siamese'])
+                template_feat *= template_mask
 
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
@@ -118,8 +149,7 @@ class SiamFC(models_interface.IterModel):
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
-                'x':             tf.identity(frame['x']),
-                'y':             tf.identity(frame['y']),
+                'y':             tf.identity(y),
                 'template_feat': tf.identity(template_feat),
                 'mean_color':    tf.identity(mean_color),
             }
@@ -136,10 +166,11 @@ class SiamFC(models_interface.IterModel):
             num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
             mid_scale = (num_scales - 1) / 2
             scales = util.scale_range(num_scales, self._scale_step)
-            search_ims, _ = util.crop_pyr(
+            search_ims, search_rects = util.crop_pyr(
                 frame['x'], search_rect, self._search_size, scales,
                 pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
                 feather=self._feather, feather_margin=self._feather_margin)
+            self._info.setdefault('search', []).append(_to_uint8(search_ims[:, mid_scale]))
 
             pair_rect, _ = _get_context_rect(prev_state['y'], self._pair_scale,
                                              aspect=self._aspect, aspect_method=self._aspect_method)
@@ -160,8 +191,6 @@ class SiamFC(models_interface.IterModel):
             prev_inputs = tf.tile(tf.expand_dims(prev_input, axis=1), [1, num_scales, 1, 1, 1])
             pair_inputs = tf.concat((prev_inputs, curr_inputs), axis=-1)
 
-            self._info.setdefault('search', []).append(_to_uint8(search_ims[:, mid_scale]))
-
             # Extract features, perform search, get receptive field of response wrt image.
             xcorr_rfs = {'search': cnnutil.identity_rf()}
             search_input = _preproc(search_ims, center_input_range=self._center_input_range,
@@ -181,9 +210,16 @@ class SiamFC(models_interface.IterModel):
 
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
                 if self._bnorm_after_xcorr:
-                    response = slim.batch_norm(response, scale=True, is_training=self._is_training)
+                    response = slim.batch_norm(response, scale=True, is_training=self._is_training,
+                                               variables_collections=['siamese'])
                 else:
-                    response = _affine_scalar(response)
+                    response = _affine_scalar(response, variables_collections=['siamese'])
+                if self._freeze_siamese:
+                    # TODO: Prevent batch-norm updates as well.
+                    # TODO: Set trainable=False for all variables above.
+                    response = tf.stop_gradient(response)
+            self._info.setdefault('response', []).append(
+                _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
 
             pair_rfs = {'input': cnnutil.identity_rf()}
             with tf.variable_scope('pair_net', reuse=(self._num_frames > 0)):
@@ -197,32 +233,44 @@ class SiamFC(models_interface.IterModel):
             np.testing.assert_array_equal(xcorr_rfs['search'].stride, pair_rfs['input'].stride)
             np.testing.assert_array_equal(response_size, pair_output_size,
                                           err_msg='output sizes different')
-            output = response + pair_output
+            score = response + pair_output
             if self._learnable_prior:
                 with tf.variable_scope('motion_prior', reuse=(self._num_frames > 0)):
-                    output = _add_motion_prior(output)
+                    score = _add_motion_prior(score)
+            self._info.setdefault('score', []).append(
+                _to_uint8(util.colormap(tf.sigmoid(score[:, mid_scale]), _COLORMAP)))
 
             losses = {}
             if self._enable_loss:
-                losses['ce'], labels = _translation_loss(
-                    response, xcorr_rfs['search'], gt_rect, frame['y_is_valid'], search_rect,
-                    search_size=self._search_size, sigma=self._sigma, search_scale=self._search_scale,
-                    balance_classes=self._balance_classes)
-                labels_cmap = util.colormap(tf.expand_dims(labels, -1), _COLORMAP)
-                self._info.setdefault('labels', []).append(_to_uint8(labels_cmap))
+                if self._enable_ce_loss:
+                    losses['ce'], labels = _cross_entropy_loss(
+                        score, xcorr_rfs['search'], prev_state['y'], gt_rect, frame['y_is_valid'],
+                        search_rect, search_size=self._search_size, search_scale=self._search_scale,
+                        label_method=self._ce_label, sigma=self._sigma,
+                        balance_classes=self._balance_classes)
+                    self._info.setdefault('ce_labels', []).append(
+                        _to_uint8(util.colormap(tf.expand_dims(labels, -1), _COLORMAP)))
+                if self._enable_margin_loss:
+                    losses['margin'], cost = _max_margin_loss(
+                        score, xcorr_rfs['search'], prev_state['y'], gt_rect, frame['y_is_valid'],
+                        search_rect, search_size=self._search_size, search_scale=self._search_scale,
+                        cost_method=self._margin_cost, reduce_method=self._margin_reduce_method)
+                    self._info.setdefault('margin_cost', []).append(
+                        _to_uint8(util.colormap(tf.expand_dims(cost, -1), _COLORMAP)))
 
             # Get relative translation and scale from response.
-            response_final = _finalize_scores(response, xcorr_rfs['search'].stride,
-                                              self._hann_method, self._hann_coeff)
-            # upsample_response_size = response_final.shape.as_list()[-3:-1]
+            score_final = _finalize_scores(score, xcorr_rfs['search'].stride,
+                                           self._hann_method, self._hann_coeff)
+            # upsample_response_size = score_final.shape.as_list()[-3:-1]
             # assert np.all(upsample_response_size <= self._search_size)
-            translation, scale = util.find_peak_pyr(response_final, scales,
+            translation, scale = util.find_peak_pyr(score_final, scales,
                                                     eps_rel=self._arg_max_eps_rel)
             translation = translation / self._search_size
 
             vis = _visualize_response(
-                response[:, mid_scale], response_final[:, mid_scale],
+                score[:, mid_scale], score_final[:, mid_scale],
                 search_ims[:, mid_scale], xcorr_rfs['search'], frame['x'], search_rect)
+            self._info.setdefault('vis', []).append(_to_uint8(vis))
 
             # Damp the scale update towards 1.
             scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
@@ -233,6 +281,8 @@ class SiamFC(models_interface.IterModel):
             # Move from search back to original image.
             # TODO: Test that this is equivalent to scaling translation?
             pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
+            # Limit size of object.
+            pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
 
             # Rectangle to use in next frame for search area.
             # If using gt and rect not valid, use previous.
@@ -261,9 +311,9 @@ class SiamFC(models_interface.IterModel):
         return losses
 
 
-def _feature_net(x, rfs=None, padding=None,
-                 arch='alexnet', output_act='linear', enable_bnorm=True,
-                 is_training=None, name='feature_net'):
+def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear', enable_bnorm=True,
+                 wd=0.0, is_training=None, variables_collections=None, trainable=False,
+                 name='feature_net'):
     '''
     Returns:
         Tuple of (feature map, receptive fields).
@@ -276,17 +326,24 @@ def _feature_net(x, rfs=None, padding=None,
     if len(x.shape) > 4:
         # Merge dims (0, ..., n-4), n-3, n-2, n-1
         x, restore = merge_dims(x, 0, len(x.shape)-3)
-        x, rfs = _feature_net(x, rfs=rfs, padding=padding, arch=arch, output_act=output_act,
-                              enable_bnorm=enable_bnorm, is_training=is_training, name=name)
+        x, rfs = _feature_net(
+            x, rfs=rfs, padding=padding, arch=arch, output_act=output_act,
+            enable_bnorm=enable_bnorm, wd=wd, is_training=is_training,
+            variables_collections=variables_collections, trainable=trainable, name=name)
         x = restore(x, 0)
         return x, rfs
 
     with tf.name_scope(name) as scope:
-        args = {}
+        conv_args = dict(weights_regularizer=slim.l2_regularizer(wd) if wd > 0 else None,
+                         variables_collections=variables_collections,
+                         trainable=trainable)
         if enable_bnorm:
-            args.update(dict(normalizer_fn=slim.batch_norm,
-                             normalizer_params=dict(is_training=is_training)))
-        with slim.arg_scope([slim.conv2d], **args):
+            conv_args.update(dict(
+                normalizer_fn=slim.batch_norm,
+                normalizer_params=dict(
+                    is_training=is_training if trainable else False, # Fix bnorm if not trainable.
+                    variables_collections=variables_collections)))
+        with slim.arg_scope([slim.conv2d], **conv_args):
             if arch == 'alexnet':
                 # https://github.com/bertinetto/siamese-fc/blob/master/training/vid_create_net.m
                 # https://github.com/tensorflow/models/blob/master/research/slim/nets/alexnet.py
@@ -412,10 +469,12 @@ def _ensure_rgba(im, name='ensure_rgba'):
 def _to_uint8(x):
     return tf.image.convert_image_dtype(x, tf.uint8, saturate=True)
 
-def _affine_scalar(x, name='affine'):
+def _affine_scalar(x, name='affine', variables_collections=None):
     with tf.name_scope(name) as scope:
-        gain = tf.get_variable('gain', shape=[], dtype=tf.float32)
-        bias = tf.get_variable('bias', shape=[], dtype=tf.float32)
+        gain = tf.get_variable('gain', shape=[], dtype=tf.float32,
+                               variables_collections=variables_collections)
+        bias = tf.get_variable('bias', shape=[], dtype=tf.float32,
+                               variables_collections=variables_collections)
         return gain * x + bias
 
 
@@ -450,15 +509,15 @@ def _add_motion_prior(response, name='motion_prior'):
         return response + prior
 
 
-def _translation_loss(response, response_rf, gt_rect, gt_is_valid, search_rect,
-                      search_size, sigma, search_scale, balance_classes,
-                      name='translation_loss'):
+def _cross_entropy_loss(
+        response, response_rf, prev_rect, gt_rect, gt_is_valid, search_rect,
+        search_size, sigma, search_scale, balance_classes,
+        label_method='gaussian_distance', name='cross_entropy_translation'):
     '''Computes the loss for a 2D map of logits.
 
     Args:
         response -- 2D map of logits.
         response_rf -- Receptive field of response BEFORE upsampling.
-        upsample_factor -- Response has been upsampled by this factor.
         gt_rect -- Ground-truth rectangle in original image frame.
         gt_is_valid -- Whether ground-truth label is present (valid).
         search_rect -- Rectangle that describes search area in original image.
@@ -468,7 +527,11 @@ def _translation_loss(response, response_rf, gt_rect, gt_is_valid, search_rect,
         balance_classes -- Should classes be balanced?
     '''
     with tf.name_scope(name) as scope:
-        response_size = response.shape.as_list()[-3:-1]
+        # [b, s, h, w, 1] -> [b, h, w]
+        response = tf.squeeze(response, 1) # Remove the scales dimension.
+        response = tf.squeeze(response, -1) # Remove the trailing dimension.
+        response_size = response.shape.as_list()[-2:]
+
         # Obtain displacement from center of search image.
         disp = util.displacement_from_center(response_size)
         disp = tf.to_float(disp) * response_rf.stride / search_size
@@ -476,12 +539,24 @@ def _translation_loss(response, response_rf, gt_rect, gt_is_valid, search_rect,
         centers = 0.5 + disp
 
         gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
-        labels, has_label = lossfunc.translation_labels(
-            centers, gt_rect_in_search, shape='gaussian', sigma=sigma/search_scale)
+        prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
+        rect_grid = util.rect_grid(response_size, response_rf, search_size,
+                                   geom.rect_size(prev_rect_in_search))
+
+        if label_method == 'gaussian_distance':
+            labels, has_label = lossfunc.translation_labels(
+                centers, gt_rect_in_search, shape='gaussian', sigma=sigma/search_scale)
+        elif label_method == 'best_iou':
+            gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 2)
+            iou = geom.rect_iou(rect_grid, gt_rect_in_search)
+            is_pos = (iou >= tf.reduce_max(iou, axis=[-2, -1], keep_dims=True))
+            labels = tf.to_float(is_pos)
+            has_label = tf.ones_like(labels, dtype=tf.bool)
+        else:
+            raise ValueError('unknown label method: {}'.format(label_method))
+
         # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
-        loss = tf.nn.sigmoid_cross_entropy_with_logits(
-            labels=labels,                            # [b, h, w]
-            logits=tf.squeeze(response, axis=(1, 4))) # [b, s, h, w, 1] -> [b, h, w]
+        loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=response)
 
         if balance_classes:
             weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
@@ -494,6 +569,79 @@ def _translation_loss(response, response_rf, gt_rect, gt_is_valid, search_rect,
         loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
         loss = tf.reduce_mean(loss)
         return loss, labels
+
+
+def _max_margin_loss(
+        score, score_rf, prev_rect, gt_rect, gt_is_valid, search_rect,
+        search_size, search_scale, cost_method='iou', reduce_method='max',
+        name='max_margin_loss'):
+    '''Computes the loss for a 2D map of logits.
+
+    Args:
+        score -- 2D map of logits.
+        score_rf -- Receptive field of score BEFORE upsampling.
+        prev_rect -- Rectangle in previous frame (used to set size of predicted rectangle).
+        gt_rect -- Ground-truth rectangle in original image frame.
+        gt_is_valid -- Whether ground-truth label is present (valid).
+        search_rect -- Rectangle that describes search area in original image.
+        search_size -- Size of search image cropped from original image.
+    '''
+    with tf.name_scope(name) as scope:
+        # [b, s, h, w, 1] -> [b, h, w]
+        score = tf.squeeze(score, 1) # Remove the scales dimension.
+        score = tf.squeeze(score, -1) # Remove the trailing dimension.
+        score_size = score.shape.as_list()[-2:]
+        gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
+        prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
+        rect_grid = util.rect_grid(score_size, score_rf, search_size,
+                                   geom.rect_size(prev_rect_in_search))
+        # rect_grid -- [b, h, w, 4]
+        # gt_rect_in_search -- [b, 4]
+        gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 2)
+        if cost_method == 'iou':
+            iou = geom.rect_iou(rect_grid, gt_rect_in_search)
+            cost = 1. - iou
+        elif cost_method == 'iou_correct':
+            iou = geom.rect_iou(rect_grid, gt_rect_in_search)
+            max_iou = tf.reduce_max(iou, axis=[-2, -1], keep_dims=True)
+            cost = tf.to_float(tf.logical_not(iou >= max_iou))
+        elif cost_method == 'distance':
+            delta = geom.rect_center(rect_grid) - geom.rect_center(gt_rect_in_search)
+            # Distance in "object" units.
+            cost = tf.norm(delta, axis=-1) * search_scale
+        else:
+            raise ValueError('unknown cost method: {}'.format(cost_method))
+        loss = _max_margin(score, cost, axis=[-2, -1], reduce_method=reduce_method)
+        # TODO: Is this the best way to handle gt_is_valid?
+        # (set loss to zero and include in mean)
+        loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
+        loss = tf.reduce_mean(loss)
+        return loss, cost
+
+
+def _max_margin(score, cost, axis=None, reduce_method='max', name='max_margin'):
+    '''Computes the max-margin loss.'''
+    with tf.name_scope(name) as scope:
+        is_best = tf.to_float(cost <= tf.reduce_min(cost, axis=axis, keep_dims=True))
+        cost_best = weighted_mean(cost, is_best, axis=axis, keep_dims=True)
+        score_best = weighted_mean(score, is_best, axis=axis, keep_dims=True)
+        # We want the rectangle with the minimum cost to have the highest score.
+        # => Ensure that the gap in score is at least the difference in cost.
+        # i.e. score_best - score >= cost - cost_best
+        # i.e. (cost - cost_best) - (score_best - score) <= 0
+        # Therefore penalize max(0, above expr).
+        violation = tf.maximum(0., (cost - cost_best) - (score_best - score))
+        if reduce_method == 'max':
+            # Structured output loss.
+            loss = tf.reduce_max(violation, axis=axis)
+        elif reduce_method == 'mean':
+            # Mean over all hinges; like triplet loss.
+            loss = tf.reduce_mean(violation, axis=axis)
+        elif reduce_method == 'sum':
+            loss = tf.reduce_sum(violation, axis=axis)
+        else:
+            raise ValueError('unknown reduce method: {}'.format(reduce_method))
+        return loss
 
 
 def _finalize_scores(response, stride, hann_method, hann_coeff, name='finalize_scores'):
@@ -589,3 +737,13 @@ def _image_sequence_summary(name, tensor, **kwargs):
     ntimesteps = tensor.shape.as_list()[-4]
     assert ntimesteps is not None
     tf.summary.image(name, tensor[0], max_outputs=ntimesteps, **kwargs)
+
+
+def _clip_rect_size(rect, min_size=None, max_size=None, name='clip_rect_size'):
+    with tf.name_scope(name) as scope:
+        center, size = geom.rect_center_size(rect)
+        if max_size is not None:
+            size = tf.minimum(size, max_size)
+        if min_size is not None:
+            size = tf.maximum(size, min_size)
+        return geom.make_rect_center_size(center, size)
