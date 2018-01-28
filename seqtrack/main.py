@@ -18,7 +18,6 @@ from seqtrack.helpers import LazyDict
 import seqtrack.models.nornn as nornn
 import seqtrack.models.itermodel as itermodel
 import seqtrack.models.siamfc as siamfc
-import seqtrack.models.pair as pair
 
 
 def parse_arguments():
@@ -300,10 +299,6 @@ def main():
         model = nornn.Nornn(**o.model_params)
     elif o.model == 'SiamFC':
         model = itermodel.ModelFromIterModel(siamfc.SiamFC(**o.model_params))
-    elif o.model == 'CrossCorrFirstConcatPrev':
-        model = itermodel.ModelFromIterModel(siamfc.CrossCorrFirstConcatPrev(**o.model_params))
-    elif o.model == 'PairConcat':
-        model = itermodel.ModelFromIterModel(pair.PairConcat(**o.model_params))
     else:
         raise ValueError('unknown model: {}'.format(o.model))
 
