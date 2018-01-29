@@ -54,13 +54,14 @@ class SiamFC(models_interface.IterModel):
             hann_coeff=1.0,
             arg_max_eps_rel=0.05,
             # Loss parameters:
+            wd=0.0,
             enable_ce_loss=True,
             ce_label='gaussian_distance',
             sigma=0.2,
             balance_classes=True,
             enable_margin_loss=False,
             margin_cost='iou',
-            margin_structured=True):
+            margin_reduce_method='max'):
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
@@ -86,16 +87,18 @@ class SiamFC(models_interface.IterModel):
         self._num_scales = num_scales
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
+        self._report_square = report_square
         self._hann_method = hann_method
         self._hann_coeff = hann_coeff
         self._arg_max_eps_rel = arg_max_eps_rel
+        self._wd = wd
         self._enable_ce_loss = enable_ce_loss
         self._ce_label = ce_label
         self._sigma = sigma
         self._balance_classes = balance_classes
         self._enable_margin_loss = enable_margin_loss
         self._margin_cost = margin_cost
-        self._margin_structured = margin_structured
+        self._margin_reduce_method = margin_reduce_method
 
         self._num_frames = 0
         # For summaries in end():
@@ -110,10 +113,14 @@ class SiamFC(models_interface.IterModel):
             self._enable_loss = enable_loss
             self._image_summaries_collections = image_summaries_collections
 
+            y = frame['y']
             mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keep_dims=True)
             # TODO: frame['image'] and template_im have a viewport
-            template_rect, _ = _get_context_rect(frame['y'], context_amount=self._template_scale,
-                                                 aspect=self._aspect, aspect_method=self._aspect_method)
+            template_rect, y_square = _get_context_rect(
+                y, context_amount=self._template_scale, aspect=self._aspect,
+                aspect_method=self._aspect_method)
+            if self._report_square:
+                y = y_square
             template_im = util.crop(frame['x'], template_rect, self._template_size,
                                     pad_value=mean_color if self._pad_with_mean else 0.5,
                                     feather=self._feather, feather_margin=self._feather_margin)
@@ -125,8 +132,8 @@ class SiamFC(models_interface.IterModel):
                 template_feat, rfs = _feature_net(
                     template_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training, variables_collections=['siamese'],
-                    trainable=(not self._freeze_siamese))
+                    wd=self._wd, is_training=self._is_training,
+                    variables_collections=['siamese'], trainable=(not self._freeze_siamese))
             feat_size = template_feat.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
             if self._enable_template_mask:
@@ -141,7 +148,7 @@ class SiamFC(models_interface.IterModel):
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
-                'y':             tf.identity(frame['y']),
+                'y':             tf.identity(y),
                 'template_feat': tf.identity(template_feat),
                 'mean_color':    tf.identity(mean_color),
             }
@@ -179,8 +186,8 @@ class SiamFC(models_interface.IterModel):
                 search_feat, rfs = _feature_net(
                     search_input, rfs, padding=self._feature_padding, arch=self._feature_arch,
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
-                    is_training=self._is_training, variables_collections=['siamese'],
-                    trainable=(not self._freeze_siamese))
+                    wd=self._wd, is_training=self._is_training,
+                    variables_collections=['siamese'], trainable=(not self._freeze_siamese))
 
             response, rfs = util.diag_xcorr_rf(
                 input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
@@ -219,7 +226,7 @@ class SiamFC(models_interface.IterModel):
                     losses['margin'], cost = _max_margin_loss(
                         response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
                         search_size=self._search_size, search_scale=self._search_scale,
-                        cost_method=self._margin_cost, structured=self._margin_structured)
+                        cost_method=self._margin_cost, reduce_method=self._margin_reduce_method)
                     self._info.setdefault('margin_cost', []).append(
                         _to_uint8(util.colormap(tf.expand_dims(cost, -1), _COLORMAP)))
 
@@ -246,6 +253,8 @@ class SiamFC(models_interface.IterModel):
             # Move from search back to original image.
             # TODO: Test that this is equivalent to scaling translation?
             pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
+            # Limit size of object.
+            pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
 
             # Rectangle to use in next frame for search area.
             # If using gt and rect not valid, use previous.
@@ -274,7 +283,8 @@ class SiamFC(models_interface.IterModel):
 
 
 def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear', enable_bnorm=True,
-                 is_training=None, name='feature_net', variables_collections=None, trainable=False):
+                 wd=0.0, is_training=None, variables_collections=None, trainable=False,
+                 name='feature_net'):
     '''
     Returns:
         Tuple of (feature map, receptive fields).
@@ -289,13 +299,15 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
         x, restore = merge_dims(x, 0, len(x.shape)-3)
         x, rfs = _feature_net(
             x, rfs=rfs, padding=padding, arch=arch, output_act=output_act,
-            enable_bnorm=enable_bnorm, is_training=is_training, name=name,
-            variables_collections=variables_collections, trainable=trainable)
+            enable_bnorm=enable_bnorm, wd=wd, is_training=is_training,
+            variables_collections=variables_collections, trainable=trainable, name=name)
         x = restore(x, 0)
         return x, rfs
 
     with tf.name_scope(name) as scope:
-        conv_args = dict(variables_collections=variables_collections, trainable=trainable)
+        conv_args = dict(weights_regularizer=slim.l2_regularizer(wd) if wd > 0 else None,
+                         variables_collections=variables_collections,
+                         trainable=trainable)
         if enable_bnorm:
             conv_args.update(dict(
                 normalizer_fn=slim.batch_norm,
@@ -499,7 +511,7 @@ def _cross_entropy_loss(
 
 def _max_margin_loss(
         score, score_rf, prev_rect, gt_rect, gt_is_valid, search_rect,
-        search_size, search_scale, cost_method='iou', structured=True,
+        search_size, search_scale, cost_method='iou', reduce_method='max',
         name='max_margin_loss'):
     '''Computes the loss for a 2D map of logits.
 
@@ -537,7 +549,7 @@ def _max_margin_loss(
             cost = tf.norm(delta, axis=-1) * search_scale
         else:
             raise ValueError('unknown cost method: {}'.format(cost_method))
-        loss = _max_margin(score, cost, axis=[-2, -1], structured=structured)
+        loss = _max_margin(score, cost, axis=[-2, -1], reduce_method=reduce_method)
         # TODO: Is this the best way to handle gt_is_valid?
         # (set loss to zero and include in mean)
         loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
@@ -545,7 +557,7 @@ def _max_margin_loss(
         return loss, cost
 
 
-def _max_margin(score, cost, axis=None, structured=True, name='max_margin'):
+def _max_margin(score, cost, axis=None, reduce_method='max', name='max_margin'):
     '''Computes the max-margin loss.'''
     with tf.name_scope(name) as scope:
         is_best = tf.to_float(cost <= tf.reduce_min(cost, axis=axis, keep_dims=True))
@@ -557,12 +569,16 @@ def _max_margin(score, cost, axis=None, structured=True, name='max_margin'):
         # i.e. (cost - cost_best) - (score_best - score) <= 0
         # Therefore penalize max(0, above expr).
         violation = tf.maximum(0., (cost - cost_best) - (score_best - score))
-        if structured:
+        if reduce_method == 'max':
             # Structured output loss.
             loss = tf.reduce_max(violation, axis=axis)
-        else:
+        elif reduce_method == 'mean':
             # Mean over all hinges; like triplet loss.
             loss = tf.reduce_mean(violation, axis=axis)
+        elif reduce_method == 'sum':
+            loss = tf.reduce_sum(violation, axis=axis)
+        else:
+            raise ValueError('unknown reduce method: {}'.format(reduce_method))
         return loss
 
 
@@ -659,3 +675,13 @@ def _image_sequence_summary(name, tensor, **kwargs):
     ntimesteps = tensor.shape.as_list()[-4]
     assert ntimesteps is not None
     tf.summary.image(name, tensor[0], max_outputs=ntimesteps, **kwargs)
+
+
+def _clip_rect_size(rect, min_size=None, max_size=None, name='clip_rect_size'):
+    with tf.name_scope(name) as scope:
+        center, size = geom.rect_center_size(rect)
+        if max_size is not None:
+            size = tf.minimum(size, max_size)
+        if min_size is not None:
+            size = tf.maximum(size, min_size)
+        return geom.make_rect_center_size(center, size)
