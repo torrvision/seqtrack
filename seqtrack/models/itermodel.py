@@ -37,7 +37,7 @@ class ModelFromIterModel(models_interface.Model):
         # TODO: Aspect, viewport.
         frame = {'x': example['x0'], 'y': example['y0']}
         init_state, init_state_feed = self._model.start(
-            frame, example['aspect'], example['continue'], run_opts,
+            frame, example['aspect'], example['continue'], example['choose_action'], run_opts,
             enable_loss=enable_loss,
             image_summaries_collections=image_summaries_collections)
 
@@ -45,6 +45,7 @@ class ModelFromIterModel(models_interface.Model):
             'x': tf.unstack(example['x'], axis=1),
             'y': tf.unstack(example['y'], axis=1),
             'y_is_valid': tf.unstack(example['y_is_valid'], axis=1),
+            'action': tf.unstack(example['action'], axis=1),
         }
         ntimesteps = len(frames['x'])
         frames = [{k: frames[k][i] for k in frames} for i in range(ntimesteps)]

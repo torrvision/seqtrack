@@ -5,7 +5,8 @@ import numpy as np
 
 from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to
 
-EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect', 'continue']
+EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect', 'continue',
+                'choose_action', 'action']
 
 
 class ModelInstance:
@@ -53,10 +54,14 @@ def make_placeholders(ntimesteps, im_size, default=None):
         'y_is_valid': [None, ntimesteps],
         'aspect':     [None],
         'continue':   [None],
+        'choose_action': [None],
+        'action':        [None, ntimesteps],
     }
     dtypes = {
-        'y_is_valid': tf.bool,
-        'continue':   tf.bool,
+        'y_is_valid':    tf.bool,
+        'continue':      tf.bool,
+        'choose_action': tf.bool,
+        'action':        tf.int32,
     }
     dtype = lambda k: dtypes.get(k, tf.float32)
 

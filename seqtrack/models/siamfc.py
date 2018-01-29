@@ -109,6 +109,7 @@ class SiamFC(models_interface.IterModel):
         self._num_scales = num_scales
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
+        self._report_square = report_square
         self._hann_method = hann_method
         self._hann_coeff = hann_coeff
         self._arg_max_eps_rel = arg_max_eps_rel
@@ -129,11 +130,12 @@ class SiamFC(models_interface.IterModel):
         self._action_value = []
         self._reward = []
 
-    def start(self, frame, aspect, cont, run_opts, enable_loss,
+    def start(self, frame, aspect, cont, choose_action, run_opts, enable_loss,
               image_summaries_collections=None, name='start'):
         with tf.name_scope(name) as scope:
             self._aspect = aspect
             self._cont = cont
+            self._choose_action = choose_action
             self._is_training = run_opts['is_training']
             self._is_tracking = run_opts['is_tracking']
             self._enable_loss = enable_loss
@@ -141,16 +143,14 @@ class SiamFC(models_interface.IterModel):
             # When tracking is continued, the state will be fed here.
             state_feed = {}
 
-            y = frame['y']
-            state_feed['y'] = placeholder_like(y, 'y')
-            y = tf.where(self._cont, state_feed['y'], y)
-
             mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keep_dims=True)
-            state_feed['mean_color'] = placeholder_like(mean_color, 'mean_color')
-            mean_color = tf.where(self._cont, state_feed['mean_color'], mean_color)
             # TODO: frame['image'] and template_im have a viewport
-            template_rect, _ = _get_context_rect(y, context_amount=self._template_scale,
-                                                 aspect=self._aspect, aspect_method=self._aspect_method)
+            y = frame['y']
+            template_rect, y_square = _get_context_rect(
+                y, context_amount=self._template_scale,
+                aspect=self._aspect, aspect_method=self._aspect_method)
+            if self._report_square:
+                y = y_square
             template_im = util.crop(frame['x'], template_rect, self._template_size,
                                     pad_value=mean_color if self._pad_with_mean else 0.5,
                                     feather=self._feather, feather_margin=self._feather_margin)
@@ -171,8 +171,6 @@ class SiamFC(models_interface.IterModel):
             #         'template_mask', template_feat.shape.as_list()[-3:],
             #         initializer=tf.ones_initializer(), collections=['siamese'])
             #     template_feat *= template_mask
-            state_feed['template_feat'] = placeholder_like(template_feat, 'template_feat')
-            template_feat = tf.where(self._cont, state_feed['template_feat'], template_feat)
 
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
@@ -197,12 +195,13 @@ class SiamFC(models_interface.IterModel):
                 xcorr_padding=self._xcorr_padding,
                 bnorm_after_xcorr=self._bnorm_after_xcorr)
 
+            self._mean_color = mean_color
+            self._template_feat = template_feat
+
+            state_feed['y'] = placeholder_like(y, 'y')
+            prev_y = tf.where(self._cont, state_feed['y'], y)
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
-            state = {
-                'y':             y,
-                'template_feat': template_feat,
-                'mean_color':    mean_color,
-            }
+            state = {'y': prev_y}
             return state, state_feed
 
     def next(self, frame, prev_state, name='timestep'):
@@ -220,8 +219,8 @@ class SiamFC(models_interface.IterModel):
             self._final_rect = prev_rect
 
             response, search_rect, search_ims = self._response_func(frame['x'], prev_rect,
-                mean_color=prev_state['mean_color'],
-                template_feat=prev_state['template_feat'],
+                mean_color=self._mean_color,
+                template_feat=self._template_feat,
                 is_training=self._is_training,
                 reuse_features=True,
                 reuse_output=(self._num_frames > 0),
@@ -239,8 +238,9 @@ class SiamFC(models_interface.IterModel):
             batch_sz = tf.shape(frame['x'])[0]
             optimal_action = unique_argmax(values, axis=1, output_type=tf.int32)
             random_action = tf.to_int32(tf.random_uniform([batch_sz]) * len(_ACTIONS))
-            is_greedy = (tf.random_uniform([batch_sz]) < self._epsilon)
-            action = tf.where(is_greedy, random_action, optimal_action)
+            use_random = (tf.random_uniform([batch_sz]) < self._epsilon)
+            action = tf.where(use_random, random_action, optimal_action)
+            action = tf.where(self._choose_action, action, frame['action'])
             # Obtain reward from environment for taking action.
             prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
             pred_in_search = _apply_action(
@@ -261,8 +261,8 @@ class SiamFC(models_interface.IterModel):
                 # TODO: Only construct graph in final frame.
                 with tf.variable_scope('old'):
                     response_old, _, _ = self._response_func(self._final_im, self._final_rect,
-                        mean_color=prev_state['mean_color'],
-                        template_feat=prev_state['template_feat'],
+                        mean_color=self._mean_color,
+                        template_feat=self._template_feat,
                         is_training=self._is_training,
                         reuse_features=(self._num_frames > 0),
                         reuse_output=(self._num_frames > 0),
@@ -299,11 +299,7 @@ class SiamFC(models_interface.IterModel):
                 # 'vis': vis,
                 'reward': reward,
             }
-            state = {
-                'y': next_prev_rect,
-                'template_feat': prev_state['template_feat'],
-                'mean_color':    prev_state['mean_color'],
-            }
+            state = {'y': next_prev_rect}
             losses = {}
             return outputs, state, losses
 

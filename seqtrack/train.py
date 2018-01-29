@@ -288,10 +288,11 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                 writer[mode] = tf.summary.FileWriter(path_summary)
 
         replay_buffer = Buffer(100000)
+        curr_first = None
         curr_rest = None
         curr_state = None
         curr_aspect = None
-        batch_ind = None
+        curr_index = None
 
         while True: # Loop over epochs
             global_step = global_step_var.eval() # Number of steps taken.
@@ -307,7 +308,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
 
                 period_update_value_func = 100
                 if global_step % period_update_value_func == 0: # includes step zero
-                    print 'update value func'
+                    # print 'update value func'
                     sess.run(update_value_func_op)
 
                 if not o.nosave:
@@ -351,36 +352,34 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                             'aspect':       seq['aspect'],
                         }
                         batch_seqs.append(segment)
-                    # Append each to replay buffer.
-                    for segment in batch_seqs:
-                        replay_buffer.push(segment)
+                    is_new = [True for _ in batch_seqs]
+                    # # Append each to replay buffer.
+                    # for segment in batch_seqs:
+                    #     replay_buffer.push(segment)
                 else:
                     # Sample b-1 segments from the replay buffer.
-                    ind = np.random.choice(len(replay_buffer.elems), o.batchsz-1, replace=True)
-                    batch_seqs = [replay_buffer.elems[i] for i in ind]
-                    first = None
+                    subset = np.random.choice(len(replay_buffer.elems), o.batchsz-1, replace=True)
+                    batch_seqs = [replay_buffer.elems[i] for i in subset]
                     cont = True
                     while curr_rest is None or len(curr_rest['image_files']) < o.ntimesteps+1:
-                        print 'sample new sequence'
+                        # print 'sample new sequence'
                         # Sample new full sequence.
                         seq = next(sequences['train'])
                         curr_aspect = seq['aspect']
-                        first, curr_rest = _split_sequence(seq, 1)
+                        curr_first, curr_rest = _split_sequence(seq, 1)
                         cont = False
                         curr_state = None
                     curr_frames, curr_rest = _split_sequence(curr_rest, o.ntimesteps)
                     segment = {
-                        'init_frame':   first,          # None if continuing.
+                        'init_frame':   curr_first,
                         'frames':       curr_frames,
                         'init_state':   curr_state,     # None if starting new sequence.
                         'continue':     cont,
                         'aspect':       curr_aspect,
                     }
                     batch_seqs = [segment] + batch_seqs
-                    batch_ind = 0
-                    # batch_seqs.append(segment)
-                    # batch_ind = o.batchsz - 1
-                    replay_buffer.push(segment)
+                    is_new = [(i == 0) for i in range(len(batch_seqs))]
+                    curr_index = 0
 
                 # Take a training step.
                 start = time.time()
@@ -396,7 +395,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                     # batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
                     # batch = _load_batch(batch_seqs, o)
                     example_value, init_state_value = load_batch(
-                        batch_seqs, init_state,
+                        batch_seqs, init_state, is_new,
                         ntimesteps=o.ntimesteps, im_size=(o.imheight, o.imwidth))
                     # feed_dict.update({example[k]: v for k, v in example_value.iteritems()})
                     nest.assert_same_structure(example, example_value)
@@ -410,21 +409,26 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                     summary_var = (summary_vars_with_preview['train']
                                    if global_step % o.period_preview == 0
                                    else summary_vars['train'])
-                    _, loss, reward, curr_state, summary = sess.run(
-                        [optimize_op, loss_var, outputs['reward'], final_state, summary_var],
+                    _, loss, reward, curr_action, curr_state, summary = sess.run(
+                        [optimize_op, loss_var, outputs['reward'], outputs['action'], final_state, summary_var],
                         feed_dict=feed_dict)
                     dur = time.time() - start
                     writer['train'].add_summary(summary, global_step=global_step)
                 else:
-                    _, loss, reward, curr_state = sess.run(
-                        [optimize_op, loss_var, outputs['reward'], final_state],
+                    _, loss, reward, curr_action, curr_state = sess.run(
+                        [optimize_op, loss_var, outputs['reward'], outputs['action'], final_state],
                         feed_dict=feed_dict)
                     dur = time.time() - start
                 # Take last element of batch.
-                if batch_ind is not None:
-                    curr_state = {k: v[batch_ind] for k, v in curr_state.items()}
-                mean_reward = np.mean(reward)
-                reward_ep.append(mean_reward)
+                for i, segment in enumerate(batch_seqs):
+                    if is_new[i]:
+                        # Record action, add to buffer, and record state.
+                        segment['action'] = curr_action[i]
+                        replay_buffer.push(segment)
+                if curr_index is not None:
+                    curr_state = {k: v[curr_index] for k, v in curr_state.items()}
+                reward_batch = np.mean(reward)
+                reward_ep.append(reward_batch)
 
                 # newval = False
                 # # Evaluate validation error.
@@ -460,7 +464,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                     # losstime = '|loss:{:.5f}/{:.5f} (time:{:.2f}/{:.2f}) - with val'.format(
                     #         loss, loss_val, dur, dur_val) if newval else \
                     #         '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
-                    losstime = '|reward:{:.5f} (time:{:.2f})'.format(mean_reward, dur)
+                    losstime = '|reward:{:.5f} (time:{:.2f})'.format(reward_batch, dur)
                     print 'ep {}/{}, batch {}/{} (bsz:{}), global_step {} {}'.format(
                             ie+1, nepoch, ib+1, nbatch, o.batchsz, global_step, losstime)
                     sys.stdout.flush()
@@ -802,7 +806,7 @@ def load_sequence(seq, im_size):
     return images
 
 
-def load_batch(segments, init_state_var, ntimesteps, im_size):
+def load_batch(segments, init_state_var, choose_action, ntimesteps, im_size):
     '''
     Args:
         im_size: (height, width)
@@ -818,9 +822,14 @@ def load_batch(segments, init_state_var, ntimesteps, im_size):
     imheight, imwidth = im_size
     examples = []
     init_state_values = []
-    for segment in segments:
+    assert len(segments) == len(choose_action)
+    for i, segment in enumerate(segments):
         example = {}
         init_state_value = {}
+        example['x0'] = load_sequence(segment['init_frame'], im_size)[0]
+        example['y0'] = segment['init_frame']['labels'][0]
+        y0_valid = segment['init_frame']['label_is_valid'][0]
+        assert y0_valid
         example['x'] = load_sequence(segment['frames'], im_size)
         example['y'] = segment['frames']['labels']
         example['y_is_valid'] = segment['frames']['label_is_valid']
@@ -828,19 +837,18 @@ def load_batch(segments, init_state_var, ntimesteps, im_size):
         example['continue'] = segment['continue']
         if segment['continue']:
             init_state_value = segment['init_state']
-            # Set initial image to zeros.
-            example['x0'] = np.zeros([imheight, imwidth, 3], dtype=np.float32)
-            example['y0'] = np.zeros([4], dtype=np.float32)
         else:
-            example['x0'] = load_sequence(segment['init_frame'], im_size)[0]
-            example['y0'] = segment['init_frame']['labels'][0]
-            y0_valid = segment['init_frame']['label_is_valid'][0]
-            assert y0_valid
             # Set initial state to zeros.
             init_state_value = map_nested(
                 lambda x: np.zeros(shape=x.shape.as_list()[1:],
                                    dtype=x.dtype.as_numpy_dtype()),
                 init_state_var)
+        example['choose_action'] = choose_action[i]
+        if choose_action[i]:
+            example['action'] = np.zeros(shape=[ntimesteps], dtype=np.int32)
+        else:
+            example['action'] = segment['action']
+
         examples.append(example)
         init_state_values.append(init_state_value)
 
@@ -851,7 +859,7 @@ def load_batch(segments, init_state_var, ntimesteps, im_size):
 
 
 def stack_nested(l):
-    '''Converts list of dictionaries to dictionary of lists.'''
+    '''Converts list of dictionaries to dictionary of numpy arrays.'''
     d = {}
     assert isinstance(l, list)
     assert len(l) > 0
