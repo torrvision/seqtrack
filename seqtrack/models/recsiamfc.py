@@ -221,12 +221,17 @@ class RecSiamFC(models_interface.IterModel):
                     response = _add_motion_prior(response)
 
             # HglassRNN
+            assert(self._freeze_siamese)
+            response_single = tf.expand_dims(response[:, mid_scale], 1)
             with tf.variable_scope('hglass_rnn', reuse=(self._num_frames > 0)):
-                response, rnn_state = _hglass_rnn(
-                    response, prev_state['rnn'],
+                #response, rnn_state = _hglass_rnn(
+                #    response[], prev_state['rnn'],
+                response_refine, rnn_state = _hglass_rnn(
+                    response_single, prev_state['rnn'],
                     enable_bnorm=self._enable_rnn_bnorm,
                     enable_recurrency=self._enable_recurrency,
                     is_training=self._is_training)
+                response_refine = slim.batch_norm(response_refine, scale=True, is_training=self._is_training)
 
             self._info.setdefault('response', []).append(
                 _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
@@ -235,7 +240,8 @@ class RecSiamFC(models_interface.IterModel):
             if self._enable_loss:
                 if self._enable_ce_loss:
                     losses['ce'], labels = _cross_entropy_loss(
-                        response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
+                        #response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
+                        response_refine, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
                         search_size=self._search_size, search_scale=self._search_scale,
                         label_method=self._ce_label, sigma=self._sigma,
                         balance_classes=self._balance_classes)
@@ -243,23 +249,38 @@ class RecSiamFC(models_interface.IterModel):
                         _to_uint8(util.colormap(tf.expand_dims(labels, -1), _COLORMAP)))
                 if self._enable_margin_loss:
                     losses['margin'], cost = _max_margin_loss(
-                        response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
+                        #response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
+                        response_refine, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
                         search_size=self._search_size, search_scale=self._search_scale,
                         cost_method=self._margin_cost, reduce_method=self._margin_reduce_method)
                     self._info.setdefault('margin_cost', []).append(
                         _to_uint8(util.colormap(tf.expand_dims(cost, -1), _COLORMAP)))
 
-            # Get relative translation and scale from response.
-            response_final = _finalize_scores(response, rfs['search'].stride,
-                                              self._hann_method, self._hann_coeff)
-            # upsample_response_size = response_final.shape.as_list()[-3:-1]
-            # assert np.all(upsample_response_size <= self._search_size)
-            translation, scale = util.find_peak_pyr(response_final, scales,
-                                                    eps_rel=self._arg_max_eps_rel)
+            # 1) Translation from the refined single response
+            response_final_translation = _finalize_scores(response_refine, rfs['search'].stride,
+                                                          self._hann_method, self._hann_coeff)
+            translation, _ = util.find_peak_pyr(response_final_translation, scales,
+                                                eps_rel=self._arg_max_eps_rel)
             translation = translation / self._search_size
 
+            # 2) Scale from the original multi-scale response
+            response_final_scale = _finalize_scores(response, rfs['search'].stride,
+                                                    self._hann_method, self._hann_coeff)
+            _, scale = util.find_peak_pyr(response_final_scale, scales,
+                                          eps_rel=self._arg_max_eps_rel)
+
+            ## Get relative translation and scale from response.
+            #response_final = _finalize_scores(response, rfs['search'].stride,
+            #                                  self._hann_method, self._hann_coeff)
+            ## upsample_response_size = response_final.shape.as_list()[-3:-1]
+            ## assert np.all(upsample_response_size <= self._search_size)
+            #translation, scale = util.find_peak_pyr(response_final, scales,
+            #                                        eps_rel=self._arg_max_eps_rel)
+            #translation = translation / self._search_size
+
             vis = _visualize_response(
-                response[:, mid_scale], response_final[:, mid_scale],
+                #response[:, mid_scale], response_final[:, mid_scale],
+                response[:, mid_scale], response_final_translation[:,0],
                 search_ims[:, mid_scale], rfs['search'], frame['x'], search_rect)
             self._info.setdefault('vis', []).append(_to_uint8(vis))
 
