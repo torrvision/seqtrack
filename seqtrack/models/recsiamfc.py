@@ -397,7 +397,7 @@ def _hglass_rnn(x, rnn_state, enable_bnorm=True, enable_recurrency=True, is_trai
             x = slim.conv2d(tf.image.resize_images(x + x_skip[2], [7, 7], align_corners=True),
                             32, 3, 1, scope='dec1')
             x = slim.conv2d(tf.image.resize_images(x + x_skip[1], [17, 17], align_corners=True),
-                            32, 3, 1, scope='dec2')
+                            1, 3, 1, scope='dec2')
             x = slim.conv2d(x + x_skip[0], 1, 3, 1,
                             activation_fn=None, normalizer_fn=None, scope='dec3')
         ## Additional 2 conv layers as previously done (Must not have activation at last)
