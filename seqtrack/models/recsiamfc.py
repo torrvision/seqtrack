@@ -143,7 +143,8 @@ class RecSiamFC(models_interface.IterModel):
             if self._enable_template_mask:
                 template_mask = tf.get_variable(
                     'template_mask', template_feat.shape.as_list()[-3:],
-                    initializer=tf.ones_initializer(), collections=['siamese'])
+                    initializer=tf.ones_initializer(),
+                    collections=['siamese', tf.GraphKeys.GLOBAL_VARIABLES])
                 template_feat *= template_mask
 
             # Initial RNN state
