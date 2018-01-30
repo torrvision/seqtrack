@@ -394,20 +394,19 @@ def _hglass_rnn(x, rnn_state, enable_bnorm=True, enable_recurrency=True, is_trai
                 x, rnn_state = _lstm(x, rnn_state)
             else:
                 x = slim.conv2d(x, 128, 3, 1, scope='rnn_replace')
-            x = slim.conv2d(tf.image.resize_images(x + x_skip[2], [7, 7],
-                                                   align_corners=True),
+            x = slim.conv2d(tf.image.resize_images(x + x_skip[2], [7, 7], align_corners=True),
                             32, 3, 1, scope='dec1')
-            x = slim.conv2d(tf.image.resize_images(x + x_skip[1], [17, 17],
-                                                   align_corners=True),
+            x = slim.conv2d(tf.image.resize_images(x + x_skip[1], [17, 17], align_corners=True),
                             32, 3, 1, scope='dec2')
-            x = slim.conv2d(x + x_skip[0], 1, 3, 1, scope='dec3')
-        # Additional 2 conv layers as previously done (Must not have activation at last)
-        with slim.arg_scope([slim.conv2d],
-                            normalizer_fn=slim.batch_norm,
-                            normalizer_params={'is_training': is_training}):
-            x = slim.conv2d(x, 1, 3, 1, scope='conv1')
-            x = slim.conv2d(x, 1, 1, 1,
-                            activation_fn=None, normalizer_fn=None, scope='conv2')
+            x = slim.conv2d(x + x_skip[0], 1, 3, 1,
+                            activation_fn=None, normalizer_fn=None, scope='dec3')
+        ## Additional 2 conv layers as previously done (Must not have activation at last)
+        #with slim.arg_scope([slim.conv2d],
+        #                    normalizer_fn=slim.batch_norm,
+        #                    normalizer_params={'is_training': is_training}):
+        #    x = slim.conv2d(x, 1, 3, 1, scope='conv1')
+        #    x = slim.conv2d(x, 1, 1, 1,
+        #                    activation_fn=None, normalizer_fn=None, scope='conv2')
         return x, rnn_state
 
 
