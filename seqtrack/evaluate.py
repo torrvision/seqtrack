@@ -117,6 +117,9 @@ def track(sess, model_inst, sequence, use_gt,
                 _single_to_batch(sequence['aspect'], model_inst.batchsz),
             model_inst.run_opts['use_gt']: use_gt,
             model_inst.run_opts['is_tracking']: True,
+            model_inst.example['choose_action']: [True],
+            model_inst.example['continue']: [start > 1],
+            model_inst.example['action']: [[0 for _ in range(model_inst.ntimesteps)]],
         }
         if start > 1:
             # This is not the first chunk.

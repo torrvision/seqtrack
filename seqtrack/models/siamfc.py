@@ -239,6 +239,7 @@ class SiamFC(models_interface.IterModel):
             optimal_action = unique_argmax(values, axis=1, output_type=tf.int32)
             random_action = tf.to_int32(tf.random_uniform([batch_sz]) * len(_ACTIONS))
             use_random = (tf.random_uniform([batch_sz]) < self._epsilon)
+            use_random = tf.logical_and(use_random, tf.logical_not(self._is_tracking))
             action = tf.where(use_random, random_action, optimal_action)
             action = tf.where(self._choose_action, action, frame['action'])
             # Obtain reward from environment for taking action.
