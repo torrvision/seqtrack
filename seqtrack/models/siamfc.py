@@ -284,6 +284,9 @@ class SiamFC(models_interface.IterModel):
                 self._action.append(action)
                 self._action_value.append(lookup_each(values, action))
 
+            # Limit size of object.
+            pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
+
             # Rectangle to use in next frame for search area.
             # If using gt and rect not valid, use previous.
             # gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_rect)
@@ -823,3 +826,13 @@ def _image_sequence_summary(name, tensor, **kwargs):
     ntimesteps = tensor.shape.as_list()[-4]
     assert ntimesteps is not None
     tf.summary.image(name, tensor[0], max_outputs=ntimesteps, **kwargs)
+
+
+def _clip_rect_size(rect, min_size=None, max_size=None, name='clip_rect_size'):
+    with tf.name_scope(name) as scope:
+        center, size = geom.rect_center_size(rect)
+        if max_size is not None:
+            size = tf.minimum(size, max_size)
+        if min_size is not None:
+            size = tf.maximum(size, min_size)
+        return geom.make_rect_center_size(center, size)
