@@ -472,8 +472,8 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                         active[active_lookup[batch_ind]].prev_state = \
                             {k: v[batch_ind] for k, v in state.items()}
 
-                reward_batch = np.mean(reward)
-                reward_ep.append(reward_batch)
+                reward_batch = [reward[ind] for ind in active_lookup]
+                reward_ep.extend(reward_batch)
 
                 # newval = False
                 # # Evaluate validation error.
@@ -509,7 +509,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                     # losstime = '|loss:{:.5f}/{:.5f} (time:{:.2f}/{:.2f}) - with val'.format(
                     #         loss, loss_val, dur, dur_val) if newval else \
                     #         '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
-                    losstime = '|reward:{:.5f} (time:{:.2f})'.format(reward_batch, dur)
+                    losstime = '|reward:{:.5f} (time:{:.2f})'.format(np.mean(reward_batch), dur)
                     print 'ep {}/{}, batch {}/{} (bsz:{}), global_step {} {}'.format(
                             ie+1, nepoch, ib+1, nbatch, o.batchsz, global_step, losstime)
                     sys.stdout.flush()
