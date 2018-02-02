@@ -288,11 +288,8 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
             else:
                 writer[mode] = tf.summary.FileWriter(path_summary)
 
-        replay_buffer = Buffer(100000)
-        num_concurrent = 2 * o.batchsz
-        active_per_batch = o.batchsz / 2
-
-        active = [None for _ in range(num_concurrent)]
+        replay_buffer = Buffer(o.replay_buffer_size)
+        active = [None for _ in range(o.num_concurrent)]
 
         while True: # Loop over epochs
             global_step = global_step_var.eval() # Number of steps taken.
@@ -306,8 +303,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
             for ib in range(nbatch): # Loop over batches in epoch.
                 global_step = global_step_var.eval() # Number of steps taken.
 
-                period_update_value_func = 100
-                if global_step % period_update_value_func == 0: # includes step zero
+                if global_step % o.period_update_value == 0: # includes step zero
                     if o.verbose_train:
                         print 'update value func'
                     sess.run(update_value_func_op)
@@ -339,7 +335,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                         print 'replay buffer not used'
                     active_per_batch = o.batchsz
                 else:
-                    active_per_batch = o.batchsz / 2
+                    active_per_batch = o.num_active_per_batch
 
                 active_subset = np.random.choice(len(active), active_per_batch, replace=False)
                 segments_active = {}

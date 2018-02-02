@@ -80,6 +80,12 @@ class Opts(object):
         self.use_gt_train       = False
         self.use_gt_eval        = False
 
+        self.max_seq_len            = 100
+        self.replay_buffer_size     = 100000
+        self.num_active_per_batch   = 4
+        self.num_concurrent         = 16
+        self.period_update_value    = 100
+
         #----------------------------------------------------------------------
         # parameters for tracking
         self.th_prob_stay       = 0.0 # threshold probability to stay movement.

@@ -155,9 +155,16 @@ def parse_arguments():
                                       'contrast': False,
                                       'grayscale': False})
 
-    parser.add_argument(
-            '--max_seq_len', help='length of sequences to sample',
-            type=int, default=100)
+    parser.add_argument('--max_seq_len', type=int, default=100,
+                        help='length of sequences to sample')
+    parser.add_argument('--replay_buffer_size', type=int, default=100000,
+                        help='number of samples to keep in replay buffer')
+    parser.add_argument('--num_active_per_batch', type=int, default=4,
+                        help='number of samples to take from active sequences')
+    parser.add_argument('--num_concurrent', type=int, default=16,
+                        help='number of active sequences to run')
+    parser.add_argument('--period_update_value', type=int, default=100,
+                        help='number of steps after which to update value function')
 
     parser.add_argument(
             '--sampler_params', help='JSON string specifying sampler',
