@@ -333,6 +333,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
 
                 min_buffer_size = o.batchsz * o.max_seq_len
                 if len(replay_buffer) < min_buffer_size:
+                    print 'replay buffer not used'
                     active_per_batch = o.batchsz
                 else:
                     active_per_batch = o.batchsz / 2
@@ -342,9 +343,11 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                 for ind in active_subset:
                     if active[ind] is None or len(active[ind].frames_rest['image_files']) < o.ntimesteps:
                         # Sample new full sequence.
-                        print 'sample new sequence'
+                        # print 'sample new sequence'
                         seq = next(sequences['train'])
                         active[ind] = continue_from_start(seq)
+                    # print 'active seq {}: remaining frames {}'.format(
+                    #     ind, len(active[ind].frames_rest['image_files']))
                     segment, active[ind] = active[ind].next(o.ntimesteps)
                     segments_active[ind] = segment
 
@@ -456,12 +459,14 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                         feed_dict=feed_dict)
                     dur = time.time() - start
                 # Take last element of batch.
-                for ind, segment in enumerate(segments):
-                    if ind in active_lookup:
-                        # Record action, add to buffer, and record state.
-                        segment['action'] = action[ind]
+                for batch_ind, segment in enumerate(segments):
+                    if batch_ind in active_lookup:
+                        # Record action, add to buffer.
+                        segment['action'] = action[batch_ind]
                         replay_buffer.push(segment)
-                        active[active_lookup[ind]].prev_state = {k: v[ind] for k, v in state.items()}
+                        # Update internal state of active sequence.
+                        active[active_lookup[batch_ind]].prev_state = \
+                            {k: v[batch_ind] for k, v in state.items()}
 
                 reward_batch = np.mean(reward)
                 reward_ep.append(reward_batch)
@@ -946,7 +951,7 @@ class Continuation:
             'action':       None,
         }
         rest = Continuation(frames_first=self.frames_first,
-                            frames_rest=self.frames_rest,
+                            frames_rest=frames_rest,
                             cont=True,
                             prev_state=None,
                             aspect=self.aspect)
