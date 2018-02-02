@@ -116,6 +116,13 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
     _image_summary(example, outputs)
     loss_var = _add_losses(losses, o.loss_coeffs)
 
+    with tf.name_scope('diagnostic'):
+        iou = geom.rect_iou(outputs['y'], example_input['y'])
+        tf.summary.scalar('iou', tf.reduce_mean(tf.boolean_mask(iou, example_input['y_is_valid'])))
+        dist = tf.norm(geom.rect_center(outputs['y']) - geom.rect_center(example_input['y']), axis=-1)
+        dist = dist / tf.reduce_mean(geom.rect_size(example_input['y']), axis=-1)
+        tf.summary.scalar('dist', tf.reduce_mean(tf.boolean_mask(dist, example_input['y_is_valid'])))
+
     model_inst = graph.ModelInstance(
         example, run_opts, outputs, init_state, final_state,
         batchsz=outputs['y'].shape.as_list()[0], ntimesteps=o.ntimesteps,
