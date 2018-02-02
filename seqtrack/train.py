@@ -288,11 +288,10 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                 writer[mode] = tf.summary.FileWriter(path_summary)
 
         replay_buffer = Buffer(100000)
-        curr_first = None
-        curr_rest = None
-        curr_state = None
-        curr_aspect = None
-        curr_index = None
+        num_concurrent = 2 * o.batchsz
+        active_per_batch = o.batchsz / 2
+
+        active = [None for _ in range(num_concurrent)]
 
         while True: # Loop over epochs
             global_step = global_step_var.eval() # Number of steps taken.
@@ -308,7 +307,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
 
                 period_update_value_func = 100
                 if global_step % period_update_value_func == 0: # includes step zero
-                    # print 'update value func'
+                    print 'update value func'
                     sess.run(update_value_func_op)
 
                 if not o.nosave:
@@ -332,54 +331,92 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                 # Store in replay buffer:
                 # (init_frame, frames, init_state, use_init_state)
 
-                # Take another steps in the current sequence and add to the buffer
-                # TODO: Batch?
                 min_buffer_size = o.batchsz * o.max_seq_len
-                if len(replay_buffer.elems) < min_buffer_size:
-                    # Sample entire batch of new sequences.
-                    batch_seqs = []
-                    for _ in range(o.batchsz):
-                        # Get full sequence.
-                        seq = next(sequences['train'])
-                        first, rest = _split_sequence(seq, 1)
-                        assert len(rest['image_files']) >= o.ntimesteps
-                        curr, rest = _split_sequence(rest, o.ntimesteps)
-                        segment = {
-                            'init_frame':   first,
-                            'frames':       curr,
-                            'init_state':   None,
-                            'continue':     False,
-                            'aspect':       seq['aspect'],
-                        }
-                        batch_seqs.append(segment)
-                    is_new = [True for _ in batch_seqs]
-                    # # Append each to replay buffer.
-                    # for segment in batch_seqs:
-                    #     replay_buffer.push(segment)
+                if len(replay_buffer) < min_buffer_size:
+                    active_per_batch = o.batchsz
                 else:
-                    # Sample b-1 segments from the replay buffer.
-                    subset = np.random.choice(len(replay_buffer.elems), o.batchsz-1, replace=True)
-                    batch_seqs = [replay_buffer.elems[i] for i in subset]
-                    cont = True
-                    while curr_rest is None or len(curr_rest['image_files']) < o.ntimesteps+1:
-                        # print 'sample new sequence'
+                    active_per_batch = o.batchsz / 2
+
+                active_subset = np.random.choice(len(active), active_per_batch, replace=False)
+                segments_active = {}
+                for ind in active_subset:
+                    if active[ind] is None or len(active[ind].frames_rest['image_files']) < o.ntimesteps:
                         # Sample new full sequence.
+                        print 'sample new sequence'
                         seq = next(sequences['train'])
-                        curr_aspect = seq['aspect']
-                        curr_first, curr_rest = _split_sequence(seq, 1)
-                        cont = False
-                        curr_state = None
-                    curr_frames, curr_rest = _split_sequence(curr_rest, o.ntimesteps)
-                    segment = {
-                        'init_frame':   curr_first,
-                        'frames':       curr_frames,
-                        'init_state':   curr_state,     # None if starting new sequence.
-                        'continue':     cont,
-                        'aspect':       curr_aspect,
-                    }
-                    batch_seqs = [segment] + batch_seqs
-                    is_new = [(i == 0) for i in range(len(batch_seqs))]
-                    curr_index = 0
+                        active[ind] = continue_from_start(seq)
+                    segment, active[ind] = active[ind].next(o.ntimesteps)
+                    segments_active[ind] = segment
+
+                replay_per_batch = o.batchsz - active_per_batch
+                if replay_per_batch > 0:
+                    replay_subset = np.random.choice(len(replay_buffer), replay_per_batch, replace=False)
+                else:
+                    replay_subset = []
+
+                active_subset_in_batch = list(np.random.choice(o.batchsz, active_per_batch, replace=False))
+                replay_subset_in_batch = list(set(range(o.batchsz)) - set(active_subset_in_batch))
+                active_lookup = dict(zip(active_subset_in_batch, active_subset))
+                replay_lookup = dict(zip(replay_subset_in_batch, replay_subset))
+
+                segments = [None for _ in range(o.batchsz)]
+                for ind in range(o.batchsz):
+                    if ind in active_lookup:
+                        segments[ind] = segments_active[active_lookup[ind]]
+                    elif ind in replay_lookup:
+                        segments[ind] = replay_buffer.elems[replay_lookup[ind]]
+                    else:
+                        raise ValueError('index not assigned: {}'.format(ind))
+
+                # # Take another steps in the current sequence and add to the buffer
+                # # TODO: Batch?
+                # min_buffer_size = o.batchsz * o.max_seq_len
+                # if len(replay_buffer.elems) < min_buffer_size:
+                #     # Sample entire batch of new sequences.
+                #     segments = []
+                #     for _ in range(o.batchsz):
+                #         # Get full sequence.
+                #         seq = next(sequences['train'])
+                #         first, rest = _split_sequence(seq, 1)
+                #         assert len(rest['image_files']) >= o.ntimesteps
+                #         curr, rest = _split_sequence(rest, o.ntimesteps)
+                #         segment = {
+                #             'init_frame':   first,
+                #             'frames':       curr,
+                #             'init_state':   None,
+                #             'continue':     False,
+                #             'aspect':       seq['aspect'],
+                #         }
+                #         segments.append(segment)
+                #     is_new = [True for _ in segments]
+                #     # # Append each to replay buffer.
+                #     # for segment in segments:
+                #     #     replay_buffer.push(segment)
+                # else:
+                #     # Sample b-1 segments from the replay buffer.
+                #     subset = np.random.choice(len(replay_buffer.elems), o.batchsz-1, replace=True)
+                #     segments = [replay_buffer.elems[i] for i in subset]
+                #     cont = True
+                #     while active[i]['rest'] is None or len(active[i]['rest']['image_files']) < o.ntimesteps+1:
+                #         # print 'sample new sequence'
+                #         # Sample new full sequence.
+                #         seq = next(sequences['train'])
+                #         active[i]['aspect'] = seq['aspect']
+                #         active[i]['first'], active[i]['rest'] = _split_sequence(seq, 1)
+                #         cont = False
+                #         curr_state = None
+                #     curr_frames, active[i]['rest'] =
+                #     _split_sequence(active[i]['rest'], o.ntimesteps)
+                #     segment = {
+                #         'init_frame':   active[i]['first'],
+                #         'frames':       curr_frames,
+                #         'init_state':   curr_state,     # None if starting new sequence.
+                #         'continue':     cont,
+                #         'aspect':       active[i]['aspect'],
+                #     }
+                #     segments = [segment] + segments
+                #     is_new = [(i == 0) for i in range(len(segments))]
+                #     curr_index = 0
 
                 # Take a training step.
                 start = time.time()
@@ -392,41 +429,40 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                     raise NotImplementedError
                     # feed_dict.update({queue_index: 0}) # Choose validation queue.
                 else:
-                    # batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
-                    # batch = _load_batch(batch_seqs, o)
+                    # segments = [next(sequences['train']) for i in range(o.batchsz)]
+                    # batch = _load_batch(segments, o)
                     example_value, init_state_value = load_batch(
-                        batch_seqs, init_state, is_new,
+                        segments, init_state,
+                        choose_action=[(ind in active_lookup) for ind in range(o.batchsz)],
                         ntimesteps=o.ntimesteps, im_size=(o.imheight, o.imwidth))
                     # feed_dict.update({example[k]: v for k, v in example_value.iteritems()})
                     nest.assert_same_structure(example, example_value)
                     nest.assert_same_structure(init_state, init_state_value)
-                    feed_dict.update(dict(zip(nest.flatten(example),
-                                              nest.flatten(example_value))))
-                    feed_dict.update(dict(zip(nest.flatten(init_state),
-                                              nest.flatten(init_state_value))))
+                    feed_dict.update(dict(zip(nest.flatten(example), nest.flatten(example_value))))
+                    feed_dict.update(dict(zip(nest.flatten(init_state), nest.flatten(init_state_value))))
                     dur_load = time.time() - start
                 if global_step % o.period_summary == 0:
                     summary_var = (summary_vars_with_preview['train']
                                    if global_step % o.period_preview == 0
                                    else summary_vars['train'])
-                    _, loss, reward, curr_action, curr_state, summary = sess.run(
+                    _, loss, reward, action, state, summary = sess.run(
                         [optimize_op, loss_var, outputs['reward'], outputs['action'], final_state, summary_var],
                         feed_dict=feed_dict)
                     dur = time.time() - start
                     writer['train'].add_summary(summary, global_step=global_step)
                 else:
-                    _, loss, reward, curr_action, curr_state = sess.run(
+                    _, loss, reward, action, state = sess.run(
                         [optimize_op, loss_var, outputs['reward'], outputs['action'], final_state],
                         feed_dict=feed_dict)
                     dur = time.time() - start
                 # Take last element of batch.
-                for i, segment in enumerate(batch_seqs):
-                    if is_new[i]:
+                for ind, segment in enumerate(segments):
+                    if ind in active_lookup:
                         # Record action, add to buffer, and record state.
-                        segment['action'] = curr_action[i]
+                        segment['action'] = action[ind]
                         replay_buffer.push(segment)
-                if curr_index is not None:
-                    curr_state = {k: v[curr_index] for k, v in curr_state.items()}
+                        active[active_lookup[ind]].prev_state = {k: v[ind] for k, v in state.items()}
+
                 reward_batch = np.mean(reward)
                 reward_ep.append(reward_batch)
 
@@ -444,9 +480,9 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                 #             raise NotImplementedError
                 #             # feed_dict.update({queue_index: 1}) # Choose validation queue.
                 #         else:
-                #             batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
-                #             # batch = _load_batch(batch_seqs, o)
-                #             batch = graph.load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
+                #             segments = [next(sequences['val']) for i in range(o.batchsz)]
+                #             # batch = _load_batch(segments, o)
+                #             batch = graph.load_batch(segments, o.ntimesteps, (o.imheight, o.imwidth))
                 #             feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                 #             dur_load = time.time() - start
                 #         summary_var = (summary_vars_with_preview['val']
@@ -873,3 +909,49 @@ def stack_nested(l):
     #     return np.asarray(l)
     else:
         return np.asarray(l)
+
+
+class Continuation:
+    '''Describes the remainder of an incomplete tracking sequence.
+
+    Example:
+        c = start(seq)
+        while ...:
+            segment, c = c.next(ntimesteps)
+            state = sess.run(..., segment, state)
+            c.prev_state = state
+
+        c, first = start(seq)
+        while ...:
+            segment, rest = c.next(ntimesteps)
+            state = sess.run(..., segment, state)
+            c = continue_from_state(seq, state)
+    '''
+
+    def __init__(self, frames_first, frames_rest, cont, prev_state, aspect):
+        self.frames_first = frames_first
+        self.frames_rest = frames_rest
+        self.cont = cont
+        self.prev_state = prev_state
+        self.aspect = aspect
+
+    def next(self, n):
+        frames_curr, frames_rest = _split_sequence(self.frames_rest, n)
+        segment = {
+            'init_frame':   self.frames_first,
+            'frames':       frames_curr,
+            'init_state':   self.prev_state,
+            'continue':     self.cont,
+            'aspect':       self.aspect,
+            'action':       None,
+        }
+        rest = Continuation(frames_first=self.frames_first,
+                            frames_rest=self.frames_rest,
+                            cont=True,
+                            prev_state=None,
+                            aspect=self.aspect)
+        return segment, rest
+
+def continue_from_start(seq):
+    frames_first, frames_rest = _split_sequence(seq, 1)
+    return Continuation(frames_first, frames_rest, cont=False, prev_state=None, aspect=seq['aspect'])

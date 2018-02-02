@@ -395,6 +395,9 @@ class Buffer:
             self.elems.append(x)
         self._pos = (self._pos + 1) % self._max_len
 
+    def __len__(self):
+        return len(self.elems)
+
 
 def placeholder_like(x, *args, **kwargs):
     # return tf.placeholder(x.dtype, x.shape.as_list(), *args, **kwargs)
