@@ -367,7 +367,7 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                     if ind in active_lookup:
                         segments[ind] = segments_active[active_lookup[ind]]
                     elif ind in replay_lookup:
-                        segments[ind] = replay_buffer.elems[replay_lookup[ind]]
+                        segments[ind] = replay_buffer[replay_lookup[ind]]
                     else:
                         raise ValueError('index not assigned: {}'.format(ind))
 

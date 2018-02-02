@@ -380,23 +380,29 @@ def lookup_each(value, index, name='lookup_each'):
 
 
 class Buffer:
+    '''Buffer using circular queue.'''
 
     def __init__(self, max_len):
-        self.elems = []
         self._max_len = max_len
+        self._elems = [None for _ in range(self._max_len)]
+        self._len = 0
         self._pos = 0
 
     def push(self, x):
-        if len(self.elems) >= self._max_len:
-            # Over-write oldest element.
-            self.elems[self._pos] = x
-        else:
-            # Add a new element.
-            self.elems.append(x)
+        if self._max_len == 0:
+            return
+        self._elems[self._pos] = x
+        self._len = min(self._len + 1, self._max_len)
         self._pos = (self._pos + 1) % self._max_len
 
     def __len__(self):
-        return len(self.elems)
+        return self._len
+
+    def __getitem__(self, i):
+        '''Return the i-th most recently added element.'''
+        assert 0 <= i
+        assert i < self._max_len
+        return self._elems[(self._pos - 1 - i + self._max_len) % self._max_len]
 
 
 def placeholder_like(x, *args, **kwargs):
