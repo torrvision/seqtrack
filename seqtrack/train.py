@@ -213,8 +213,9 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
     #     saver_external = tf.train.Saver(vars_to_restore)
     if o.siamese_pretrain:
         siamese_vars = tf.get_collection('siamese')
-        print 'siamese vars:'
-        pprint.pprint(siamese_vars)
+        if o.verbose_train:
+            print 'siamese vars:'
+            pprint.pprint(siamese_vars)
         saver_siamese = tf.train.Saver(siamese_vars)
 
     t_total = time.time()
@@ -307,7 +308,8 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
 
                 period_update_value_func = 100
                 if global_step % period_update_value_func == 0: # includes step zero
-                    print 'update value func'
+                    if o.verbose_train:
+                        print 'update value func'
                     sess.run(update_value_func_op)
 
                 if not o.nosave:
@@ -333,7 +335,8 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
 
                 min_buffer_size = o.batchsz * o.max_seq_len
                 if len(replay_buffer) < min_buffer_size:
-                    print 'replay buffer not used'
+                    if o.verbose_train:
+                        print 'replay buffer not used'
                     active_per_batch = o.batchsz
                 else:
                     active_per_batch = o.batchsz / 2
@@ -341,9 +344,10 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
                 active_subset = np.random.choice(len(active), active_per_batch, replace=False)
                 segments_active = {}
                 for ind in active_subset:
-                    if active[ind] is None or len(active[ind].frames_rest['image_files']) < o.ntimesteps:
+                    while active[ind] is None or len(active[ind].frames_rest['image_files']) < o.ntimesteps:
                         # Sample new full sequence.
-                        # print 'sample new sequence'
+                        if o.verbose_train:
+                            print 'sample new sequence'
                         seq = next(sequences['train'])
                         active[ind] = continue_from_start(seq)
                     # print 'active seq {}: remaining frames {}'.format(
