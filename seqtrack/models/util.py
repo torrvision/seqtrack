@@ -250,7 +250,8 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
     return center
 
 
-def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_pyr'):
+def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0,
+                  absolute_translation=False, name='find_peak_pyr'):
     '''
     Args:
         response: [b, s, h, w, 1]
@@ -272,16 +273,20 @@ def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_py
                                    tf.greater_equal(response, max_val - eps_abs))
         is_max = tf.to_float(is_max)
 
-        grid = tf.to_float(displacement_from_center(upsample_size))
-
+        # Compute (relative or absolute) translation
+        if not absolute_translation:
+            grid = tf.to_float(displacement_from_center(upsample_size))
+        else:
+            grid = make_grid_centers(upsample_size)
         # Grid now has translation from center in search image co-ords.
         # Transform into co-ordinate frame of each scale.
         grid = tf.multiply(grid,                           # [h, w, 2]
                            expand_dims_n(scales, -1, n=3)) # [s, 1, 1, 1]
-
         translation = weighted_mean(grid,                       # [s, h, w, 2]
                                     tf.expand_dims(is_max, -1), # [b, s, h, w] -> [b, s, h, w, 1]
                                     axis=(-4, -3, -2))          # [b, s, h, w, 2] -> [b, 2]
+
+        # Compute scale
         scale = weighted_mean(expand_dims_n(scales, -1, n=2), # [b, s] -> [b, s, 1, 1]
                               is_max,                         # [b, s, h, w]
                               axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
