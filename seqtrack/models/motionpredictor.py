@@ -63,6 +63,8 @@ class MotionPredictor(models_interface.IterModel):
             enable_margin_loss=False,
             margin_cost='iou',
             margin_reduce_method='max',
+            # motion predictor
+            response_motion_size=33,
             enable_motion_loss=True,
             ):
         self._template_size = template_size
@@ -103,7 +105,8 @@ class MotionPredictor(models_interface.IterModel):
         self._enable_margin_loss = enable_margin_loss
         self._margin_cost = margin_cost
         self._margin_reduce_method = margin_reduce_method
-        self._enable_motion_loss = enable_motion_loss 
+        self._response_motion_size = response_motion_size
+        self._enable_motion_loss = enable_motion_loss
 
         self._num_frames = 0
         # For summaries in end():
@@ -149,13 +152,13 @@ class MotionPredictor(models_interface.IterModel):
                 template_feat *= template_mask
 
             # initial states for encoder and decoder
-            cell_size = [tf.shape(template_feat)[0], 3, 3, 512] # TODO: Avoid manual dimensions?
+            cell_size = [tf.shape(template_feat)[0], 3, 3, 256] # TODO: Avoid manual dimensions?
             with tf.variable_scope('rnn_state'):
                 encoder_state_init = {k: tf.fill(cell_size, 0.0, name='{}'.format(k)) for k in ['h', 'c']}
                 decoder_state_init = {k: tf.fill(cell_size, 0.0, name='{}'.format(k)) for k in ['h', 'c']}
 
             # Create 'response_g' using 'y' and ground-truth generation function.
-            centers = util.make_grid_centers((257, 257))
+            centers = util.make_grid_centers([self._response_motion_size]*2)
             response_g, _ = lossfunc.translation_labels(
                 centers, y, shape='gaussian', sigma=self._sigma_absolute, absolute_translation=True)
             response_g = tf.expand_dims(response_g, -1)
@@ -251,7 +254,7 @@ class MotionPredictor(models_interface.IterModel):
                     self._info.setdefault('margin_cost', []).append(
                         _to_uint8(util.colormap(tf.expand_dims(cost, -1), _COLORMAP)))
 
-            
+
             # -------------------------------------------------------------------------------------
             # Motion prediction model (in image frame)
             # 1. Encoder for motion history; potential extention to DNC, VAE, etc.
@@ -259,28 +262,24 @@ class MotionPredictor(models_interface.IterModel):
             # 3. Use response_by_motion! (addition, probabilistic search space, etc.)
             # -------------------------------------------------------------------------------------
             # Encoder-decoder
-            # TODO: test resizing to reduce computation
-            input_to_encoder = tf.stop_gradient(prev_state['response_g'])
-            input_to_encoder = tf.image.resize_images(input_to_encoder,
-                                                      [65, 65], align_corners=True)
+            input_to_encoder = tf.image.resize_images(prev_state['response_g'],
+                [self._response_motion_size]*2, align_corners=True)
             with tf.variable_scope('encoder', reuse=(self._num_frames > 0)):
                 motion_summary, encoder_state = _motion_encoder(
                     input_to_encoder, prev_state['encoder'],
-                    tanh=False, # TODO: check
+                    tanh=False, # TODO: after test, have an option
                     is_training=self._is_training)
-            # TODO: I WAS USING DECODER WRONGLY!!!!!!
-            decoder_type = 'cnn'
+
+            decoder_type = 'cnn' # TODO: after test, have an option
             with tf.variable_scope('decoder', reuse=(self._num_frames > 0)):
                 response_by_motion, decoder_state = _motion_decoder(
                     motion_summary, prev_state['decoder'], decoder_type=decoder_type,
                     is_training=self._is_training)
-            assert response_by_motion.shape.as_list()[-3] == 65
-            response_by_motion = tf.image.resize_images(response_by_motion,
-                                                        [257, 257], align_corners=True)
+            assert response_by_motion.shape.as_list()[-3] == self._response_motion_size
 
             # loss.
             if self._enable_motion_loss:
-                centers = util.make_grid_centers((257, 257))
+                centers = util.make_grid_centers([self._response_motion_size]*2)
                 labels, has_label = lossfunc.translation_labels(
                     centers, gt_rect, shape='gaussian', sigma=self._sigma_absolute,
                     absolute_translation=True)
@@ -310,9 +309,10 @@ class MotionPredictor(models_interface.IterModel):
                                              tf.stack([1, tf.shape(upsample_response)[1], 1]))
             response_rect_in_image, restore_fn_rect = merge_dims(response_rect_in_image, 0, 2)
             upsample_response, restore_fn_response = merge_dims(upsample_response, 0, 2)
+            ref_response_size = frame['x'].shape.as_list()[-3:-1]
             response_by_appearance = util.crop(upsample_response,
                                                geom.crop_inverse(response_rect_in_image),
-                                               frame['x'].shape.as_list()[-3:-1],
+                                               ref_response_size,
                                                tf.reduce_min(upsample_response, (-3,-2,-1),
                                                              keep_dims=True),
                                                feather=True)
@@ -321,7 +321,8 @@ class MotionPredictor(models_interface.IterModel):
             response_by_appearance = restore_fn_response(response_by_appearance, 0)
 
             # Final response -> Use responses from appearance and motion together.
-            response_final = tf.sigmoid(response_by_appearance + response_by_motion)
+            response_final = tf.sigmoid(response_by_appearance +
+                tf.image.resize_images(response_by_motion, ref_response_size, align_corners=True))
 
             # Get 'absolute' translation and scale from response
             translation, scale = util.find_peak_pyr(response_final, scales,
@@ -394,7 +395,7 @@ class MotionPredictor(models_interface.IterModel):
                 'mean_color':    prev_state['mean_color'],
                 'encoder':       encoder_state,
                 'decoder':       decoder_state,
-                'response_g':    next_prev_response,
+                'response_g':    tf.stop_gradient(next_prev_response),
             }
             return outputs, state, losses
 
@@ -478,23 +479,11 @@ def _motion_encoder(x, state_prev, tanh=True, is_training=None, name='motion_enc
                 normalizer_fn=slim.batch_norm,
                 normalizer_params={'is_training': is_training, 'fused': True},
                 ):
-            # Assuming the input is resized to 65x65.
+            # Assuming the input is resized to 33x33.
             x = slim.conv2d(x, 32, 5, 2, scope='conv1')
             x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='pool1')
             x = slim.conv2d(x, 64, 5, 2, scope='conv2')
             x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='pool2')
-            x = slim.conv2d(x, 128, 3, 1, scope='conv3')
-            x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='pool3')
-
-            ## Assuming the input is original size, i.e. 257x257
-            #x = slim.conv2d(x, 32, 5, 2, scope='conv1')
-            #x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='pool1')
-            #x = slim.conv2d(x, 64, 5, 2, scope='conv2')
-            #x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='pool2')
-            #x = slim.conv2d(x, 128, 5, 2, scope='conv3')
-            #x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='pool3')
-            #x = slim.conv2d(x, 256, 3, 1, scope='conv4')
-            #x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='pool4')
         output, state_next = _conv_lstm(x, state_prev, is_training)
         # Put tanh to create summary; following original paper.
         if tanh:
@@ -515,50 +504,28 @@ def _motion_decoder(x, state_prev, decoder_type='rnn', is_training=None, name='m
                                          normalizer_params={'is_training': is_training},
                                          activation_fn=tf.nn.tanh, scope='conv_'+k)
                           for k in state_prev.keys()} # TODO: only H?
-            output, state_next = _conv_lstm(x, state_prev, is_training)
-            # Deconvolution
-            with slim.arg_scope([slim.conv2d],
-                    padding='SAME',
-                    normalizer_fn=slim.batch_norm,
-                    normalizer_params={'is_training': is_training, 'fused': True},
-                    ):
-                # Assuming the input is resized to 65x65.
-                output = slim.conv2d(tf.image.resize_images(output, [9, 9], align_corners=True),
-                                     64, 3, 1, scope='conv2')
-                output = slim.conv2d(tf.image.resize_images(output, [33, 33], align_corners=True),
-                                     32, 3, 1, scope='conv3')
-                output = slim.conv2d(tf.image.resize_images(output, [65, 65], align_corners=True),
-                                     1, 3, 1, activation_fn=None, normalizer_fn=None, scope='conv4') # NOTE: with bnorm -> not work.
-
-                ## Assuming the input is original size, i.e. 257x257
-                #output = slim.conv2d(tf.image.resize_images(output, [9, 9], align_corners=True),
-                #                     128, 3, 1, scope='conv1')
-                #output = slim.conv2d(tf.image.resize_images(output, [33, 33], align_corners=True),
-                #                     64, 3, 1, scope='conv2')
-                #output = slim.conv2d(tf.image.resize_images(output, [129, 129], align_corners=True),
-                #                     32, 3, 1, scope='conv3')
-                #output = slim.conv2d(tf.image.resize_images(output, [257, 257], align_corners=True),
-                #                     1, 3, 1, activation_fn=None, normalizer_fn=None, scope='conv4') # NOTE: with bnorm -> not work.
+            x, state_next = _conv_lstm(x, state_prev, is_training)
         elif decoder_type == 'cnn':
-            with slim.arg_scope([slim.conv2d],
-                    padding='SAME',
-                    normalizer_fn=slim.batch_norm,
-                    normalizer_params={'is_training': is_training, 'fused': True},
-                    ):
-                # Assuming the input is resized to 65x65.
-                output = x
-                output = slim.conv2d(tf.image.resize_images(output, [5, 5], align_corners=True),
-                                     128, 3, 1, scope='conv1')
-                output = slim.conv2d(tf.image.resize_images(output, [9, 9], align_corners=True),
-                                     64, 3, 1, scope='conv2')
-                output = slim.conv2d(tf.image.resize_images(output, [33, 33], align_corners=True),
-                                     32, 3, 1, scope='conv3')
-                output = slim.conv2d(tf.image.resize_images(output, [65, 65], align_corners=True),
-                                     1, 3, 1, activation_fn=None, normalizer_fn=None, scope='conv4') # NOTE: with bnorm -> not work.
-            state_next = state_prev
+            state_next = state_prev # no meaning
         else:
             raise ValueError('Not available decoder type.')
-        return output, state_next
+
+        # Deconvolution
+        with slim.arg_scope([slim.conv2d],
+                padding='SAME',
+                normalizer_fn=slim.batch_norm,
+                normalizer_params={'is_training': is_training, 'fused': True},
+                ):
+            # Assuming the input is resized to 33x33.
+            x = slim.conv2d(tf.image.resize_images(x, [5, 5], align_corners=True),
+                            128, 3, 1, scope='conv1')
+            x = slim.conv2d(tf.image.resize_images(x, [9, 9], align_corners=True),
+                            64, 3, 1, scope='conv2')
+            x = slim.conv2d(tf.image.resize_images(x, [17, 17], align_corners=True),
+                            32, 3, 1, scope='conv3')
+            x = slim.conv2d(tf.image.resize_images(x, [33, 33], align_corners=True),
+                            1, 3, 1, activation_fn=None, normalizer_fn=None, scope='conv4') # NOTE: with bnorm -> not work.
+        return x, state_next
 
 def _conv_lstm(x, state, is_training, name='conv_lstm'):
     with tf.name_scope(name) as scope:
