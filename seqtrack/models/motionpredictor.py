@@ -262,11 +262,9 @@ class MotionPredictor(models_interface.IterModel):
             # 3. Use response_by_motion! (addition, probabilistic search space, etc.)
             # -------------------------------------------------------------------------------------
             # Encoder-decoder
-            input_to_encoder = tf.image.resize_images(prev_state['response_g'],
-                [self._response_motion_size]*2, align_corners=True)
             with tf.variable_scope('encoder', reuse=(self._num_frames > 0)):
                 motion_summary, encoder_state = _motion_encoder(
-                    input_to_encoder, prev_state['encoder'],
+                    prev_state['response_g'], prev_state['encoder'],
                     tanh=False, # TODO: after test, have an option
                     is_training=self._is_training)
 
@@ -386,6 +384,9 @@ class MotionPredictor(models_interface.IterModel):
             else:
                 next_prev_rect = pred
                 next_prev_response = response_final[:, mid_scale]
+            next_prev_response = tf.image.resize_images(next_prev_response,
+                [self._response_motion_size]*2, align_corners=True)
+            next_prev_response = tf.stop_gradient(next_prev_response)
 
             self._num_frames += 1
             outputs = {'y': pred, 'vis': vis}
@@ -395,7 +396,7 @@ class MotionPredictor(models_interface.IterModel):
                 'mean_color':    prev_state['mean_color'],
                 'encoder':       encoder_state,
                 'decoder':       decoder_state,
-                'response_g':    tf.stop_gradient(next_prev_response),
+                'response_g':    next_prev_response,
             }
             return outputs, state, losses
 
