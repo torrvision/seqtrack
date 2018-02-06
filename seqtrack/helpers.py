@@ -358,15 +358,20 @@ def unique_argmax(x, axis=None, output_type=tf.int64, name='unique_argmax'):
 def lookup_each(value, index, name='lookup_each'):
     '''
     Args:
-        value -- size [b, n]
-        index -- size [b], type integer
+        value -- size [b, n] or [b_0, ..., b_{k-1}, n]
+        index -- integers in range(n); size [b] or [b_0, ..., b_{k-1}]
 
     Returns:
-        size [b]
+        output -- size [b] or [b_0, ..., b_{k-1}]
+
+    output[i] = value[i, index[i]]
+    output[i_0, ..., i_{k-1}] = value[i_0, ..., i_{k-1}, index[i_0, ..., i_{k-1}]]
     '''
     with tf.name_scope(name) as scope:
-        full_index = tf.stack((tf.range(most_static_shape(index)[0]), index), axis=-1)
-        return tf.gather_nd(value, full_index)
+        ranges = map(tf.range, most_static_shape(index))
+        grid = tf.meshgrid(*ranges, indexing='ij')
+        src = tf.stack(tuple(grid) + (index,), axis=-1)
+        return tf.gather_nd(value, src)
 
 
 # def unstack_dict(d, keys, axis):
