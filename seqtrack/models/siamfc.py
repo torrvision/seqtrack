@@ -75,6 +75,7 @@ class SiamFC(models_interface.IterModel):
             arg_max_eps_rel=0.05,
             # Loss parameters:
             rl_method='dqn',
+            buffer_value_func=True,
             enable_ce_loss=True,
             ce_label='gaussian_distance',
             sigma=0.2,
@@ -115,6 +116,7 @@ class SiamFC(models_interface.IterModel):
         self._hann_coeff = hann_coeff
         self._arg_max_eps_rel = arg_max_eps_rel
         self._rl_method = rl_method
+        self._buffer_value_func = buffer_value_func
         self._enable_ce_loss = enable_ce_loss
         self._ce_label = ce_label
         self._sigma = sigma
@@ -287,10 +289,16 @@ class SiamFC(models_interface.IterModel):
                             response_old, is_training=self._is_training)
                         if self._rl_method == 'dqn':
                             # Action scores are Q(s, a).
-                            self._last_value_old = tf.reduce_max(action_scores_old, axis=-1)
+                            if self._buffer_value_func:
+                                self._last_value_old = tf.reduce_max(action_scores_old, axis=-1)
+                            else:
+                                self._last_value_old = tf.reduce_max(action_scores, axis=-1)
                         elif self._rl_method == 'a2c':
                             # State value is V(s).
-                            self._last_value_old = state_value_old
+                            if self._buffer_value_func:
+                                self._last_value_old = state_value_old
+                            else:
+                                self._last_value_old = state_value
 
                 gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_rect)
                 reward = geom.rect_iou(pred, frame['y'])
