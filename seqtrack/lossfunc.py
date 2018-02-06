@@ -37,6 +37,7 @@ def foreground_labels(position, rect, shape='rect', sigma=0.3, name='foreground_
 
 
 def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, sigma=0.3,
+                       absolute_translation=False,
                        name='translation_labels'):
     '''
     Args:
@@ -56,7 +57,9 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
 
         rect = expand_dims_n(rect, -2, n=2) # [b, 4] -> [b, 1, 1, 4]
         min_pt, max_pt = geom.rect_min_max(rect)
-        center = 0.5 * (min_pt + max_pt)
+        center, size = 0.5 * (min_pt + max_pt), max_pt - min_pt
+        width = tf.reduce_mean(size, axis=-1)
+        assert len(width.shape.as_list()) == 3
 
         error = position - center
         sqr_dist = tf.reduce_sum(tf.square(error), axis=-1)
@@ -64,7 +67,11 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
 
         has_label = tf.ones(label_shape, tf.bool) # [b, h, w]
         if shape == 'gaussian':
-            labels = tf.exp(-0.5 * sqr_dist / tf.square(sigma))
+            if not absolute_translation:
+                labels = tf.exp(-0.5 * sqr_dist / tf.square(sigma))
+            else: # need to change according to the rectangle size to reflect object size.
+                # TODO: rectangle labels? rather than square.
+                labels = tf.exp(-0.5 * sqr_dist / tf.square(sigma*width))
         elif shape == 'threshold':
             is_pos = dist <= radius_pos
             is_neg = radius_neg <= dist
