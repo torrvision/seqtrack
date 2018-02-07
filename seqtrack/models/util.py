@@ -26,6 +26,7 @@ def crop(im, rect, im_size, pad_value=0, feather=False, feather_margin=0.05, nam
         pad_value: Either scalar constant or
             tf.Tensor that is broadcast-compatible with image.
     '''
+    assert len(im.shape) - 3 == len(rect.shape) - 1
     with tf.name_scope(name) as scope:
         if isinstance(pad_value, tf.Tensor):
             # TODO: This operation seems slow!
@@ -34,6 +35,14 @@ def crop(im, rect, im_size, pad_value=0, feather=False, feather_margin=0.05, nam
                       feather=feather, feather_margin=feather_margin, name=name)
             im += pad_value
             return im
+
+        rank = len(im.shape)
+        if rank > 4:
+            im, restore = merge_dims(im, 0, rank-3)
+            rect, _ = merge_dims(rect, 0, rank-3)
+            im = crop(im, rect, im_size, pad_value=pad_value,
+                      feather=feather, feather_margin=feather_margin, name=name)
+            return restore(im, 0)
 
         if feather:
             im = feather_image(im, margin=feather_margin, background_value=pad_value)
@@ -251,7 +260,7 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
 
 
 def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0,
-                  absolute_translation=False, name='find_peak_pyr'):
+                  is_pyramid=True, name='find_peak_pyr'):
     '''
     Args:
         response: [b, s, h, w, 1]
@@ -273,20 +282,18 @@ def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0,
                                    tf.greater_equal(response, max_val - eps_abs))
         is_max = tf.to_float(is_max)
 
-        # Compute (relative or absolute) translation
-        if not absolute_translation:
-            grid = tf.to_float(displacement_from_center(upsample_size))
-        else:
-            grid = make_grid_centers(upsample_size)
-        # Grid now has translation from center in search image co-ords.
-        # Transform into co-ordinate frame of each scale.
-        grid = tf.multiply(grid,                           # [h, w, 2]
-                           expand_dims_n(scales, -1, n=3)) # [s, 1, 1, 1]
+        # Get center of each pixel in middle scale.
+        # Shift center to be zero for applying scale.
+        grid = make_grid_centers(upsample_size) - 0.5
+        if is_pyramid:
+            # Transform translations into co-ordinate frame of center scale.
+            grid = tf.multiply(grid,                           # [h, w, 2]
+                               expand_dims_n(scales, -1, n=3)) # [s, 1, 1, 1]
+        # If is_pyramid is False, then all scales have same ref frame.
+
         translation = weighted_mean(grid,                       # [s, h, w, 2]
                                     tf.expand_dims(is_max, -1), # [b, s, h, w] -> [b, s, h, w, 1]
                                     axis=(-4, -3, -2))          # [b, s, h, w, 2] -> [b, 2]
-
-        # Compute scale
         scale = weighted_mean(expand_dims_n(scales, -1, n=2), # [b, s] -> [b, s, 1, 1]
                               is_max,                         # [b, s, h, w]
                               axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
