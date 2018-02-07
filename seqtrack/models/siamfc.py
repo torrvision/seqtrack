@@ -75,6 +75,7 @@ class SiamFC(models_interface.IterModel):
             arg_max_eps_rel=0.05,
             # Loss parameters:
             rl_method='dqn',
+            use_best_action=False, # (instead of following policy)
             buffer_value_func=True,
             enable_ce_loss=True,
             ce_label='gaussian_distance',
@@ -116,6 +117,7 @@ class SiamFC(models_interface.IterModel):
         self._hann_coeff = hann_coeff
         self._arg_max_eps_rel = arg_max_eps_rel
         self._rl_method = rl_method
+        self._use_best_action = use_best_action
         self._buffer_value_func = buffer_value_func
         self._enable_ce_loss = enable_ce_loss
         self._ce_label = ce_label
@@ -239,23 +241,20 @@ class SiamFC(models_interface.IterModel):
             self._info.setdefault('response', []).append(
                 _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
 
+            optimal_action = unique_argmax(action_scores, axis=1, output_type=tf.int32)
             if self._rl_method == 'dqn':
                 # Choose an action.
                 batch_sz = tf.shape(frame['x'])[0]
-                optimal_action = unique_argmax(action_scores, axis=1, output_type=tf.int32)
                 random_action = tf.to_int32(tf.random_uniform([batch_sz]) * len(_ACTIONS))
                 use_random = (tf.random_uniform([batch_sz]) < self._epsilon)
                 use_random = tf.logical_and(use_random, tf.logical_not(self._is_tracking))
                 action = tf.where(use_random, random_action, optimal_action)
                 action = tf.where(self._choose_action, action, frame['action'])
-            elif self._rl_method == 'a2c':
-                # TODO: Use best action at test time?
-                action = tf.to_int32(tf.multinomial(action_scores, 1))
-                action = tf.squeeze(action, axis=1)
-            elif self._rl_method == 'none':
-                action = unique_argmax(action_scores, axis=1, output_type=tf.int32)
-            else:
-                raise ValueError('unknown method: {}'.format(self._rl_method))
+            else: # rl_method is 'a2c' or 'none'
+                policy_action = tf.to_int32(tf.multinomial(action_scores, num_samples=1))
+                policy_action = tf.squeeze(policy_action, axis=1)
+                action = tf.cond(tf.logical_and(self._is_tracking, self._use_best_action),
+                                 lambda: optimal_action, lambda: policy_action)
             # Obtain reward from environment for taking action.
             prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
             pred_in_search = _apply_action(
@@ -270,35 +269,54 @@ class SiamFC(models_interface.IterModel):
                     tf.stack((geom.rect_to_tf_box(prev_rect_in_search),
                               geom.rect_to_tf_box(pred_in_search)), axis=1))))
 
-            reward = 0.0
+            losses = {}
             if self._enable_loss:
-                # Estimate value of final state using old model.
-                # TODO: Only construct graph in final frame.
-                with tf.variable_scope('old'):
-                    response_old, _, _ = self._response_func(self._final_im, self._final_rect,
-                        mean_color=self._mean_color,
-                        template_feat=self._template_feat,
-                        is_training=self._is_training,
-                        reuse_features=(self._num_frames > 0),
-                        reuse_output=(self._num_frames > 0),
-                        is_tracking=self._is_tracking,
-                        num_scales=self._num_scales,
-                        variables_collections=None)
-                    with tf.variable_scope('decision', reuse=(self._num_frames > 0)):
-                        action_scores_old, state_value_old = _decision_net(
-                            response_old, is_training=self._is_training)
-                        if self._rl_method == 'dqn':
-                            # Action scores are Q(s, a).
-                            if self._buffer_value_func:
-                                self._last_value_old = tf.reduce_max(action_scores_old, axis=-1)
-                            else:
-                                self._last_value_old = tf.reduce_max(action_scores, axis=-1)
-                        elif self._rl_method == 'a2c':
-                            # State value is V(s).
-                            if self._buffer_value_func:
-                                self._last_value_old = state_value_old
-                            else:
-                                self._last_value_old = state_value
+                if self._rl_method == 'none':
+                    # Find rectangle for each action.
+                    action_rects = _apply_each_action(
+                        prev_rect_in_search,
+                        translation_step=self._translation_action_step/self._search_scale,
+                        log_scale_step=tf.log(self._scale_action_step))
+                    # Find best action.
+                    gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
+                    iou = geom.rect_iou(
+                        action_rects, # [b, a, 4]
+                        tf.expand_dims(gt_rect_in_search, axis=-2)) # [b, 4] -> [b, 1, 4]
+                    # gt_action = unique_argmax(iou, axis=-1)
+                    is_best = tf.to_float(iou >= tf.reduce_max(iou, axis=-1, keep_dims=True))
+                    gt_p_action = (1. / tf.reduce_sum(is_best, axis=-1, keep_dims=True)) * is_best
+                    loss = tf.nn.softmax_cross_entropy_with_logits(
+                        labels=gt_p_action, logits=action_scores)
+                    loss = tf.where(frame['y_is_valid'], loss, tf.zeros_like(loss))
+                    losses['action_ce'] = tf.reduce_mean(loss)
+                else:
+                    # Estimate value of final state using old model.
+                    # TODO: Only construct graph in final frame.
+                    with tf.variable_scope('old'):
+                        response_old, _, _ = self._response_func(self._final_im, self._final_rect,
+                            mean_color=self._mean_color,
+                            template_feat=self._template_feat,
+                            is_training=self._is_training,
+                            reuse_features=(self._num_frames > 0),
+                            reuse_output=(self._num_frames > 0),
+                            is_tracking=self._is_tracking,
+                            num_scales=self._num_scales,
+                            variables_collections=None)
+                        with tf.variable_scope('decision', reuse=(self._num_frames > 0)):
+                            action_scores_old, state_value_old = _decision_net(
+                                response_old, is_training=self._is_training)
+                            if self._rl_method == 'dqn':
+                                # Action scores are Q(s, a).
+                                if self._buffer_value_func:
+                                    self._last_value_old = tf.reduce_max(action_scores_old, axis=-1)
+                                else:
+                                    self._last_value_old = tf.reduce_max(action_scores, axis=-1)
+                            elif self._rl_method == 'a2c':
+                                # State value is V(s).
+                                if self._buffer_value_func:
+                                    self._last_value_old = state_value_old
+                                else:
+                                    self._last_value_old = state_value
 
                 gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_rect)
                 reward = geom.rect_iou(pred, frame['y'])
@@ -331,27 +349,28 @@ class SiamFC(models_interface.IterModel):
                 'reward': reward,
             }
             state = {'y': next_prev_rect}
-            losses = {}
             return outputs, state, losses
 
     def end(self):
         losses = {}
+        action_scores = tf.stack(self._action_scores, axis=1)
+        state_value = tf.stack(self._state_value, axis=1)
+        reward = tf.stack(self._reward, axis=1)
+        action = tf.stack(self._action, axis=1)
 
-        if self._enable_loss:
+        with tf.name_scope('summary'):
+            tf.summary.scalar('reward', tf.reduce_mean(reward))
+            for key in self._info:
+                _image_sequence_summary(key, tf.stack(self._info[key], axis=1),
+                                        collections=self._image_summaries_collections)
+
+        if self._enable_loss and self._rl_method in ['dqn', 'a2c']:
             # Get discounted total reward for all frames.
             total_reward = [None for _ in range(self._num_frames)]
             total_reward[-1] = tf.stop_gradient(self._last_value_old)
             for t in reversed(range(self._num_frames-1)):
                 total_reward[t] = self._reward[t] + self._gamma * total_reward[t+1]
-
-            # Careful: Stack [t, b] instead of [b, t]
-            action_scores = tf.stack(self._action_scores, axis=1)
-            state_value = tf.stack(self._state_value, axis=1)
-            reward = tf.stack(self._reward, axis=1)
-            action = tf.stack(self._action, axis=1)
             total_reward = tf.stack(total_reward, axis=1)
-
-            reward = tf.stop_gradient(reward)
             total_reward = tf.stop_gradient(total_reward)
 
             if self._rl_method == 'dqn':
@@ -367,11 +386,6 @@ class SiamFC(models_interface.IterModel):
                 value_obj = tf.square(total_reward - state_value)
                 losses['value'] = 0.5 * tf.reduce_mean(value_obj[:, :-1])
 
-        with tf.name_scope('summary'):
-            tf.summary.scalar('reward', tf.reduce_mean(reward))
-            for key in self._info:
-                _image_sequence_summary(key, tf.stack(self._info[key], axis=1),
-                                        collections=self._image_summaries_collections)
         return losses
 
 
@@ -546,9 +560,33 @@ def _decision_net(x, is_training=None, enable_bnorm=True, name='feature_net'):
 
 
 def _apply_action(rect, action_index, translation_step, log_scale_step, name='apply_action'):
+    '''
+    Args:
+        rect -- [b, 4]
+        action_index -- [b]
+
+    Returns:
+        size [b, 4]
+    '''
     with tf.name_scope(name) as scope:
         translation = translation_step * tf.gather(_ACTION_TRANSLATION, action_index, axis=0)
         log_scale = log_scale_step * tf.gather(_ACTION_SCALE, action_index, axis=0)
+        return _rect_translate_scale(rect, translation, tf.exp(log_scale))
+
+
+def _apply_each_action(rect, translation_step, log_scale_step, name='apply_each_action'):
+    '''
+    Args:
+        rect -- [b, 4]
+
+    Returns:
+        size [b, a, 4] where a is the number of actions
+    '''
+    with tf.name_scope(name) as scope:
+        rect = tf.expand_dims(rect, -2) # [b, 4] -> [b, 1, 4]
+        translation = translation_step * tf.convert_to_tensor(_ACTION_TRANSLATION)
+        log_scale = log_scale_step * tf.convert_to_tensor(_ACTION_SCALE)
+        # translation and scale are [a, ?]
         return _rect_translate_scale(rect, translation, tf.exp(log_scale))
 
 
