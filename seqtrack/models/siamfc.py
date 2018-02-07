@@ -238,7 +238,7 @@ class SiamFC(models_interface.IterModel):
             # assert np.all(upsample_response_size <= self._search_size)
             translation, scale = util.find_peak_pyr(response_final, scales,
                                                     eps_rel=self._arg_max_eps_rel)
-            translation = translation / self._search_size
+            # translation = translation / self._search_size
 
             vis = _visualize_response(
                 response[:, mid_scale], response_final[:, mid_scale],
