@@ -237,7 +237,7 @@ class MotionPredictor(models_interface.IterModel):
                 _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
 
             losses = {}
-            if self._enable_loss:
+            if self._enable_loss and not self._freeze_siamese:
                 if self._enable_ce_loss:
                     losses['ce'], labels = _cross_entropy_loss(
                         response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
@@ -276,7 +276,7 @@ class MotionPredictor(models_interface.IterModel):
             assert response_by_motion.shape.as_list()[-3] == self._response_motion_size
 
             # loss.
-            if self._enable_motion_loss:
+            if self._enable_loss and self._enable_motion_loss:
                 centers = util.make_grid_centers([self._response_motion_size]*2)
                 labels, has_label = lossfunc.translation_labels(
                     centers, gt_rect, shape='gaussian', sigma=self._sigma_absolute,
@@ -297,41 +297,40 @@ class MotionPredictor(models_interface.IterModel):
             # Convert response in image frame: 'response_by_appearance'
             upsample_response = _finalize_scores(response, rfs['search'].stride,
                                                  self._hann_method, self._hann_coeff, sigmoid=False)
+            # Find rectangle for response (of middle scale) in image ref frame.
             rf_centers = _find_rf_centers(self._search_size, response_size, rfs['search'])
             upsample_response_size = upsample_response.shape.as_list()[-3:-1]
             response_rect_in_search = _align_corner_centers(rf_centers, upsample_response_size)
             response_rect_in_image = geom.crop_rect(response_rect_in_search,
                                                     geom.crop_inverse(search_rect))
+            # Get that rectangle for each scale.
+            response_rects_in_image = geom.grow_rect(
+                tf.expand_dims(scales, 1),                  # [s] -> [s, 1]
+                tf.expand_dims(response_rect_in_image, 1))  # [b, 4] -> [b, 1, 4]
             # crop multi-scale responses
-            response_rect_in_image = tf.tile(tf.expand_dims(response_rect_in_image, 1),
-                                             tf.stack([1, tf.shape(upsample_response)[1], 1]))
-            response_rect_in_image, restore_fn_rect = merge_dims(response_rect_in_image, 0, 2)
-            upsample_response, restore_fn_response = merge_dims(upsample_response, 0, 2)
             ref_response_size = frame['x'].shape.as_list()[-3:-1]
-            response_by_appearance = util.crop(upsample_response,
-                                               geom.crop_inverse(response_rect_in_image),
-                                               ref_response_size,
-                                               tf.reduce_min(upsample_response, (-3,-2,-1),
-                                                             keep_dims=True),
-                                               feather=True)
-            response_rect_in_image = restore_fn_rect(response_rect_in_image, 0)
-            upsample_response = restore_fn_response(upsample_response, 0)
-            response_by_appearance = restore_fn_response(response_by_appearance, 0)
+            response_by_appearance = util.crop(
+                upsample_response, geom.crop_inverse(response_rects_in_image),
+                ref_response_size,
+                pad_value=tf.reduce_min(upsample_response, (-3,-2,-1), keep_dims=True),
+                feather=True)
 
             # Final response -> Use responses from appearance and motion together.
             response_final = tf.sigmoid(response_by_appearance +
                 tf.image.resize_images(response_by_motion, ref_response_size, align_corners=True))
+            # response_final /= tf.reduce_max(response_final, (-3,-2,-1), keep_dims=True)
 
             # Get 'absolute' translation and scale from response
             translation, scale = util.find_peak_pyr(response_final, scales,
-                                                    absolute_translation=True,
+                                                    is_pyramid=False,
                                                     eps_rel=self._arg_max_eps_rel)
+            position = translation + 0.5
             # Damp the scale update towards 1.
             scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
 
             # Output rectangle.
-            pred = geom.rect_translate(geom.grow_rect(tf.expand_dims(scale, -1), prev_rect),
-                                       translation - geom.rect_center(prev_rect))
+            pred = geom.make_rect_center_size(
+                position, tf.expand_dims(scale, -1) * geom.rect_size(prev_rect))
             # Limit size of object.
             pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
 
