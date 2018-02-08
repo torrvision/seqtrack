@@ -314,14 +314,17 @@ def leaky_relu(x, name='leaky_relu'):
 
 def weighted_mean(x, w, axis=None, keep_dims=False, name='weighted_mean'):
     with tf.name_scope(name) as scope:
-        with tf.control_dependencies([tf.assert_non_negative(w)]):
-            w = tf.identity(w)
-        # num = tf.reduce_sum(w * x, axis=axis)
-        # TODO: Is this broadcasting necessary?
-        mass = tf.reduce_sum(w * tf.ones_like(x), axis=axis, keep_dims=True)
-        with tf.control_dependencies([tf.assert_positive(mass)]):
-            p = (1. / mass) * w
+        p = normalize_prob(w * tf.ones_like(x), axis=axis)
         return tf.reduce_sum(p * x, axis=axis, keep_dims=keep_dims)
+
+def normalize_prob(x, axis=None, name='normalize'):
+    with tf.name_scope(name) as scope:
+        with tf.control_dependencies([tf.assert_non_negative(x)]):
+            x = tf.identity(x)
+        z = tf.reduce_sum(x, axis=axis, keep_dims=True)
+        with tf.control_dependencies([tf.assert_positive(z)]):
+            p = (1. / z) * x
+        return p
 
 
 def most_static_shape(x):

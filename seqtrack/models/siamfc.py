@@ -16,6 +16,7 @@ from seqtrack.helpers import get_act
 from seqtrack.helpers import leaky_relu
 from seqtrack.helpers import expand_dims_n
 from seqtrack.helpers import weighted_mean
+from seqtrack.helpers import normalize_prob
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 _COLORMAP = 'viridis'
@@ -57,6 +58,7 @@ class SiamFC(models_interface.IterModel):
             wd=0.0,
             enable_ce_loss=True,
             ce_label='gaussian_distance',
+            ce_label_structure='independent',
             sigma=0.2,
             balance_classes=True,
             enable_margin_loss=False,
@@ -94,6 +96,7 @@ class SiamFC(models_interface.IterModel):
         self._wd = wd
         self._enable_ce_loss = enable_ce_loss
         self._ce_label = ce_label
+        self._ce_label_structure = ce_label_structure
         self._sigma = sigma
         self._balance_classes = balance_classes
         self._enable_margin_loss = enable_margin_loss
@@ -219,8 +222,8 @@ class SiamFC(models_interface.IterModel):
                     losses['ce'], labels = _cross_entropy_loss(
                         response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
                         search_size=self._search_size, search_scale=self._search_scale,
-                        label_method=self._ce_label, sigma=self._sigma,
-                        balance_classes=self._balance_classes)
+                        label_method=self._ce_label, label_structure=self._ce_label_structure,
+                        sigma=self._sigma, balance_classes=self._balance_classes)
                     self._info.setdefault('ce_labels', []).append(
                         _to_uint8(util.colormap(tf.expand_dims(labels, -1), _COLORMAP)))
                 if self._enable_margin_loss:
@@ -451,7 +454,8 @@ def _add_motion_prior(response, name='motion_prior'):
 def _cross_entropy_loss(
         response, response_rf, prev_rect, gt_rect, gt_is_valid, search_rect,
         search_size, sigma, search_scale, balance_classes,
-        label_method='gaussian_distance', name='cross_entropy_translation'):
+        label_method='gaussian_distance', label_structure='independent',
+        name='cross_entropy_translation'):
     '''Computes the loss for a 2D map of logits.
 
     Args:
@@ -467,6 +471,7 @@ def _cross_entropy_loss(
     '''
     with tf.name_scope(name) as scope:
         # [b, s, h, w, 1] -> [b, h, w]
+        # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
         response = tf.squeeze(response, 1) # Remove the scales dimension.
         response = tf.squeeze(response, -1) # Remove the trailing dimension.
         response_size = response.shape.as_list()[-2:]
@@ -494,14 +499,21 @@ def _cross_entropy_loss(
         else:
             raise ValueError('unknown label method: {}'.format(label_method))
 
-        # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
-        loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=response)
-
-        if balance_classes:
-            weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
+        if label_structure == 'independent':
+            loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=response)
+            if balance_classes:
+                weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
+            else:
+                weights = lossfunc.make_uniform_weights(has_label, axis=(-2, -1))
+            loss = tf.reduce_sum(weights * loss, axis=(1, 2))
+        elif label_structure == 'joint':
+            labels = normalize_prob(labels, axis=(1, 2))
+            labels_flat, _ = merge_dims(labels, 1, 3)
+            response_flat, _ = merge_dims(response, 1, 3)
+            loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels_flat,
+                                                           logits=response_flat)
         else:
-            weights = lossfunc.make_uniform_weights(has_label, axis=(-2, -1))
-        loss = tf.reduce_sum(weights * loss, axis=(1, 2))
+            raise ValueError('unknown label structure: {}'.format(label_structure))
 
         # TODO: Is this the best way to handle gt_is_valid?
         # (set loss to zero and include in mean)
