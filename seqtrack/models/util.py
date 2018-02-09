@@ -268,6 +268,7 @@ def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0,
 
     Assumes that response is centered and at same stride as search image.
     '''
+    assert len(response.shape) == 5
     with tf.name_scope(name) as scope:
         response = tf.squeeze(response, axis=-1)
         upsample_size = response.shape.as_list()[-2:]
