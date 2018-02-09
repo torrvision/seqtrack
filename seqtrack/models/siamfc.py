@@ -232,11 +232,12 @@ class SiamFC(models_interface.IterModel):
                         util.colormap(tf.expand_dims(labels[:, mid_scale], -1), _COLORMAP)))
                 if self._enable_margin_loss:
                     losses['margin'], cost = _max_margin_loss(
-                        response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
-                        search_size=self._search_size, search_scale=self._search_scale,
-                        cost_method=self._margin_cost, reduce_method=self._margin_reduce_method)
+                        response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'],
+                        search_rect, scales, search_size=self._search_size,
+                        search_scale=self._search_scale, cost_method=self._margin_cost,
+                        reduce_method=self._margin_reduce_method)
                     self._info.setdefault('margin_cost', []).append(_to_uint8(
-                        util.colormap(tf.expand_dims(cost, -1), _COLORMAP)))
+                        util.colormap(tf.expand_dims(cost[:, mid_scale], -1), _COLORMAP)))
 
             # Get relative translation and scale from response.
             response_final = _finalize_scores(response, rfs['search'].stride,
@@ -529,7 +530,7 @@ def _cross_entropy_loss(
 
 
 def _max_margin_loss(
-        score, score_rf, prev_rect, gt_rect, gt_is_valid, search_rect,
+        score, score_rf, prev_rect, gt_rect, gt_is_valid, search_rect, scales,
         search_size, search_scale, cost_method='iou', reduce_method='max',
         name='max_margin_loss'):
     '''Computes the loss for a 2D map of logits.
@@ -544,23 +545,22 @@ def _max_margin_loss(
         search_size -- Size of search image cropped from original image.
     '''
     with tf.name_scope(name) as scope:
-        # [b, s, h, w, 1] -> [b, h, w]
-        score = tf.squeeze(score, 1) # Remove the scales dimension.
+        # [b, s, h, w, 1] -> [b, s, h, w]
         score = tf.squeeze(score, -1) # Remove the trailing dimension.
         score_size = score.shape.as_list()[-2:]
         gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
         prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
-        rect_grid = util.rect_grid(score_size, score_rf, search_size,
-                                   geom.rect_size(prev_rect_in_search))
-        # rect_grid -- [b, h, w, 4]
+        rect_grid = util.rect_grid_pyr(score_size, score_rf, search_size,
+                                       geom.rect_size(prev_rect_in_search), scales)
+        # rect_grid -- [b, s, h, w, 4]
         # gt_rect_in_search -- [b, 4]
-        gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 2)
+        gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 3)
         if cost_method == 'iou':
             iou = geom.rect_iou(rect_grid, gt_rect_in_search)
             cost = 1. - iou
         elif cost_method == 'iou_correct':
             iou = geom.rect_iou(rect_grid, gt_rect_in_search)
-            max_iou = tf.reduce_max(iou, axis=[-2, -1], keep_dims=True)
+            max_iou = tf.reduce_max(iou, axis=(-3, -2, -1), keep_dims=True)
             cost = tf.to_float(tf.logical_not(iou >= max_iou))
         elif cost_method == 'distance':
             delta = geom.rect_center(rect_grid) - geom.rect_center(gt_rect_in_search)
@@ -568,7 +568,7 @@ def _max_margin_loss(
             cost = tf.norm(delta, axis=-1) * search_scale
         else:
             raise ValueError('unknown cost method: {}'.format(cost_method))
-        loss = _max_margin(score, cost, axis=[-2, -1], reduce_method=reduce_method)
+        loss = _max_margin(score, cost, axis=(-3, -2, -1), reduce_method=reduce_method)
         # TODO: Is this the best way to handle gt_is_valid?
         # (set loss to zero and include in mean)
         loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
