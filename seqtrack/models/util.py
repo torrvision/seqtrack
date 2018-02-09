@@ -351,6 +351,32 @@ def rect_grid(response_size, rf, search_size, rect_size, name='rect_grid'):
         return geom.make_rect_center_size(centers, rect_size)
 
 
+def rect_grid_pyr(response_size, rf, search_size, rect_size, scales, name='rect_grid_pyr'):
+    '''Obtains the rectangles for a translation and scale scoremap.
+
+    Args:
+        response_size -- Dimension of scoremap. (height, width)
+        rf -- Receptive field of scoremap.
+        search_size -- Dimension of search image in pixels. (height, width)
+        rect_size -- Size of rectangle in normalized co-ords in search image. [b, 2]
+    '''
+    with tf.name_scope(name) as scope:
+        # Assert that receptive fields are centered.
+        cnnutil.assert_center_alignment(search_size, response_size, rf)
+        # Obtain displacement from center of search image.
+        # Not necessary to use receptive field offset because it is centered.
+        disp = displacement_from_center(response_size)
+        disp = tf.to_float(disp) * rf.stride / search_size
+        disp = tf.multiply(tf.expand_dims(disp, -4),     # [b, h, w, 2] -> [b, 1, h, w, 2]
+                           expand_dims_n(scales, -1, 3)) # [s] -> [s, 1, 1, 1]
+        # Get centers of receptive field of each pixel.
+        centers = 0.5 + disp
+        rect_size = tf.multiply(tf.expand_dims(rect_size, -2), # [b, 2] -> [b, 1, 2]
+                                tf.expand_dims(scales, -1))    # [s] -> [s, 1]
+        rect_size = expand_dims_n(rect_size, -2, 2) # [b, s, 2] -> [b, s, 1, 1, 2]
+        return geom.make_rect_center_size(centers, rect_size)
+
+
 def colormap(x, cmap_name, name='colormap'):
     with tf.name_scope(name) as scope:
         x_shape = x.shape.as_list()

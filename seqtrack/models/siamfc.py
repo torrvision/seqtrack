@@ -46,6 +46,7 @@ class SiamFC(models_interface.IterModel):
             bnorm_after_xcorr=True,
             freeze_siamese=False,
             learnable_prior=False,
+            train_multiscale=False,
             # Tracking parameters:
             num_scales=5,
             scale_step=1.03,
@@ -86,6 +87,7 @@ class SiamFC(models_interface.IterModel):
         self._bnorm_after_xcorr = bnorm_after_xcorr
         self._freeze_siamese = freeze_siamese
         self._learnable_prior = learnable_prior
+        self._train_multiscale = train_multiscale
         self._num_scales = num_scales
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
@@ -172,7 +174,8 @@ class SiamFC(models_interface.IterModel):
                                                aspect=self._aspect, aspect_method=self._aspect_method)
 
             # Extract an image pyramid (use 1 scale when not in tracking mode).
-            num_scales = tf.cond(self._is_tracking, lambda: self._num_scales, lambda: 1)
+            num_scales = tf.cond(tf.logical_or(self._is_tracking, self._train_multiscale),
+                                 lambda: self._num_scales, lambda: 1)
             mid_scale = (num_scales - 1) / 2
             scales = util.scale_range(num_scales, self._scale_step)
             search_ims, search_rects = util.crop_pyr(
@@ -220,19 +223,20 @@ class SiamFC(models_interface.IterModel):
             if self._enable_loss:
                 if self._enable_ce_loss:
                     losses['ce'], labels = _cross_entropy_loss(
-                        response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
-                        search_size=self._search_size, search_scale=self._search_scale,
-                        label_method=self._ce_label, label_structure=self._ce_label_structure,
-                        sigma=self._sigma, balance_classes=self._balance_classes)
-                    self._info.setdefault('ce_labels', []).append(
-                        _to_uint8(util.colormap(tf.expand_dims(labels, -1), _COLORMAP)))
+                        response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'],
+                        search_rect, scales, search_size=self._search_size,
+                        search_scale=self._search_scale, label_method=self._ce_label,
+                        label_structure=self._ce_label_structure, sigma=self._sigma,
+                        balance_classes=self._balance_classes)
+                    self._info.setdefault('ce_labels', []).append(_to_uint8(
+                        util.colormap(tf.expand_dims(labels[:, mid_scale], -1), _COLORMAP)))
                 if self._enable_margin_loss:
                     losses['margin'], cost = _max_margin_loss(
                         response, rfs['search'], prev_rect, gt_rect, frame['y_is_valid'], search_rect,
                         search_size=self._search_size, search_scale=self._search_scale,
                         cost_method=self._margin_cost, reduce_method=self._margin_reduce_method)
-                    self._info.setdefault('margin_cost', []).append(
-                        _to_uint8(util.colormap(tf.expand_dims(cost, -1), _COLORMAP)))
+                    self._info.setdefault('margin_cost', []).append(_to_uint8(
+                        util.colormap(tf.expand_dims(cost, -1), _COLORMAP)))
 
             # Get relative translation and scale from response.
             response_final = _finalize_scores(response, rfs['search'].stride,
@@ -452,7 +456,7 @@ def _add_motion_prior(response, name='motion_prior'):
 
 
 def _cross_entropy_loss(
-        response, response_rf, prev_rect, gt_rect, gt_is_valid, search_rect,
+        response, response_rf, prev_rect, gt_rect, gt_is_valid, search_rect, scales,
         search_size, sigma, search_scale, balance_classes,
         label_method='gaussian_distance', label_structure='independent',
         name='cross_entropy_translation'):
@@ -471,8 +475,8 @@ def _cross_entropy_loss(
     '''
     with tf.name_scope(name) as scope:
         # [b, s, h, w, 1] -> [b, h, w]
-        # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
-        response = tf.squeeze(response, 1) # Remove the scales dimension.
+        # # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
+        # response = tf.squeeze(response, 1) # Remove the scales dimension.
         response = tf.squeeze(response, -1) # Remove the trailing dimension.
         response_size = response.shape.as_list()[-2:]
 
@@ -484,16 +488,18 @@ def _cross_entropy_loss(
 
         gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
         prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
-        rect_grid = util.rect_grid(response_size, response_rf, search_size,
-                                   geom.rect_size(prev_rect_in_search))
+        rect_grid = util.rect_grid_pyr(response_size, response_rf, search_size,
+                                       geom.rect_size(prev_rect_in_search), scales)
 
         if label_method == 'gaussian_distance':
             labels, has_label = lossfunc.translation_labels(
                 centers, gt_rect_in_search, shape='gaussian', sigma=sigma/search_scale)
+            labels = tf.expand_dims(labels, 1)
+            has_label = tf.expand_dims(has_label, 1)
         elif label_method == 'best_iou':
-            gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 2)
+            gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 3) # [b, 1, 1, 1, 2]
             iou = geom.rect_iou(rect_grid, gt_rect_in_search)
-            is_pos = (iou >= tf.reduce_max(iou, axis=[-2, -1], keep_dims=True))
+            is_pos = (iou >= tf.reduce_max(iou, axis=(-3, -2, -1), keep_dims=True))
             labels = tf.to_float(is_pos)
             has_label = tf.ones_like(labels, dtype=tf.bool)
         else:
@@ -502,14 +508,14 @@ def _cross_entropy_loss(
         if label_structure == 'independent':
             loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=response)
             if balance_classes:
-                weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
+                weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-3, -2, -1))
             else:
-                weights = lossfunc.make_uniform_weights(has_label, axis=(-2, -1))
-            loss = tf.reduce_sum(weights * loss, axis=(1, 2))
+                weights = lossfunc.make_uniform_weights(has_label, axis=(-3, -2, -1))
+            loss = tf.reduce_sum(weights * loss, axis=(1, 2, 3))
         elif label_structure == 'joint':
-            labels = normalize_prob(labels, axis=(1, 2))
-            labels_flat, _ = merge_dims(labels, 1, 3)
-            response_flat, _ = merge_dims(response, 1, 3)
+            labels = normalize_prob(labels, axis=(1, 2, 3))
+            labels_flat, _ = merge_dims(labels, 1, 4)
+            response_flat, _ = merge_dims(response, 1, 4)
             loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels_flat,
                                                            logits=response_flat)
         else:
