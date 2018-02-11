@@ -278,7 +278,6 @@ class SiamFCSeq(models_interface.IterModel):
             # In reality, siamfc response is very noisy, rather than one peak (e.g. it has high
             # values around boundary due to edge).
             # Ideas? non-max suppression, normalizing, hann window, etc.
-            rsp_siamfc = tf.sigmoid(rsp_siamfc)
             rsp_siamfc = tf.stop_gradient(rsp_siamfc)
 
             # TODO: Choose one scale response. Options: mid or max.
@@ -323,7 +322,7 @@ class SiamFCSeq(models_interface.IterModel):
                                                 tf.expand_dims(scales[mid_scale], -1),
                                                 is_pyramid=False,
                                                 eps_rel=self._arg_max_eps_rel)
-            _, scale = util.find_peak_pyr(rsp_siamfc, scales,
+            _, scale = util.find_peak_pyr(tf.sigmoid(rsp_siamfc), scales,
                                           is_pyramid=False,
                                           eps_rel=self._arg_max_eps_rel)
             position = translation + 0.5
@@ -338,7 +337,7 @@ class SiamFCSeq(models_interface.IterModel):
 
             # visualize in summary
             self._info.setdefault('rsp_siamfc', []).append(
-                _to_uint8(util.colormap(rsp_siamfc[:, mid_scale], _COLORMAP)))
+                _to_uint8(util.colormap(tf.sigmoid(rsp_siamfc[:, mid_scale]), _COLORMAP)))
             self._info.setdefault('rsp_decoder', []).append(
                 _to_uint8(util.colormap(rsp_decoder, _COLORMAP)))
             overlay = tf.image.resize_images(util.colormap(rsp_decoder, _COLORMAP),
@@ -437,7 +436,8 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
             return x, rfs
 
 
-def _encoder_decoder(x, rnn_state, enable_hglass=True, enable_rnn=True, enable_rnn_bnorm=False,
+def _encoder_decoder(x, rnn_state, enable_hglass=True, residual_type='add',
+                     enable_rnn=True, enable_rnn_bnorm=False,
                      tanh_summary=False, is_training=None, name='encoder_decoder'):
     assert is_training is not None
     assert len(x.shape) == 4
@@ -452,6 +452,7 @@ def _encoder_decoder(x, rnn_state, enable_hglass=True, enable_rnn=True, enable_r
         with slim.arg_scope([slim.conv2d], **bnorm_args):
             # Only 'VALID' padding for conv and pool (either max_pool or avg_pool) and 3x3 convs.
             x_skip.append(x)
+            x = tf.sigmoid(x) # TODO: test without sigmoid
             x = slim.conv2d(x, 32, 3, 1, padding='VALID', scope='enc_conv1')
             x = slim.max_pool2d(x, kernel_size=3, padding='VALID', scope='enc_pool1')
             x = slim.conv2d(x, 32, 3, 1, padding='VALID', scope='enc_conv2')
@@ -483,10 +484,18 @@ def _encoder_decoder(x, rnn_state, enable_hglass=True, enable_rnn=True, enable_r
                 x = slim.conv2d(resz_imgs(x, [5, 5]), 128, 3, 1, scope='dec1')
                 x = slim.conv2d(resz_imgs(x, [9, 9]), 64, 3, 1, scope='dec2')
                 x = slim.conv2d(resz_imgs(x, [17, 17]), 32, 3, 1, scope='dec3')
-                x = slim.conv2d(resz_imgs(x, [33, 33]), 16, 3, 1, scope='dec4')
-                x = tf.concat([x, x_skip[0]], -1)
-                x = slim.conv2d(x, 16, 3, 1, scope='dec5')
-                x = slim.conv2d(x, 1, 3, 1, activation_fn=None, normalizer_fn=None, scope='dec6')
+                if residual_type == 'add':
+                    x = slim.conv2d(resz_imgs(x, [33, 33]), 1, 3, 1,
+                                    activation_fn=None, normalizer_fn=None, scope='dec4') # TODO: test bnorm
+                    x = x + x_skip[0]
+                elif residual_type == 'concat':
+                    x = slim.conv2d(resz_imgs(x, [33, 33]), 16, 3, 1,
+                                    activation_fn=None, normalizer_fn=None, scope='dec4') # TODO: teset bnorm
+                    x = tf.concat([x, x_skip[0]], -1)
+                    x = slim.conv2d(x, 16, 3, 1, scope='dec5')
+                    x = slim.conv2d(x, 1, 3, 1, activation_fn=None, normalizer_fn=None, scope='dec6')
+                else:
+                    raise ValueError('Not available residual type.')
             else:
                 # Assuming the input is resized to 33x33.
                 x = slim.conv2d(resz_imgs(x, [5, 5]), 128, 3, 1, scope='dec1')
