@@ -3,6 +3,7 @@ import tensorflow.contrib.slim as slim
 import numpy as np
 
 import math
+import functools
 
 from seqtrack import cnnutil
 from seqtrack import geom
@@ -64,7 +65,9 @@ class MotionPredictor(models_interface.IterModel):
             margin_cost='iou',
             margin_reduce_method='max',
             # motion predictor
-            response_motion_size=33,
+            rnn_state_dims=256,
+            rsp_motion_size=33,
+            rsp_siamfc_upsample_size=33,
             enable_motion_loss=True,
             ):
         self._template_size = template_size
@@ -105,7 +108,9 @@ class MotionPredictor(models_interface.IterModel):
         self._enable_margin_loss = enable_margin_loss
         self._margin_cost = margin_cost
         self._margin_reduce_method = margin_reduce_method
-        self._response_motion_size = response_motion_size
+        self._rnn_state_dims = rnn_state_dims
+        self._rsp_motion_size = rsp_motion_size
+        self._rsp_siamfc_upsample_size = rsp_siamfc_upsample_size
         self._enable_motion_loss = enable_motion_loss
 
         self._num_frames = 0
@@ -152,13 +157,13 @@ class MotionPredictor(models_interface.IterModel):
                 template_feat *= template_mask
 
             # initial states for encoder and decoder
-            cell_size = [tf.shape(template_feat)[0], 3, 3, 256] # TODO: Avoid manual dimensions?
+            cell_size = [tf.shape(template_feat)[0], 3, 3, self._rnn_state_dims]
             with tf.variable_scope('rnn_state'):
                 encoder_state_init = {k: tf.fill(cell_size, 0.0, name='{}'.format(k)) for k in ['h', 'c']}
                 decoder_state_init = {k: tf.fill(cell_size, 0.0, name='{}'.format(k)) for k in ['h', 'c']}
 
             # Create 'response_g' using 'y' and ground-truth generation function.
-            centers = util.make_grid_centers([self._response_motion_size]*2)
+            centers = util.make_grid_centers([self._rsp_motion_size]*2)
             response_g, _ = lossfunc.translation_labels(
                 centers, y, shape='gaussian', sigma=self._sigma_absolute, absolute_translation=True)
             response_g = tf.expand_dims(response_g, -1)
@@ -256,33 +261,34 @@ class MotionPredictor(models_interface.IterModel):
 
 
             # -------------------------------------------------------------------------------------
+            # After SiamFC
+            # -------------------------------------------------------------------------------------
             # Motion prediction model (in image frame)
             # 1. Encoder for motion history; potential extention to DNC, VAE, etc.
             # 2. Decoder for motion prediction; potential extention to attention mechanism.
-            # 3. Use response_by_motion! (addition, probabilistic search space, etc.)
+            # 3. Use rsp_motion. (addition, ensemble, probabilistic search space, etc.)
             # -------------------------------------------------------------------------------------
             # Encoder-decoder
+            # TODO: Consider previous "SiamFC response" only as input to encoder.
             with tf.variable_scope('encoder', reuse=(self._num_frames > 0)):
                 motion_summary, encoder_state = _motion_encoder(
                     prev_state['response_g'], prev_state['encoder'],
-                    tanh=False, # TODO: after test, have an option
-                    is_training=self._is_training)
+                    tanh_summary=False, is_training=self._is_training) # TODO: test tanh
 
-            decoder_type = 'cnn' # TODO: after test, have an option
             with tf.variable_scope('decoder', reuse=(self._num_frames > 0)):
-                response_by_motion, decoder_state = _motion_decoder(
-                    motion_summary, prev_state['decoder'], decoder_type=decoder_type,
+                rsp_motion, decoder_state = _motion_decoder(
+                    motion_summary, prev_state['decoder'], decoder_type='cnn',
                     is_training=self._is_training)
-            assert response_by_motion.shape.as_list()[-3] == self._response_motion_size
+            assert all(np.array(rsp_motion.shape.as_list()[-3:-1]) == [self._rsp_motion_size]*2)
 
             # loss.
             if self._enable_loss and self._enable_motion_loss:
-                centers = util.make_grid_centers([self._response_motion_size]*2)
+                centers = util.make_grid_centers([self._rsp_motion_size]*2)
                 labels, has_label = lossfunc.translation_labels(
                     centers, gt_rect, shape='gaussian', sigma=self._sigma_absolute,
                     absolute_translation=True)
                 loss = tf.nn.sigmoid_cross_entropy_with_logits(
-                    labels=labels, logits=tf.squeeze(response_by_motion, -1))
+                    labels=labels, logits=tf.squeeze(rsp_motion, -1))
                 if self._balance_classes:
                     weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-2, -1))
                 else:
@@ -294,13 +300,11 @@ class MotionPredictor(models_interface.IterModel):
                 self._info.setdefault('ce_labels_global', []).append(
                     _to_uint8(util.colormap(tf.expand_dims(labels, -1), _COLORMAP)))
 
-            # Convert response in image frame: 'response_by_appearance'
-            upsample_response = _finalize_scores(response, rfs['search'].stride,
-                                                 self._hann_method, self._hann_coeff, sigmoid=False)
+            # Convert response in image frame: 'rsp_siamfc'
             # Find rectangle for response (of middle scale) in image ref frame.
             rf_centers = _find_rf_centers(self._search_size, response_size, rfs['search'])
-            upsample_response_size = upsample_response.shape.as_list()[-3:-1]
-            response_rect_in_search = _align_corner_centers(rf_centers, upsample_response_size)
+            upsample_size = ((np.array(response_size) - 1) * rfs['search'].stride + 1).tolist()
+            response_rect_in_search = _align_corner_centers(rf_centers, upsample_size)
             response_rect_in_image = geom.crop_rect(response_rect_in_search,
                                                     geom.crop_inverse(search_rect))
             # Get that rectangle for each scale.
@@ -308,22 +312,32 @@ class MotionPredictor(models_interface.IterModel):
                 tf.expand_dims(scales, 1),                  # [s] -> [s, 1]
                 tf.expand_dims(response_rect_in_image, 1))  # [b, 4] -> [b, 1, 4]
             # crop multi-scale responses
-            ref_response_size = frame['x'].shape.as_list()[-3:-1]
-            response_by_appearance = util.crop(
-                upsample_response, geom.crop_inverse(response_rects_in_image),
-                ref_response_size,
-                pad_value=tf.reduce_min(upsample_response, (-3,-2,-1), keep_dims=True),
+            rsp_siamfc = util.crop(
+                response, geom.crop_inverse(response_rects_in_image),
+                [self._rsp_siamfc_upsample_size]*2,
+                pad_value=tf.reduce_min(response, (-3,-2,-1), keep_dims=True),
                 feather=True)
 
-            # Final response -> Use responses from appearance and motion together.
-            response_final = tf.sigmoid(response_by_appearance +
-                tf.image.resize_images(response_by_motion, ref_response_size, align_corners=True))
-            # response_final /= tf.reduce_max(response_final, (-3,-2,-1), keep_dims=True)
+            # TODO: consider where to put these
+            #rsp_siamfc = tf.stop_gradient(rsp_siamfc)
 
-            # Get 'absolute' translation and scale from response
-            translation, scale = util.find_peak_pyr(response_final, scales,
+            # Final response -> Use responses from appearance and motion together.
+            # 1. (TEST) Only use SiamFC response, but visualize decoder output
+            use_rsp_motion = True
+            if not use_rsp_motion:
+                translation, scale = util.find_peak_pyr(tf.sigmoid(rsp_siamfc), scales,
+                                                        is_pyramid=False,
+                                                        eps_rel=self._arg_max_eps_rel)
+            else:
+                # NOTE: rsp_siamfc has bnorm beforehand, whereas rsp_motion doesn't.
+                assert self._rsp_siamfc_upsample_size == self._rsp_motion_size
+                rsp_final = tf.sigmoid(rsp_siamfc + rsp_motion) # NOTE: rsp_motion is one scale.
+                translation, _ = util.find_peak_pyr(rsp_final, scales, # NOTE: scale not used here.
                                                     is_pyramid=False,
                                                     eps_rel=self._arg_max_eps_rel)
+                _, scale = util.find_peak_pyr(tf.sigmoid(rsp_siamfc), scales,
+                                              is_pyramid=False,
+                                              eps_rel=self._arg_max_eps_rel)
             position = translation + 0.5
             # Damp the scale update towards 1.
             scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
@@ -335,42 +349,16 @@ class MotionPredictor(models_interface.IterModel):
             pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
 
             # visualize in summary
-            self._info.setdefault('response_by_appearance', []).append(
-                    _to_uint8(util.colormap(tf.sigmoid(response_by_appearance[:, mid_scale]), _COLORMAP)))
-            self._info.setdefault('response_by_motion', []).append(
-                _to_uint8(util.colormap(tf.sigmoid(response_by_motion), _COLORMAP)))
-            self._info.setdefault('response_final', []).append(
-                _to_uint8(util.colormap(response_final[:, mid_scale], _COLORMAP)))
-            vis = _paste_image(frame['x'],
-                               util.colormap(response_final[:, mid_scale], _COLORMAP), alpha=0.5)
+            self._info.setdefault('rsp_siamfc', []).append(
+                    _to_uint8(util.colormap(tf.sigmoid(rsp_siamfc[:, mid_scale]), _COLORMAP)))
+            self._info.setdefault('rsp_motion', []).append(
+                _to_uint8(util.colormap(tf.sigmoid(rsp_motion), _COLORMAP)))
+            self._info.setdefault('rsp_final', []).append(
+                _to_uint8(util.colormap(rsp_final[:, mid_scale], _COLORMAP)))
+            overlay = tf.image.resize_images(util.colormap(rsp_final[:, mid_scale], _COLORMAP),
+                                             frame['x'].shape.as_list()[-3:-1])
+            vis = _paste_image(frame['x'], overlay, alpha=0.5)
             self._info.setdefault('vis', []).append(_to_uint8(vis))
-
-
-            ## Get relative translation and scale from response.
-            #response_final = _finalize_scores(response, rfs['search'].stride,
-            #                                  self._hann_method, self._hann_coeff)
-            ## upsample_response_size = response_final.shape.as_list()[-3:-1]
-            ## assert np.all(upsample_response_size <= self._search_size)
-            #translation, scale = util.find_peak_pyr(response_final, scales,
-            #                                        eps_rel=self._arg_max_eps_rel)
-            #translation = translation / self._search_size
-
-            #vis = _visualize_response(
-            #    response[:, mid_scale], response_final[:, mid_scale],
-            #    search_ims[:, mid_scale], rfs['search'], frame['x'], search_rect)
-            #self._info.setdefault('vis', []).append(_to_uint8(vis))
-
-            ## Damp the scale update towards 1.
-            #scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
-            ## Get rectangle in search image.
-            #prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
-            #pred_in_search = _rect_translate_scale(prev_target_in_search, translation,
-            #                                       tf.expand_dims(scale, -1))
-            ## Move from search back to original image.
-            ## TODO: Test that this is equivalent to scaling translation?
-            #pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
-            ## Limit size of object.
-            #pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
 
             # Rectangle to use in next frame for search area.
             # If using gt and rect not valid, use previous.
@@ -378,13 +366,11 @@ class MotionPredictor(models_interface.IterModel):
             if self._use_gt:
                 next_prev_rect = tf.cond(self._is_tracking, lambda: pred, lambda: gt_rect)
                 next_prev_response = tf.cond(self._is_tracking,
-                                             lambda: response_final[:, mid_scale],
+                                             lambda: rsp_siamfc[:, mid_scale], # TODO: can be rsp_final?
                                              lambda: tf.expand_dims(labels, -1))
             else:
                 next_prev_rect = pred
-                next_prev_response = response_final[:, mid_scale]
-            next_prev_response = tf.image.resize_images(next_prev_response,
-                [self._response_motion_size]*2, align_corners=True)
+                next_prev_response = rsp_siamfc[:, mid_scale] # TODO: choose best scale?
             next_prev_response = tf.stop_gradient(next_prev_response)
 
             self._num_frames += 1
@@ -471,71 +457,78 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
             return x, rfs
 
 
-def _motion_encoder(x, state_prev, tanh=True, is_training=None, name='motion_encoder'):
-    with tf.name_scope(name) as scope:
-        # motion embedding
-        with slim.arg_scope([slim.conv2d],
-                padding='SAME',
-                normalizer_fn=slim.batch_norm,
-                normalizer_params={'is_training': is_training, 'fused': True},
-                ):
-            # Assuming the input is resized to 33x33.
-            x = slim.conv2d(x, 32, 5, 2, scope='conv1')
-            x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='pool1')
-            x = slim.conv2d(x, 64, 5, 2, scope='conv2')
-            x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='pool2')
-        output, state_next = _conv_lstm(x, state_prev, is_training)
-        # Put tanh to create summary; following original paper.
-        if tanh:
-            motion_summary = slim.conv2d(output, output.shape.as_list()[-1], 1, 1,
-                                         normalizer_fn=slim.batch_norm,
-                                         normalizer_params={'is_training': is_training},
-                                         activation_fn=tf.nn.tanh, scope='context')
-        else:
-            motion_summary = output
-        return motion_summary, state_next
+def _motion_encoder(x, state_prev, enable_rnn_bnorm=False, tanh_summary=False, is_training=None,
+                    name='motion_encoder'):
+    assert is_training is not None
+    assert len(x.shape) == 4
+    assert x.shape.as_list()[1] == 33 # TODO: avoid this?
 
-def _motion_decoder(x, state_prev, decoder_type='rnn', is_training=None, name='motion_decoder'):
+    with tf.name_scope(name) as scope:
+        bnorm_args = dict(normalizer_fn=slim.batch_norm,
+                          normalizer_params={'is_training': is_training, 'fused': True})
+        # motion embedding
+        with slim.arg_scope([slim.conv2d], **bnorm_args):
+            # Only 'VALID' padding for conv and pool (either max_pool or avg_pool) and 3x3 convs.
+            x = slim.conv2d(x, 32, 3, 1, padding='VALID', scope='enc_conv1')
+            x = slim.max_pool2d(x, kernel_size=3, padding='VALID', scope='enc_pool1')
+            x = slim.conv2d(x, 32, 3, 1, padding='VALID', scope='enc_conv2')
+            x = slim.conv2d(x, 64, 3, 1, padding='VALID', scope='enc_conv3')
+            x = slim.max_pool2d(x, kernel_size=3, padding='VALID', scope='enc_pool2')
+            x = slim.conv2d(x, 64, 3, 1, padding='VALID', scope='enc_conv4')
+            # Simple
+            #x = slim.conv2d(x, 32, 5, 2, scope='enc_conv1')
+            #x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='enc_pool1')
+            #x = slim.conv2d(x, 64, 5, 2, scope='enc_conv2')
+            #x = slim.max_pool2d(x, kernel_size=2, padding='SAME', scope='enc_pool2')
+        # motion summary
+        summary, state_next = _conv_lstm(x, state_prev, enable_rnn_bnorm, is_training)
+        # Put tanh to create summary; following original paper.
+        if tanh_summary:
+            summary = slim.conv2d(summary, summary.shape.as_list()[-1], 1, 1,
+                                  normalizer_fn=slim.batch_norm,
+                                  normalizer_params={'is_training': is_training},
+                                  activation_fn=tf.nn.tanh, scope='context')
+        return summary, state_next
+
+def _motion_decoder(x, state_prev, enable_rnn_bnorm=False, decoder_type='cnn', is_training=None,
+                    name='motion_decoder'):
+    assert is_training is not None
+    resz_imgs = functools.partial(tf.image.resize_images, align_corners=True)
+
     with tf.name_scope(name) as scope:
         if decoder_type == 'rnn':
-            # initialize hidden states using summary.
+            # initialize hidden states using summary. # TODO: only H?
             state_prev = {k: slim.conv2d(x, x.shape.as_list()[-1], 1, 1,
                                          normalizer_fn=slim.batch_norm,
                                          normalizer_params={'is_training': is_training},
                                          activation_fn=tf.nn.tanh, scope='conv_'+k)
-                          for k in state_prev.keys()} # TODO: only H?
-            x, state_next = _conv_lstm(x, state_prev, is_training)
+                          for k in state_prev.keys()}
+            x, state_next = _conv_lstm(x, state_prev, enable_rnn_bnorm, is_training)
         elif decoder_type == 'cnn':
             state_next = state_prev # no meaning
         else:
             raise ValueError('Not available decoder type.')
 
         # Deconvolution
-        with slim.arg_scope([slim.conv2d],
-                padding='SAME',
-                normalizer_fn=slim.batch_norm,
-                normalizer_params={'is_training': is_training, 'fused': True},
-                ):
-            # Assuming the input is resized to 33x33.
-            x = slim.conv2d(tf.image.resize_images(x, [5, 5], align_corners=True),
-                            128, 3, 1, scope='conv1')
-            x = slim.conv2d(tf.image.resize_images(x, [9, 9], align_corners=True),
-                            64, 3, 1, scope='conv2')
-            x = slim.conv2d(tf.image.resize_images(x, [17, 17], align_corners=True),
-                            32, 3, 1, scope='conv3')
-            x = slim.conv2d(tf.image.resize_images(x, [33, 33], align_corners=True),
-                            1, 3, 1, activation_fn=None, normalizer_fn=None, scope='conv4') # NOTE: with bnorm -> not work.
+        bnorm_args = dict(normalizer_fn=slim.batch_norm,
+                          normalizer_params={'is_training': is_training, 'fused': True})
+        with slim.arg_scope([slim.conv2d], **bnorm_args):
+            x = slim.conv2d(resz_imgs(x, [5, 5]), 128, 3, 1, scope='conv1')
+            x = slim.conv2d(resz_imgs(x, [9, 9]), 64, 3, 1, scope='conv2')
+            x = slim.conv2d(resz_imgs(x, [17, 17]), 32, 3, 1, scope='conv3')
+            x = slim.conv2d(resz_imgs(x, [33, 33]), 1, 3, 1,
+                            activation_fn=None, normalizer_fn=None, scope='conv4') # NOTE: with bnorm -> not work.
         return x, state_next
 
-def _conv_lstm(x, state, is_training, name='conv_lstm'):
+def _conv_lstm(x, state, enable_bnorm=False, is_training=None, name='conv_lstm'):
+    assert is_training is not None
     with tf.name_scope(name) as scope:
-        assert is_training is not None
         h_prev, c_prev = state['h'], state['c']
-        with slim.arg_scope([slim.conv2d],
-                # TODO: no batchnorm here?
-                #num_outputs=h_prev.shape.as_list()[-1], kernel_size=3, activation_fn=None):
-                num_outputs=h_prev.shape.as_list()[-1], kernel_size=3, activation_fn=None,
-                normalizer_fn=slim.batch_norm, normalizer_params={'is_training': is_training}):
+        conv_args = dict(num_outputs=h_prev.shape.as_list()[-1], kernel_size=3, activation_fn=None)
+        if enable_bnorm:
+            conv_args.update(normalizer_fn=slim.batch_norm,
+                             normalizer_params={'is_training': is_training})
+        with slim.arg_scope([slim.conv2d], **conv_args):
             # To avoid concat error due to dimension difference between x and h for multi-scale case.
             it = tf.nn.sigmoid(slim.conv2d(x, scope='xi') + slim.conv2d(h_prev, scope='hi'))
             ft = tf.nn.sigmoid(slim.conv2d(x, scope='xf') + slim.conv2d(h_prev, scope='hf'))
@@ -543,17 +536,11 @@ def _conv_lstm(x, state, is_training, name='conv_lstm'):
             ct = (ft * c_prev) + (it * ct_tilda)
             ot = tf.nn.sigmoid(slim.conv2d(x, scope='xo') + slim.conv2d(h_prev, scope='ho'))
             ht = ot * tf.nn.tanh(ct)
-            #it = tf.nn.sigmoid(slim.conv2d(tf.concat([x, h_prev], -1), scope='i'))
-            #ft = tf.nn.sigmoid(slim.conv2d(tf.concat([x, h_prev], -1), scope='f'))
-            #ct_tilda = tf.nn.tanh(slim.conv2d(tf.concat([x, h_prev], -1), scope='c'))
-            #ct = (ft * c_prev) + (it * ct_tilda)
-            #ot = tf.nn.sigmoid(slim.conv2d(tf.concat([x, h_prev], -1), scope='o'))
-            #ht = ot * tf.nn.tanh(ct)
         output = tf.identity(ht)
-        state['h'] = ht
-        state['c'] = ct
+        # state['h'] = ht
+        # state['c'] = ct
+        state = {'h': ht, 'c': ct}
         return output, state
-
 
 def hann(n, name='hann'):
     with tf.name_scope(name) as scope:
