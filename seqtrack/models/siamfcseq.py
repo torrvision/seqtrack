@@ -452,7 +452,7 @@ def _encoder_decoder(x, rnn_state, enable_hglass=True, residual_type='add',
         with slim.arg_scope([slim.conv2d], **bnorm_args):
             # Only 'VALID' padding for conv and pool (either max_pool or avg_pool) and 3x3 convs.
             x_skip.append(x)
-            x = tf.sigmoid(x) # TODO: test without sigmoid
+            x = tf.sigmoid(x)
             x = slim.conv2d(x, 32, 3, 1, padding='VALID', scope='enc_conv1')
             x = slim.max_pool2d(x, kernel_size=3, padding='VALID', scope='enc_pool1')
             x = slim.conv2d(x, 32, 3, 1, padding='VALID', scope='enc_conv2')
@@ -486,7 +486,7 @@ def _encoder_decoder(x, rnn_state, enable_hglass=True, residual_type='add',
                 x = slim.conv2d(resz_imgs(x, [17, 17]), 32, 3, 1, scope='dec3')
                 if residual_type == 'add':
                     x = slim.conv2d(resz_imgs(x, [33, 33]), 1, 3, 1,
-                                    activation_fn=None, normalizer_fn=None, scope='dec4') # TODO: test bnorm
+                                    activation_fn=None, scope='dec4')
                     x = x + x_skip[0]
                 elif residual_type == 'concat':
                     x = slim.conv2d(resz_imgs(x, [33, 33]), 16, 3, 1,
