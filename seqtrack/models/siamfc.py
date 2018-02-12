@@ -221,7 +221,7 @@ class SiamFC(models_interface.IterModel):
                 state['rnn_h'] = tf.where(self._cont, state_feed['rnn_h'], rnn_h)
                 state['rnn_c'] = tf.where(self._cont, state_feed['rnn_c'], rnn_c)
                 # Buffered parameters.
-                if self._enable_loss:
+                if self._rl_method != 'none' and self._enable_loss:
                     self._cell_old = tf.contrib.rnn.BasicLSTMCell(256, state_is_tuple=True)
                     rnn_h_old, rnn_c_old = self._cell_old.zero_state(batchsz, dtype=tf.float32)
                     state_feed['rnn_h_old'] = placeholder_like(rnn_h_old, 'rnn_h_old')
