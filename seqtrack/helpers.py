@@ -340,6 +340,18 @@ def stack_dict(frames, axis=0, keys=None):
     }
 
 
+# (untested)
+# def stack_nested(xs, axis=0):
+#     if isinstance(xs, dict):
+#         return {k: stack_nested(x, axis=axis) for k, x in xs.items()}
+#     elif isinstance(xs, list):
+#         return [stack_nested(x, axis=axis) for x in xs]
+#     elif isinstance(xs, tuple):
+#         return tuple(stack_nested(list(xs), axis=axis))
+#     else:
+#         return tf.stack(xs, axis=axis)
+
+
 def unique_argmax(x, axis=None, output_type=tf.int64, name='unique_argmax'):
     # TODO: Add rel_eps, abs_eps.
     with tf.name_scope(name) as scope:

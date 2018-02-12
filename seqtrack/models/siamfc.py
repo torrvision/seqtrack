@@ -61,6 +61,8 @@ class SiamFC(models_interface.IterModel):
             bnorm_after_xcorr=True,
             freeze_siamese=False,
             learnable_prior=False,
+            a2c_share_fc=False,
+            enable_rnn=False,
             epsilon=0.1,
             gamma=0.9,
             translation_action_step=0.2,
@@ -105,6 +107,8 @@ class SiamFC(models_interface.IterModel):
         self._bnorm_after_xcorr = bnorm_after_xcorr
         self._freeze_siamese = freeze_siamese
         self._learnable_prior = learnable_prior
+        self._a2c_share_fc = a2c_share_fc
+        self._enable_rnn = enable_rnn
         self._epsilon = epsilon
         self._gamma = gamma
         self._translation_action_step = translation_action_step
@@ -146,7 +150,11 @@ class SiamFC(models_interface.IterModel):
             self._is_tracking = run_opts['is_tracking']
             self._enable_loss = enable_loss
             self._image_summaries_collections = image_summaries_collections
-            # When tracking is continued, the state will be fed here.
+            # The dict state is what will be provided to the next frame.
+            # The dict state_feed is where the state will be fed when resuming.
+            # It is necessary for these to be separate for only a subset of the
+            # batch to be continued from a previous state (for experience replay).
+            state = {}
             state_feed = {}
 
             mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keep_dims=True)
@@ -204,10 +212,25 @@ class SiamFC(models_interface.IterModel):
             self._mean_color = mean_color
             self._template_feat = template_feat
 
+            if self._enable_rnn:
+                batchsz = tf.shape(frame['x'])[0]
+                self._cell = tf.contrib.rnn.BasicLSTMCell(256, state_is_tuple=True)
+                rnn_h, rnn_c = self._cell.zero_state(batchsz, dtype=tf.float32)
+                state_feed['rnn_h'] = placeholder_like(rnn_h, 'rnn_h')
+                state_feed['rnn_c'] = placeholder_like(rnn_c, 'rnn_c')
+                state['rnn_h'] = tf.where(self._cont, state_feed['rnn_h'], rnn_h)
+                state['rnn_c'] = tf.where(self._cont, state_feed['rnn_c'], rnn_c)
+                # Buffered parameters.
+                if self._enable_loss:
+                    self._cell_old = tf.contrib.rnn.BasicLSTMCell(256, state_is_tuple=True)
+                    rnn_h_old, rnn_c_old = self._cell_old.zero_state(batchsz, dtype=tf.float32)
+                    state_feed['rnn_h_old'] = placeholder_like(rnn_h_old, 'rnn_h_old')
+                    state_feed['rnn_c_old'] = placeholder_like(rnn_c_old, 'rnn_c_old')
+                    state['rnn_h_old'] = tf.where(self._cont, state_feed['rnn_h_old'], rnn_h_old)
+                    state['rnn_c_old'] = tf.where(self._cont, state_feed['rnn_c_old'], rnn_c_old)
+
             state_feed['y'] = placeholder_like(y, 'y')
-            prev_y = tf.where(self._cont, state_feed['y'], y)
-            # TODO: Avoid passing template_feat to and from GPU (or re-computing).
-            state = {'y': prev_y}
+            state['y'] = tf.where(self._cont, state_feed['y'], y)
             return state, state_feed
 
     def next(self, frame, prev_state, name='timestep'):
@@ -224,6 +247,7 @@ class SiamFC(models_interface.IterModel):
             self._final_im = frame['x']
             self._final_rect = prev_rect
 
+            state = {}
             response, search_rect, search_ims = self._response_func(frame['x'], prev_rect,
                 mean_color=self._mean_color,
                 template_feat=self._template_feat,
@@ -234,8 +258,19 @@ class SiamFC(models_interface.IterModel):
                 num_scales=self._num_scales,
                 variables_collections=['siamese'])
             with tf.variable_scope('decision', reuse=(self._num_frames > 0)):
-                action_scores, state_value = _decision_net(
-                    response, is_training=self._is_training)
+                if self._num_frames == 0:
+                    self._cell = tf.contrib.rnn.BasicLSTMCell(256)
+                if self._enable_rnn:
+                    state_tuple = (prev_state['rnn_h'], prev_state['rnn_c'])
+                    action_scores, state_value, state_tuple = _decision_net(
+                        response, self._cell, state_tuple,
+                        is_training=self._is_training,
+                        enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
+                    state['rnn_h'], state['rnn_c'] = state_tuple
+                else:
+                    action_scores, state_value, _ = _decision_net(
+                        response, is_training=self._is_training,
+                        enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
 
             mid_scale = (self._num_scales - 1) / 2
             self._info.setdefault('response', []).append(
@@ -303,8 +338,17 @@ class SiamFC(models_interface.IterModel):
                             num_scales=self._num_scales,
                             variables_collections=None)
                         with tf.variable_scope('decision', reuse=(self._num_frames > 0)):
-                            action_scores_old, state_value_old = _decision_net(
-                                response_old, is_training=self._is_training)
+                            if self._enable_rnn:
+                                state_tuple = (prev_state['rnn_h_old'], prev_state['rnn_c_old'])
+                                action_scores_old, state_value_old, state_tuple = _decision_net(
+                                    response_old, self._cell_old, state_tuple,
+                                    is_training=self._is_training,
+                                    enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
+                                state['rnn_h_old'], state['rnn_c_old'] = state_tuple
+                            else:
+                                action_scores_old, state_value_old, _ = _decision_net(
+                                    response_old, is_training=self._is_training,
+                                    enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
                             if self._rl_method == 'dqn':
                                 # Action scores are Q(s, a).
                                 if self._buffer_value_func:
@@ -348,7 +392,7 @@ class SiamFC(models_interface.IterModel):
                 # 'vis': vis,
                 'reward': reward,
             }
-            state = {'y': next_prev_rect}
+            state['y'] = next_prev_rect
             return outputs, state, losses
 
     def end(self):
@@ -524,7 +568,8 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
             return x, rfs
 
 
-def _decision_net(x, is_training=None, enable_bnorm=True, name='feature_net'):
+def _decision_net(x, cell=None, state=None, is_training=None, enable_bnorm=True,
+                  enable_rnn=False, share_fc=False, name='decision_net'):
     '''
     Args:
         x -- [b, s, h, w, c]
@@ -551,12 +596,21 @@ def _decision_net(x, is_training=None, enable_bnorm=True, name='feature_net'):
             x = slim.conv2d(x, 16, [3, 3], padding='SAME')
             x = slim.conv2d(x, 16, [3, 3], padding='SAME')
             x = slim.flatten(x)
-            a = slim.repeat(x, 2, slim.fully_connected, 256)
+            if share_fc:
+                x = slim.repeat(x, 2, slim.fully_connected, 256)
+                if enable_rnn:
+                    x, state = cell(x, state)
+                else:
+                    state = None
+                a, v = x, x
+            else:
+                assert not enable_rnn
+                a = slim.repeat(x, 2, slim.fully_connected, 256)
+                v = slim.repeat(x, 2, slim.fully_connected, 256)
             a = slim.fully_connected(a, len(_ACTIONS), activation_fn=None, normalizer_fn=None)
-            v = slim.repeat(x, 2, slim.fully_connected, 256)
-            v = slim.fully_connected(x, 1, activation_fn=None, normalizer_fn=None)
+            v = slim.fully_connected(v, 1, activation_fn=None, normalizer_fn=None)
             v = tf.squeeze(v, axis=-1)
-            return a, v
+            return a, v, state
 
 
 def _apply_action(rect, action_index, translation_step, log_scale_step, name='apply_action'):
