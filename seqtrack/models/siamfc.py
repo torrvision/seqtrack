@@ -79,6 +79,7 @@ class SiamFC(models_interface.IterModel):
             rl_method='dqn',
             use_best_action=False, # (instead of following policy)
             buffer_value_func=True,
+            regularize_entropy=False,
             enable_ce_loss=True,
             ce_label='gaussian_distance',
             sigma=0.2,
@@ -123,6 +124,7 @@ class SiamFC(models_interface.IterModel):
         self._rl_method = rl_method
         self._use_best_action = use_best_action
         self._buffer_value_func = buffer_value_func
+        self._regularize_entropy = regularize_entropy
         self._enable_ce_loss = enable_ce_loss
         self._ce_label = ce_label
         self._sigma = sigma
@@ -306,6 +308,11 @@ class SiamFC(models_interface.IterModel):
 
             losses = {}
             if self._enable_loss:
+                if self._regularize_entropy:
+                    loss = -tf.nn.softmax_cross_entropy_with_logits(
+                        labels=tf.nn.softmax(action_scores), logits=action_scores)
+                    losses['entropy'] = tf.reduce_mean(loss)
+
                 if self._rl_method == 'none':
                     # Find rectangle for each action.
                     action_rects = _apply_each_action(
