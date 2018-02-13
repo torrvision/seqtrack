@@ -62,6 +62,7 @@ class SiamFC(models_interface.IterModel):
             freeze_siamese=False,
             learnable_prior=False,
             a2c_share_fc=False,
+            dense_actions=False,
             enable_rnn=False,
             epsilon=0.1,
             gamma=0.9,
@@ -109,6 +110,7 @@ class SiamFC(models_interface.IterModel):
         self._freeze_siamese = freeze_siamese
         self._learnable_prior = learnable_prior
         self._a2c_share_fc = a2c_share_fc
+        self._dense_actions = dense_actions
         self._enable_rnn = enable_rnn
         self._epsilon = epsilon
         self._gamma = gamma
@@ -196,7 +198,6 @@ class SiamFC(models_interface.IterModel):
                 search_scale=self._search_scale,
                 aspect=self._aspect,
                 aspect_method=self._aspect_method,
-                scale_step=self._scale_step,
                 search_size=self._search_size,
                 pad_with_mean=self._pad_with_mean,
                 feather=self._feather,
@@ -249,8 +250,11 @@ class SiamFC(models_interface.IterModel):
             self._final_im = frame['x']
             self._final_rect = prev_rect
 
+            scales = util.scale_range(self._num_scales, self._scale_step)
+
             state = {}
-            response, search_rect, search_ims = self._response_func(frame['x'], prev_rect,
+            response, response_rf, search_rect, search_ims = self._response_func(
+                frame['x'], prev_rect, scales,
                 mean_color=self._mean_color,
                 template_feat=self._template_feat,
                 is_training=self._is_training,
@@ -265,14 +269,30 @@ class SiamFC(models_interface.IterModel):
                 if self._enable_rnn:
                     state_tuple = (prev_state['rnn_h'], prev_state['rnn_c'])
                     action_scores, state_value, state_tuple = _decision_net(
-                        response, self._cell, state_tuple,
-                        is_training=self._is_training,
+                        response, self._cell, state_tuple, is_training=self._is_training,
+                        dense_actions=self._dense_actions,
                         enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
                     state['rnn_h'], state['rnn_c'] = state_tuple
                 else:
                     action_scores, state_value, _ = _decision_net(
                         response, is_training=self._is_training,
+                        dense_actions=self._dense_actions,
                         enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
+
+            if self._dense_actions:
+                action_translation, action_scale = _make_dense_actions(
+                    shape=action_scores.shape.as_list()[-3:],
+                    stride=response_rf.stride,
+                    imsize_hw=self._search_size,
+                    scales=scales)
+                action_translation, _ = merge_dims(action_translation, 0, 3)
+                action_scale, _ = merge_dims(action_scale, 0, 3)
+                action_scores, _ = merge_dims(action_scores, 1, 4)
+            else:
+                action_translation = tf.multiply(
+                    self._translation_action_step / self._search_scale,
+                    tf.convert_to_tensor(_ACTION_TRANSLATION))
+                action_scale = tf.exp(tf.log(self._scale_action_step) * tf.convert_to_tensor(_ACTION_SCALE))
 
             mid_scale = (self._num_scales - 1) / 2
             self._info.setdefault('response', []).append(
@@ -294,10 +314,10 @@ class SiamFC(models_interface.IterModel):
                                  lambda: optimal_action, lambda: policy_action)
             # Obtain reward from environment for taking action.
             prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
-            pred_in_search = _apply_action(
-                prev_rect_in_search, action,
-                translation_step=self._translation_action_step/self._search_scale,
-                log_scale_step=tf.log(self._scale_action_step))
+            pred_in_search = _rect_translate_scale(
+                prev_rect_in_search,
+                tf.gather(action_translation, action, axis=0),
+                tf.gather(action_scale, action, axis=0))
             pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
 
             self._info.setdefault('search_im', []).append(_to_uint8(
@@ -335,7 +355,8 @@ class SiamFC(models_interface.IterModel):
                     # Estimate value of final state using old model.
                     # TODO: Only construct graph in final frame.
                     with tf.variable_scope('old'):
-                        response_old, _, _ = self._response_func(self._final_im, self._final_rect,
+                        response_old, _, _, _ = self._response_func(
+                            self._final_im, self._final_rect, scales,
                             mean_color=self._mean_color,
                             template_feat=self._template_feat,
                             is_training=self._is_training,
@@ -348,14 +369,17 @@ class SiamFC(models_interface.IterModel):
                             if self._enable_rnn:
                                 state_tuple = (prev_state['rnn_h_old'], prev_state['rnn_c_old'])
                                 action_scores_old, state_value_old, state_tuple = _decision_net(
-                                    response_old, self._cell_old, state_tuple,
-                                    is_training=self._is_training,
+                                    response_old, self._cell_old, state_tuple, is_training=self._is_training,
+                                    dense_actions=self._dense_actions,
                                     enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
                                 state['rnn_h_old'], state['rnn_c_old'] = state_tuple
                             else:
                                 action_scores_old, state_value_old, _ = _decision_net(
                                     response_old, is_training=self._is_training,
+                                    dense_actions=self._dense_actions,
                                     enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
+                            if self._dense_actions:
+                                action_scores_old, _ = merge_dims(action_scores_old, 1, 4)
                             if self._rl_method == 'dqn':
                                 # Action scores are Q(s, a).
                                 if self._buffer_value_func:
@@ -443,6 +467,7 @@ class SiamFC(models_interface.IterModel):
 def _response_net(
         im,
         prev_rect,
+        scales,
         mean_color,
         template_feat,
         is_training,
@@ -454,7 +479,6 @@ def _response_net(
         aspect_method,
         is_tracking,
         num_scales,
-        scale_step,
         search_size,
         pad_with_mean,
         feather,
@@ -475,7 +499,6 @@ def _response_net(
 
         # Extract an image pyramid (use 1 scale when not in tracking mode).
         mid_scale = (num_scales - 1) / 2
-        scales = util.scale_range(num_scales, scale_step)
         search_ims, search_rects = util.crop_pyr(
             im, search_rect, search_size, scales,
             pad_value=mean_color if pad_with_mean else 0.5,
@@ -512,7 +535,7 @@ def _response_net(
                 # TODO: Set trainable=False for all variables above.
                 response = tf.stop_gradient(response)
 
-        return response, search_rect, search_ims
+        return response, rfs['search'], search_rect, search_ims
 
 
 def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear', enable_bnorm=True,
@@ -576,7 +599,7 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
 
 
 def _decision_net(x, cell=None, state=None, is_training=None, enable_bnorm=True,
-                  enable_rnn=False, share_fc=False, name='decision_net'):
+                  dense_actions=False, enable_rnn=False, share_fc=False, name='decision_net'):
     '''
     Args:
         x -- [b, s, h, w, c]
@@ -587,11 +610,6 @@ def _decision_net(x, cell=None, state=None, is_training=None, enable_bnorm=True,
     assert is_training is not None
     assert len(x.shape) == 5
 
-    # Concatenate multiple scales as feature channels.
-    # TODO: Try 3D conv?
-    x = tf.transpose(x, [0, 2, 3, 1, 4]) # [b, s, h, w, c] -> [b, h, w, s, c]
-    x, _ = merge_dims(x, 3, 5)           # [b, s, h, w, c] -> [b, h, w, s*c]
-
     # np.testing.assert_equal(x.shape.as_list()[-3:-1], [17, 17])
     with tf.name_scope(name) as scope:
         args = dict()
@@ -600,23 +618,50 @@ def _decision_net(x, cell=None, state=None, is_training=None, enable_bnorm=True,
                 normalizer_fn=slim.batch_norm,
                 normalizer_params=dict( is_training=is_training)))
         with slim.arg_scope([slim.conv2d, slim.fully_connected], **args):
-            x = slim.conv2d(x, 16, [3, 3], padding='SAME')
-            x = slim.conv2d(x, 16, [3, 3], padding='SAME')
-            x = slim.flatten(x)
-            if share_fc:
-                x = slim.repeat(x, 2, slim.fully_connected, 256)
-                if enable_rnn:
-                    x, state = cell(x, state)
-                else:
-                    state = None
+            if dense_actions:
+                # Re-map scalars.
                 a, v = x, x
+                a, restore = merge_dims(a, 0, 2) # [b, s, h, w, c] -> [b*s, h, w, c]
+                a = slim.conv2d(a, 64, [1, 1])
+                a = slim.conv2d(a, 1, [1, 1], activation_fn=None, normalizer_fn=None)
+                a = restore(a, 0)
+                a += tf.get_variable('prior', dtype=tf.float32,
+                                     shape=a.shape.as_list()[-4:], # Include scales!
+                                     initializer=tf.zeros_initializer(dtype=tf.float32))
+                a = tf.squeeze(a, -1)
+                # Concatenate multiple scales as feature channels.
+                v = tf.transpose(v, [0, 2, 3, 1, 4]) # [b, s, h, w, c] -> [b, h, w, s, c]
+                v, _ = merge_dims(v, 3, 5)           # -> [b, h, w, s*c]
+                # 33 => 17 => 9 => 5
+                v = slim.conv2d(v, 32, [3, 3], stride=2, padding='SAME')
+                v = slim.conv2d(v, 32, [3, 3], stride=2, padding='SAME')
+                v = slim.conv2d(v, 32, [3, 3], stride=2, padding='SAME')
+                v = slim.flatten(v)
+                v = slim.repeat(v, 2, slim.fully_connected, 256)
+                v = slim.fully_connected(v, 1, activation_fn=None, normalizer_fn=None)
+                v = tf.squeeze(v, axis=-1)
             else:
-                assert not enable_rnn
-                a = slim.repeat(x, 2, slim.fully_connected, 256)
-                v = slim.repeat(x, 2, slim.fully_connected, 256)
-            a = slim.fully_connected(a, len(_ACTIONS), activation_fn=None, normalizer_fn=None)
-            v = slim.fully_connected(v, 1, activation_fn=None, normalizer_fn=None)
-            v = tf.squeeze(v, axis=-1)
+                # Concatenate multiple scales as feature channels.
+                # TODO: Try 3D conv?
+                x = tf.transpose(x, [0, 2, 3, 1, 4]) # [b, s, h, w, c] -> [b, h, w, s, c]
+                x, _ = merge_dims(x, 3, 5)           # -> [b, h, w, s*c]
+                x = slim.conv2d(x, 16, [3, 3], padding='SAME')
+                x = slim.conv2d(x, 16, [3, 3], padding='SAME')
+                x = slim.flatten(x)
+                if share_fc:
+                    x = slim.repeat(x, 2, slim.fully_connected, 256)
+                    if enable_rnn:
+                        x, state = cell(x, state)
+                    else:
+                        state = None
+                    a, v = x, x
+                else:
+                    assert not enable_rnn
+                    a = slim.repeat(x, 2, slim.fully_connected, 256)
+                    v = slim.repeat(x, 2, slim.fully_connected, 256)
+                a = slim.fully_connected(a, len(_ACTIONS), activation_fn=None, normalizer_fn=None)
+                v = slim.fully_connected(v, 1, activation_fn=None, normalizer_fn=None)
+                v = tf.squeeze(v, axis=-1)
             return a, v, state
 
 
@@ -986,3 +1031,30 @@ def _clip_rect_size(rect, min_size=None, max_size=None, name='clip_rect_size'):
         if min_size is not None:
             size = tf.maximum(size, min_size)
         return geom.make_rect_center_size(center, size)
+
+
+def _make_dense_actions(shape, stride, imsize_hw, scales, name='make_dense_actions'):
+    '''
+    Args:
+        shape -- Tuple of (scales, height, width).
+        stride -- Integer.
+        imsize_hw -- Integer.
+        scales -- Tensor with shape [s].
+    '''
+    with tf.name_scope(name) as scope:
+        num_scales, size_y, size_x = shape
+        assert num_scales % 2 == 1
+        assert size_y % 2 == 1
+        assert size_x % 2 == 1
+        range_y = tf.range(size_y) - (size_y-1)/2
+        range_x = tf.range(size_x) - (size_x-1)/2
+        stride_y, stride_x = n_positive_integers(2, stride)
+        imsize_y, imsize_x = n_positive_integers(2, imsize_hw)
+        range_y = tf.to_float(range_y) * (float(stride_y) / imsize_y)
+        range_x = tf.to_float(range_x) * (float(stride_x) / imsize_x)
+        grid_s, grid_y, grid_x = tf.meshgrid(scales, range_y, range_x, indexing='ij')
+        grid_xy = tf.stack((grid_x, grid_y), axis=-1)
+        grid_s = tf.expand_dims(grid_s, -1)
+        # Apply scale to translations.
+        grid_xy *= grid_s
+        return grid_xy, grid_s
