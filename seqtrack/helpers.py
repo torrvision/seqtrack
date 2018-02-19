@@ -120,6 +120,8 @@ def merge_dims(x, a, b, name='merge_dims'):
     Returns:
         Reshaped tensor and a function to restore the shape.
     '''
+    assert 0 <= a < b
+
     def restore(v, axis, x_static, x_dynamic, name='restore'):
         with tf.name_scope(name) as scope:
             '''Restores dimensions [axis] to dimensions [a, ..., b-1].'''
@@ -152,6 +154,23 @@ def merge_dims(x, a, b, name='merge_dims'):
         y = tf.reshape(x, y_dynamic)
         restore_fn = functools.partial(restore, x_static=x_static, x_dynamic=x_dynamic)
         return y, restore_fn
+
+
+def split_dims(x, shape, axis=None, name='split_dims'):
+    with tf.name_scope(name) as scope:
+        x_static = x.shape.as_list()
+        x_dynamic = tf.unstack(tf.shape(x))
+        m = len(x_static)
+        assert -m <= axis < m
+        axis = axis % m
+        # Substitute the static size where possible.
+        if x_static[axis] is not None and all([sh is not None for sh in shape]):
+            assert x_static[axis] == np.prod(shape)
+        y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, axis)] +
+                     [shape[i] for i in range(len(shape))] +
+                     [x_static[i] or x_dynamic[i] for i in range(axis+1, m)])
+        y = tf.reshape(x, y_dynamic)
+        return y
 
 
 def expand_dims_n(input, axis=None, n=1, name=None):

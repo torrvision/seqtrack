@@ -13,6 +13,7 @@ from seqtrack.models import interface as models_interface
 from seqtrack.models import util
 
 from seqtrack.helpers import merge_dims
+from seqtrack.helpers import split_dims
 from seqtrack.helpers import get_act
 from seqtrack.helpers import leaky_relu
 from seqtrack.helpers import expand_dims_n
@@ -616,30 +617,75 @@ def _decision_net(x, cell=None, state=None, is_training=None, enable_bnorm=True,
         if enable_bnorm:
             args.update(dict(
                 normalizer_fn=slim.batch_norm,
-                normalizer_params=dict( is_training=is_training)))
+                normalizer_params=dict(is_training=is_training)))
         with slim.arg_scope([slim.conv2d, slim.fully_connected], **args):
             if dense_actions:
-                # Re-map scalars.
-                a, v = x, x
-                a, restore = merge_dims(a, 0, 2) # [b, s, h, w, c] -> [b*s, h, w, c]
-                a = slim.conv2d(a, 64, [1, 1])
-                a = slim.conv2d(a, 1, [1, 1], activation_fn=None, normalizer_fn=None)
-                a = restore(a, 0)
-                a += tf.get_variable('prior', dtype=tf.float32,
-                                     shape=a.shape.as_list()[-4:], # Include scales!
-                                     initializer=tf.zeros_initializer(dtype=tf.float32))
-                a = tf.squeeze(a, -1)
-                # Concatenate multiple scales as feature channels.
-                v = tf.transpose(v, [0, 2, 3, 1, 4]) # [b, s, h, w, c] -> [b, h, w, s, c]
-                v, _ = merge_dims(v, 3, 5)           # -> [b, h, w, s*c]
-                # 33 => 17 => 9 => 5
-                v = slim.conv2d(v, 32, [3, 3], stride=2, padding='SAME')
-                v = slim.conv2d(v, 32, [3, 3], stride=2, padding='SAME')
-                v = slim.conv2d(v, 32, [3, 3], stride=2, padding='SAME')
-                v = slim.flatten(v)
-                v = slim.repeat(v, 2, slim.fully_connected, 256)
+                # Perform 3D convolution with strides to reduce to vector.
+                xs = []
+                x = slim.conv3d(x, 32, [1, 3, 3], padding='SAME', activation_fn=None, normalizer_fn=None)
+                # [b, 5, 17, 17, 32]
+                xs.append(x)
+                x = tf.nn.relu(slim.batch_norm(x, is_training=is_training))
+                x = slim.max_pool3d(x, [1, 3, 3], [1, 2, 2], padding='SAME')
+                # [b, 5, 9, 9, 32]
+                x = slim.conv3d(x, 48, [1, 3, 3], padding='SAME', activation_fn=None, normalizer_fn=None)
+                # [b, 5, 9, 9, 48]
+                xs.append(x)
+                x = tf.nn.relu(slim.batch_norm(x, is_training=is_training))
+                x = slim.max_pool3d(x, [1, 3, 3], [1, 2, 2], padding='SAME')
+                # [b, 5, 5, 5, 32]
+                x = slim.conv3d(x, 64, [3, 3, 3], padding='SAME', activation_fn=None, normalizer_fn=None)
+                # [b, 5, 5, 5, 64]
+                xs.append(x)
+                x = tf.nn.relu(slim.batch_norm(x, is_training=is_training))
+                x = slim.max_pool3d(x, [3, 3, 3], [2, 2, 2], padding='SAME')
+                # [b, 3, 3, 3, 64]
+                x = slim.flatten(x)
+                # [b, 1728]
+                x = slim.repeat(x, 2, slim.fully_connected, 256)
+                v = x
                 v = slim.fully_connected(v, 1, activation_fn=None, normalizer_fn=None)
                 v = tf.squeeze(v, axis=-1)
+
+                x = slim.fully_connected(x, 1728, activation_fn=None, normalizer_fn=None)
+                x = split_dims(x, [3, 3, 3, 64], axis=-1)
+                x = _resize3d(x, [5, 5, 5], align_corners=True)
+                x = x + xs.pop()
+                x = tf.nn.relu(slim.batch_norm(x, is_training=is_training))
+                x = slim.conv3d(x, 48, [1, 1, 1], padding='SAME', activation_fn=None, normalizer_fn=None)
+                x = _resize2d(x, [9, 9], align_corners=True)
+                x = x + xs.pop()
+                x = tf.nn.relu(slim.batch_norm(x, is_training=is_training))
+                x = slim.conv3d(x, 32, [1, 1, 1], padding='SAME', activation_fn=None, normalizer_fn=None)
+                x = _resize2d(x, [17, 17], align_corners=True)
+                x = x + xs.pop()
+                x = tf.nn.relu(slim.batch_norm(x, is_training=is_training))
+                x = slim.conv3d(x, 1, [1, 1, 1], padding='SAME', activation_fn=None, normalizer_fn=None)
+                a = x
+                a = tf.squeeze(a, -1)
+
+                # # Re-map scalars.
+                # a, v = x, x
+                # a, restore = merge_dims(a, 0, 2) # [b, s, h, w, c] -> [b*s, h, w, c]
+                # a = slim.conv2d(a, 64, [1, 1])
+                # a = slim.conv2d(a, 1, [1, 1], activation_fn=None, normalizer_fn=None)
+                # a = restore(a, 0)
+                # a += tf.get_variable('prior', dtype=tf.float32,
+                #                      shape=a.shape.as_list()[-4:], # Include scales!
+                #                      initializer=tf.zeros_initializer(dtype=tf.float32))
+                # a = tf.squeeze(a, -1)
+                # # Concatenate multiple scales as feature channels.
+                # v = tf.transpose(v, [0, 2, 3, 1, 4]) # [b, s, h, w, c] -> [b, h, w, s, c]
+                # v, _ = merge_dims(v, 3, 5)           # -> [b, h, w, s*c]
+                # # 33 => 17 => 9 => 5
+                # v = slim.conv2d(v, 32, [3, 3], stride=2, padding='SAME')
+                # v = slim.conv2d(v, 32, [3, 3], stride=2, padding='SAME')
+                # v = slim.conv2d(v, 32, [3, 3], stride=2, padding='SAME')
+                # v = slim.flatten(v)
+                # v = slim.repeat(v, 2, slim.fully_connected, 256)
+                # v = slim.fully_connected(v, 1, activation_fn=None, normalizer_fn=None)
+                # v = tf.squeeze(v, axis=-1)
+
             else:
                 # Concatenate multiple scales as feature channels.
                 # TODO: Try 3D conv?
@@ -1058,3 +1104,38 @@ def _make_dense_actions(shape, stride, imsize_hw, scales, name='make_dense_actio
         # Apply scale to translations.
         grid_xy *= grid_s
         return grid_xy, grid_s
+
+
+def _resize2d(images, size, method=tf.image.ResizeMethod.BILINEAR, align_corners=False, name='resize_images'):
+    with tf.name_scope(name) as scope:
+        r = len(images.shape)
+        if r > 4:
+            images, restore = merge_dims(images, 0, r-3)
+            images = _resize2d(images, size, method=method, align_corners=align_corners)
+            return restore(images, axis=0)
+        return tf.image.resize_images(images, size, method=method, align_corners=align_corners)
+
+
+def _resize3d(x, size, method=tf.image.ResizeMethod.BILINEAR, align_corners=False, name='resize3d'):
+    with tf.name_scope(name) as scope:
+        r = len(x.shape)
+        if r > 5:
+            x, restore = merge_dims(x, 0, r-4)
+            x = _resize3d(x, size, method=method, align_corners=align_corners)
+            return restore(x, axis=0)
+
+        size = n_positive_integers(3, size)
+        # First do 2D resize in H, W.
+        # x is [n, d, h, w, c]
+        x, restore = merge_dims(x, 0, 2) # [n*d, h, w, c]
+        x = tf.image.resize_images(x, size[1:3], method=method, align_corners=align_corners)
+        x = restore(x, axis=0) # [n, d, h, w, c]
+        # Next do 1D resize in D.
+        x = tf.transpose(x, [0, 2, 3, 1, 4]) # [n, h, w, d, c]
+        x, restore = merge_dims(x, 0, 3) # [n*h*w, d, c]
+        x = tf.expand_dims(x, 2) # [n*h*w, d, 1, c]
+        x = tf.image.resize_images(x, [size[0], 1], method=method, align_corners=align_corners)
+        x = tf.squeeze(x, 2) # [n*h*w, d, c]
+        x = restore(x, axis=0) # [n, h, w, d, c]
+        x = tf.transpose(x, [0, 3, 1, 2, 4]) # [n, h, w, d, c]
+        return x
