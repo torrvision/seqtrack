@@ -643,6 +643,12 @@ def _decision_net(x, cell=None, state=None, is_training=None, enable_bnorm=True,
                 x = slim.flatten(x)
                 # [b, 1728]
                 x = slim.repeat(x, 2, slim.fully_connected, 256)
+
+                if enable_rnn:
+                    x, state = cell(x, state)
+                else:
+                    state = None
+
                 v = x
                 v = slim.fully_connected(v, 1, activation_fn=None, normalizer_fn=None)
                 v = tf.squeeze(v, axis=-1)
