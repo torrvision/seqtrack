@@ -250,6 +250,21 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
     return center
 
 
+def is_peak(response, axis=None, eps_rel=0.0, eps_abs=0.0, name='is_peak'):
+    '''
+    Args:
+        response: [b, s, h, w, 1]
+    '''
+    with tf.name_scope(name) as scope:
+        # Find arg max over all scales.
+        response = tf.verify_tensor_all_finite(response, 'response is not finite')
+        max_val = tf.reduce_max(response, axis=axis, keep_dims=True)
+        is_max = tf.logical_or(
+            tf.greater_equal(response, max_val - eps_rel*tf.abs(max_val)),
+            tf.greater_equal(response, max_val - eps_abs))
+        return is_max
+
+
 def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_pyr'):
     '''
     Args:

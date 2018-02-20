@@ -148,15 +148,16 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
     tf.summary.scalar('lr', lr, collections=['summaries_train'])
     optimizer = _get_optimizer(lr, o)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    with tf.control_dependencies(update_ops):
-        if not o.grad_clip:
-            optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
-        else: # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
-            gradients, variables = zip(*optimizer.compute_gradients(loss_var))
-            gradients = [None if gradient is None else tf.clip_by_norm(gradient, o.max_grad_norm)
-                         for gradient in gradients]
-            optimize_op = optimizer.apply_gradients(zip(gradients, variables),
-                                                    global_step=global_step_var)
+    if not o.evaluate:
+        with tf.control_dependencies(update_ops):
+            if not o.grad_clip:
+                optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
+            else: # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
+                gradients, variables = zip(*optimizer.compute_gradients(loss_var))
+                gradients = [None if gradient is None else tf.clip_by_norm(gradient, o.max_grad_norm)
+                             for gradient in gradients]
+                optimize_op = optimizer.apply_gradients(zip(gradients, variables),
+                                                        global_step=global_step_var)
 
     summary_vars = {}
     summary_vars_with_preview = {}
@@ -218,12 +219,12 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
 
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
-        print '\ntraining starts! --------------------------------------------'
-        sys.stdout.flush()
-
         if o.evaluate:
             evaluate_at_existing_checkpoints(o, saver, eval_sets, sess, model_inst)
             return
+
+        print '\ntraining starts! --------------------------------------------'
+        sys.stdout.flush()
 
         # 1. resume (full restore), 2. initialize from scratch, 3. curriculume learning (partial restore)
         prev_ckpt = 0
@@ -594,7 +595,10 @@ def _add_losses(losses, loss_coeffs, name='add_losses'):
         for k in loss_coeffs:
             if k not in losses:
                 raise AssertionError('loss not found: {}'.format(k))
-        return tf.add_n([float(loss_coeffs.get(k, 1)) * v for k, v in losses.items()], name=scope)
+        weighted = [float(loss_coeffs.get(k, 1)) * v for k, v in losses.items()]
+        if not weighted:
+            return 0.0
+        return tf.add_n(weighted, name=scope)
 
 def _loss_summary(losses, name='loss_summary'):
     with tf.name_scope(name) as scope:
