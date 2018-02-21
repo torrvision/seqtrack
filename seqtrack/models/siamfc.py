@@ -157,7 +157,7 @@ class SiamFC(models_interface.IterModel):
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
-                # 'y':             tf.identity(y),
+                'y_gt':          tf.identity(y),
                 'template_feat': tf.identity(template_feat),
                 'mean_color':    tf.identity(mean_color),
             }
@@ -165,9 +165,9 @@ class SiamFC(models_interface.IterModel):
 
     def next(self, frame, prev_state, name='timestep'):
         with tf.name_scope(name) as scope:
-            # # During training, let the "previous location" be the current true location
-            # # so that the object is in the center of the search area (like SiamFC).
-            # gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y'])
+            # During training, let the "previous location" be the current true location
+            # so that the object is in the center of the search area (like SiamFC).
+            gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y_gt'])
 
             # Receptive field of feature transform is 87 at stride 8.
             # Feature template is size 5.
@@ -176,16 +176,21 @@ class SiamFC(models_interface.IterModel):
             rf_stride = 8
 
             # Resize the image to multiple sizes.
-            ideal_edges = [64, 128, 256, 512]
+            # The image itself takes up `valid_edge` pixels within an image of size `edge`.
+            # ideal_edges = [64, 128, 256, 512]
+            # ideal_edges = np.logspace(6, 9, num=(9-6)*2+1, base=2.)
+            ideal_edges = np.logspace(6, 9, num=(9-6)+1, base=2.)
             num_sizes = len(ideal_edges)
             valid_edges = [
                 int(round(float(ideal_edge-1)/rf_stride))*rf_stride+1
                 for ideal_edge in ideal_edges]
+            print 'ideal edges:', ideal_edges
+            print 'valid edges:', valid_edges
             edges = [2*rf_half + valid_edge for valid_edge in valid_edges]
+            # TODO: Use a random region within the square.
+            center_rect = _center_rect_with_aspect(self._aspect)
             crop_rects = [
-                geom.crop_inverse(
-                    geom.grow_rect(float(valid_edges[i])/edges[i],
-                                   _center_rect_with_aspect(self._aspect)))
+                geom.crop_inverse(geom.grow_rect(float(valid_edges[i])/edges[i], center_rect))
                 for i in range(num_sizes)]
             search_im = [
                 util.crop(frame['x'], crop_rects[i], (edges[i], edges[i]),
@@ -209,37 +214,19 @@ class SiamFC(models_interface.IterModel):
                         wd=self._wd, is_training=self._is_training,
                         variables_collections=['siamese'], trainable=(not self._freeze_siamese))
 
-            response_original = [None for _ in edges]
+            response = [None for _ in edges]
             for i in range(num_sizes):
-                response_original[i], rfs[i] = util.diag_xcorr_rf(
+                response[i], rfs[i] = util.diag_xcorr_rf(
                     input=search_feat[i], filter=prev_state['template_feat'], input_rfs=rfs[i],
                     padding=self._xcorr_padding)
-                response_original[i] = tf.reduce_sum(response_original[i], axis=-1, keep_dims=True)
+                response[i] = tf.reduce_sum(response[i], axis=-1, keep_dims=True)
                 cnnutil.assert_center_alignment(n_positive_integers(2, edges[i]),
-                                                response_original[i].shape.as_list()[-3:-1],
+                                                response[i].shape.as_list()[-3:-1],
                                                 rfs[i]['search'])
 
-            # for i in range(num_sizes):
-            #     self._info.setdefault('search/size_{}'.format(i), []).append(
-            #         _to_uint8(search_im[i]))
-            #     self._info.setdefault('response_original/size_{}'.format(i), []).append(
-            #         _to_uint8(util.colormap(tf.sigmoid(response_original[i]), _COLORMAP)))
-
-            # Upsample all responses to same size.
-            response_size = response_original[-1].shape.as_list()[-3:-1]
-            response = [
-                tf.image.resize_images(
-                    response_original[i], response_size,
-                    method=tf.image.ResizeMethod.BICUBIC, align_corners=True)
-                if i < num_sizes - 1 else response_original[i]
-                for i in range(num_sizes)]
-            response = tf.stack(response, axis=1)
-
-            # Size of object at each scale.
-            # Given size of object in template and resolution of template.
-            size_in_template = geom.rect_size(self._target_in_template)
-            sizes = (size_in_template *
-                tf.expand_dims(float(self._template_size) / tf.to_float(edges), axis=-1))
+            # Compute batch-norm of all responses together.
+            # This requires concatenating into a large vector.
+            response, unvec = _merge_dims_and_concat(response, 1, 3)
 
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
                 if self._bnorm_after_xcorr:
@@ -254,11 +241,89 @@ class SiamFC(models_interface.IterModel):
                 if self._learnable_prior:
                     response = _add_motion_prior(response)
 
+            # Return from super-vector to separate images per scale.
+            response = unvec(response)
+
+            # Compute the rectangle for each position.
+            # Size of object at each scale.
+            # Given size of object in template and resolution of template.
+            size_in_template = geom.rect_size(self._target_in_template)
+            # TODO: Original image covers `valid_edge` pixels.
+            # sizes = (size_in_template *
+            #     tf.expand_dims(float(self._template_size) / tf.to_float(valid_edges), axis=-1))
+            # scales = float(self._template_size) / np.asfarray(valid_edges)
+            size = [
+                (float(self._template_size) / valid_edges[i]) * size_in_template
+                for i in range(num_sizes)]
+            # Center of receptive field at each location.
+            # TODO: The corners at 0 and 1 are off by half a pixel?
+            centers = [
+                _position_grid(response[i].shape.as_list()[-3:-1]) for i in range(num_sizes)]
+            rects = [
+                geom.make_rect_center_size(centers[i], expand_dims_n(size[i], -2, 2))
+                for i in range(num_sizes)]
+
+            for i in range(num_sizes):
+                self._info.setdefault('search/scale_{}'.format(i), []).append(
+                    _to_uint8(search_im[i]))
+                self._info.setdefault('response/scale_{}'.format(i), []).append(
+                    _to_uint8(util.colormap(tf.sigmoid(response[i]), _COLORMAP)))
+
+            losses = {}
+            if self._enable_loss:
+                # Get labels for all rectangles.
+                iou = [
+                    geom.rect_iou(rects[i], expand_dims_n(gt_rect, -2, 2))
+                    for i in range(num_sizes)]
+                max_iou = [
+                    tf.reduce_max(iou[i], axis=(-2, -1), keep_dims=True)
+                    for i in range(num_sizes)]
+                max_iou = tf.reduce_max(tf.stack(max_iou, axis=1), axis=1, keep_dims=False)
+                is_pos = [
+                    tf.logical_or(iou[i] >= max_iou, iou[i] >= 0.7)
+                    for i in range(num_sizes)]
+                is_neg = [tf.logical_not(is_pos[i]) for i in range(num_sizes)]
+                is_pos = map(tf.to_float, is_pos)
+                is_neg = map(tf.to_float, is_neg)
+                num_pos = [tf.reduce_sum(is_pos[i], axis=(-2, -1)) for i in range(num_sizes)]
+                num_neg = [tf.reduce_sum(is_neg[i], axis=(-2, -1)) for i in range(num_sizes)]
+                num_pos = tf.reduce_sum(tf.stack(num_pos, axis=1), axis=1)
+                num_neg = tf.reduce_sum(tf.stack(num_neg, axis=1), axis=1)
+                coeff = [
+                    (expand_dims_n(0.5 / num_pos, -1, 2) * is_pos[i] +
+                     expand_dims_n(0.5 / num_neg, -1, 2) * is_neg[i])
+                    for i in range(num_sizes)]
+
+                loss = [
+                    coeff[i] * tf.nn.sigmoid_cross_entropy_with_logits(
+                        labels=is_pos[i], logits=tf.squeeze(response[i], axis=-1))
+                    for i in range(num_sizes)]
+                loss, _ = _merge_dims_and_concat(loss, 1, 3)
+                loss = tf.reduce_sum(loss, axis=1)
+                loss = tf.where(frame['y_is_valid'], loss, tf.zeros_like(loss))
+                losses['ce'] = tf.reduce_mean(loss)
+
+                for i in range(num_sizes):
+                    self._info.setdefault('label/scale_{}'.format(i), []).append(
+                        _to_uint8(util.colormap(tf.expand_dims(is_pos[i], -1), _COLORMAP)))
+
+            # Upsample all responses to same size.
+            response_size = response[-1].shape.as_list()[-3:-1]
+            response_resize = [
+                tf.image.resize_images(
+                    response[i], response_size,
+                    method=tf.image.ResizeMethod.BICUBIC, align_corners=True)
+                if i < num_sizes - 1 else response[i]
+                for i in range(num_sizes)]
+            response_resize = tf.stack(response_resize, axis=1)
+
+            # TODO: Unify this code with above `rects`.
             # Find max over all responses.
-            response_sigmoid = tf.sigmoid(response)
+            response_sigmoid = tf.sigmoid(response_resize)
             is_max = tf.to_float(util.is_peak(response_sigmoid, axis=(-4, -3, -2)))
+            sizes = tf.stack(size, axis=1)
             pred_size = weighted_mean(expand_dims_n(sizes, -2, 2), is_max, axis=(-4, -3, -2))
-            center_grid = _position_grid(response.shape.as_list()[-3:-1])
+            center_grid = _position_grid(response_resize.shape.as_list()[-3:-1])
             pred_center = weighted_mean(tf.expand_dims(center_grid, -4), is_max, axis=(-4, -3, -2))
             pred = geom.make_rect_center_size(pred_center, pred_size)
 
@@ -305,7 +370,7 @@ class SiamFC(models_interface.IterModel):
             # self._info.setdefault('response', []).append(
             #     _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
 
-            losses = {}
+            # losses = {}
             # if self._enable_loss:
             #     if self._enable_ce_loss:
             #         losses['ce'], labels = _cross_entropy_loss(
@@ -363,7 +428,7 @@ class SiamFC(models_interface.IterModel):
             # outputs = {'y': pred, 'vis': vis}
             outputs = {'y': pred}
             state = {
-                # 'y': next_prev_rect,
+                'y_gt': gt_rect,
                 'template_feat': prev_state['template_feat'],
                 'mean_color':    prev_state['mean_color'],
             }
@@ -818,3 +883,17 @@ def _position_grid(size):
     range_x = tf.to_float(tf.range(size_x)) / float(size_x - 1)
     grid_y, grid_x = tf.meshgrid(range_y, range_x, indexing='ij')
     return tf.stack((grid_x, grid_y), axis=-1)
+
+
+def _merge_dims_and_concat(xs, a, b):
+    pairs = map(lambda x: merge_dims(x, a, b), xs)
+    xs, restores = zip(*pairs) # Inverse of zip is zip-star.
+    ns = [x.shape.as_list()[a] for x in xs]
+    xs = tf.concat(xs, axis=a)
+
+    def _restore(ys):
+        ys = tf.split(ys, ns, axis=a)
+        ys = [r(y, axis=a) for y, r in zip(ys, restores)]
+        return ys
+
+    return xs, _restore
