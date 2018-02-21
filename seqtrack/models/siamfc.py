@@ -327,6 +327,9 @@ class SiamFC(models_interface.IterModel):
             pred_center = weighted_mean(tf.expand_dims(center_grid, -4), is_max, axis=(-4, -3, -2))
             pred = geom.make_rect_center_size(pred_center, pred_size)
 
+            # Move back from square image to valid part.
+            pred = geom.crop_rect(pred, center_rect)
+
             # if self._curr_as_prev:
             #     prev_rect = tf.cond(self._is_tracking, lambda: prev_state['y'], lambda: gt_rect)
             # else:

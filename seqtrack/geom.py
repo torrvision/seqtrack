@@ -3,6 +3,20 @@ import tensorflow as tf
 EPSILON = 1e-3
 
 
+def crop_pt(pts, window_rect, name='crop_pt'):
+    '''Returns each rectangle relative to a window.
+
+    Args:
+        rects -- [..., 4]
+        window_rect -- [..., 4]
+    '''
+    with tf.name_scope(name) as scope:
+        window_min, window_max = rect_min_max(window_rect)
+        window_size = window_max - window_min
+        window_size = tf.sign(window_size) * tf.maximum(tf.abs(window_size), EPSILON)
+        return (pts - window_min) / window_size
+
+
 def crop_rect(rects, window_rect, name='crop_rect'):
     '''Returns each rectangle relative to a window.
 
