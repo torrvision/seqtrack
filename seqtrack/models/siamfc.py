@@ -167,7 +167,7 @@ class SiamFC(models_interface.IterModel):
         with tf.name_scope(name) as scope:
             # During training, let the "previous location" be the current true location
             # so that the object is in the center of the search area (like SiamFC).
-            gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_state['y_gt'])
+            gt_rect_in_im = tf.where(frame['y_is_valid'], frame['y'], prev_state['y_gt'])
 
             # Receptive field of feature transform is 87 at stride 8.
             # Feature template is size 5.
@@ -187,13 +187,21 @@ class SiamFC(models_interface.IterModel):
             print 'ideal edges:', ideal_edges
             print 'valid edges:', valid_edges
             edges = [2*rf_half + valid_edge for valid_edge in valid_edges]
+            # The image is a rectangle with the correct aspect ratio within a square.
+            # The square has size `valid_edge` within a larger padded image of size `edge`.
             # TODO: Use a random region within the square.
-            center_rect = _center_rect_with_aspect(self._aspect)
-            crop_rects = [
-                geom.crop_inverse(geom.grow_rect(float(valid_edges[i])/edges[i], center_rect))
+            im_in_square = _center_rect_with_aspect(self._aspect)
+            square_in_padded = [
+                geom.make_rect_center_size(
+                    0.5 * tf.ones(2, tf.float32),
+                    (float(valid_edges[i])/edges[i]) * tf.ones(2, tf.float32))
+                for i in range(num_sizes)]
+            # Get aspect within inset rect.
+            im_in_padded = [
+                geom.crop_rect(im_in_square, geom.crop_inverse(square_in_padded[i]))
                 for i in range(num_sizes)]
             search_im = [
-                util.crop(frame['x'], crop_rects[i], (edges[i], edges[i]),
+                util.crop(frame['x'], geom.crop_inverse(im_in_padded[i]), (edges[i], edges[i]),
                           pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
                           feather=self._feather, feather_margin=self._feather_margin)
                 for i in range(num_sizes)]
@@ -272,8 +280,9 @@ class SiamFC(models_interface.IterModel):
             losses = {}
             if self._enable_loss:
                 # Get labels for all rectangles.
+                gt_rect_in_square = geom.crop_rect(gt_rect_in_im, geom.crop_inverse(im_in_square))
                 iou = [
-                    geom.rect_iou(rects[i], expand_dims_n(gt_rect, -2, 2))
+                    geom.rect_iou(rects[i], expand_dims_n(gt_rect_in_square, -2, 2))
                     for i in range(num_sizes)]
                 max_iou = [
                     tf.reduce_max(iou[i], axis=(-2, -1), keep_dims=True)
@@ -328,7 +337,7 @@ class SiamFC(models_interface.IterModel):
             pred = geom.make_rect_center_size(pred_center, pred_size)
 
             # Move back from square image to valid part.
-            pred = geom.crop_rect(pred, center_rect)
+            pred = geom.crop_rect(pred, im_in_square)
 
             # if self._curr_as_prev:
             #     prev_rect = tf.cond(self._is_tracking, lambda: prev_state['y'], lambda: gt_rect)
@@ -431,7 +440,7 @@ class SiamFC(models_interface.IterModel):
             # outputs = {'y': pred, 'vis': vis}
             outputs = {'y': pred}
             state = {
-                'y_gt': gt_rect,
+                'y_gt': gt_rect_in_im,
                 'template_feat': prev_state['template_feat'],
                 'mean_color':    prev_state['mean_color'],
             }
