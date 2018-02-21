@@ -239,6 +239,7 @@ class SiamFC(models_interface.IterModel):
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
                 if self._bnorm_after_xcorr:
                     response = slim.batch_norm(response, scale=True, is_training=self._is_training,
+                                               trainable=(not self._freeze_siamese),
                                                variables_collections=['siamese'])
                 else:
                     response = _affine_scalar(response, variables_collections=['siamese'])
@@ -247,7 +248,7 @@ class SiamFC(models_interface.IterModel):
                     # TODO: Set trainable=False for all variables above.
                     response = tf.stop_gradient(response)
                 if self._learnable_prior:
-                    response = _add_motion_prior(response)
+                    response += _get_motion_prior(response.shape.as_list()[1:])
 
             # Return from super-vector to separate images per scale.
             response = unvec(response)
@@ -486,6 +487,7 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
                 normalizer_fn=slim.batch_norm,
                 normalizer_params=dict(
                     is_training=is_training if trainable else False, # Fix bnorm if not trainable.
+                    trainable=trainable,
                     variables_collections=variables_collections)))
         with slim.arg_scope([slim.conv2d], **conv_args):
             if arch == 'alexnet':
@@ -604,10 +606,8 @@ def _get_context_rect(rect, context_amount, aspect, aspect_method):
     return context, square
 
 
-def _add_motion_prior(response, name='motion_prior'):
+def _get_motion_prior(response_shape, name='motion_prior'):
     with tf.name_scope(name) as scope:
-        response_shape = response.shape.as_list()[-3:]
-        assert response_shape[-1] == 1
         prior = tf.get_variable('prior', shape=response_shape, dtype=tf.float32,
                                 initializer=tf.zeros_initializer(dtype=tf.float32))
         # self._info.setdefault('response_appearance', []).append(
@@ -617,7 +617,7 @@ def _add_motion_prior(response, name='motion_prior'):
         #         'motion_prior', max_outputs=1,
         #         tensor=_to_uint8(util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
         #         collections=self._image_summaries_collections)
-        return response + prior
+        return prior
 
 
 def _cross_entropy_loss(
