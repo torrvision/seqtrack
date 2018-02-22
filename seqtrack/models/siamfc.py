@@ -195,26 +195,58 @@ class SiamFC(models_interface.IterModel):
                     output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
                     wd=self._wd, is_training=self._is_training,
                     variables_collections=['siamese'], trainable=(not self._freeze_siamese))
+            search_feat_size = search_feat.shape.as_list()[2:4]
+            cnnutil.assert_center_alignment(self._search_size, search_feat_size, rfs['search'])
 
-            response, rfs = util.diag_xcorr_rf(
-                input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
-                padding=self._xcorr_padding)
-            response = tf.reduce_sum(response, axis=-1, keep_dims=True)
-            response_size = response.shape.as_list()[-3:-1]
-            cnnutil.assert_center_alignment(self._search_size, response_size, rfs['search'])
+            search_feat, unmerge_scales = merge_dims(search_feat, 0, 2)
+
+            template_feat_size = prev_state['template_feat'].shape.as_list()[1:3]
+            template_parts, _ = merge_dims(prev_state['template_feat'], 1, 3) # [b, h*w, c]
+            template_parts = expand_dims_n(template_parts, 1, 2) # [b, 1, 1, h*w, c]
+            # [b, H, W, c]
+            search_feat = tf.expand_dims(search_feat, -2) # [b, H, W, 1, c]
+            response = tf.reduce_sum(template_parts * search_feat, axis=-1) # [b, H, W, h*w]
+
+            if self._freeze_siamese:
+                # TODO: Prevent batch-norm updates as well.
+                # TODO: Set trainable=False for all variables above.
+                response = tf.stop_gradient(response)
+
+            # response, rfs = util.diag_xcorr_rf(
+            #     input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
+            #     padding=self._xcorr_padding)
+            # response = tf.reduce_sum(response, axis=-1, keep_dims=True)
+            # response_size = response.shape.as_list()[-3:-1]
+            # cnnutil.assert_center_alignment(self._search_size, response_size, rfs['search'])
 
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
-                if self._bnorm_after_xcorr:
-                    response = slim.batch_norm(response, scale=True, is_training=self._is_training,
-                                               variables_collections=['siamese'])
-                else:
-                    response = _affine_scalar(response, variables_collections=['siamese'])
-                if self._freeze_siamese:
-                    # TODO: Prevent batch-norm updates as well.
-                    # TODO: Set trainable=False for all variables above.
-                    response = tf.stop_gradient(response)
+                # Add batch-norm layer.
+                response = tf.expand_dims(response, -1) # Apply batch-norm to scalars.
+                response = slim.batch_norm(response, is_training=self._is_training,
+                                           variables_collections=['siamese'])
+                response = tf.squeeze(response, -1)
+                # Add a final conv layer to put together the responses.
+                response, rfs = util.conv2d_rf(response, rfs, 1, template_feat_size, padding='VALID',
+                                               activation_fn=None, normalizer_fn=None)
+                response_size = response.shape.as_list()[-3:-1]
+                cnnutil.assert_center_alignment(self._search_size, response_size, rfs['search'])
                 if self._learnable_prior:
                     response = _add_motion_prior(response)
+
+            response = unmerge_scales(response, 0)
+
+            # with tf.variable_scope('output', reuse=(self._num_frames > 0)):
+            #     if self._bnorm_after_xcorr:
+            #         response = slim.batch_norm(response, scale=True, is_training=self._is_training,
+            #                                    variables_collections=['siamese'])
+            #     else:
+            #         response = _affine_scalar(response, variables_collections=['siamese'])
+            #     if self._freeze_siamese:
+            #         # TODO: Prevent batch-norm updates as well.
+            #         # TODO: Set trainable=False for all variables above.
+            #         response = tf.stop_gradient(response)
+            #     if self._learnable_prior:
+            #         response = _add_motion_prior(response)
 
             self._info.setdefault('response', []).append(
                 _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
