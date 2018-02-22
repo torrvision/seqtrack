@@ -143,9 +143,10 @@ def merge_dims(x, a, b, name='merge_dims'):
         x_static = x.shape.as_list()
         n = len(x_static)
 
+        prod = lambda xs: reduce(lambda x, y: x * y, xs)
         # Substitute the static size where possible.
         y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, a)] +
-                     [tf.reduce_prod(x_dynamic[a:b])] +
+                     [prod([x_static[i] or x_dynamic[i] for i in range(a, b)])] +
                      [x_static[i] or x_dynamic[i] for i in range(b, n)])
         y = tf.reshape(x, y_dynamic)
         restore_fn = functools.partial(restore, x_static=x_static, x_dynamic=x_dynamic)
