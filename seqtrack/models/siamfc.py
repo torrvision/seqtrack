@@ -273,10 +273,13 @@ class SiamFC(models_interface.IterModel):
                 for i in range(num_sizes)]
 
             for i in range(num_sizes):
-                self._info.setdefault('search/scale_{}'.format(i), []).append(
-                    _to_uint8(search_im[i]))
-                self._info.setdefault('response/scale_{}'.format(i), []).append(
-                    _to_uint8(util.colormap(tf.sigmoid(response[i]), _COLORMAP)))
+                self._info.setdefault('search/scale_{}'.format(i), []).append(_to_uint8(
+                    search_im[i]))
+                response_cmap = util.colormap(tf.sigmoid(response[i]), _COLORMAP)
+                self._info.setdefault('response/scale_{}'.format(i), []).append(_to_uint8(
+                    response_cmap))
+                self._info.setdefault('response_overlay/scale_{}'.format(i), []).append(_to_uint8(
+                    _visualize_response(search_im[i], response_cmap, rfs[i]['search'])))
 
             losses = {}
             if self._enable_loss:
@@ -314,8 +317,11 @@ class SiamFC(models_interface.IterModel):
                 losses['ce'] = tf.reduce_mean(loss)
 
                 for i in range(num_sizes):
-                    self._info.setdefault('label/scale_{}'.format(i), []).append(
-                        _to_uint8(util.colormap(tf.expand_dims(is_pos[i], -1), _COLORMAP)))
+                    label_cmap = util.colormap(tf.expand_dims(is_pos[i], -1), _COLORMAP)
+                    self._info.setdefault('label/scale_{}'.format(i), []).append(_to_uint8(
+                        label_cmap))
+                    self._info.setdefault('label_overlay/scale_{}'.format(i), []).append(_to_uint8(
+                        _visualize_response(search_im[i], label_cmap, rfs[i]['search'])))
 
             # Upsample all responses to same size.
             response_size = response[-1].shape.as_list()[-3:-1]
@@ -804,35 +810,44 @@ def _finalize_scores(response, stride, hann_method, hann_coeff, name='finalize_s
         return response
 
 
-def _visualize_response(
-        response, response_final, search_im, response_rf, im, search_rect,
-        name='visualize_response'):
+# def _visualize_response(
+#         response, response_final, search_im, response_rf, im, search_rect,
+#         name='visualize_response'):
+#     with tf.name_scope(name) as scope:
+#         response_size = response.shape.as_list()[-3:-1]
+#         search_size = search_im.shape.as_list()[-3:-1]
+#         rf_centers = _find_rf_centers(search_size, response_size, response_rf)
+# 
+#         # response is logits
+#         response_cmap = util.colormap(tf.sigmoid(response), _COLORMAP)
+#         # self._info.setdefault('response', []).append(_to_uint8(response_cmap))
+#         # Draw coarse response over search image.
+#         response_in_search = _align_corner_centers(rf_centers, response_size)
+#         # self._info.setdefault('response_in_search', []).append(_to_uint8(_paste_image_at_rect(
+#         #     search_im, response_cmap, response_in_search, alpha=0.5)))
+# 
+#         # response_final is probability
+#         response_final_cmap = util.colormap(response_final, _COLORMAP)
+#         # self._info.setdefault('response_final', []).append(_to_uint8(response_final_cmap))
+#         # Draw upsample, regularized response over original image.
+#         upsample_response_size = response_final.shape.as_list()[-3:-1]
+#         response_final_in_search = _align_corner_centers(rf_centers, upsample_response_size)
+#         response_final_in_image = geom.crop_rect(response_final_in_search, geom.crop_inverse(search_rect))
+#         # TODO: How to visualize multi-scale responses?
+#         response_final_in_image = _paste_image_at_rect(
+#             im, response_final_cmap, response_final_in_image, alpha=0.5)
+#         # self._info.setdefault('response_final_in_image', []).append(_to_uint8(response_final_in_image))
+# 
+#         return response_final_in_image
+
+
+def _visualize_response(search_im, response_cmap, response_rf, name='visualize_response'):
     with tf.name_scope(name) as scope:
-        response_size = response.shape.as_list()[-3:-1]
+        response_size = response_cmap.shape.as_list()[-3:-1]
         search_size = search_im.shape.as_list()[-3:-1]
         rf_centers = _find_rf_centers(search_size, response_size, response_rf)
-
-        # response is logits
-        response_cmap = util.colormap(tf.sigmoid(response), _COLORMAP)
-        # self._info.setdefault('response', []).append(_to_uint8(response_cmap))
-        # Draw coarse response over search image.
         response_in_search = _align_corner_centers(rf_centers, response_size)
-        # self._info.setdefault('response_in_search', []).append(_to_uint8(_paste_image_at_rect(
-        #     search_im, response_cmap, response_in_search, alpha=0.5)))
-
-        # response_final is probability
-        response_final_cmap = util.colormap(response_final, _COLORMAP)
-        # self._info.setdefault('response_final', []).append(_to_uint8(response_final_cmap))
-        # Draw upsample, regularized response over original image.
-        upsample_response_size = response_final.shape.as_list()[-3:-1]
-        response_final_in_search = _align_corner_centers(rf_centers, upsample_response_size)
-        response_final_in_image = geom.crop_rect(response_final_in_search, geom.crop_inverse(search_rect))
-        # TODO: How to visualize multi-scale responses?
-        response_final_in_image = _paste_image_at_rect(
-            im, response_final_cmap, response_final_in_image, alpha=0.5)
-        # self._info.setdefault('response_final_in_image', []).append(_to_uint8(response_final_in_image))
-
-        return response_final_in_image
+        return _paste_image_at_rect(search_im, response_cmap, response_in_search, alpha=0.5)
 
 
 def _rect_translate_scale(rect, translate, scale, name='rect_translate_scale'):
