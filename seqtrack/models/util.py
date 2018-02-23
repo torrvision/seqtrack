@@ -14,6 +14,7 @@ from seqtrack.helpers import modify_aspect_ratio
 from seqtrack.helpers import diag_xcorr
 from seqtrack.helpers import expand_dims_n
 from seqtrack.helpers import weighted_mean
+from seqtrack.lossfunc import make_grid_centers
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 
@@ -288,22 +289,22 @@ def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_py
         return translation, scale
 
 
-def make_grid_centers(im_size, name='make_grid_centers'):
-    '''Make grid of center positions of each pixel.
-
-    Args:
-        im_size: (height, width)
-
-    Returns:
-        Tensor grid of size [height, width, 2] as (x, y).
-    '''
-    with tf.name_scope(name) as scope:
-        size_y, size_x = n_positive_integers(2, im_size)
-        grid_y = (tf.to_float(tf.range(size_y)) + 0.5) / float(size_y)
-        grid_x = (tf.to_float(tf.range(size_x)) + 0.5) / float(size_x)
-        grid = tf.stack((tf.tile(tf.expand_dims(grid_x, 0), [size_y, 1]),
-                         tf.tile(tf.expand_dims(grid_y, 1), [1, size_x])), axis=-1)
-        return grid
+# def make_grid_centers(im_size, name='make_grid_centers'):
+#     '''Make grid of center positions of each pixel.
+# 
+#     Args:
+#         im_size: (height, width)
+# 
+#     Returns:
+#         Tensor grid of size [height, width, 2] as (x, y).
+#     '''
+#     with tf.name_scope(name) as scope:
+#         size_y, size_x = n_positive_integers(2, im_size)
+#         grid_y = (tf.to_float(tf.range(size_y)) + 0.5) / float(size_y)
+#         grid_x = (tf.to_float(tf.range(size_x)) + 0.5) / float(size_x)
+#         grid = tf.stack((tf.tile(tf.expand_dims(grid_x, 0), [size_y, 1]),
+#                          tf.tile(tf.expand_dims(grid_y, 1), [1, size_x])), axis=-1)
+#         return grid
 
 
 def displacement_from_center(im_size, name='displacement_grid'):

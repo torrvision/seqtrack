@@ -2,7 +2,35 @@ import tensorflow as tf
 import tensorflow.contrib.slim as slim
 
 from seqtrack import geom
-from seqtrack.helpers import most_static_shape, expand_dims_n
+
+from seqtrack.helpers import most_static_shape
+from seqtrack.helpers import expand_dims_n
+from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
+
+
+def foreground_labels_grid(im_size, rect, name='fg_labels_grid', **kwargs):
+    with tf.name_scope(name) as scope:
+        position = make_grid_centers(im_size)
+        return foreground_labels(position, rect, name=scope, **kwargs)
+
+
+def make_grid_centers(im_size, name='make_grid_centers'):
+    '''Make grid of center positions of each pixel.
+
+    Args:
+        im_size: (height, width)
+
+    Returns:
+        Tensor grid of size [height, width, 2] as (x, y).
+    '''
+    with tf.name_scope(name) as scope:
+        size_y, size_x = n_positive_integers(2, im_size)
+        range_y = (tf.to_float(tf.range(size_y)) + 0.5) / float(size_y)
+        range_x = (tf.to_float(tf.range(size_x)) + 0.5) / float(size_x)
+        grid_y, grid_x = tf.meshgrid(range_y, range_x, indexing='ij')
+        # grid = tf.stack((tf.tile(tf.expand_dims(range_x, 0), [size_y, 1]),
+        #                  tf.tile(tf.expand_dims(range_y, 1), [1, size_x])), axis=-1)
+        return tf.stack((grid_x, grid_y), axis=-1, name=scope)
 
 
 def foreground_labels(position, rect, shape='rect', sigma=0.3, name='foreground_labels'):
