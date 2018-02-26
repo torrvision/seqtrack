@@ -64,6 +64,7 @@ class SiamFC(models_interface.IterModel):
             learnable_prior=False,
             a2c_share_fc=False,
             dense_actions=False,
+            use_raw_scores=False, # for dense actions
             enable_rnn=False,
             epsilon=0.1,
             gamma=0.9,
@@ -79,6 +80,7 @@ class SiamFC(models_interface.IterModel):
             arg_max_eps_rel=0.05,
             # Loss parameters:
             rl_method='dqn',
+            temperature=1.0,
             use_best_action=False, # (instead of following policy)
             buffer_value_func=True,
             regularize_entropy=False,
@@ -112,6 +114,7 @@ class SiamFC(models_interface.IterModel):
         self._learnable_prior = learnable_prior
         self._a2c_share_fc = a2c_share_fc
         self._dense_actions = dense_actions
+        self._use_raw_scores = use_raw_scores
         self._enable_rnn = enable_rnn
         self._epsilon = epsilon
         self._gamma = gamma
@@ -125,6 +128,7 @@ class SiamFC(models_interface.IterModel):
         self._hann_coeff = hann_coeff
         self._arg_max_eps_rel = arg_max_eps_rel
         self._rl_method = rl_method
+        self._temperature = temperature
         self._use_best_action = use_best_action
         self._buffer_value_func = buffer_value_func
         self._regularize_entropy = regularize_entropy
@@ -272,13 +276,15 @@ class SiamFC(models_interface.IterModel):
                     action_scores, state_value, state_tuple = _decision_net(
                         response, self._cell, state_tuple, is_training=self._is_training,
                         dense_actions=self._dense_actions,
-                        enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
+                        enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc,
+                        use_raw_scores=self._use_raw_scores)
                     state['rnn_h'], state['rnn_c'] = state_tuple
                 else:
                     action_scores, state_value, _ = _decision_net(
                         response, is_training=self._is_training,
                         dense_actions=self._dense_actions,
-                        enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
+                        enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc,
+                        use_raw_scores=self._use_raw_scores)
 
             if self._dense_actions:
                 action_translation, action_scale = _make_dense_actions(
@@ -309,7 +315,8 @@ class SiamFC(models_interface.IterModel):
                 action = tf.where(use_random, random_action, optimal_action)
                 action = tf.where(self._choose_action, action, frame['action'])
             else: # rl_method is 'a2c' or 'none'
-                policy_action = tf.to_int32(tf.multinomial(action_scores, num_samples=1))
+                policy_action = tf.to_int32(tf.multinomial(
+                    (1./self._temperature)*action_scores, num_samples=1))
                 policy_action = tf.squeeze(policy_action, axis=1)
                 action = tf.cond(tf.logical_and(self._is_tracking, self._use_best_action),
                                  lambda: optimal_action, lambda: policy_action)
@@ -372,13 +379,15 @@ class SiamFC(models_interface.IterModel):
                                 action_scores_old, state_value_old, state_tuple = _decision_net(
                                     response_old, self._cell_old, state_tuple, is_training=self._is_training,
                                     dense_actions=self._dense_actions,
-                                    enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
+                                    enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc,
+                                    use_raw_scores=self._use_raw_scores)
                                 state['rnn_h_old'], state['rnn_c_old'] = state_tuple
                             else:
                                 action_scores_old, state_value_old, _ = _decision_net(
                                     response_old, is_training=self._is_training,
                                     dense_actions=self._dense_actions,
-                                    enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc)
+                                    enable_rnn=self._enable_rnn, share_fc=self._a2c_share_fc,
+                                    use_raw_scores=self._use_raw_scores)
                             if self._dense_actions:
                                 action_scores_old, _ = merge_dims(action_scores_old, 1, 4)
                             if self._rl_method == 'dqn':
@@ -600,7 +609,8 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
 
 
 def _decision_net(x, cell=None, state=None, is_training=None, enable_bnorm=True,
-                  dense_actions=False, enable_rnn=False, share_fc=False, name='decision_net'):
+                  dense_actions=False, enable_rnn=False, share_fc=False,
+                  use_raw_scores=False, name='decision_net'):
     '''
     Args:
         x -- [b, s, h, w, c]
@@ -613,6 +623,11 @@ def _decision_net(x, cell=None, state=None, is_training=None, enable_bnorm=True,
 
     # np.testing.assert_equal(x.shape.as_list()[-3:-1], [17, 17])
     with tf.name_scope(name) as scope:
+        if use_raw_scores:
+            a = tf.squeeze(x, -1)
+            v = tf.zeros([tf.shape(x)[0]], tf.float32)
+            return a, v, None
+
         args = dict()
         if enable_bnorm:
             args.update(dict(

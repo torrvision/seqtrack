@@ -149,15 +149,16 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
     tf.summary.scalar('lr', lr, collections=['summaries_train'])
     optimizer = _get_optimizer(lr, o)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-    with tf.control_dependencies(update_ops):
-        if not o.grad_clip:
-            optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
-        else: # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
-            gradients, variables = zip(*optimizer.compute_gradients(loss_var))
-            gradients = [None if gradient is None else tf.clip_by_norm(gradient, o.max_grad_norm)
-                         for gradient in gradients]
-            optimize_op = optimizer.apply_gradients(zip(gradients, variables),
-                                                    global_step=global_step_var)
+    if not o.evaluate:
+        with tf.control_dependencies(update_ops):
+            if not o.grad_clip:
+                optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
+            else: # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
+                gradients, variables = zip(*optimizer.compute_gradients(loss_var))
+                gradients = [None if gradient is None else tf.clip_by_norm(gradient, o.max_grad_norm)
+                             for gradient in gradients]
+                optimize_op = optimizer.apply_gradients(zip(gradients, variables),
+                                                        global_step=global_step_var)
 
     summary_vars = {}
     summary_vars_with_preview = {}
