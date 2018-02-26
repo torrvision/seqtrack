@@ -215,7 +215,9 @@ class SiamFC(models_interface.IterModel):
                 enable_feature_bnorm=self._enable_feature_bnorm,
                 freeze_siamese=self._freeze_siamese,
                 xcorr_padding=self._xcorr_padding,
-                bnorm_after_xcorr=self._bnorm_after_xcorr)
+                bnorm_after_xcorr=self._bnorm_after_xcorr,
+                hann_method=self._hann_method,
+                hann_coeff=self._hann_coeff
 
             self._mean_color = mean_color
             self._template_feat = template_feat
@@ -501,7 +503,9 @@ def _response_net(
         enable_feature_bnorm,
         freeze_siamese,
         xcorr_padding,
-        bnorm_after_xcorr):
+        bnorm_after_xcorr,
+        hann_method,
+        hann_coeff):
     with tf.name_scope(name) as scope:
         # Coerce the aspect ratio of the rectangle to construct the search area.
         search_rect, _ = _get_context_rect(prev_rect, search_scale,
@@ -544,6 +548,16 @@ def _response_net(
                 # TODO: Prevent batch-norm updates as well.
                 # TODO: Set trainable=False for all variables above.
                 response = tf.stop_gradient(response)
+
+        if hann_method == 'add_logit':
+            response += hann_coeff * tf.expand_dims(hann_2d(upsample_size), -1)
+        # elif hann_method == 'mul_prob':
+        #     response = tf.sigmoid(response)
+        #     response *= tf.expand_dims(hann_2d(upsample_size), -1)
+        elif hann_method == 'none' or not hann_method:
+            pass
+        else:
+            raise ValueError('unknown hann method: {}'.format(hann_method))
 
         return response, rfs['search'], search_rect, search_ims
 
