@@ -221,12 +221,12 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
 
     t_total = time.time()
     with tf.Session(config=o.tfconfig) as sess:
-        print '\ntraining starts! --------------------------------------------'
-        sys.stdout.flush()
-
         if o.evaluate:
             evaluate_at_existing_checkpoints(o, saver, eval_sets, sess, model_inst)
             return
+
+        print '\ntraining starts! --------------------------------------------'
+        sys.stdout.flush()
 
         # 1. resume (full restore), 2. initialize from scratch, 3. curriculume learning (partial restore)
         prev_ckpt = 0
