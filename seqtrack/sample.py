@@ -8,8 +8,27 @@ import math
 import numpy as np
 import os
 
+import logging
+logger = logging.getLogger(__name__)
+
 from seqtrack import data
 from seqtrack import geom_np
+
+
+# Thoughts:
+#
+# During training, we just need a never-ending stream of examples.
+# However, sometimes during training, we want to obtain an epoch.
+# During evaluation, we either want to
+# - take n sequences from a larger (possibly infinite) stream or
+# - run the tracker on all videos in a dataset
+#
+# The use of asynchronous data loading, balanced mixtures of datasets, etc
+# makes it difficult to have a perfect resume
+# (which might otherwise be done at the epoch).
+#
+# We could have a DataSource class.
+# This can have an epoch or not.
 
 
 def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
@@ -41,14 +60,21 @@ def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
         ntimesteps: Maximum number of frames after first frame, or None.
     '''
 
-    def _select_frames(is_valid, valid_frames):
+    tracks_by_video = data.get_tracks_by_video(dataset)
+
+    def _select_frames(valid_frames):
+        valid_frames = sorted(valid_frames)
+        valid_frames_set = set(valid_frames)
+        t_min, t_max = valid_frames[0], valid_frames[-1]
+        video_len = t_max - t_min + 1
+        is_valid = {t: t in valid_frames_set for t in range(t_min, t_max + 1)}
+
         if kind == 'sampling':
             k = min(len(valid_frames), ntimesteps+1)
             return sorted(rand.choice(valid_frames, k, replace=False))
         elif kind == 'freq-range-fit':
             # TODO: The scope of this sampler should include
             # choosing objects within videos.
-            video_len = len(is_valid)
             # Choose frames:
             #   a, round(a+freq), round(a+2*freq), round(a+3*freq), ...
             # Therefore, for frames [0, ..., ntimesteps], we need:
@@ -68,7 +94,7 @@ def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
             # Let n = ntimesteps*f.
             n = int(round(ntimesteps * f))
             # Choose first frame such that all frames are present.
-            a = rand.choice([a for a in valid_frames if a + n <= video_len - 1])
+            a = rand.choice([a for a in valid_frames if a + n <= t_max])
             return [int(round(a + f*t)) for t in range(0, ntimesteps+1)]
         elif kind == 'regular':
             ''' Sample frames with `freq`, regardless of label
@@ -78,15 +104,14 @@ def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
             Adaptive frequency or gradually increasing frequency as a
             Curriculum Learning might be tried.
             '''
-            num_frames = len(is_valid)
-            frames = range(rand.choice(valid_frames), num_frames, freq)
+            frames = range(rand.choice(valid_frames), video_len, freq)
             return frames[:ntimesteps+1]
         elif kind == 'full':
             ''' The full sequence from first 1 to last 1, regardless of label.
             Thus, the returned frames can be `SPARSE`, e.g., [1,1,1,1,0,0,1,1].
             This option is used to evaluate full-length sequences.
             '''
-            return range(valid_frames[0], valid_frames[-1]+1)
+            return range(t_min, t_max+1)
         else:
             raise ValueError('unknown sampler: {}'.format(kind))
 
@@ -105,50 +130,67 @@ def sample(dataset, rand=None, shuffle=False, max_videos=None, max_objects=None,
         raise ValueError('enable shuffle or remove limit on number of videos')
 
     num_videos = 0
-    for video in videos:
+    for video_id in videos:
         if max_videos is not None and not num_videos < max_videos:
             break
 
         ## JV: Shuffle all trajectories even if max_objects specified.
-        ## trajectories = dataset.tracks[video]
+        ## trajectories = dataset.tracks[video_id]
         ## if max_objects is not None and len(trajectories) > max_objects:
         ##     trajectories = rand.choice(trajectories, max_objects, replace=False)
         # Construct (index, trajectory) pairs.
-        trajectories = list(enumerate(dataset.tracks[video]))
-        if max_objects is not None and len(trajectories) > max_objects:
-            rand.shuffle(trajectories)
+        video_tracks = list(enumerate(tracks_by_video[video_id]))
+        if max_objects is not None and len(video_tracks) > max_objects:
+            rand.shuffle(video_tracks)
 
-        ## for cnt, trajectory in enumerate(trajectories):
+        ## for cnt, trajectory in enumerate(video_tracks):
         num_objects = 0
-        for index, trajectory in trajectories:
+        for index, track_id in video_tracks:
             if max_objects is not None and not num_objects < max_objects:
                 break
 
-            frame_is_valid = [(t in trajectory) for t in range(dataset.video_length[video])]
-            # JV: This was not sorted in previous commits? Could have an effect!
-            valid_frames = sorted(trajectory.keys())
-            frames = _select_frames(frame_is_valid, valid_frames)
-            if not frames:
+            labels = dataset.labels(track_id)
+            present_frames = [t for t, l in labels.items() if not l.get('absent', False)]
+            if len(present_frames) == 0:
+                logger.warning('no present frames: track "%s" in video "%s"', track_id, video_id)
                 continue
-            label_is_valid = [(t in trajectory) for t in frames]
+            frames = _select_frames(present_frames)
+            if not frames:
+                logger.warning('failed to select frames: track "%s" in video "%s"',
+                               track_id, video_id)
+                continue
+            label_is_valid = [t in labels and not labels[t].get('absent', False) for t in frames]
             # Skip sequences with no labels (after first label).
             num_labels = sum(1 for x in label_is_valid if x)
             if num_labels < 2:
+                logger.warning('less than two labels: track "%s" in video "%s"', track_id, video_id)
                 continue
-            width, height = dataset.original_image_size[video]
+            # width, height = dataset.original_image_size[video_id]
             yield {
-                'image_files':         [dataset.image_file(video, t) for t in frames],
+                'image_files':         [dataset.image_file(video_id, t) for t in frames],
                 'viewports':           [geom_np.unit_rect() for _ in frames],
-                'labels':              [trajectory.get(t, _invalid_rect()) for t in frames],
+                'labels':              [_rect_from_label(labels.get(t, None)) for t in frames],
                 'label_is_valid':      label_is_valid,
-                'aspect':              float(width) / float(height),
-                'original_image_size': dataset.original_image_size[video],
-                'video_name':          video + '-{}'.format(index) if len(trajectories) > 1 else video,
+                'aspect':              dataset.aspect(video_id),
+                # 'original_image_size': dataset.original_image_size[video_id],
+                'video_name':          (video_id + '-{}'.format(index)) if len(video_tracks) > 1
+                                       else video_id,
             }
             num_objects += 1
 
         if num_objects > 0:
             num_videos += 1
+
+
+def _rect_from_label(label):
+    if label is None:
+        return _invalid_rect()
+    if label.get('absent', False):
+        return _invalid_rect()
+    if 'rect' not in label:
+        raise ValueError('label does not contain rect')
+    rect = label['rect']
+    return [rect['xmin'], rect['ymin'], rect['xmax'], rect['ymax']]
 
 
 def _invalid_rect():
@@ -169,7 +211,8 @@ def sample_videos(dataset, shuffle, rand):
     try:
         videos = dataset.sample_videos(shuffle, rand)
     except AttributeError:
-        videos = list(dataset.videos)
+        # videos = list(dataset.videos)
+        videos = data.get_videos(dataset)
         if shuffle:
             rand.shuffle(videos)
     for video in videos:
@@ -195,7 +238,7 @@ class DatasetMixture(data.Concat):
         p = weights / np.sum(weights)
 
         samplers = {name: (video for video in []) for name in names}
-        for i in range(len(self.videos)):
+        for i in range(len(data.get_videos(self))):
             name = rand.choice(names, p=p)
             try:
                 video = next(samplers[name])

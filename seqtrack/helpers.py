@@ -5,8 +5,13 @@ import functools
 import json
 import numpy as np
 import os
+import tempfile
+import time
 from PIL import Image
 import tensorflow as tf
+
+import logging
+logger = logging.getLogger(__name__)
 
 from seqtrack import geom
 from seqtrack import geom_np
@@ -95,23 +100,43 @@ def pad_to(x, n, axis=0, mode='constant'):
     width[axis] = (0, n - x.shape[axis])
     return np.pad(x, width, mode=mode)
 
-def cache_json(filename, func, makedir=False):
+
+def cache(codec, filename, func, makedir=False, mode=0644):
     '''Caches the result of a function in a file.
 
     Args:
+        codec -- Object with methods dump() and load().
         func -- Function with zero arguments.
     '''
     if os.path.exists(filename):
-        with open(filename, 'r') as r:
-            result = json.load(r)
+        logger.info('load from cache file: "%s"', filename)
+        start = time.clock()
+        with open(filename, 'r') as f:
+            result = codec.load(f)
+        dur = time.clock() - start
+        logger.info('time to load cache: %.3g sec "%s"', dur, filename)
     else:
-        if makedir:
-            if not os.path.exists(os.path.dirname(filename)):
-                os.makedirs(os.path.dirname(filename))
+        logger.info('no cache found: "%s"', filename)
+        dir, basename = os.path.split(filename)
+        if not os.path.exists(dir):
+            if makedir:
+                os.makedirs(dir)
+            else:
+                raise RuntimeError('makedir is false and dir does not exist: {}'.format(dir))
+        # Create temporary file in same directory.
         result = func()
-        with open(filename, 'w') as w:
-            json.dump(result, w)
+        # TODO: Clean up tmp file on exception.
+        start = time.clock()
+        with tempfile.NamedTemporaryFile(delete=False, dir=dir, suffix=basename) as f:
+            codec.dump(result, f)
+        dur = time.clock() - start
+        os.chmod(f.name, mode)  # Default permissions are 600.
+        os.rename(f.name, filename)
+        logger.info('time to dump cache: %.3g sec "%s"', dur, filename)
     return result
+
+
+cache_json = functools.partial(cache, json)
 
 
 def merge_dims(x, a, b, name='merge_dims'):

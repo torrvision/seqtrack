@@ -1,589 +1,286 @@
-'''Describes different datasets.
+'''Contains code for loading and installing datasets.
 
-A dataset is a collection of videos,
-where each video contains a collection of tracks.
-Each track may have the location of the object specified in any subset of frames.
-The location of the object is a rectangle.
-There is currently no distinction between an object being absent versus unlabelled.
+This module uses distinct concepts of datasets and subsets.
+For example, the dataset 'ilsvrc' contains subsets 'ilsvrc_train' and 'ilsvrc_val'.
+All image data for one dataset (e.g. 'ilsvrc') is contained in one dir (and put in one tarball).
+Metadata is loaded for a subset using trackdat.load_xxx(dataset_dir, ...).
 
-A dataset object has the following properties:
+For speed, it is often useful to resize all images in a dataset.
+To accommodate pre-processing, the data directory is arranged according to:
+    {data_root}/{preproc}/{dataset}/
+The un-pre-processed version is called "original".
+Metadata is always loaded from the "original" version
+in case the object is described in absolute pixel co-ordinates.
+(This could be circumvented for ILSVRC since the image size is stored in the XML.
+However, since the result is cached, it is a one-off cost.)
+To load the metadata for a subset, use `load_metadata(data_root, subset_name)`.
+The metadata includes the aspect ratio but not the size of the images.
 
-    dataset.videos -- List of strings.
-    dataset.video_length[video] -- Dictionary that maps string -> integer.
-    dataset.image_file(video, frame_number) -- Returns absolute path.
-    dataset.image_size[video] -- Dictionary that maps string -> (width, height).
-    dataset.original_image_size[video] -- Dictionary that maps string -> (width, height).
-        Used for computing IOU, distance, etc.
-    dataset.tracks[video] -- Dictionary that maps string -> list of tracks.
-        A track is a dictionary that maps frame_number -> rectangle.
-        The subset of keys indicates in which frames the object is labelled.
-        The rectangle is in the form [xmin, ymin, xmax, ymax].
-        The rectangle coordinates are normalized to [0, 1].
+Loading the metadata can be time consuming.
+To avoid this, the metadata for each subset can be cached.
+
+For running the code on a cluster where accessing individual files is slow,
+it is possible to untar the dataset to a local drive.
+This code can also be used to set up the data for the first time.
+The module also include functionality to install the dataset from a tarball.
+The function untar_and_load_all() installs and loads the metadata for several datasets.
 '''
 
-import pdb
-import numpy as np
-
-import csv
-import glob
-import itertools
+import msgpack
 import os
-import random
-import xmltodict
-import cv2
-from PIL import Image
+import subprocess
+import time
+from functools import partial
 
-from seqtrack import draw
+import logging
+logger = logging.getLogger(__name__)
+
 from seqtrack import helpers
+import trackdat
+
+CACHE_CODEC = msgpack
+CACHE_EXT = '.msgpack'
 
 
-class Data_ILSVRC(object):
-    def __init__(self, dstype, o):
-        self.dstype      = dstype
-        self.path_data   = os.path.join(o.path_data_home, 'ILSVRC')
-        self.trainsplit  = o.trainsplit # 0, 1, 2, 3, or 9 for all
-        # self.datadirname = 'Data_frmsz{}'.format(o.frmsz) \
-        #                         if o.useresizedimg else 'Data'
-        if o.useresizedimg:
-            if o.imwidth == o.imheight:
-                self.datadirname = 'Data_frmsz{}'.format(o.imwidth)
-            else:
-                self.datadirname = 'Data_{}_{}'.format(o.imwidth, o.imheight)
-        else:
-            self.datadirname = 'Data'
+class Subset(object):
+    '''Describes a named subset of a dataset.
 
-        self.videos = None
-        # Number of frames in each snippet.
-        self.video_length = None
-        self.tracks = None
-        self.stat = None
-        self._load_data(o)
+    The metadata of a subset is loaded using a load_xxx function in trackdat.
+    For example, ilsvrc_train is a subset of ilsvrc, and is loaded using
 
-    def _images_dir(self, video):
-        parts = video.split('/')
-        return os.path.join(self.path_data, self.datadirname, 'VID', self.dstype, *parts)
+        load_ilsvrc(dir, subset='train')
+    '''
 
-    def _annotations_dir(self, video):
-        parts = video.split('/')
-        return os.path.join(self.path_data, 'Annotations', 'VID', self.dstype, *parts)
-
-    def image_file(self, video, frame):
-        return os.path.join(self._images_dir(video), '{:06d}.JPEG'.format(frame))
-
-    def _load_data(self, o):
-        # TODO: need to process and load test data set as well..
-        # TODO: not loading test data yet. ILSVRC doesn't have "Annotations" for
-        # test set. I can still load "Data", but need to fix a couple of places
-        # to load only "Data". Will fix it later.
-        self._update_videos()
-        self._update_video_length()
-        self._update_tracks(o)
-        ## self._update_stat(o)
-
-    def _parsexml(self, xmlfile):
-        with open(xmlfile) as f:
-            doc = xmltodict.parse(f.read(), force_list={'object'})
-        return doc
-
-    def _update_videos(self):
-        def create_videos():
-            if self.dstype in {'test', 'val'}:
-                path_snp_data = os.path.join(self.path_data, self.datadirname, 'VID', self.dstype)
-                videos = sorted(os.listdir(path_snp_data))
-            elif self.dstype is 'train': # train data has 4 splits.
-                splits = []
-                if self.trainsplit in range(4):
-                    splits = [self.trainsplit]
-                elif self.trainsplit == 9: # MAGIC NUMBER for all train data 
-                    splits = range(4)
-                else:
-                    raise ValueError('No available option for train split')
-                videos = []
-                for i in splits:
-                    split_dir = 'ILSVRC2015_VID_train_{:04d}'.format(i)
-                    path_snp_data = os.path.join(self.path_data, self.datadirname, 'VID', self.dstype, split_dir)
-                    vs = sorted(os.listdir(path_snp_data))
-                    vs = ['{}/{}'.format(split_dir, v) for v in vs]
-                    videos.extend(vs)
-            return videos
-
-        if self.videos is None:
-            self.videos = create_videos()
-
-    def _update_video_length(self):
-        def create_video_length():
-            nfrms = {}
-            for video in self.videos:
-                images = glob.glob(os.path.join(self._images_dir(video), '*.JPEG'))
-                nfrms[video] = len(images)
-            return nfrms
-
-        if self.video_length is None:
-            self.video_length = create_video_length()
-
-    def _identifier(self):
-        if self.dstype == 'train':
-            return '{}_{}'.format(self.dstype, self.trainsplit)
-        else:
-            return self.dstype
-
-    def _update_tracks(self, o):
-        def load_info():
-            info = {}
-            for i, video in enumerate(self.videos):
-                print i+1, video
-                video_info = load_video_info(video)
-                for k, v in video_info.iteritems():
-                    info.setdefault(k, {})[video] = v
-            return info
-
-        def load_video_info(video):
-            frames = []
-            size = None
-            video_len = self.video_length[video]
-            for t in range(video_len):
-                xmlfile = os.path.join(self._annotations_dir(video), '{:06d}.xml'.format(t))
-                frame_objects, frame_size = read_frame_annotation(xmlfile)
-                if size is not None:
-                    assert(size == frame_size)
-                frames.append(frame_objects)
-                size = size or frame_size
-            # Convert from list of frame annotations to list of tracks.
-            tracks = {}
-            for t, frame_objects in enumerate(frames):
-                for obj_id, rect in frame_objects.iteritems():
-                    # List of (frame, rectangle) pairs instead of dictionary
-                    # because JSON does not support integer keys.
-                    tracks.setdefault(obj_id, []).append((t, rect))
-                    # tracks.setdefault(obj_id, {})[t] = rect
-            # Note: This will not preserve the original object IDs
-            # if the IDs are not consecutive starting from 0.
-            # For example: ILSVRC2015_VID_train_0000/ILSVRC2015_train_00014017
-            return {
-                'tracks': [tracks[obj_id] for obj_id in sorted(tracks.keys())],
-                'original_image_size': size,
-            }
-
-        def read_frame_annotation(xmlfile):
-            '''Returns a dictionary of (track index) -> rectangle.'''
-            doc = self._parsexml(xmlfile)
-            width  = int(doc['annotation']['size']['width'])
-            height = int(doc['annotation']['size']['height'])
-            obj_annots = doc['annotation'].get('object', [])
-            objs = dict(map(lambda obj: extract_id_rect_pair(obj, width, height),
-                            obj_annots))
-            return objs, (width, height)
-
-        def extract_id_rect_pair(obj, width, height):
-            index = int(obj['trackid'])
-            # ImageNet uses range xmin <= x < xmax.
-            rect = [
-                int(obj['bndbox']['xmin']) / float(width),
-                int(obj['bndbox']['ymin']) / float(height),
-                int(obj['bndbox']['xmax']) / float(width),
-                int(obj['bndbox']['ymax']) / float(height),
-            ]
-            return index, rect
-
-        if self.tracks is None:
-            if not os.path.isdir(o.path_aux):
-                os.makedirs(o.path_aux)
-            cache_file = os.path.join(o.path_aux, 'info_{}.json'.format(self._identifier()))
-            info = helpers.cache_json(cache_file, lambda: load_info())
-            # Convert (frame, rectangle) pairs to dictionary.
-            self.tracks = {video: [dict(track) for track in track_list]
-                           for video, track_list in info['tracks'].iteritems()}
-            self.original_image_size = info['original_image_size']
-
-    ## def _update_stat(self, o):
-    ##     def create_stat_pixelwise(): # NOTE: obsolete
-    ##         stat = dict.fromkeys({'mean', 'std'}, None)
-    ##         mean = []
-    ##         std = []
-    ##         for i, video in enumerate(self.videos):
-    ##             print 'computing mean and std in snippet of {}, {}/{}'.format(
-    ##                     self.dstype, i+1, len(self.videos))
-    ##             imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
-    ##             xs = []
-    ##             for j in imglist:
-    ##                 # NOTE: perform resize image!
-    ##                 xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
-    ##                     (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
-    ##             xs = np.asarray(xs)
-    ##             mean.append(np.mean(xs, axis=0))
-    ##             std.append(np.std(xs, axis=0))
-    ##         mean = np.mean(np.asarray(mean), axis=0)
-    ##         std = np.mean(np.asarray(std), axis=0)
-    ##         stat['mean'] = mean
-    ##         stat['std'] = std
-    ##         return stat
-
-    ##     def create_stat_global():
-    ##         stat = dict.fromkeys({'mean', 'std'}, None)
-    ##         means = []
-    ##         stds = []
-    ##         for i, video in enumerate(self.videos):
-    ##             print 'computing mean and std in snippet of {}, {}/{}'.format(
-    ##                     self.dstype, i+1, len(self.videos))
-    ##             imglist = sorted(glob.glob(os.path.join(self._images_dir(video), '*.JPEG')))
-    ##             xs = []
-    ##             # for j in imglist:
-    ##             #     # NOTE: perform resize image!
-    ##             #     xs.append(cv2.resize(cv2.imread(j)[:,:,(2,1,0)], 
-    ##             #         (o.frmsz, o.frmsz), interpolation=cv2.INTER_AREA))
-    ##             # Lazy method: Read a single image, do not resize.
-    ##             xs.append(cv2.imread(imglist[len(imglist)/2])[:,:,(2,1,0)])
-    ##             means.append(np.mean(xs))
-    ##             stds.append(np.std(xs))
-    ##         mean = np.mean(means)
-    ##         std = np.mean(stds)
-    ##         stat['mean'] = mean
-    ##         stat['std'] = std
-    ##         return stat
-
-    ##     if self.stat is None:
-    ##         if self.dstype == 'train':
-    ##             filename = os.path.join(o.path_stat, 
-    ##                 'meanstd_{}_frmsz_{}_train_{}.npy'.format(o.dataset, o.frmsz, self.trainsplit))
-    ##         else:
-    ##             filename = os.path.join(o.path_stat,
-    ##                 'meanstd_{}_frmsz_{}_{}.npy'.format(o.dataset, o.frmsz, self.dstype))
-    ##         if os.path.exists(filename):
-    ##             self.stat = np.load(filename).tolist()
-    ##         else:
-    ##             self.stat = create_stat_global() 
-    ##             np.save(filename, self.stat)
+    def __init__(self, dataset, load_func):
+        self.dataset = dataset
+        self.load_func = load_func
 
 
-class Data_OTB(object):
-    '''Represents OTB-50 or OTB-100 dataset.'''
+SUBSETS = {
+    'alov': Subset('alov', trackdat.load_alov),
+    'dtb70': Subset('dtb70', trackdat.load_dtb70),
+    'ilsvrc_train': Subset('ilsvrc', partial(trackdat.load_ilsvrc, subset='train')),
+    'ilsvrc_val': Subset('ilsvrc', partial(trackdat.load_ilsvrc, subset='val')),
+    'nfs_240': Subset('nfs', trackdat.load_nfs),
+    'nfs_30': Subset('nfs', partial(trackdat.load_nfs, fps=30)),
+    'nuspro': Subset('nuspro', trackdat.load_nuspro),
+    'otb': Subset('otb', partial(trackdat.load_otb, subset='tb_100')),
+    'otb_50': Subset('otb', partial(trackdat.load_otb, subset='tb_50')),
+    'otb_cvpr13': Subset('otb', partial(trackdat.load_otb, subset='cvpr13')),
+    'tc128': Subset('tc128', partial(trackdat.load_tc128, keep_prev=True)),
+    'tc128_ce': Subset('tc128', partial(trackdat.load_tc128, keep_prev=False)),
+    'tlp': Subset('tlp', trackdat.load_tlp),
+    'uav123': Subset('uav123', partial(trackdat.load_uav123, subset='UAV123')),
+    'uav20l': Subset('uav123', partial(trackdat.load_uav123, subset='UAV20L')),
+    'vot2013': Subset('vot2013', trackdat.load_vot),
+    'vot2014': Subset('vot2014', trackdat.load_vot),
+    'vot2015': Subset('vot2015', trackdat.load_vot),
+    'vot2016': Subset('vot2016', trackdat.load_vot),
+    'vot2017': Subset('vot2017', trackdat.load_vot),
+    'ytbb_train': Subset('ytbb', partial(trackdat.load_ytbb_sec, subset='train')),
+    'ytbb_val': Subset('ytbb', partial(trackdat.load_ytbb_sec, subset='validation')),
+}
 
-    def __init__(self, variant, o):
-        self.path_data = os.path.join(o.path_data_home, 'OTB')
-        self.variant = variant # {'OTB-50', 'OTB-100'}
-        # Options to save locally.
-        self.useresizedimg = o.useresizedimg
-        # self.frmsz         = o.frmsz
 
-        # TODO: OTB dataset has attributes to videos. Add them.
+def load(data_dir, preproc, subset_name, cache=False, cache_dir=None):
+    '''Loads the metadata and instantiates.'''
+    dataset_dir = os.path.join(data_dir, preproc, SUBSETS[subset_name].dataset)
+    metadata = load_metadata(data_dir, subset_name, cache, cache_dir)
+    return DatasetInstance(dataset_dir, metadata)
 
-        self.videos       = None
-        self.video_length = None
-        self.tracks       = None
-        self._load_data(o)
 
-    def image_file(self, video, t):
-        # if self.useresizedimg:
-        #     img_dir = 'img'
-        # else:
-        #     img_dir = 'img_frmsz{}'.format(self.frmsz)
-        img_dir = 'img'
-        if video == 'Board':
-            filename = '{:05d}.jpg'.format(t+1)
-        else:
-            filename = '{:04d}.jpg'.format(t+1)
-        return os.path.join(self.path_data, video, img_dir, filename)
+def load_metadata(data_dir, subset_name, cache=False, cache_dir=None):
+    '''Loads metadata from {data_dir}/original/{subset}.
 
-    def _load_data(self, o):
-        self._update_videos()
-        self._update_exceptions(o)
-        self._update_video_info(o)
+    Must be loaded from original data because
+    metadata includes relative co-ordinates and aspect ratio,
+    and pre-processed versions have different image sizes.
+    '''
+    if cache:
+        return helpers.cache(trackdat.dataset.Serializer(CACHE_CODEC),
+                             _cache_file(cache_dir, subset_name),
+                             lambda: load_metadata(data_dir, subset_name))
 
-    def _update_videos(self):
-        OTB50 = [
-            'Basketball','Biker','Bird1','BlurBody','BlurCar2','BlurFace',
-            'BlurOwl','Bolt','Box','Car1','Car4','CarDark','CarScale',
-            'ClifBar','Couple','Crowds','David','Deer','Diving','DragonBaby',
-            'Dudek','Football','Freeman4','Girl','Human3','Human4','Human6',
-            'Human9','Ironman','Jump','Jumping','Liquor','Matrix',
-            'MotorRolling','Panda','RedTeam','Shaking','Singer2','Skating1',
-            'Skating2','Skiing','Soccer','Surfer','Sylvester',
-            'Tiger2','Trellis','Walking','Walking2','Woman']
-        OTB100 = OTB50 + [
-            'Bird2','BlurCar1','BlurCar3','BlurCar4','Board','Bolt2','Boy', 
-            'Car2','Car24','Coke','Coupon','Crossing','Dancer','Dancer2',
-            'David2','David3','Dog','Dog1','Doll','FaceOcc1','FaceOcc2','Fish', 
-            'FleetFace','Football1','Freeman1','Freeman3','Girl2','Gym',
-            'Human2','Human5','Human7','Human8','Jogging',
-            'KiteSurf','Lemming','Man','Mhyang','MountainBike','Rubik',
-            'Singer1','Skater','Skater2','Subway','Suv','Tiger1','Toy','Trans', 
-            'Twinnings','Vase']
-        if self.variant == 'OTB-50':
-            self.videos = OTB50
-        elif self.variant == 'OTB-100':
-            self.videos = OTB100
-        else:
-            raise ValueError('unknown OTB variant: {}'.format(self.variant))
+    logger.info('load metadata: "%s"', subset_name)
+    subset = SUBSETS[subset_name]
+    start = time.time()
+    metadata = subset.load_func(os.path.join(data_dir, 'original', subset.dataset))
+    logger.info('time to load metadata: %.3g sec "%s"', time.time() - start, subset_name)
+    return metadata
 
-    def _update_exceptions(self, o):
-        # Note: First frame is indexed from 1!
-        self.offset = {}
-        self.offset['David']    = 300
-        self.offset['BlurCar1'] = 247
-        self.offset['BlurCar3'] = 3
-        self.offset['BlurCar4'] = 18
 
-    def _update_video_info(self, o):
-        def load_info():
-            info = {}
-            for i, video in enumerate(self.videos):
-                video_info = load_video_info(video)
-                for k, v in video_info.iteritems():
-                    info.setdefault(k, {})[video] = v
-            return info
+def untar_and_load_all(tar_dir, data_dir, preproc, subset_names, cache_dir):
+    '''Untars and loads the metadata for many sets at once.
 
-        def load_video_info(video):
-            video_dir = os.path.join(self.path_data, video)
-            if not os.path.isdir(video_dir):
-                raise ValueError('video directory does not exist: {}'.format(video_dir))
-            # Get video length.
-            image_files = glob.glob(os.path.join(video_dir, 'img', '*.jpg'))
-            video_length = len(image_files)
-            assert(video_length > 0)
-            # Check image resolution.
-            width, height = Image.open(image_files[0]).size
+    If the metadata is not cached and preproc is not 'original',
+    then the original dataset will also be untarred to load the metadata.
 
-            # Get number of objects.
-            gt_files = glob.glob(os.path.join(video_dir, 'groundtruth_rect*.txt'))
-            num_objects = len(gt_files)
-            assert(num_objects > 0)
-            tracks = []
-            for j in range(num_objects):
-                if num_objects == 1:
-                    gt_file = 'groundtruth_rect.txt'
-                else:
-                    gt_file = 'groundtruth_rect.{}.txt'.format(j+1)
-                if video == 'Human4' and gt_file == 'groundtruth_rect.1.txt':
-                    continue
-                rects = load_rectangles(os.path.join(video_dir, gt_file))
-                # Normalize by image size.
-                rects = rects / np.array([width, height, width, height])
-                # Create track from rectangles and offset.
-                offset = self.offset.get(video, 1) - 1
-                track = {t+offset: list(rect) for t, rect in enumerate(rects)}
-                tracks.append(track)
-            return {
-                'video_length':        video_length,
-                'original_image_size': (width, height),
-                'tracks':              tracks,
-            }
+    These should be done together since multiple subsets can use the same dataset.
+    The untar processes will also be executed in parallel.
 
-        def load_rectangles(fname):
-            try:
-                rects = np.loadtxt(fname, dtype=np.float32, delimiter=',')
-            except:
-                rects = np.loadtxt(fname, dtype=np.float32)
-            assert(len(rects) > 0)
-            # label reformat [x1,y1,w,h] -> [x1,y1,x2,y2]
-            rects[:,(2,3)] = rects[:,(0,1)] + rects[:,(2,3)]
-            # Assume rectangles are meant for use with Matlab's imshow() and rectangle().
-            # Matlab draws an image of size n on the continuous range 0.5 to n+0.5.
-            return rects - 0.5
+    Expects directory structure:
+        {tar_dir}/original/{dataset_name}.tar
+        {tar_dir}/{preproc}/{dataset}.tar
 
-        if self.tracks is None:
-            info = load_info()
-            self.video_length        = info['video_length']
-            self.original_image_size = info['original_image_size']
-            self.tracks              = info['tracks']
+    Creates directory structure:
+        {data_dir}/{preproc}/{dataset}
+        {cache_dir}/dataset_{subset_name}.json
+    '''
+    if not os.path.isdir(data_dir):
+        os.makedirs(data_dir, 0755)
+
+    if preproc != 'original':
+        without_cache = [name for name in subset_names
+                         if not os.path.isfile(_cache_file(cache_dir, name))]
+        if len(without_cache) > 0:
+            logger.info('cache not found for: %s', _list_str(without_cache))
+            # Need to untar original version to load annotations.
+            _untar(tar_dir, data_dir, 'original', _get_datasets(without_cache))
+    else:
+        _untar(tar_dir, data_dir, 'original', _get_datasets(subset_names))
+
+    metadata = {name: load(data_dir, preproc, name, cache=True, cache_dir=cache_dir)
+                for name in subset_names}
+
+    if preproc != 'original':
+        _untar(tar_dir, data_dir, preproc, _get_datasets(subset_names))
+    return metadata
+
+
+def _get_datasets(subset_names):
+    return set(SUBSETS[name].dataset for name in subset_names)
+
+
+def _cache_file(cache_dir, subset_name):
+    return os.path.join(cache_dir, 'dataset_{}{}'.format(subset_name, CACHE_EXT))
+
+
+def _untar(tar_dir, data_dir, preproc, names):
+    '''
+    Expects directory structure:
+        {tar_dir}/{preproc}/{name}.tar
+    Each tar file contains a single top-level directory {name}.
+
+    Creates directory structure:
+        {data_dir}/{preproc}/{name}/
+    '''
+    src_dir = os.path.join(tar_dir, preproc)
+    tar_files = {name: os.path.join(src_dir, name + '.tar') for name in names}
+    # First check if all tar files exist.
+    for name in names:
+        if not os.path.isfile(tar_files[name]):
+            raise RuntimeError('tar file not found: "{}"'.format(tar_files[name]))
+    dst_dir = os.path.join(data_dir, preproc)
+    if not os.path.isdir(dst_dir):
+        os.makedirs(dst_dir, 0755)
+    dataset_dirs = {name: os.path.join(dst_dir, name) for name in names}
+
+    # Start a process to untar each file.
+    start = time.time()
+    procs = {}
+    for name in names:
+        logger.info('untar "%s" in "%s"', tar_files[name], dst_dir)
+        procs[name] = subprocess.Popen(['tar', '-xf', tar_files[name]], cwd=dst_dir)
+    while True:
+        procs = {
+            name: proc for name, proc in procs.items()
+            if _still_running_or_assert_success(
+                proc, name, tar_files[name], dataset_dirs[name], start)}
+        if len(procs) == 0:
+            break
+        time.sleep(1)
+
+
+def _still_running_or_assert_success(proc, name, tar_file, dataset_dir, start):
+    retcode = proc.poll()
+    if retcode is None:
+        return True
+    if retcode != 0:
+        raise RuntimeError('could not untar "{}": non-zero return code {}'.format(
+            tar_file, retcode))
+    # Check that directory has been created.
+    if not os.path.isdir(dataset_dir):
+        raise RuntimeError('dir not created "{}"'.format(dataset_dir))
+    logger.info('time to untar: %.0f sec "%s"', time.time() - start, dataset_dir)
+    return False
+
+
+class DatasetInstance(object):
+    '''Describes dataset instantiated in a directory.'''
+
+    def __init__(self, dir, metadata):
+        self.dir = dir
+        self.metadata = metadata
+
+    def tracks(self):
+        return self.metadata.tracks()
+
+    def video(self, track_id):
+        return self.metadata.video(track_id)
+
+    def labels(self, track_id):
+        return self.metadata.labels(track_id)
+
+    def image_file(self, video_id, time):
+        '''Returns absolute path to image.'''
+        return os.path.join(self.dir, self.metadata.image_file(video_id, time))
+
+    def aspect(self, video_id):
+        return self.metadata.aspect(video_id)
 
 
 class Concat(object):
 
     def __init__(self, datasets):
-        '''
-        Args:
-            datasets: Dictionary that maps name (string) to dataset.
-        '''
-        assert all('/' not in name for name in datasets.keys())
-        assert all(' ' not in name for name in datasets.keys())
         self.datasets = datasets
-        # Copy all fields.
-        self.videos              = []
-        self.video_length        = {}
-        # self.image_size          = {}
-        self.original_image_size = {}
-        self.tracks              = {}
-        for dataset_name, dataset in datasets.items():
-            for video in dataset.videos:
-                new_video = dataset_name + '/' + video
-                self.videos.append(new_video)
-                self.video_length[new_video]        = dataset.video_length[video]
-                # self.image_size[new_video]          = dataset.image_size[video]
-                self.original_image_size[new_video] = dataset.original_image_size[video]
-                self.tracks[new_video]              = dataset.tracks[video]
 
-    def image_file(self, video, frame):
-        dataset_name, old_video = video.split('/', 1)
-        return self.datasets[dataset_name].image_file(old_video, frame)
+    def tracks(self):
+        return [_join_concat_id(dataset_id, track_id)
+                for dataset_id, dataset in self.datasets.items()
+                for track_id in dataset.tracks()]
 
+    def video(self, track_id):
+        dataset_id, internal_track_id = _split_concat_id(track_id)
+        internal_video_id = self.datasets[dataset_id].video(internal_track_id)
+        return _join_concat_id(dataset_id, internal_video_id)
 
-class CSV:
+    def labels(self, track_id):
+        dataset_id, internal_track_id = _split_concat_id(track_id)
+        return self.datasets[dataset_id].labels(internal_track_id)
 
-    '''
-    Expects directory structure:
-        data/csv/dataset.csv
-        data/csv/images/xxx/yyy.jpg
-        data/csv/images_frmsz123/xxx/yyy.jpg (if useresizedimg is true)
-    The paths in data/csv/dataset.csv are relative to csv/images.
-    '''
+    def image_file(self, video_id, time):
+        dataset_id, internal_video_id = _split_concat_id(video_id)
+        return self.datasets[dataset_id].image_file(internal_video_id, time)
 
-    def __init__(self, name, o):
-        # Video name is directory of image file.
-        fname = os.path.join(o.path_data_home, 'csv', name+'.csv')
-        with open(fname, 'r') as csv_file:
-            reader = csv.DictReader(csv_file)
-            rects = {}
-            size = {}
-            format_str = {}
-            for row in reader:
-                # Filename is e.g. 'uav123/person19_2/001865.jpg'
-                video, image = os.path.split(row['filename'])
-                track_id = row['trackID']
-                image_name, image_ext = os.path.splitext(image)
-                t = int(image_name)
-                if video not in format_str:
-                    # e.g. '{:06d}.JPEG'
-                    # It is necessary to determine the format string to find
-                    # the path of unlabelled frames, which do not appear in the csv file.
-                    format_str[video] = '{:0' + str(len(image_name)) + '}' + image_ext
-                assert image == format_str[video].format(t)
-                rects.setdefault(video, {}).setdefault(track_id, {})[t] = CSV._row_to_rect(row)
-                size[video] = (int(row['frameWidth']), int(row['frameHeight']))
-
-        videos = sorted(rects.keys())
-        # Convert dictionaries of tracks to lists.
-        rects = {
-            video: [tracks[name] for name in sorted(tracks.keys())]
-            for video, tracks in rects.iteritems()
-        }
-        # Take maximum time + 1 as video length.
-        video_length = {
-            video: max(t for track in tracks for t in track.keys())+1
-            for video, tracks in rects.iteritems()
-        }
-
-        self.videos = videos
-        self.video_length = video_length
-        self.tracks = rects
-        self.original_image_size = size
-        self.format_str = format_str
-        # if o.useresizedimg:
-        #     self.image_dir = os.path.join(o.path_data_home, 'csv', 'images_frmsz{}'.format(o.frmsz))
-        # else:
-        #     # TODO: Use something different here?
-        #     self.image_dir = os.path.join(o.path_data_home, 'csv', 'images')
-        self.image_dir = os.path.join(o.path_data_home, 'csv', 'images')
-
-    @staticmethod
-    def _row_to_rect(row):
-        min_x  = float(row['leftX'])  / float(row['frameWidth'])
-        min_y  = float(row['topY'])   / float(row['frameHeight'])
-        size_x = float(row['width'])  / float(row['frameWidth'])
-        size_y = float(row['height']) / float(row['frameHeight'])
-        return [min_x, min_y, min_x+size_x, min_y + size_y]
-
-    def image_file(self, video, frame):
-        return os.path.join(self.image_dir, video, self.format_str[video].format(frame))
+    def aspect(self, video_id):
+        dataset_id, internal_video_id = _split_concat_id(video_id)
+        return self.datasets[dataset_id].aspect(internal_video_id)
 
 
-def run_sanitycheck(batch, dataset, frmsz, stat=None, fulllen=False):
-    if not fulllen:
-        draw.show_dataset_batch(batch, dataset, frmsz, stat)
-    else:
-        draw.show_dataset_batch_fulllen_seq(batch, dataset, frmsz, stat)
-
-def split_batch_fulllen_seq(batch_fl, o):
-    # split the full-length sequence in multiple segments
-    nsegments = int(np.ceil( (batch_fl['nfrms']-1)/float(o.ntimesteps) ))
-
-    data = np.zeros(
-            (nsegments, o.ntimesteps+1, o.frmsz, o.frmsz, o.ninchannel), 
-            dtype=np.float32)
-    label = np.zeros((nsegments, o.ntimesteps+1, o.outdim), 
-            dtype=np.float32)
-    inputs_valid = np.zeros((nsegments, o.ntimesteps+1), dtype=np.bool)
-    inputs_HW = np.zeros((nsegments, 2), dtype=np.float32)
-
-    for i in range(nsegments):
-        if (i+1)*o.ntimesteps+1 <= batch_fl['nfrms']:
-            seglen = o.ntimesteps + 1
-        else:
-            seglen = (batch_fl['nfrms']-1) % o.ntimesteps + 1
-        data[i, 0:seglen] = batch_fl['inputs'][
-                0, i*o.ntimesteps:i*o.ntimesteps + seglen]
-        label[i, 0:seglen] = batch_fl['labels'][
-                0, i*o.ntimesteps:i*o.ntimesteps + seglen]
-        inputs_valid[i, 0:seglen] = batch_fl['inputs_valid'][
-                0, i*o.ntimesteps:i*o.ntimesteps + seglen]
-        inputs_HW[i] = batch_fl['inputs_HW'][0]
-
-    batch = {
-            'inputs': data,
-            'inputs_valid': inputs_valid,
-            'inputs_HW': inputs_HW,
-            'labels': label,
-            'nfrms': batch_fl['nfrms'],
-            'nsegments': nsegments,
-            'idx': batch_fl['idx']
-            }
-    return batch 
+def _join_concat_id(dataset_id, internal_id):
+    assert '/' not in dataset_id
+    return dataset_id + '/' + internal_id
 
 
-def load_data(o):
-    if o.dataset == 'ILSVRC':
-        datasets = {dstype: Data_ILSVRC(dstype, o) for dstype in ['train', 'val']}
-    else:
-        raise ValueError('dataset not implemented yet')
-    return datasets
+def _split_concat_id(external_id):
+    dataset_id, internal_id = external_id.split('/', 1)
+    return dataset_id, internal_id
 
-if __name__ == '__main__':
 
-    # settings 
-    np.random.seed(9)
+def get_videos(metadata):
+    return sorted(set(map(metadata.video, metadata.tracks())))
 
-    from opts import Opts
-    o = Opts()
-    o.batchsz = 10
-    o.ntimesteps = 20
 
-    o.dataset = 'ILSVRC' # moving_mnist, bouncing_mnist, ILSVRC, OTB-50
-    o._set_dataset_params()
+def get_tracks_by_video(metadata):
+    track_ids = {}
+    for track_id in metadata.tracks():
+        track_ids.setdefault(metadata.video(track_id), []).append(track_id)
+    return track_ids
 
-    dstype = 'train'
-    
-    test_fl = False
 
-    sanitycheck = False
+def _quote(x):
+    return "'" + x + "'"
 
-    # moving_mnist
-    if o.dataset in ['moving_mnist', 'bouncing_mnist']:
-        loader = load_data(o)
-        batch = loader.get_batch(0, o, dstype)
-        if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz)
 
-    # ILSVRC
-    if o.dataset == 'ILSVRC':
-        o.trainsplit = 0
-        loader = load_data(o)
-        if test_fl: # to test full-length sequences 
-            batch_fl = loader.get_batch_fl(0, o)
-            batch = split_batch_fulllen_seq(batch_fl, o)
-            if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz, loader.stat[dstype], fulllen=True) 
-        else:
-            batch = loader.get_batch(0, o, dstype)
-            if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz, loader.stat[dstype])
-        #o.useresizedimg = False # NOTE: set it False to create resized imgs
-        #loader.create_resized_images(o) # to create resized images
-
-    # OTB-50
-    if o.dataset in ['OTB-50', 'OTB-100']:
-        loader = load_data(o)
-        assert(test_fl==True) # for OTB, it's always full-length
-        batch_fl = loader.get_batch_fl(0, o)
-        batch = split_batch_fulllen_seq(batch_fl, o)
-        if sanitycheck: run_sanitycheck(batch, o.dataset, o.frmsz, loader.stat, fulllen=True)
-        #o.useresizedimg = False # NOTE: set it False to create resized imgs
-        #loader.create_resized_images(o)
-
-    pdb.set_trace()
-
+def _list_str(x):
+    return ', '.join(map(_quote, x))

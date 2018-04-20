@@ -16,6 +16,7 @@ import re
 import subprocess
 import threading
 
+from seqtrack import data
 from seqtrack import draw
 from seqtrack import evaluate
 from seqtrack import geom
@@ -134,8 +135,8 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
     tf.summary.scalar('total', loss_var)
 
     nepoch     = o.nepoch if not o.debugmode else 2
-    nbatch     = len(datasets['train'].videos)/o.batchsz if not o.debugmode else 30
-    nbatch_val = len(datasets['val'].videos)/o.batchsz if not o.debugmode else 30
+    nbatch     = len(data.get_videos(datasets['train']))/o.batchsz if not o.debugmode else 30
+    nbatch_val = len(data.get_videos(datasets['val']))/o.batchsz if not o.debugmode else 30
 
     global_step_var = tf.Variable(0, name='global_step', trainable=False)
     # lr = init * decay^(step)

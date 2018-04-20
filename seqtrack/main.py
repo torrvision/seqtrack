@@ -2,10 +2,15 @@ import pdb
 import sys
 import argparse
 import functools
+import itertools
 import json
 import numpy as np
+import os
 import random
 import tensorflow as tf
+
+import logging
+logger = logging.getLogger(__name__)
 
 from seqtrack.opts import Opts
 from seqtrack import data
@@ -25,7 +30,7 @@ def parse_arguments():
     track.add_tracker_arguments(parser)
 
     parser.add_argument(
-            '--verbose', help='print arguments',
+            '-v', '--verbose', help='print arguments',
             action='store_true')
     parser.add_argument(
             '--verbose_train', help='print train losses during train',
@@ -46,13 +51,13 @@ def parse_arguments():
             '--tfdb', help='run tensorflow debugger',
             action='store_true')
 
-    ## parser.add_argument(
-    ##         '--dataset', help='specify the name of dataset',
-    ##         type=str, default='')
     parser.add_argument(
             '--train_dataset',
             help='specify the training dataset; string, list of strings or list of tuples',
-            type=json.loads, default='"ILSVRC-train"')
+            type=json.loads, default='"ilsvrc_train"')
+    parser.add_argument(
+            '--val_dataset',
+            type=json.loads, default='"ilsvrc_val"')
     parser.add_argument(
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker (list)',
             type=str, default=['ILSVRC-val', 'OTB-50'])
@@ -65,6 +70,15 @@ def parse_arguments():
     parser.add_argument(
             '--max_eval_videos', help='max number of videos to evaluate; not applied to OTB',
             type=int, default=100)
+
+    parser.add_argument('--untar', action='store_true',
+                        help='Untar dataset? Otherwise data must already exist')
+    parser.add_argument('--data_dir', help='Location of datasets')
+    parser.add_argument('--tar_dir', help='Location of dataset tarballs')
+    parser.add_argument('--tmp_data_dir', default='/tmp/data/',
+                        help='Temporary directory in which to untar data')
+    parser.add_argument('--data_cache_dir', help='Where to cache the dataset metadata')
+    parser.add_argument('--preproc', default='original')
 
     parser.add_argument(
             '--trainsplit', help='specify the split of train dataset (ILSVRC)',
@@ -163,9 +177,9 @@ def parse_arguments():
             '--motion_params', help='JSON string specifying motion augmentation',
             type=json.loads, default={})
 
-    parser.add_argument(
-            '--path_data_home', help='location of datasets',
-            type=str, default='./data')
+    # parser.add_argument(
+    #         '--path_data_home', help='location of datasets',
+    #         type=str, default='./data')
     parser.add_argument(
             '--nosave', help='no need to save results?',
             action='store_true')
@@ -210,60 +224,29 @@ def parse_arguments():
 
 
 def main():
-    # sys.settrace(trace) # Use this to find segfaults.
-
     args = parse_arguments()
+    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
     o = Opts()
     o.update_by_sysarg(args=args)
     o.initialize()
 
-    # datasets = data.load_data(o)
-    datasets = LazyDict()
-    csv_datasets = [
-        'vot2013', 'vot2014', 'vot2016', 'vot2017',
-        'otb50', 'otb100', 'otb_diff',
-        'tc', 'dtb70', 'nuspro', 'uav123',
-        # 'tc_train', 'dtb70_train', 'nuspro_train', 'uav123_train',
-        # 'tc_val', 'dtb70_val', 'nuspro_val', 'uav123_val',
-        'pool636_train', 'pool636_val',
-    ]
-    for name in csv_datasets:
-        datasets[name] = functools.partial(data.CSV, name, o)
-    datasets['ILSVRC-train'] = functools.partial(data.Data_ILSVRC, 'train', o)
-    datasets['ILSVRC-val'] = functools.partial(data.Data_ILSVRC, 'val', o)
-    datasets['OTB-50'] = functools.partial(data.Data_OTB, 'OTB-50', o)
-    datasets['OTB-100'] = functools.partial(data.Data_OTB, 'OTB-100', o)
-    # Add some pre-defined unions.
-    datasets['vot'] = lambda: data.Concat({name: datasets[name] for name in [
-        'vot2013', 'vot2014', 'vot2016', 'vot2017']})
-    datasets['pool574'] = lambda: data.Concat({name: datasets[name] for name in [
-        'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro']})
-    datasets['pool697'] = lambda: data.Concat({name: datasets[name] for name in [
-        'vot2013', 'vot2014', 'vot2016', 'vot2017', 'tc', 'dtb70', 'nuspro', 'uav123']})
+    # TODO: How to get datasets from train_dataset and eval_datasets?
+    train_datasets = _datasets_in_compound_dataset(args.train_dataset)
+    val_datasets = _datasets_in_compound_dataset(args.val_dataset)
+    dataset_names = list(set(itertools.chain(train_datasets, val_datasets, args.eval_datasets)))
+    logger.info('load datasets: %s', _list_str(dataset_names))
 
-    # datasets['pool636_train'] = lambda: data.Concat({name: datasets[name] for name in [
-    #     'tc_train', 'dtb70_train', 'nuspro_train', 'uav123_train']})
-    # datasets['pool636_val'] = lambda: data.Concat({name: datasets[name] for name in [
-    #     'tc_val', 'dtb70_val', 'nuspro_val', 'uav123_val']})
-
-    # Construct training dataset object from string.
-    # If it is a string, use a single dataset.
-    # If it is a list of strings, concatenate those datasets.
-    # If it is a list of (weight, string) pairs, construct a DatasetMixture.
-    if isinstance(o.train_dataset, basestring):
-        train_dataset = datasets[o.train_dataset]
-    elif isinstance(o.train_dataset, list):
-        assert len(o.train_dataset) > 0
-        if isinstance(o.train_dataset[0], basestring):
-            assert all(isinstance(x, basestring) for x in o.train_dataset)
-            train_dataset = data.Concat({name: datasets[name] for name in o.train_dataset})
-        else:
-            # Must be a list of pairs.
-            assert all(len(x) == 2 for x in o.train_dataset)
-            train_dataset = sample.DatasetMixture(
-                {name: (weight, datasets[name]) for weight, name in o.train_dataset})
+    if args.untar:
+        datasets = data.untar_and_load_all(
+            args.tar_dir, args.tmp_data_dir, args.preproc, dataset_names,
+            cache_dir=args.data_cache_dir)
     else:
-        raise ValueError('train_dataset is not a string or a list: {}'.format(repr(o.train_dataset)))
+        datasets = {
+            name: data.load(args.data_dir, args.preproc, name,
+                            cache=True, cache_dir=args.data_cache_dir) for name in datasets}
+
+    train_dataset = _make_compound_dataset(args.train_dataset, datasets)
+    val_dataset = _make_compound_dataset(args.val_dataset, datasets)
 
     # These are the possible choices for evaluation sampler.
     # No need to specify `shuffle`, `max_videos`, `max_objects` here,
@@ -307,13 +290,59 @@ def main():
     else:
         raise ValueError('unknown model: {}'.format(o.model))
 
-    train.train(model, {'train': train_dataset, 'val': datasets['ILSVRC-val']},
+    train.train(model, {'train': train_dataset, 'val': val_dataset},
                 eval_sets, o, use_queues=o.use_queues)
 
 
-def trace(frame, event, arg):
-    print "%s, %s:%d" % (event, frame.f_code.co_filename, frame.f_lineno)
-    return trace
+def _make_compound_dataset(names, datasets):
+    # Construct training dataset object from string.
+    # If it is a string, use a single dataset.
+    # If it is a list of strings, concatenate those datasets.
+    # If it is a list of (weight, string) pairs, construct a DatasetMixture.
+    if isinstance(names, basestring):
+        dataset = datasets[names]
+    elif isinstance(names, list):
+        assert len(names) > 0
+        if isinstance(names[0], basestring):
+            assert all(isinstance(elem, basestring) for elem in names)
+            dataset = data.Concat({name: datasets[name] for name in names})
+        else:
+            # Must be a list of pairs.
+            assert all(len(elem) == 2 for elem in names)
+            dataset = sample.DatasetMixture(
+                {name: (weight, datasets[name]) for weight, name in names})
+    else:
+        raise ValueError('train_dataset is not a string or a list: {}'.format(repr(names)))
+    return dataset
+
+
+def _datasets_in_compound_dataset(x):
+    # Construct training dataset object from string.
+    # If it is a string, use a single dataset.
+    # If it is a list of strings, concatenate those datasets.
+    # If it is a list of (weight, string) pairs, construct a DatasetMixture.
+    if isinstance(x, basestring):
+        return [x]
+    elif isinstance(x, list):
+        assert len(x) > 0
+        if isinstance(x[0], basestring):
+            assert all(isinstance(elem, basestring) for elem in x)
+            return x
+        else:
+            # Must be a list of pairs.
+            assert all(len(elem) == 2 for elem in x)
+            return [name for weight, name in x]
+    else:
+        raise ValueError('train_dataset is not a string or a list: {}'.format(repr(x)))
+
+
+def _quote(x):
+    return "'" + x + "'"
+
+
+def _list_str(x):
+    return ', '.join(map(_quote, x))
+
 
 if __name__ == "__main__":
     main()

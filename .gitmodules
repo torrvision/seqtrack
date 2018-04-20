@@ -1,0 +1,3 @@
+[submodule "trackdat"]
+	path = trackdat
+	url = git@github.com:jvlmdr/trackdat.git

@@ -108,7 +108,7 @@ class Opts(object):
         self.path_src           = os.path.dirname(__file__) # Take aux/ and stat/ from source dir.
         self.path_aux           = os.path.join(self.path_src, 'aux')
         self.path_stat          = os.path.join(self.path_src, 'stat')
-        self.path_data_home     = './data'
+        # self.path_data_home     = './data'
         ## self.path_data          = '' # This is set later e.g. {path_data_home}/ILSVRC
         self.nosave             = False
         self.path_ckpt          = './ckpt'

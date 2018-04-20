@@ -42,7 +42,6 @@ def track(sess, model_inst, sequence, use_gt,
     sequence['labels']         -- Numpy array of shape [n, 4]
     sequence['label_is_valid'] -- List of booleans of length n.
     sequence['aspect']         -- Aspect ratio of original image.
-    sequence['original_image_size'] -- (width, height) tuple.
         Required to compute IOU, etc. with correct aspect ratio.
     '''
     # TODO: Variable batch size.
@@ -237,8 +236,8 @@ def evaluate(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
             #     visualize(sequence['video_name'], sequence, pred, hmap_pred, save_frames)
             gt = np.array(sequence['labels'])
             # Convert to original image co-ordinates.
-            pred = _unnormalize_rect(pred, sequence['original_image_size'])
-            gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
+            # pred = _unnormalize_rect(pred, sequence['original_image_size'])
+            # gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
             tre_results.append(evaluate_track(pred, gt, is_valid))
         sequence_tre_results.append(tre_results)
 
@@ -284,7 +283,7 @@ def extract_tre_sequence(seq, ind, num):
         return None
 
     KEYS_SEQ = ['image_files', 'viewports', 'labels', 'label_is_valid']
-    KEYS_NON_SEQ = ['aspect', 'original_image_size']
+    KEYS_NON_SEQ = ['aspect']
     subseq = {}
     subseq.update({k: seq[k][start_t:] for k in KEYS_SEQ})
     subseq.update({k: seq[k] for k in KEYS_NON_SEQ})
