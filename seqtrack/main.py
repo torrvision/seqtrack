@@ -119,8 +119,8 @@ def parse_arguments():
             '--siamese_model_file', help='specify if using pretrained model')
 
     parser.add_argument(
-            '--nepoch', help='number of epochs',
-            type=int, default=20)
+            '--num_steps', help='number of gradient steps',
+            type=int, default=200000)
     parser.add_argument(
             '--batchsz', help='batch size',
             type=int, default=1)

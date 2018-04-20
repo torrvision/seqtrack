@@ -134,10 +134,6 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
     tf.summary.scalar('regularization', r)
     tf.summary.scalar('total', loss_var)
 
-    nepoch     = o.nepoch if not o.debugmode else 2
-    nbatch     = len(data.get_videos(datasets['train']))/o.batchsz if not o.debugmode else 30
-    nbatch_val = len(data.get_videos(datasets['val']))/o.batchsz if not o.debugmode else 30
-
     global_step_var = tf.Variable(0, name='global_step', trainable=False)
     # lr = init * decay^(step)
     #    = init * decay^(step / period * period / decay_steps)
@@ -286,104 +282,90 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
             else:
                 writer[mode] = tf.summary.FileWriter(path_summary)
 
-        while True: # Loop over epochs
+        while True:
             global_step = global_step_var.eval() # Number of steps taken.
-            if global_step >= nepoch * nbatch:
+            if global_step >= o.num_steps:
                 break
-            ie = global_step / nbatch
-            t_epoch = time.time()
 
-            ib_val = 0
-            loss_ep = []
-            for ib in range(nbatch): # Loop over batches in epoch.
-                global_step = global_step_var.eval() # Number of steps taken.
+            if not o.nosave:
+                period_ckpt = o.period_ckpt if not o.debugmode else 40
+                if global_step % period_ckpt == 0 and global_step > prev_ckpt:
+                    if not os.path.isdir(o.path_ckpt):
+                        os.makedirs(o.path_ckpt)
+                    print 'save model'
+                    saver.save(sess, o.path_ckpt+'/iteration', global_step=global_step)
+                    print 'done: save model'
+                    sys.stdout.flush()
+                    prev_ckpt = global_step
 
-                if not o.nosave:
-                    period_ckpt = o.period_ckpt if not o.debugmode else 40
-                    if global_step % period_ckpt == 0 and global_step > prev_ckpt:
-                        if not os.path.isdir(o.path_ckpt):
-                            os.makedirs(o.path_ckpt)
-                        print 'save model'
-                        saver.save(sess, o.path_ckpt+'/iteration', global_step=global_step)
-                        print 'done: save model'
-                        sys.stdout.flush()
-                        prev_ckpt = global_step
+            gt_ratio = max(1.0*np.exp(-o.gt_decay_rate*global_step), o.min_gt_ratio)
 
-                # intermediate evaluation of model
-                period_assess = o.period_assess if not o.debugmode else 20
-                if global_step > 0 and global_step > o.period_skip and global_step % period_assess == 0:
-                    for eval_id, sampler in eval_sets.iteritems():
-                        eval_sequences = sampler()
-                        _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences)
+            # intermediate evaluation of model
+            period_assess = o.period_assess if not o.debugmode else 20
+            if global_step > 0 and global_step > o.period_skip and global_step % period_assess == 0:
+                for eval_id, sampler in eval_sets.iteritems():
+                    eval_sequences = sampler()
+                    _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences)
 
-                # Take a training step.
+            # Take a training step.
+            start = time.time()
+            feed_dict = {run_opts['use_gt']:      o.use_gt_train,
+                         run_opts['is_training']: True,
+                         run_opts['is_tracking']: False,
+                         run_opts['gt_ratio']:    gt_ratio}
+            if use_queues:
+                feed_dict.update({queue_index: 0}) # Choose validation queue.
+            else:
+                batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
+                # batch = _load_batch(batch_seqs, o)
+                batch = graph.load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
+                feed_dict.update({example[k]: v for k, v in batch.iteritems()})
+                dur_load = time.time() - start
+            if global_step % o.period_summary == 0:
+                summary_var = (summary_vars_with_preview['train']
+                               if global_step % o.period_preview == 0
+                               else summary_vars['train'])
+                _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
+                                            feed_dict=feed_dict)
+                dur = time.time() - start
+                writer['train'].add_summary(summary, global_step=global_step)
+            else:
+                _, loss = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
+                dur = time.time() - start
+            loss_ep.append(loss)
+
+            newval = False
+            # Evaluate validation error.
+            if global_step % o.period_summary == 0:
                 start = time.time()
-                feed_dict = {run_opts['use_gt']:      o.use_gt_train,
-                             run_opts['is_training']: True,
+                feed_dict = {run_opts['use_gt']:      o.use_gt_train,  # Match training.
+                             run_opts['is_training']: False, # Do not update bnorm stats.
                              run_opts['is_tracking']: False,
-                             run_opts['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*global_step),
-                                                         o.min_gt_ratio)}
+                             run_opts['gt_ratio']:    gt_ratio} # Match training.
                 if use_queues:
-                    feed_dict.update({queue_index: 0}) # Choose validation queue.
+                    feed_dict.update({queue_index: 1}) # Choose validation queue.
                 else:
-                    batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
+                    batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
                     # batch = _load_batch(batch_seqs, o)
                     batch = graph.load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
                     feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                     dur_load = time.time() - start
-                if global_step % o.period_summary == 0:
-                    summary_var = (summary_vars_with_preview['train']
-                                   if global_step % o.period_preview == 0
-                                   else summary_vars['train'])
-                    _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
-                                                feed_dict=feed_dict)
-                    dur = time.time() - start
-                    writer['train'].add_summary(summary, global_step=global_step)
-                else:
-                    _, loss = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
-                    dur = time.time() - start
-                loss_ep.append(loss)
+                summary_var = (summary_vars_with_preview['val']
+                               if global_step % o.period_preview == 0
+                               else summary_vars['val'])
+                loss_val, summary = sess.run([loss_var, summary_var],
+                                             feed_dict=feed_dict)
+                dur_val = time.time() - start
+                writer['val'].add_summary(summary, global_step=global_step)
+                newval = True
 
-                newval = False
-                # Evaluate validation error.
-                if global_step % o.period_summary == 0:
-                    # Only if (ib / nbatch) >= (ib_val / nbatch_val), or equivalently
-                    if ib * nbatch_val >= ib_val * nbatch:
-                        start = time.time()
-                        feed_dict = {run_opts['use_gt']:      o.use_gt_train,  # Match training.
-                                     run_opts['is_training']: False, # Do not update bnorm stats.
-                                     run_opts['is_tracking']: False,
-                                     run_opts['gt_ratio']:    max(1.0*np.exp(-o.gt_decay_rate*ie), o.min_gt_ratio)} # Match training.
-                        if use_queues:
-                            feed_dict.update({queue_index: 1}) # Choose validation queue.
-                        else:
-                            batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
-                            # batch = _load_batch(batch_seqs, o)
-                            batch = graph.load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
-                            feed_dict.update({example[k]: v for k, v in batch.iteritems()})
-                            dur_load = time.time() - start
-                        summary_var = (summary_vars_with_preview['val']
-                                       if global_step % o.period_preview == 0
-                                       else summary_vars['val'])
-                        loss_val, summary = sess.run([loss_var, summary_var],
-                                                     feed_dict=feed_dict)
-                        dur_val = time.time() - start
-                        writer['val'].add_summary(summary, global_step=global_step)
-                        ib_val += 1
-                        newval = True
-
-                # Print result of one batch update
-                if o.verbose_train:
-                    losstime = '|loss:{:.5f}/{:.5f} (time:{:.2f}/{:.2f}) - with val'.format(
-                            loss, loss_val, dur, dur_val) if newval else \
-                            '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
-                    print 'ep {}/{}, batch {}/{} (bsz:{}), global_step {} {}'.format(
-                            ie+1, nepoch, ib+1, nbatch, o.batchsz, global_step, losstime)
-                    sys.stdout.flush()
-
-            print '[Epoch finished] ep {:d}/{:d}, global_step {:d} |loss:{:.5f} (time:{:.2f})'.format(
-                    ie+1, nepoch, global_step_var.eval(), np.mean(loss_ep), time.time()-t_epoch)
-            sys.stdout.flush()
+            # Print result of one batch update
+            if o.verbose_train:
+                losstime = '|loss:{:.5f}/{:.5f} (time:{:.2f}/{:.2f}) - with val'.format(
+                        loss, loss_val, dur, dur_val) if newval else \
+                        '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
+                print 'global_step {} {}'.format(global_step, losstime)
+                sys.stdout.flush()
 
         # **training finished
         print '\ntraining finished! ------------------------------------------'
