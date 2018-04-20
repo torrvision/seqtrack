@@ -332,7 +332,6 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
             else:
                 _, loss = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
                 dur = time.time() - start
-            loss_ep.append(loss)
 
             newval = False
             # Evaluate validation error.
