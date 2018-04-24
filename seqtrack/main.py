@@ -249,17 +249,20 @@ def main():
     train_dataset = _make_sampler(args.train_dataset, datasets)
     val_dataset = _make_sampler(args.val_dataset, datasets)
 
-    sampler_presets = {
-        'full': sample.FrameSampler(kind='full'),
+    # Parameters for FrameSampler().
+    sampler_preset_params = {
+        'full': dict(kind='full'),
         # The 'train' sampler is the same as used during training.
         # This may be useful for detecting over-fitting.
-        'train': sample.FrameSampler(ntimesteps=o.ntimesteps, **o.sampler_params),
+        'train': dict(ntimesteps=o.ntimesteps, **o.sampler_params),
     }
     eval_sets = {
         # Give each dataset its own random seed.
         d+'-'+s: functools.partial(
-            sample.sample, sample.EpochSampler(datasets[d]), sampler_presets[s],
-            motion_params=None, rand=np.random.RandomState(o.seed_global),
+            sample.sample,
+            sample.EpochSampler(datasets[d]),
+            sample.FrameSampler(**sampler_preset_params[s]),
+            rand=np.random.RandomState(o.seed_global),
             infinite=False, max_num=100)
         for d in o.eval_datasets
         for s in o.eval_samplers
