@@ -30,7 +30,7 @@ from seqtrack import visualize
 from seqtrack.helpers import cache_json
 
 
-def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
+def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
     '''Trains a network.
 
     Args:
@@ -173,16 +173,6 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
 
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver(max_to_keep=10)
-
-    # Use a separate random number generator for each sampler.
-    sequences = {
-        mode: sample.sample(
-            datasets[mode],
-            sample.FrameSampler(ntimesteps=o.ntimesteps, **o.sampler_params),
-            motion_params=o.motion_params,
-            rand=np.random.RandomState(o.seed_global),
-            infinite=True)
-        for mode in modes}
 
     if o.curriculum_learning:
         ''' Curriculum learning.

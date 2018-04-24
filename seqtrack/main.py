@@ -1,13 +1,13 @@
 import pdb
 import sys
 import argparse
-import functools
-import itertools
 import json
 import numpy as np
 import os
 import random
 import tensorflow as tf
+from functools import partial
+from itertools import chain
 
 import logging
 logger = logging.getLogger(__name__)
@@ -232,9 +232,10 @@ def main():
     o.initialize()
 
     # TODO: How to get datasets from train_dataset and eval_datasets?
-    train_datasets = _datasets_in_sampler(args.train_dataset)
-    val_datasets = _datasets_in_sampler(args.val_dataset)
-    dataset_names = list(set(itertools.chain(train_datasets, val_datasets, args.eval_datasets)))
+    dataset_names = list(set(chain(
+        _datasets_in_sampler(args.train_dataset),
+        _datasets_in_sampler(args.val_dataset),
+        args.eval_datasets)))
     logger.info('load datasets: %s', _list_str(dataset_names))
 
     if args.untar:
@@ -246,27 +247,26 @@ def main():
             name: data.load(args.data_dir, args.preproc, name,
                             cache=True, cache_dir=args.data_cache_dir) for name in datasets}
 
-    train_dataset = _make_sampler(args.train_dataset, datasets)
-    val_dataset = _make_sampler(args.val_dataset, datasets)
+    sampler_presets = {
+        'full': partial(sample.FrameSampler, kind='full'),
+        'train': partial(sample.FrameSampler, ntimesteps=o.ntimesteps, **o.sampler_params)}
 
-    # Parameters for FrameSampler().
-    sampler_preset_params = {
-        'full': dict(kind='full'),
-        # The 'train' sampler is the same as used during training.
-        # This may be useful for detecting over-fitting.
-        'train': dict(ntimesteps=o.ntimesteps, **o.sampler_params),
-    }
-    eval_sets = {
+    # Create example streams for train and val.
+    # Use a separate random number generator for each sampler.
+    sampler_specs = {'train': args.train_dataset, 'val': args.val_dataset}
+    streams = {
+        mode: sample.sample(
+            _make_sampler(sampler_specs[mode], datasets), sampler_presets['train']()
+            motion_params=o.motion_params, rand=np.random.RandomState(o.seed_global),
+            infinite=True)
+        for mode in modes}
+    # Create functions to sample finite sets for evaluation.
+    eval_sample_fns = {
         # Give each dataset its own random seed.
-        d+'-'+s: functools.partial(
-            sample.sample,
-            sample.EpochSampler(datasets[d]),
-            sample.FrameSampler(**sampler_preset_params[s]),
-            rand=np.random.RandomState(o.seed_global),
-            infinite=False, max_num=100)
-        for d in o.eval_datasets
-        for s in o.eval_samplers
-    }
+        (d + '-' + s): partial(
+            sample.sample, sample.EpochSampler(datasets[d]), sampler_presets[s](),
+            rand=np.random.RandomState(o.seed_global), infinite=False, max_num=100)
+        for d in o.eval_datasets for s in o.eval_samplers}
 
     if o.report:
         train.generate_report(sorted(o.eval_samplers), sorted(o.eval_datasets), o)
@@ -277,8 +277,7 @@ def main():
     else:
         raise ValueError('unknown model: {}'.format(o.model))
 
-    train.train(model, {'train': train_dataset, 'val': val_dataset},
-                eval_sets, o, use_queues=o.use_queues)
+    train.train(model, streams, eval_sample_fns, o, use_queues=o.use_queues)
 
 
 def _make_sampler(names, datasets):
