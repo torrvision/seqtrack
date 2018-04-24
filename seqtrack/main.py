@@ -60,7 +60,7 @@ def parse_arguments():
             type=json.loads, default='"ilsvrc_val"')
     parser.add_argument(
             '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker (list)',
-            type=str, default=['ILSVRC-val', 'OTB-50'])
+            type=str, default=['ilsvrc_val', 'otb_50'])
     parser.add_argument(
             '--eval_tre_num', type=int, default=3,
             help='number of points from which to start tracker in evaluation (full sampler only)')
@@ -222,8 +222,9 @@ def parse_arguments():
     return args
 
 
-
 def main():
+    # sys.settrace(trace)  # Use this to find segfaults.
+
     args = parse_arguments()
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
     o = Opts()
@@ -231,8 +232,8 @@ def main():
     o.initialize()
 
     # TODO: How to get datasets from train_dataset and eval_datasets?
-    train_datasets = _datasets_in_compound_dataset(args.train_dataset)
-    val_datasets = _datasets_in_compound_dataset(args.val_dataset)
+    train_datasets = _datasets_in_sampler(args.train_dataset)
+    val_datasets = _datasets_in_sampler(args.val_dataset)
     dataset_names = list(set(itertools.chain(train_datasets, val_datasets, args.eval_datasets)))
     logger.info('load datasets: %s', _list_str(dataset_names))
 
@@ -245,34 +246,21 @@ def main():
             name: data.load(args.data_dir, args.preproc, name,
                             cache=True, cache_dir=args.data_cache_dir) for name in datasets}
 
-    train_dataset = _make_compound_dataset(args.train_dataset, datasets)
-    val_dataset = _make_compound_dataset(args.val_dataset, datasets)
+    train_dataset = _make_sampler(args.train_dataset, datasets)
+    val_dataset = _make_sampler(args.val_dataset, datasets)
 
-    # These are the possible choices for evaluation sampler.
-    # No need to specify `shuffle`, `max_videos`, `max_objects` here,
-    # but `ntimesteps` should be set if applicable.
     sampler_presets = {
-        'full':   functools.partial(sample.sample, kind='full'),
+        'full': sample.FrameSampler(kind='full'),
         # The 'train' sampler is the same as used during training.
         # This may be useful for detecting over-fitting.
-        'train':  functools.partial(sample.sample, ntimesteps=o.ntimesteps, **o.sampler_params),
-        # The 'custom' sampler can be modified for a quick and dirty test.
-        'custom': functools.partial(sample.sample, kind='regular',
-                                    freq=o.sampler_params.get('freq', 10),
-                                    ntimesteps=o.ntimesteps),
+        'train': sample.FrameSampler(ntimesteps=o.ntimesteps, **o.sampler_params),
     }
-    # Take all dataset-sampler combinations.
-    # Different policies are used for choosing trajectories in OTB and ILSVRC:
-    # ILSVRC is large and therefore a random subset of videos are used,
-    # with 1 object per video.
-    # OTB is small and therefore all tracks in all videos are used.
     eval_sets = {
-        # Give each evaluation set its own random seed.
-        d+'-'+s: functools.partial(sampler_presets[s], datasets[d],
-            rand=np.random.RandomState(o.seed_global),
-            max_videos=o.max_eval_videos,
-            shuffle=True,
-            max_objects=1 if d.startswith('ILSVRC-') else None)
+        # Give each dataset its own random seed.
+        d+'-'+s: functools.partial(
+            sample.sample, sample.EpochSampler(datasets[d]), sampler_presets[s],
+            motion_params=None, rand=np.random.RandomState(o.seed_global),
+            infinite=False, max_num=100)
         for d in o.eval_datasets
         for s in o.eval_samplers
     }
@@ -281,11 +269,7 @@ def main():
         train.generate_report(sorted(o.eval_samplers), sorted(o.eval_datasets), o)
         return
 
-    # TODO: Set model_opts from command-line or JSON file?
-    # m = model.load_model(o, model_params=o.model_params)
-    if o.model == 'Nornn':
-        model = Nornn(**o.model_params)
-    elif o.model == 'SiamFC':
+    if o.model == 'SiamFC':
         model = ModelFromIterModel(SiamFC(**o.model_params))
     else:
         raise ValueError('unknown model: {}'.format(o.model))
@@ -294,46 +278,40 @@ def main():
                 eval_sets, o, use_queues=o.use_queues)
 
 
-def _make_compound_dataset(names, datasets):
-    # Construct training dataset object from string.
-    # If it is a string, use a single dataset.
-    # If it is a list of strings, concatenate those datasets.
-    # If it is a list of (weight, string) pairs, construct a DatasetMixture.
+def _make_sampler(names, datasets):
+    '''
+    Args:
+        names: string (EpochSampler), list of strings (EpochSampler of Concat) or
+            list of float-string-pairs (MixtureSampler).
+    '''
     if isinstance(names, basestring):
-        dataset = datasets[names]
-    elif isinstance(names, list):
+        return sample.EpochSampler(datasets[names])
+    if isinstance(names, list):
         assert len(names) > 0
-        if isinstance(names[0], basestring):
-            assert all(isinstance(elem, basestring) for elem in names)
-            dataset = data.Concat({name: datasets[name] for name in names})
-        else:
-            # Must be a list of pairs.
-            assert all(len(elem) == 2 for elem in names)
-            dataset = sample.DatasetMixture(
-                {name: (weight, datasets[name]) for weight, name in names})
-    else:
-        raise ValueError('train_dataset is not a string or a list: {}'.format(repr(names)))
-    return dataset
+        if all(isinstance(name, basestring) for name in names):
+            concat = data.Concat({name: datasets[name] for name in names})
+            return sample.EpochSampler(concat)
+        elif all(_is_pair(elem) for elem in names):
+            samplers = {name: sample.EpochSampler(datasets[name]) for _, name in names}
+            weights = {name: weight for weight, name in names}
+            return sample.MixtureSampler(samplers, weights)
+    raise ValueError('invalid structure: {}'.format(repr(names)))
 
 
-def _datasets_in_compound_dataset(x):
-    # Construct training dataset object from string.
-    # If it is a string, use a single dataset.
-    # If it is a list of strings, concatenate those datasets.
-    # If it is a list of (weight, string) pairs, construct a DatasetMixture.
-    if isinstance(x, basestring):
-        return [x]
-    elif isinstance(x, list):
-        assert len(x) > 0
-        if isinstance(x[0], basestring):
-            assert all(isinstance(elem, basestring) for elem in x)
-            return x
-        else:
-            # Must be a list of pairs.
-            assert all(len(elem) == 2 for elem in x)
-            return [name for weight, name in x]
-    else:
-        raise ValueError('train_dataset is not a string or a list: {}'.format(repr(x)))
+def _is_pair(x):
+    return (isinstance(x, list) or isinstance(x, tuple)) and len(x) == 2
+
+
+def _datasets_in_sampler(names):
+    if isinstance(names, basestring):
+        return [names]
+    if isinstance(names, list):
+        assert len(names) > 0
+        if all(isinstance(name, basestring) for name in names):
+            return names
+        elif all(_is_pair(elem) for elem in names):
+            return [name for _, name in names]
+    raise ValueError('invalid structure: {}'.format(repr(names)))
 
 
 def _quote(x):
@@ -342,6 +320,11 @@ def _quote(x):
 
 def _list_str(x):
     return ', '.join(map(_quote, x))
+
+
+def trace(frame, event, arg):
+    print >> sys.stderr, '%s, %s:%d' % (event, frame.f_code.co_filename, frame.f_lineno)
+    return trace
 
 
 if __name__ == "__main__":

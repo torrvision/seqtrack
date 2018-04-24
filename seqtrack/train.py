@@ -175,10 +175,14 @@ def train(model, datasets, eval_sets, o, stat=None, use_queues=False):
     saver = tf.train.Saver(max_to_keep=10)
 
     # Use a separate random number generator for each sampler.
-    sequences = {mode: iter_examples(datasets[mode], o,
-                                     rand=np.random.RandomState(o.seed_global),
-                                     num_epochs=None)
-                 for mode in modes}
+    sequences = {
+        mode: sample.sample(
+            datasets[mode],
+            sample.FrameSampler(ntimesteps=o.ntimesteps, **o.sampler_params),
+            motion_params=o.motion_params,
+            rand=np.random.RandomState(o.seed_global),
+            infinite=True)
+        for mode in modes}
 
     if o.curriculum_learning:
         ''' Curriculum learning.
@@ -445,24 +449,6 @@ def _perform_color_augmentation(example_raw, o, name='color_augmentation'):
     example['x0'] = xs_aug[:,0]
     example['x']  = xs_aug[:,1:]
     return example
-
-
-def iter_examples(dataset, o, rand=None, num_epochs=None):
-    '''Generator that produces multiple epochs of examples for SGD.'''
-    if num_epochs:
-        epochs = xrange(num_epochs)
-    else:
-        epochs = itertools.count()
-    for i in epochs:
-        sequences = sample.sample(dataset, rand=rand,
-                                  shuffle=True, max_objects=1, ntimesteps=o.ntimesteps,
-                                  **o.sampler_params)
-        for sequence in sequences:
-            # JV: Add motion augmentation.
-            # yield sequence
-            if o.augment_motion:
-                sequence = motion.augment(sequence, rand=rand, **o.motion_params)
-            yield sequence
 
 
 def generate_report(samplers, datasets, o,

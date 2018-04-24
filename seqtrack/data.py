@@ -52,6 +52,10 @@ class Subset(object):
     '''
 
     def __init__(self, dataset, load_func):
+        '''
+        Args:
+            dataset -- String.
+        '''
         self.dataset = dataset
         self.load_func = load_func
 
@@ -206,7 +210,10 @@ def _still_running_or_assert_success(proc, name, tar_file, dataset_dir, start):
 
 
 class DatasetInstance(object):
-    '''Describes dataset instantiated in a directory.'''
+    '''Describes dataset instantiated in a directory.
+
+    Absolute image paths are returned.
+    '''
 
     def __init__(self, dir, metadata):
         self.dir = dir
@@ -230,41 +237,40 @@ class DatasetInstance(object):
 
 
 class Concat(object):
+    '''Represents the concatenation of multiple datasets as one dataset.'''
 
     def __init__(self, datasets):
         self.datasets = datasets
 
     def tracks(self):
-        return [_join_concat_id(dataset_id, track_id)
+        return [self.join_id(dataset_id, track_id)
                 for dataset_id, dataset in self.datasets.items()
                 for track_id in dataset.tracks()]
 
     def video(self, track_id):
-        dataset_id, internal_track_id = _split_concat_id(track_id)
+        dataset_id, internal_track_id = self.split_id(track_id)
         internal_video_id = self.datasets[dataset_id].video(internal_track_id)
-        return _join_concat_id(dataset_id, internal_video_id)
+        return self.join_id(dataset_id, internal_video_id)
 
     def labels(self, track_id):
-        dataset_id, internal_track_id = _split_concat_id(track_id)
+        dataset_id, internal_track_id = self.split_id(track_id)
         return self.datasets[dataset_id].labels(internal_track_id)
 
     def image_file(self, video_id, time):
-        dataset_id, internal_video_id = _split_concat_id(video_id)
-        return self.datasets[dataset_id].image_file(internal_video_id, time)
+        dataset_id, internal_id = self.split_id(video_id)
+        return self.datasets[dataset_id].image_file(internal_id, time)
 
     def aspect(self, video_id):
-        dataset_id, internal_video_id = _split_concat_id(video_id)
-        return self.datasets[dataset_id].aspect(internal_video_id)
+        dataset_id, internal_id = self.split_id(video_id)
+        return self.datasets[dataset_id].aspect(internal_id)
 
+    def join_id(self, dataset_id, internal_id):
+        assert '/' not in dataset_id
+        return dataset_id + '/' + internal_id
 
-def _join_concat_id(dataset_id, internal_id):
-    assert '/' not in dataset_id
-    return dataset_id + '/' + internal_id
-
-
-def _split_concat_id(external_id):
-    dataset_id, internal_id = external_id.split('/', 1)
-    return dataset_id, internal_id
+    def split_id(self, external_id):
+        dataset_id, internal_id = external_id.split('/', 1)
+        return dataset_id, internal_id
 
 
 def get_videos(metadata):
