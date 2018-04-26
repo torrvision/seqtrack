@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 from seqtrack.opts import Opts
 from seqtrack import data
 # from seqtrack import model
+from seqtrack import motion
 from seqtrack import track
 from seqtrack import train
 from seqtrack import sample
@@ -247,24 +248,27 @@ def main():
             name: data.load(args.data_dir, args.preproc, name,
                             cache=True, cache_dir=args.data_cache_dir) for name in datasets}
 
-    sampler_presets = {
+    frame_sampler_presets = {
         'full': partial(sample.FrameSampler, kind='full'),
         'train': partial(sample.FrameSampler, ntimesteps=o.ntimesteps, **o.sampler_params)}
 
     # Create example streams for train and val.
     # Use a separate random number generator for each sampler.
     sampler_specs = {'train': args.train_dataset, 'val': args.val_dataset}
-    streams = {
-        mode: sample.sample(
-            _make_sampler(sampler_specs[mode], datasets), sampler_presets['train']()
-            motion_params=o.motion_params, rand=np.random.RandomState(o.seed_global),
-            infinite=True)
-        for mode in modes}
+    streams = {}
+    for i, mode in enumerate(['train', 'val']):
+        seed = o.seed_global + i  # Use a different seed for train and val.
+        postproc_fn = (
+            None if not o.augment_motion else
+            partial(motion.augment, rand=np.random.RandomState(seed), **o.motion_params))
+        streams[mode] = sample.sample(
+            _make_sampler(sampler_specs[mode], datasets), frame_sampler_presets['train'](),
+            postproc_fn=postproc_fn, rand=np.random.RandomState(seed), infinite=True)
     # Create functions to sample finite sets for evaluation.
     eval_sample_fns = {
         # Give each dataset its own random seed.
         (d + '-' + s): partial(
-            sample.sample, sample.EpochSampler(datasets[d]), sampler_presets[s](),
+            sample.sample, sample.EpochSampler(datasets[d]), frame_sampler_presets[s](),
             rand=np.random.RandomState(o.seed_global), infinite=False, max_num=100)
         for d in o.eval_datasets for s in o.eval_samplers}
 

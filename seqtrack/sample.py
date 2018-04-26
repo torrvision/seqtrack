@@ -25,11 +25,10 @@ logger = logging.getLogger(__name__)
 
 from seqtrack import data
 from seqtrack import geom_np
-from seqtrack import motion
 import trackdat
 
 
-def sample(sequence_sampler, frame_sampler, motion_params=None,
+def sample(sequence_sampler, frame_sampler, postproc_fn=None,
            rand=None, infinite=False, max_num=0):
     '''Produces a finite or infinite stream of sequences from a dataset.
 
@@ -61,10 +60,12 @@ def sample(sequence_sampler, frame_sampler, motion_params=None,
         # Frame sampler can fail.
         # TODO: Could integrate frame sampler with sequence sampler
         # to e.g. preserve distribution on failure.
-        if not sequence:
+        if sequence is None:
             continue
-        if motion_params is not None:
-            sequence = motion.augment(sequence, rand=rand, **motion_params)
+        if postproc_fn is not None:
+            sequence = postproc_fn(sequence, rand=rand)
+            if sequence is None:
+                continue
         yield sequence
         num += 1
 
@@ -140,31 +141,48 @@ class FrameSampler(object):
         Args:
             kwargs: For select_frames().
         '''
-        labels = self.dataset.labels(track_id)
-        present_frames = [t for t, l in labels.items() if trackdat.dataset.is_present(l)]
-        if len(present_frames) == 0:
-            logger.debug('no present frames: track "%s"', track_id)
-            return None
-        if len(present_frames) < 2:
-            logger.debug('less than two present frames: track "%s"', track_id)
-            return None
-        frames = select_frames(present_frames, rand=self.rand, **self.kwargs)
-        if not frames:
-            logger.debug('failed to select frames: track "%s"', track_id)
-            return None
-        return make_sequence(self.dataset, track_id, frames)
+        return select_frames_dataset(self.dataset, track_id, rand=self.rand, **self.kwargs)
 
 
-def select_frames(valid_frames, rand, kind=None, ntimesteps=None,
+def select_frames_dataset(dataset, track_id, rand, **kwargs):
+    '''Selects frames from a full track in a dataset.
+
+    Returns a sequence.
+    '''
+    labels = dataset.labels(track_id)
+    present_frames = sorted(t for t, l in labels.items() if trackdat.dataset.is_present(l))
+    if len(present_frames) == 0:
+        logger.debug('no present frames: track "%s"', track_id)
+        return None
+    if len(present_frames) < 2:
+        logger.debug('less than two present frames: track "%s"', track_id)
+        return None
+
+    t_start, t_stop = present_frames[0], present_frames[-1] + 1
+    frames = select_frames_start(t_start, t_stop, present_frames, rand, **kwargs)
+    return make_sequence(dataset, track_id, frames)
+
+
+def select_frames_start(t_start, t_stop, valid_frames, *args, **kwargs):
+    t_stop = t_stop - t_start
+    valid_frames = [t - t_start for t in valid_frames]
+    frames = select_frames(t_stop, valid_frames, *args, **kwargs)
+    if frames is None:
+        return None
+    return [t + t_start for t in frames]
+
+
+def select_frames(t_stop, valid_frames, rand, kind=None, ntimesteps=None,
                   freq=10, min_freq=10, max_freq=60, use_log=True):
-    valid_frames = sorted(valid_frames)
-    valid_frames_set = set(valid_frames)
-    t_min, t_max = valid_frames[0], valid_frames[-1]
-    seq_len = t_max - t_min + 1
-    is_valid = {t: t in valid_frames_set for t in range(t_min, t_max + 1)}
+    '''
+    Args:
+        valid_frames: Sorted list of unique integers in [0, t_stop).
 
+    Returns:
+        List of integers in [0, t_stop).
+    '''
     if kind == 'full':
-        return range(t_min, t_max+1)
+        return range(t_stop)
     elif kind == 'sampling':
         # Random subset of present frames.
         # TODO: Change the name when convenient.
@@ -174,19 +192,19 @@ def select_frames(valid_frames, rand, kind=None, ntimesteps=None,
         # Sample frames with `freq`, regardless of label
         # (only the first frame need to have label).
         # Note also that the returned frames can have length < ntimesteps+1.
-        frames = range(rand.choice(valid_frames), seq_len, freq)
+        frames = range(rand.choice(valid_frames), t_stop, freq)
         return frames[:ntimesteps+1]
     elif kind == 'freq-range-fit':
         # Choose frames:
         #   a, round(a+freq), round(a+2*freq), round(a+3*freq), ...
         # Therefore, for frames [0, ..., ntimesteps], we need:
-        #   a + ntimesteps*freq <= seq_len - 1
-        # The smallest possible value of a is valid_frames[0]
-        #   valid_frames[0] + ntimesteps*freq <= seq_len - 1
-        #   ntimesteps*freq <= seq_len - 1 - valid_frames[0]
-        #   freq <= (seq_len - 1 - valid_frames[0]) / ntimesteps
+        #   a + ntimesteps*freq <= t_stop - 1
+        # The smallest possible value of a is 0
+        #   0 + ntimesteps*freq <= t_stop - 1
+        #   ntimesteps*freq <= t_stop - 1
+        #   freq <= (t_stop - 1) / ntimesteps
         u = min_freq
-        v = min(max_freq, float((seq_len - 1) - valid_frames[0]) / ntimesteps)
+        v = min(max_freq, float((t_stop - 1)) / ntimesteps)
         if not u <= v:
             return None
         if use_log:
@@ -196,7 +214,7 @@ def select_frames(valid_frames, rand, kind=None, ntimesteps=None,
         # Let n = ntimesteps*f.
         n = int(round(ntimesteps * f))
         # Choose first frame such that all frames are present.
-        a = rand.choice([a for a in valid_frames if a + n <= t_max])
+        a = rand.choice([a for a in valid_frames if a + n <= t_stop])
         return [int(round(a + f*t)) for t in range(0, ntimesteps+1)]
     else:
         raise ValueError('unknown sampler: {}'.format(kind))
