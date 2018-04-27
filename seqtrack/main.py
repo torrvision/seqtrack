@@ -33,6 +33,7 @@ def parse_arguments():
     parser.add_argument(
             '-v', '--verbose', help='print arguments',
             action='store_true')
+    parser.add_argument('--loglevel', default='info', help='debug, info, warning')
     parser.add_argument(
             '--verbose_train', help='print train losses during train',
             action='store_true')
@@ -227,7 +228,8 @@ def main():
     # sys.settrace(trace)  # Use this to find segfaults.
 
     args = parse_arguments()
-    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
+    # logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
+    logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
     o = Opts()
     o.update_by_sysarg(args=args)
     o.initialize()
