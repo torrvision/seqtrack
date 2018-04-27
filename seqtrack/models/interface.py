@@ -86,7 +86,7 @@ class IterModel(object):
 
     def end(self):
         '''end() provides a final chance to add summaries, losses, etc.
-        
+
         Returns:
             An additional loss dict.
         '''

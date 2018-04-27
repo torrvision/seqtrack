@@ -19,11 +19,11 @@ def foreground_labels(position, rect, shape='rect', sigma=0.3, name='foreground_
     with tf.name_scope(name) as scope:
         label_shape = most_static_shape(rect)[0:1] + most_static_shape(position)[0:2]
 
-        rect = expand_dims_n(rect, -2, n=2) # [b, 4] -> [b, 1, 1, 4]
+        rect = expand_dims_n(rect, -2, n=2)  # [b, 4] -> [b, 1, 1, 4]
         min_pt, max_pt = geom.rect_min_max(rect)
         center, size = 0.5 * (min_pt + max_pt), max_pt - min_pt
 
-        has_label = tf.ones(label_shape, tf.bool) # [b, h, w]
+        has_label = tf.ones(label_shape, tf.bool)  # [b, h, w]
         if shape == 'rect':
             is_pos = tf.logical_and(tf.reduce_all(min_pt <= position, axis=-1),
                                     tf.reduce_all(position <= max_pt, axis=-1))
@@ -54,7 +54,7 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
     with tf.name_scope(name) as scope:
         label_shape = most_static_shape(rect)[0:1] + most_static_shape(position)[-3:-1]
 
-        rect = expand_dims_n(rect, -2, n=2) # [b, 4] -> [b, 1, 1, 4]
+        rect = expand_dims_n(rect, -2, n=2)  # [b, 4] -> [b, 1, 1, 4]
         min_pt, max_pt = geom.rect_min_max(rect)
         center = 0.5 * (min_pt + max_pt)
 
@@ -62,7 +62,7 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
         sqr_dist = tf.reduce_sum(tf.square(error), axis=-1)
         dist = tf.norm(error, axis=-1)
 
-        has_label = tf.ones(label_shape, tf.bool) # [b, h, w]
+        has_label = tf.ones(label_shape, tf.bool)  # [b, h, w]
         if shape == 'gaussian':
             labels = tf.exp(-0.5 * sqr_dist / tf.square(sigma))
         elif shape == 'threshold':
@@ -72,7 +72,7 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
             is_pos = tf.to_float(is_pos)
             is_neg = tf.to_float(is_neg)
             labels = is_pos / (is_pos + is_neg)
-            labels = tf.where(has_label, labels, 0.5*tf.ones_like(labels))
+            labels = tf.where(has_label, labels, 0.5 * tf.ones_like(labels))
         else:
             raise ValueError('shape not supported: {}'.format(shape))
         return labels, has_label

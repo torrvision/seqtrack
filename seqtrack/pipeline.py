@@ -68,16 +68,16 @@ def get_example_filenames(capacity=32, name='get_example'):
                              names=['image_files', 'viewports', 'labels', 'label_is_valid', 'aspect'],
                              name='file_queue')
         placeholder = {
-            'image_files':    tf.placeholder(tf.string, shape=[None], name='example_files'),
-            'viewports':      tf.placeholder(tf.float32, shape=[None, 4], name='example_viewports'),
-            'labels':         tf.placeholder(tf.float32, shape=[None, 4], name='example_labels'),
+            'image_files': tf.placeholder(tf.string, shape=[None], name='example_files'),
+            'viewports': tf.placeholder(tf.float32, shape=[None, 4], name='example_viewports'),
+            'labels': tf.placeholder(tf.float32, shape=[None, 4], name='example_labels'),
             'label_is_valid': tf.placeholder(tf.bool, shape=[None], name='example_label_is_valid'),
-            'aspect':         tf.placeholder(tf.float32, shape=[], name='example_aspect'),
+            'aspect': tf.placeholder(tf.float32, shape=[], name='example_aspect'),
         }
         enqueue = queue.enqueue(placeholder)
         with tf.name_scope('summary'):
             tf.summary.scalar('fraction_of_%d_full' % capacity,
-                              tf.cast(queue.size(), tf.float32) * (1./capacity))
+                              tf.cast(queue.size(), tf.float32) * (1. / capacity))
         dequeue = queue.dequeue(name=scope)
 
     # Restore partial shape information that is erased by FIFOQueue.
@@ -115,11 +115,11 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
             if coord.should_stop():
                 return
             sess.run(enqueue, feed_dict={
-                placeholder['image_files']:    example['image_files'],
-                placeholder['viewports']:      example['viewports'],
-                placeholder['labels']:         example['labels'],
+                placeholder['image_files']: example['image_files'],
+                placeholder['viewports']: example['viewports'],
+                placeholder['labels']: example['labels'],
                 placeholder['label_is_valid']: example['label_is_valid'],
-                placeholder['aspect']:         example['aspect'],
+                placeholder['aspect']: example['aspect'],
             })
     except (tf.errors.OutOfRangeError, tf.errors.CancelledError) as ex:
         ok = False
@@ -133,8 +133,8 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
 
 
 def load_images(example, image_size=[None, None, None], pad_value=128,
-        capacity=32, num_threads=1,
-        name='load_images'):
+                capacity=32, num_threads=1,
+                name='load_images'):
     '''Creates a queue of sequences with images loaded.
     See the package example.
 
@@ -179,9 +179,9 @@ def load_images(example, image_size=[None, None, None], pad_value=128,
         # Sample viewport in image.
         images = tf.image.convert_image_dtype(images, tf.float32)
         images = tf.image.crop_and_resize(images, geom.rect_to_tf_box(example['viewports']),
-            box_ind=tf.range(tf.shape(images)[0]),
-            crop_size=image_size[0:2],
-            extrapolation_value=pad_value/255.)
+                                          box_ind=tf.range(tf.shape(images)[0]),
+                                          crop_size=image_size[0:2],
+                                          extrapolation_value=pad_value / 255.)
         # tf.image.crop_and_resize converts to float32.
         # TODO: Avoid casting uint8 -> float32 -> uint8 -> float32.
         images = tf.image.convert_image_dtype(images, tf.uint8)
@@ -190,10 +190,10 @@ def load_images(example, image_size=[None, None, None], pad_value=128,
         del example['viewports']
         example['images'] = images
         enqueue = queue.enqueue(example)
-        tf.train.add_queue_runner(tf.train.QueueRunner(queue, [enqueue]*num_threads))
+        tf.train.add_queue_runner(tf.train.QueueRunner(queue, [enqueue] * num_threads))
         with tf.name_scope('summary'):
             tf.summary.scalar('fraction_of_%d_full' % capacity,
-                              tf.cast(queue.size(), tf.float32) * (1./capacity))
+                              tf.cast(queue.size(), tf.float32) * (1. / capacity))
         dequeue = queue.dequeue(name=scope)
         # Restore rank information of Tensors for tf.train.batch.
         # TODO: It does not seem possible to preserve this through the FIFOQueue?
@@ -203,6 +203,7 @@ def load_images(example, image_size=[None, None, None], pad_value=128,
         dequeue['label_is_valid'].set_shape(example['label_is_valid'].shape)
         dequeue['aspect'].set_shape(example['aspect'].shape)
         return dequeue
+
 
 def batch(example, batch_size=1, capacity=32, num_threads=1, sequence_length=None, name='batch'):
     '''Creates a queue of batches of sequences (with images) from a queue of sequences.
@@ -229,8 +230,8 @@ def batch(example, batch_size=1, capacity=32, num_threads=1, sequence_length=Non
         # Get the length of the sequence before tf.train.batch.
         example['num_frames'] = tf.shape(example['images'])[0]
         b = tf.train.batch(example, batch_size=batch_size,
-            dynamic_pad=True, capacity=capacity, num_threads=num_threads,
-            name=scope)
+                           dynamic_pad=True, capacity=capacity, num_threads=num_threads,
+                           name=scope)
         # Restore partial shape information (erased by FIFOQueue).
         for k in b:
             b[k].set_shape([None] + example[k].shape.as_list())
@@ -265,8 +266,8 @@ def make_multiplexer(sources, capacity=32, num_threads=1, name='multiplex'):
                 enqueue = queue.enqueue(source)
                 with tf.name_scope('summary'):
                     tf.summary.scalar('fraction_of_%d_full' % capacity,
-                                      tf.cast(queue.size(), tf.float32) * (1./capacity))
-            tf.train.add_queue_runner(tf.train.QueueRunner(queue, [enqueue]*num_threads))
+                                      tf.cast(queue.size(), tf.float32) * (1. / capacity))
+            tf.train.add_queue_runner(tf.train.QueueRunner(queue, [enqueue] * num_threads))
             queues.append(queue)
         # Multiplex over dummy queues.
         index = tf.placeholder(tf.int32, [], 'index')

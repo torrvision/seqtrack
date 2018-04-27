@@ -2,6 +2,7 @@ import unittest
 
 from seqtrack.helpers import to_nested_tuple
 
+
 class TestToNestedTuple(unittest.TestCase):
 
     def test_basic(self):

@@ -21,16 +21,16 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='run tracker on one sequence')
     add_tracker_arguments(parser)
     parser.add_argument('model_file',
-        help='e.g. iteration-100000; where iteration-100000.index exists')
+                        help='e.g. iteration-100000; where iteration-100000.index exists')
     parser.add_argument('out_file', help='e.g. track.csv')
 
     parser.add_argument('--sequence_name', type=str, default='untitled')
     parser.add_argument('--init_rect', type=json.loads, required=True,
-        help='e.g. {"xmin": 0.1, "ymin": 0.7, "xmax": 0.4, "ymax": 0.9}')
+                        help='e.g. {"xmin": 0.1, "ymin": 0.7, "xmax": 0.4, "ymax": 0.9}')
     parser.add_argument('--start', type=int, required=True)
     parser.add_argument('--end', type=int, required=True)
     parser.add_argument('--image_format', type=str, required=True,
-        help='e.g. sequence/%%06d.jpeg')
+                        help='e.g. sequence/%%06d.jpeg')
 
     parser.add_argument('--gpu_frac', type=float, default='1.0', help='fraction of gpu memory')
     parser.add_argument('--vis', action='store_true')
@@ -47,7 +47,7 @@ def main():
     o.initialize()
 
     # Load sequence from args.
-    frames = range(args.start, args.end+1)
+    frames = range(args.start, args.end + 1)
     sequence = {}
     sequence['video_name'] = args.sequence_name
     sequence['image_files'] = [args.image_format % i for i in frames]
@@ -71,13 +71,13 @@ def main():
     with tf.Session(config=config) as sess:
         saver.restore(sess, args.model_file)
         rect_pred, _ = evaluate.track(sess, example, model, sequence, use_gt=False, verbose=True,
-            visualize=args.vis, vis_dir=args.vis_dir, save_frames=args.vis_keep_frames)
+                                      visualize=args.vis, vis_dir=args.vis_dir, save_frames=args.vis_keep_frames)
 
     rect_pred = np.asarray(rect_pred).tolist()
     with open(args.out_file, 'w') as f:
         writer = csv.writer(f)
         writer.writerow(['frame', 'xmin', 'ymin', 'xmax', 'ymax'])
-        times = range(args.start, args.end+1)
+        times = range(args.start, args.end + 1)
         for t, rect_t in zip(times[1:], rect_pred):
             writer.writerow([t] + map(lambda x: '{:.6g}'.format(x), rect_t))
         # json.dump(rect_pred, sys.stdout)
@@ -87,19 +87,19 @@ def add_tracker_arguments(parser):
     # parser.add_argument(
     #         '--frmsz', help='size of a square image', type=int, default=257)
     parser.add_argument(
-            '--imwidth', type=int, default=640, help='image resolution')
+        '--imwidth', type=int, default=640, help='image resolution')
     parser.add_argument(
-            '--imheight', type=int, default=360, help='image resolution')
+        '--imheight', type=int, default=360, help='image resolution')
     parser.add_argument(
-            '--ntimesteps', help='number of time steps for rnn',
-            type=int, default=1)
+        '--ntimesteps', help='number of time steps for rnn',
+        type=int, default=1)
 
     parser.add_argument(
-            '--model', help='model!',
-            type=str, default='')
+        '--model', help='model!',
+        type=str, default='')
     parser.add_argument(
-            '--model_params', help='JSON string specifying model',
-            type=json.loads, default={})
+        '--model_params', help='JSON string specifying model',
+        type=json.loads, default={})
     # parser.add_argument(
     #         '--cnn_model', help='pretrained CNN model',
     #         type=str, default='custom')

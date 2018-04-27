@@ -186,14 +186,14 @@ def select_frames(t_stop, valid_frames, rand, kind=None, ntimesteps=None,
     elif kind == 'sampling':
         # Random subset of present frames.
         # TODO: Change the name when convenient.
-        k = min(len(valid_frames), ntimesteps+1)
+        k = min(len(valid_frames), ntimesteps + 1)
         return sorted(rand.choice(valid_frames, k, replace=False))
     elif kind == 'regular':
         # Sample frames with `freq`, regardless of label
         # (only the first frame need to have label).
         # Note also that the returned frames can have length < ntimesteps+1.
         frames = range(rand.choice(valid_frames), t_stop, freq)
-        return frames[:ntimesteps+1]
+        return frames[:ntimesteps + 1]
     elif kind == 'freq-range-fit':
         # Choose frames:
         #   a, round(a+freq), round(a+2*freq), round(a+3*freq), ...
@@ -215,7 +215,7 @@ def select_frames(t_stop, valid_frames, rand, kind=None, ntimesteps=None,
         n = int(round(ntimesteps * f))
         # Choose first frame such that all frames are present.
         a = rand.choice([a for a in valid_frames if a + n <= t_stop])
-        return [int(round(a + f*t)) for t in range(0, ntimesteps+1)]
+        return [int(round(a + f * t)) for t in range(0, ntimesteps + 1)]
     else:
         raise ValueError('unknown sampler: {}'.format(kind))
 

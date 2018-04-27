@@ -148,8 +148,8 @@ indices = indices.astype('int')
 
 for epoch_i in range(n_epochs):
     for iter_i in range(iter_per_epoch - 1):
-        batch_xs = X_train[indices[iter_i]:indices[iter_i+1]]
-        batch_ys = Y_train[indices[iter_i]:indices[iter_i+1]]
+        batch_xs = X_train[indices[iter_i]:indices[iter_i + 1]]
+        batch_ys = Y_train[indices[iter_i]:indices[iter_i + 1]]
 
         if iter_i % 10 == 0:
             loss = sess.run(cross_entropy,

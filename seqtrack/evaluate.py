@@ -94,12 +94,12 @@ def track(sess, model_inst, sequence, use_gt,
             load_image_viewport(image_file, viewport,
                                 size_hw=(model_inst.imheight, model_inst.imwidth))
             for image_file, viewport in zip(
-                sequence['image_files'][start:start+chunk_len],
-                sequence['viewports'][start:start+chunk_len])
+                sequence['image_files'][start:start + chunk_len],
+                sequence['viewports'][start:start + chunk_len])
         ]
         prev_time = time.time()
-        labels = sequence['labels'][start:start+chunk_len]
-        is_valid = sequence['label_is_valid'][start:start+chunk_len]
+        labels = sequence['labels'][start:start + chunk_len]
+        is_valid = sequence['label_is_valid'][start:start + chunk_len]
 
         # Prepare data as input to network.
         images_arr = map(im_to_arr, images)
@@ -121,7 +121,7 @@ def track(sess, model_inst, sequence, use_gt,
             # This is not the first chunk.
             # Add the previous state to the feed dictionary.
             tensor, value = to_nested_tuple(model_inst.state_init, prev_state)
-            if tensor is not None: # Function returns None if empty.
+            if tensor is not None:  # Function returns None if empty.
                 feed_dict[tensor] = value
         # Get output and final state.
         # y_pred, prev_state, hmap_pred = sess.run(
@@ -149,8 +149,8 @@ def track(sess, model_inst, sequence, use_gt,
                 #     rect_pred=y_pred[i],
                 #     hmap_pred=hmap_pred[i])
                 im_vis = visualize_pkg.draw_output(image_i,
-                    rect_gt=(labels[i] if is_valid[i] else None),
-                    rect_pred=outputs['y'][i])
+                                                   rect_gt=(labels[i] if is_valid[i] else None),
+                                                   rect_pred=outputs['y'][i])
                 im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % t))
 
         y_pred_chunks.append(outputs['y'])
@@ -158,17 +158,17 @@ def track(sess, model_inst, sequence, use_gt,
 
     dur += time.time() - prev_time
     if verbose:
-        print 'time: {:.3g} sec ({:.3g} fps)'.format(dur, (sequence_len-1)/dur)
+        print 'time: {:.3g} sec ({:.3g} fps)'.format(dur, (sequence_len - 1) / dur)
 
     if visualize:
         args = ['ffmpeg', '-loglevel', 'error',
                           # '-r', '1', # fps.
-                          '-y', # Overwrite without asking.
-                          '-nostdin', # No interaction with user.
+                          '-y',  # Overwrite without asking.
+                          '-nostdin',  # No interaction with user.
                           '-i', FRAME_PATTERN,
                           '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
                           os.path.join(os.path.abspath(vis_dir),
-                                       escape_filename(sequence['video_name'])+'.mp4')]
+                                       escape_filename(sequence['video_name']) + '.mp4')]
         try:
             p = subprocess.Popen(args, cwd=frame_dir)
             p.wait()
@@ -183,6 +183,7 @@ def track(sess, model_inst, sequence, use_gt,
     # hmap_pred = np.concatenate(hmap_pred_chunks)
     # return y_pred, hmap_pred
     return y_pred
+
 
 def _single_to_batch(x, batch_size):
     x = np.expand_dims(x, 0)
@@ -264,8 +265,8 @@ def evaluate(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
             # Note that this is different from the standard deviation of a single set.
             # See page 107 of "All of Statistics" (Wasserman).
             std_err = np.sqrt(var / len(results_k))
-            results[mode][k]            = mean.tolist() # Convert to list for JSON.
-            results[mode][k+'_std_err'] = std_err.tolist()
+            results[mode][k] = mean.tolist()  # Convert to list for JSON.
+            results[mode][k + '_std_err'] = std_err.tolist()
     return results
 
 
@@ -275,7 +276,7 @@ def extract_tre_sequence(seq, ind, num):
     valid_frames = [t for t in range(num_frames) if is_valid[t]]
     min_t, max_t = valid_frames[0], valid_frames[-1]
 
-    start_t = int(round(float(ind)/num*(max_t-min_t))) + min_t
+    start_t = int(round(float(ind) / num * (max_t - min_t))) + min_t
     # Snap to next valid frame (raises StopIteration if none).
     try:
         start_t = next(t for t in valid_frames if t >= start_t)
@@ -320,45 +321,46 @@ def evaluate_track(pred, gt, is_valid):
     cle = _compute_cle(pred, gt)
 
     # Success plot: 1. iou, 2. success rates, 3. area under curve
-    success_thresholds = np.append(np.arange(0,1,0.05), 1)
-    success_thresholds = np.tile(success_thresholds, (iou.size,1))
-    success_table = iou[:,np.newaxis] > success_thresholds
-    iou_mean        = np.mean(iou)
-    success_rates   = np.mean(success_table, axis=0)
-    auc             = np.mean(success_rates)
+    success_thresholds = np.append(np.arange(0, 1, 0.05), 1)
+    success_thresholds = np.tile(success_thresholds, (iou.size, 1))
+    success_table = iou[:, np.newaxis] > success_thresholds
+    iou_mean = np.mean(iou)
+    success_rates = np.mean(success_table, axis=0)
+    auc = np.mean(success_rates)
 
     # Precision plot: 1. cle, 2. precision rates, 3. representative precision error
     precision_thresholds = np.arange(0, 60, 5)
-    precision_thresholds_rep = np.tile(precision_thresholds, (cle.size,1))
-    precision_table = cle[:,np.newaxis] < precision_thresholds_rep
-    representative_precision_threshold = 20 # benchmark
-    cle_mean            = np.mean(cle)
-    precision_rates     = np.mean(precision_table, axis=0)
-    cle_representative  = precision_rates[
+    precision_thresholds_rep = np.tile(precision_thresholds, (cle.size, 1))
+    precision_table = cle[:, np.newaxis] < precision_thresholds_rep
+    representative_precision_threshold = 20  # benchmark
+    cle_mean = np.mean(cle)
+    precision_rates = np.mean(precision_table, axis=0)
+    cle_representative = precision_rates[
         np.where(precision_thresholds == representative_precision_threshold)][0]
 
     results = {}
-    results['iou_mean']             = iou_mean
-    results['success_rates']        = success_rates
-    results['auc']                  = auc
-    results['cle_mean']             = cle_mean
-    results['precision_rates']      = precision_rates
-    results['cle_representative']   = cle_representative
+    results['iou_mean'] = iou_mean
+    results['success_rates'] = success_rates
+    results['auc'] = auc
+    results['cle_mean'] = cle_mean
+    results['precision_rates'] = precision_rates
+    results['cle_representative'] = cle_representative
     return results
+
 
 def _compute_iou(boxA, boxB):
     # determine the (x, y)-coordinates of the intersection rectangle
-    xA = np.maximum(boxA[:,0], boxB[:,0])
-    yA = np.maximum(boxA[:,1], boxB[:,1])
-    xB = np.minimum(boxA[:,2], boxB[:,2])
-    yB = np.minimum(boxA[:,3], boxB[:,3])
+    xA = np.maximum(boxA[:, 0], boxB[:, 0])
+    yA = np.maximum(boxA[:, 1], boxB[:, 1])
+    xB = np.minimum(boxA[:, 2], boxB[:, 2])
+    yB = np.minimum(boxA[:, 3], boxB[:, 3])
 
     # compute the area of intersection rectangle
     interArea = np.maximum((xB - xA), 0) * np.maximum((yB - yA), 0)
 
     # compute the area of both the prediction and ground-truth rectangles
-    boxAArea = ((boxA[:,2] - boxA[:,0]) * (boxA[:,3] - boxA[:,1]))
-    boxBArea = ((boxB[:,2] - boxB[:,0]) * (boxB[:,3] - boxB[:,1]))
+    boxAArea = ((boxA[:, 2] - boxA[:, 0]) * (boxA[:, 3] - boxA[:, 1]))
+    boxBArea = ((boxB[:, 2] - boxB[:, 0]) * (boxB[:, 3] - boxB[:, 1]))
 
     # compute the intersection over union by taking the intersection area and
     # dividing it by the sum of prediction + ground-truth areas - the
@@ -366,11 +368,12 @@ def _compute_iou(boxA, boxB):
     iou = interArea / (boxAArea + boxBArea - interArea)
     return iou.astype(np.float32)
 
+
 def _compute_cle(boxA, boxB):
     # compute center location error
-    centerA_x = (np.array(boxA[:,0]) + np.array(boxA[:,2]))/2
-    centerA_y = (np.array(boxA[:,1]) + np.array(boxA[:,3]))/2
-    centerB_x = (np.array(boxB[:,0]) + np.array(boxB[:,2]))/2
-    centerB_y = (np.array(boxB[:,1]) + np.array(boxB[:,3]))/2
-    cle = np.sqrt((centerA_x-centerB_x)**2 + (centerA_y-centerB_y)**2)
+    centerA_x = (np.array(boxA[:, 0]) + np.array(boxA[:, 2])) / 2
+    centerA_y = (np.array(boxA[:, 1]) + np.array(boxA[:, 3])) / 2
+    centerB_x = (np.array(boxB[:, 0]) + np.array(boxB[:, 2])) / 2
+    centerB_y = (np.array(boxB[:, 1]) + np.array(boxB[:, 3])) / 2
+    cle = np.sqrt((centerA_x - centerB_x)**2 + (centerA_y - centerB_y)**2)
     return cle

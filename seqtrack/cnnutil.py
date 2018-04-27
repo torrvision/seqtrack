@@ -2,6 +2,7 @@ import numpy as np
 
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
+
 class IntRect:
     '''Describes a rectangle.
 
@@ -35,14 +36,16 @@ class IntRect:
     def intersect(a, b):
         return IntRect(np.maximum(a.min, b.min), np.minimum(a.max, b.max))
 
+
 class ReceptiveField:
     '''Describes the receptive fields (in an earlier layer) of all pixels in a later layer.
 
     If y has receptive field rf in x, then pixel y[v] depends on pixels x[u] where
         v*rf.stride + rf.rect.min <= u < v*rf.stride + rf.rect.max
     '''
+
     def __init__(self, rect=IntRect(), stride=(0, 0)):
-        self.rect   = rect
+        self.rect = rect
         self.stride = np.array(stride)
 
     def __eq__(a, b):
@@ -51,11 +54,14 @@ class ReceptiveField:
     def __str__(self):
         return '{}@{}'.format(self.rect, tuple(self.stride))
 
+
 def identity_rf():
     return ReceptiveField(rect=IntRect((0, 0), (1, 1)), stride=(1, 1))
 
+
 def infinite_rect():
     return IntRect(min=(float('-inf'), float('-inf')), max=(float('+inf'), float('+inf')))
+
 
 def compose_rf(prev_rf, rel_rf):
     '''Computes the receptive field of the next layer.
@@ -76,8 +82,9 @@ def compose_rf(prev_rf, rel_rf):
     #   v*(rel_rf.stride*prev_rf.stride) + ((rel_rf.rect.max-1)*prev_rf.stride + prev_rf.rect.max) - 1
     stride = prev_rf.stride * rel_rf.stride
     min = prev_rf.rect.min + prev_rf.stride * rel_rf.rect.min
-    max = prev_rf.rect.max + prev_rf.stride * (rel_rf.rect.max-1)
+    max = prev_rf.rect.max + prev_rf.stride * (rel_rf.rect.max - 1)
     return ReceptiveField(IntRect(min, max), stride)
+
 
 def rf_centers_in_input(output_size, rf):
     '''Gives the center pixels of the receptive fields of the corners of the activation map.'''
@@ -108,15 +115,15 @@ def rf_centers_in_input(output_size, rf):
 #         rfs.append(rf)
 #     # Resolve multiple receptive fields.
 #     return reduce(resolve_rfs, rfs, None)
-# 
+#
 # def _operation_rf(op):
 #     '''Returns the receptive field of the operation.
-# 
+#
 #     Considers only the first input and the first output.
 #     Returns None if the receptive field cannot be determined.
 #     '''
 #     # Careful: This probably violates encapsulation and might break if TensorFlow changes.
-# 
+#
 #     if op.type in {'Conv2D', 'MaxPool'}:
 #         data_format = op.get_attr('data_format')
 #         if data_format != 'NHWC':
@@ -136,7 +143,7 @@ def rf_centers_in_input(output_size, rf):
 #     else:
 #         print str(op)
 #         raise ValueError('unknown type: {}'.format(op.type))
-# 
+#
 # def _filter_rect_padding(filter_size, padding):
 #     if padding == 'SAME':
 #         if all(filter_size % 2 != 0):
@@ -151,6 +158,7 @@ def rf_centers_in_input(output_size, rf):
 #         return IntRect((0, 0), filter_size)
 #     else:
 #         raise ValueError('unknown padding type: {}'.format(padding))
+
 
 def resolve_rfs(a, b):
     if not a:

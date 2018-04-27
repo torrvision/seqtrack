@@ -9,15 +9,18 @@ def make_rect(min_pt, max_pt):
     rect = np.concatenate((x_min, y_min, x_max, y_max), axis=-1)
     return rect
 
+
 def rect_min_max(rect):
     x_min, y_min, x_max, y_max = np.split(np.asarray(rect), 4, axis=-1)
     min_pt = np.concatenate((x_min, y_min), axis=-1)
     max_pt = np.concatenate((x_max, y_max), axis=-1)
     return min_pt, max_pt
 
+
 def rect_size(rect):
     min_pt, max_pt = rect_min_max(rect)
     return max_pt - min_pt
+
 
 def crop_solve(original, result):
     '''Finds window such that result = crop(original, window).'''
@@ -37,6 +40,7 @@ def crop_solve(original, result):
     window = make_rect(window_min, window_max)
     return window
 
+
 def crop_rect(rects, window_rect):
     window_min, window_max = rect_min_max(window_rect)
     window_size = window_max - window_min
@@ -46,10 +50,12 @@ def crop_rect(rects, window_rect):
     out_max = (rects_max - window_min) / window_size
     return make_rect(out_min, out_max)
 
+
 def crop_image_viewport(viewport, rect):
     '''Crop an image viewport to a rectangle within the existing viewport.'''
     # rect/canvas = crop(rect/viewport, inv(viewport/canvas))
     return crop_rect(rect, crop_inverse(viewport))
+
 
 def crop_inverse(rect):
     rect_min, rect_max = rect_min_max(rect)
@@ -64,10 +70,12 @@ def crop_inverse(rect):
     # v_max = v_min + 1 / y_size
     return make_rect(inv_min, inv_max)
 
+
 def unit_rect():
     min_pt = np.array([0.0, 0.0], dtype=np.float32)
     max_pt = np.array([1.0, 1.0], dtype=np.float32)
     return make_rect(min_pt, max_pt)
+
 
 def rect_intersect(a_rect, b_rect):
     # Assumes that rectangles are valid (min <= max).
@@ -77,16 +85,19 @@ def rect_intersect(a_rect, b_rect):
     intersect_max = np.minimum(a_max, b_max)
     return make_rect(intersect_min, intersect_max)
 
+
 def rect_translate(rect, delta):
     min_pt, max_pt = rect_min_max(rect)
     return make_rect(min_pt + delta, max_pt + delta)
+
 
 def rect_mul(rect, size):
     min_pt, max_pt = rect_min_max(rect)
     return make_rect(size * min_pt, size * max_pt)
 
+
 def grow_rect(scale, rect):
     min_pt, max_pt = rect_min_max(rect)
-    center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
+    center, size = 0.5 * (min_pt + max_pt), max_pt - min_pt
     size *= scale
-    return make_rect(center-0.5*size, center+0.5*size)
+    return make_rect(center - 0.5 * size, center + 0.5 * size)

@@ -46,23 +46,24 @@ def make_placeholders(ntimesteps, im_size, default=None):
     '''
     im_height, im_width = im_size
     shapes = {
-        'x0':         [None, im_height, im_width, 3],
-        'y0':         [None, 4],
-        'x':          [None, ntimesteps, im_height, im_width, 3],
-        'y':          [None, ntimesteps, 4],
+        'x0': [None, im_height, im_width, 3],
+        'y0': [None, 4],
+        'x': [None, ntimesteps, im_height, im_width, 3],
+        'y': [None, ntimesteps, 4],
         'y_is_valid': [None, ntimesteps],
-        'aspect':     [None],
+        'aspect': [None],
     }
-    dtype = lambda k: tf.bool if k.endswith('_is_valid') else tf.float32
+
+    def dtype(k): return tf.bool if k.endswith('_is_valid') else tf.float32
 
     if default is not None:
         assert(set(default.keys()) == set(shapes.keys()))
         example = {
-            k: tf.placeholder_with_default(default[k], shapes[k], name='placeholder_'+k)
+            k: tf.placeholder_with_default(default[k], shapes[k], name='placeholder_' + k)
             for k in shapes.keys()}
     else:
         example = {
-            k: tf.placeholder(dtype(k), shapes[k], name='placeholder_'+k)
+            k: tf.placeholder(dtype(k), shapes[k], name='placeholder_' + k)
             for k in EXAMPLE_KEYS}
     run_opts = {}
     # Add a placeholder for models that use ground-truth during training.
@@ -81,8 +82,8 @@ def whiten(example_raw, stat=None, name='whiten'):
         ## assert(stat is not None)
         # TODO: Check that this does not create two variables:
         mean = tf.constant(stat['mean'] if stat else 0.0, tf.float32, name='mean')
-        std = tf.constant(stat['std'] if stat else 1.0,  tf.float32, name='std')
-        example = dict(example_raw) # Copy dictionary before modifying.
+        std = tf.constant(stat['std'] if stat else 1.0, tf.float32, name='std')
+        example = dict(example_raw)  # Copy dictionary before modifying.
         # Replace raw x (images) with whitened x (images).
         example['x'] = _whiten_image(example_raw['x'], mean, std, name='x')
         example['x0'] = _whiten_image(example_raw['x0'], mean, std, name='x0')
@@ -97,7 +98,7 @@ def _whiten_image(x, mean, std, name='whiten_image'):
 
 # def guard_labels(unsafe):
 #     '''Hides the 'y' labels if 'use_gt' is False.
-# 
+#
 #     This prevents the model from accidentally using 'y'.
 #     '''
 #     # unsafe['x'] -- [b, t, h, w, 3]
@@ -133,12 +134,12 @@ def load_sequence(seq, im_size):
         for t in range(seq_len)
     ]
     return {
-        'x0':         np.array(images[0]),
-        'y0':         np.array(seq['labels'][0]),
-        'x':          np.array(images[1:]),
-        'y':          np.array(seq['labels'][1:]),
+        'x0': np.array(images[0]),
+        'y0': np.array(seq['labels'][0]),
+        'x': np.array(images[1:]),
+        'y': np.array(seq['labels'][1:]),
         'y_is_valid': np.array(seq['label_is_valid'][1:]),
-        'aspect':     seq['aspect'],
+        'aspect': seq['aspect'],
     }
 
 
@@ -160,6 +161,6 @@ def load_batch(seqs, ntimesteps, im_size):
     # Pad all sequences to o.ntimesteps.
     # NOTE: Assumes that none of the arrays to be padded are empty.
     return {k: np.stack([pad_to(x[k], ntimesteps, axis=0)
-                             if k in sequence_keys else x[k]
+                         if k in sequence_keys else x[k]
                          for x in examples])
             for k in EXAMPLE_KEYS}

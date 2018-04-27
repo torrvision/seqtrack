@@ -77,8 +77,8 @@ def transformer(U, theta, out_size, name='SpatialTransformer', **kwargs):
             max_x = tf.cast(tf.shape(im)[2] - 1, 'int32')
 
             # scale indices from [-1, 1] to [0, width/height]
-            x = (x + 1.0)*(width_f) / 2.0
-            y = (y + 1.0)*(height_f) / 2.0
+            x = (x + 1.0) * (width_f) / 2.0
+            y = (y + 1.0) * (height_f) / 2.0
 
             # do sampling
             x0 = tf.cast(tf.floor(x), 'int32')
@@ -91,10 +91,10 @@ def transformer(U, theta, out_size, name='SpatialTransformer', **kwargs):
             y0 = tf.clip_by_value(y0, zero, max_y)
             y1 = tf.clip_by_value(y1, zero, max_y)
             dim2 = width
-            dim1 = width*height
-            base = _repeat(tf.range(num_batch)*dim1, out_height*out_width)
-            base_y0 = base + y0*dim2
-            base_y1 = base + y1*dim2
+            dim1 = width * height
+            base = _repeat(tf.range(num_batch) * dim1, out_height * out_width)
+            base_y0 = base + y0 * dim2
+            base_y1 = base + y1 * dim2
             idx_a = base_y0 + x0
             idx_b = base_y1 + x0
             idx_c = base_y0 + x1
@@ -114,11 +114,11 @@ def transformer(U, theta, out_size, name='SpatialTransformer', **kwargs):
             x1_f = tf.cast(x1, 'float32')
             y0_f = tf.cast(y0, 'float32')
             y1_f = tf.cast(y1, 'float32')
-            wa = tf.expand_dims(((x1_f-x) * (y1_f-y)), 1)
-            wb = tf.expand_dims(((x1_f-x) * (y-y0_f)), 1)
-            wc = tf.expand_dims(((x-x0_f) * (y1_f-y)), 1)
-            wd = tf.expand_dims(((x-x0_f) * (y-y0_f)), 1)
-            output = tf.add_n([wa*Ia, wb*Ib, wc*Ic, wd*Id])
+            wa = tf.expand_dims(((x1_f - x) * (y1_f - y)), 1)
+            wb = tf.expand_dims(((x1_f - x) * (y - y0_f)), 1)
+            wc = tf.expand_dims(((x - x0_f) * (y1_f - y)), 1)
+            wd = tf.expand_dims(((x - x0_f) * (y - y0_f)), 1)
+            output = tf.add_n([wa * Ia, wb * Ib, wc * Ic, wd * Id])
             return output
 
     def _meshgrid(height, width):
@@ -198,6 +198,6 @@ def batch_transformer(U, thetas, out_size, name='BatchSpatialTransformer'):
     """
     with tf.variable_scope(name):
         num_batch, num_transforms = map(int, thetas.get_shape().as_list()[:2])
-        indices = [[i]*num_transforms for i in xrange(num_batch)]
+        indices = [[i] * num_transforms for i in xrange(num_batch)]
         input_repeated = tf.gather(U, tf.reshape(indices, [-1]))
         return transformer(input_repeated, thetas, out_size)

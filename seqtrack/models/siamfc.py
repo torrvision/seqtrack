@@ -29,14 +29,14 @@ class SiamFC(models_interface.IterModel):
             template_size=127,
             search_size=255,
             template_scale=2,
-            aspect_method='perimeter', # TODO: Equivalent to SiamFC?
+            aspect_method='perimeter',  # TODO: Equivalent to SiamFC?
             use_gt=True,
             curr_as_prev=True,
-            pad_with_mean=False, # Use mean of first image for padding.
+            pad_with_mean=False,  # Use mean of first image for padding.
             feather=True,
             feather_margin=0.1,
-            center_input_range=True, # Make range [-0.5, 0.5] instead of [0, 1].
-            keep_uint8_range=False, # Use input range of 255 instead of 1.
+            center_input_range=True,  # Make range [-0.5, 0.5] instead of [0, 1].
+            keep_uint8_range=False,  # Use input range of 255 instead of 1.
             feature_padding='VALID',
             feature_arch='alexnet',
             feature_act='linear',
@@ -52,7 +52,7 @@ class SiamFC(models_interface.IterModel):
             scale_step=1.03,
             scale_update_rate=0.6,
             report_square=False,
-            hann_method='none', # none, mul_prob, add_logit
+            hann_method='none',  # none, mul_prob, add_logit
             hann_coeff=1.0,
             arg_max_eps_rel=0.05,
             # Loss parameters:
@@ -154,9 +154,9 @@ class SiamFC(models_interface.IterModel):
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
-                'y':             tf.identity(y),
+                'y': tf.identity(y),
                 'template_feat': tf.identity(template_feat),
-                'mean_color':    tf.identity(mean_color),
+                'mean_color': tf.identity(mean_color),
             }
             return state
 
@@ -278,7 +278,7 @@ class SiamFC(models_interface.IterModel):
             state = {
                 'y': next_prev_rect,
                 'template_feat': prev_state['template_feat'],
-                'mean_color':    prev_state['mean_color'],
+                'mean_color': prev_state['mean_color'],
             }
             return outputs, state, losses
 
@@ -305,7 +305,7 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
     # For feature pyramid, support rank > 4.
     if len(x.shape) > 4:
         # Merge dims (0, ..., n-4), n-3, n-2, n-1
-        x, restore = merge_dims(x, 0, len(x.shape)-3)
+        x, restore = merge_dims(x, 0, len(x.shape) - 3)
         x, rfs = _feature_net(
             x, rfs=rfs, padding=padding, arch=arch, output_act=output_act,
             enable_bnorm=enable_bnorm, wd=wd, is_training=is_training,
@@ -321,7 +321,7 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
             conv_args.update(dict(
                 normalizer_fn=slim.batch_norm,
                 normalizer_params=dict(
-                    is_training=is_training if trainable else False, # Fix bnorm if not trainable.
+                    is_training=is_training if trainable else False,  # Fix bnorm if not trainable.
                     variables_collections=variables_collections)))
         with slim.arg_scope([slim.conv2d], **conv_args):
             if arch == 'alexnet':
@@ -358,7 +358,8 @@ def hann(n, name='hann'):
     with tf.name_scope(name) as scope:
         n = tf.convert_to_tensor(n)
         x = tf.to_float(tf.range(n)) / tf.to_float(n - 1)
-        return 0.5 * (1. - tf.cos(2.*math.pi*x))
+        return 0.5 * (1. - tf.cos(2. * math.pi * x))
+
 
 def hann_2d(im_size, name='hann_2d'):
     with tf.name_scope(name) as scope:
@@ -376,10 +377,11 @@ def _find_rf_centers(input_size_hw, output_size_hw, rf, name='rf_centers'):
         # Switch to (x, y) for rect.
         input_size = tf.to_float(input_size_hw[::-1])
         output_size = tf.to_float(output_size_hw[::-1])
-        min_pt = tf.to_float(min_pixel[::-1]) + 0.5 # Take center point of pixel.
+        min_pt = tf.to_float(min_pixel[::-1]) + 0.5  # Take center point of pixel.
         max_pt = tf.to_float(max_pixel[::-1]) + 0.5
         scale = 1. / input_size
         return geom.make_rect(scale * min_pt, scale * max_pt)
+
 
 def _align_corner_centers(rect, im_size_hw, name='align_corner_centers'):
     with tf.name_scope(name) as scope:
@@ -388,6 +390,7 @@ def _align_corner_centers(rect, im_size_hw, name='align_corner_centers'):
         im_size = tf.to_float(im_size_hw[::-1])
         return geom.grow_rect(im_size / (im_size - 1), rect)
 
+
 def _paste_image_at_rect(target, overlay, rect, alpha=1, name='paste_image_at_rect'):
     with tf.name_scope(name) as scope:
         overlay = _ensure_rgba(overlay)
@@ -395,11 +398,13 @@ def _paste_image_at_rect(target, overlay, rect, alpha=1, name='paste_image_at_re
         overlay = util.crop(overlay, geom.crop_inverse(rect), target_size)
         return _paste_image(target, overlay, alpha=alpha)
 
+
 def _paste_image(target, overlay, alpha=1, name='paste_image'):
     with tf.name_scope(name) as scope:
         overlay_rgb, overlay_a = tf.split(overlay, [3, 1], axis=-1)
         overlay_a *= alpha
-        return overlay_a * overlay_rgb + (1-overlay_a) * target
+        return overlay_a * overlay_rgb + (1 - overlay_a) * target
+
 
 def _ensure_rgba(im, name='ensure_rgba'):
     with tf.name_scope(name) as scope:
@@ -411,10 +416,12 @@ def _ensure_rgba(im, name='ensure_rgba'):
             return tf.identity(im)
         assert num_channels == 3
         shape = most_static_shape(im)
-        return tf.concat([im, tf.ones(shape[:-1]+[1], im.dtype)], axis=-1)
+        return tf.concat([im, tf.ones(shape[:-1] + [1], im.dtype)], axis=-1)
+
 
 def _to_uint8(x):
     return tf.image.convert_image_dtype(x, tf.uint8, saturate=True)
+
 
 def _affine_scalar(x, name='affine', variables_collections=None):
     with tf.name_scope(name) as scope:
@@ -478,7 +485,7 @@ def _cross_entropy_loss(
         # [b, s, h, w, 1] -> [b, h, w]
         # # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
         # response = tf.squeeze(response, 1) # Remove the scales dimension.
-        response = tf.squeeze(response, -1) # Remove the trailing dimension.
+        response = tf.squeeze(response, -1)  # Remove the trailing dimension.
         response_size = response.shape.as_list()[-2:]
 
         # Obtain displacement from center of search image.
@@ -494,11 +501,11 @@ def _cross_entropy_loss(
 
         if label_method == 'gaussian_distance':
             labels, has_label = lossfunc.translation_labels(
-                centers, gt_rect_in_search, shape='gaussian', sigma=sigma/search_scale)
+                centers, gt_rect_in_search, shape='gaussian', sigma=sigma / search_scale)
             labels = tf.expand_dims(labels, 1)
             has_label = tf.expand_dims(has_label, 1)
         elif label_method == 'best_iou':
-            gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 3) # [b, 1, 1, 1, 2]
+            gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 3)  # [b, 1, 1, 1, 2]
             iou = geom.rect_iou(rect_grid, gt_rect_in_search)
             is_pos = (iou >= tf.reduce_max(iou, axis=(-3, -2, -1), keep_dims=True))
             labels = tf.to_float(is_pos)
@@ -546,7 +553,7 @@ def _max_margin_loss(
     '''
     with tf.name_scope(name) as scope:
         # [b, s, h, w, 1] -> [b, s, h, w]
-        score = tf.squeeze(score, -1) # Remove the trailing dimension.
+        score = tf.squeeze(score, -1)  # Remove the trailing dimension.
         score_size = score.shape.as_list()[-2:]
         gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
         prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)

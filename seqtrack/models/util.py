@@ -96,7 +96,7 @@ def feather_image(im, margin, background_value=0, name='feather_image'):
         if background_value == 0:
             im *= mask
         else:
-            im = mask * im + (1-mask) * background_value
+            im = mask * im + (1 - mask) * background_value
         return im
 
 
@@ -111,7 +111,7 @@ def feather_mask(im_size, margin, name='feather_mask'):
     with tf.name_scope(name) as scope:
         grid = make_grid_centers(im_size)
         # Distance from interior on either side.
-        lower, upper = margin, 1-margin
+        lower, upper = margin, 1 - margin
         below_lower = tf.clip_by_value((lower - grid) / margin, 0., 1.)
         above_upper = tf.clip_by_value((grid - upper) / margin, 0., 1.)
         delta = tf.maximum(below_lower, above_upper)
@@ -128,18 +128,18 @@ def scale_range(num, step, name='scale_range'):
                 [tf.assert_equal(num % 2, 1, message='number of scales must be odd')]):
             half = (num - 1) / 2
         log_step = tf.abs(tf.log(step))
-        return tf.exp(log_step * tf.to_float(tf.range(-half, half+1)))
+        return tf.exp(log_step * tf.to_float(tf.range(-half, half + 1)))
 
 
 def conv2d_rf(inputs, input_rfs, num_outputs, kernel_size, stride=1, padding='SAME', **kwargs):
     '''Wraps slim.conv2d to include receptive field calculation.
-    
+
     input_rfs['var_name'] is the receptive field of input w.r.t. var_name.
     output_rfs['var_name'] is the receptive field of output w.r.t. var_name.
     '''
     if input_rfs is None:
         input_rfs = {}
-    assert len(inputs.shape) == 4 # otherwise slim.conv2d does higher-dim convolution
+    assert len(inputs.shape) == 4  # otherwise slim.conv2d does higher-dim convolution
     outputs = slim.conv2d(inputs, num_outputs, kernel_size, stride, padding, **kwargs)
     rel_rf = _filter_rf(kernel_size, stride, padding)
     output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
@@ -165,7 +165,7 @@ def diag_xcorr_rf(input, filter, input_rfs, stride=1, padding='VALID', name='dia
     '''
     stride = n_positive_integers(2, stride)
     kernel_size = filter.shape.as_list()[-3:-1]
-    assert all(kernel_size) # Must not be None or 0.
+    assert all(kernel_size)  # Must not be None or 0.
     rel_rf = _filter_rf(kernel_size, stride, padding)
     output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
 
@@ -176,7 +176,7 @@ def diag_xcorr_rf(input, filter, input_rfs, stride=1, padding='VALID', name='dia
 
 # def xcorr_rf(input, filter, input_rfs, padding='VALID'):
 #     '''Wraps tf.nn.conv2d to include receptive field calculation.
-# 
+#
 #     Args:
 #         input: [b, h, w, c]
 #         filter: [b, h, w, c]
@@ -199,7 +199,7 @@ def _filter_rf(kernel_size, stride, padding):
     if padding == 'SAME':
         assert np.all(kernel_size % 2 == 1)
         half = (kernel_size - 1) / 2
-        rect = IntRect(-half, half+1)
+        rect = IntRect(-half, half + 1)
         rel_rf = ReceptiveField(rect=rect, stride=stride)
     elif padding == 'VALID':
         rect = IntRect(np.zeros_like(kernel_size), kernel_size)
@@ -219,19 +219,19 @@ def coerce_aspect(target, im_aspect, aspect_method='stretch', name='coerce_aspec
             stretch = tf.stack([im_aspect, tf.ones_like(im_aspect)], axis=-1)
             target = geom.rect_mul(target, stretch)
             target = modify_aspect_ratio(target, aspect_method)
-            target = geom.rect_mul(target, 1./stretch)
+            target = geom.rect_mul(target, 1. / stretch)
         return target
 
 
 def find_center_in_scoremap(scoremap, threshold=0.95):
     assert len(scoremap.shape.as_list()) == 4
 
-    max_val = tf.reduce_max(scoremap, axis=(1,2), keep_dims=True)
+    max_val = tf.reduce_max(scoremap, axis=(1, 2), keep_dims=True)
     with tf.control_dependencies([tf.assert_greater_equal(scoremap, 0.0)]):
-        max_loc = tf.greater_equal(scoremap, max_val*threshold) # values over 95% of max.
+        max_loc = tf.greater_equal(scoremap, max_val * threshold)  # values over 95% of max.
 
     spatial_dim = scoremap.shape.as_list()[1:3]
-    assert all(spatial_dim) # Spatial dimension must be static.
+    assert all(spatial_dim)  # Spatial dimension must be static.
     # Compute center of each pixel in [0, 1] in search area.
     dim_y, dim_x = spatial_dim[0], spatial_dim[1]
     centers_x, centers_y = tf.meshgrid(
@@ -245,7 +245,7 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
 
     EPSILON = 1e-4
     with tf.control_dependencies([tf.assert_greater_equal(center, -EPSILON),
-                                  tf.assert_less_equal(center, 1.0+EPSILON)]):
+                                  tf.assert_less_equal(center, 1.0 + EPSILON)]):
         center = tf.identity(center)
     return center
 
@@ -268,7 +268,7 @@ def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_py
         max_val = tf.reduce_max(response, axis=(-3, -2, -1), keep_dims=True)
         with tf.control_dependencies([tf.assert_non_negative(response)]):
             # is_max = tf.to_float(response >= (1.0 - eps_rel) * max_val)
-            is_max = tf.logical_or(tf.greater_equal(response, max_val - eps_rel*tf.abs(max_val)),
+            is_max = tf.logical_or(tf.greater_equal(response, max_val - eps_rel * tf.abs(max_val)),
                                    tf.greater_equal(response, max_val - eps_abs))
         is_max = tf.to_float(is_max)
 
@@ -277,12 +277,12 @@ def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_py
         # Grid now has translation from center in search image co-ords.
         # Transform into co-ordinate frame of each scale.
         grid = tf.multiply(grid,                           # [h, w, 2]
-                           expand_dims_n(scales, -1, n=3)) # [s, 1, 1, 1]
+                           expand_dims_n(scales, -1, n=3))  # [s, 1, 1, 1]
 
         translation = weighted_mean(grid,                       # [s, h, w, 2]
-                                    tf.expand_dims(is_max, -1), # [b, s, h, w] -> [b, s, h, w, 1]
+                                    tf.expand_dims(is_max, -1),  # [b, s, h, w] -> [b, s, h, w, 1]
                                     axis=(-4, -3, -2))          # [b, s, h, w, 2] -> [b, 2]
-        scale = weighted_mean(expand_dims_n(scales, -1, n=2), # [b, s] -> [b, s, 1, 1]
+        scale = weighted_mean(expand_dims_n(scales, -1, n=2),  # [b, s] -> [b, s, 1, 1]
                               is_max,                         # [b, s, h, w]
                               axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
         return translation, scale
@@ -347,7 +347,7 @@ def rect_grid(response_size, rf, search_size, rect_size, name='rect_grid'):
         # Get centers of receptive field of each pixel.
         centers = 0.5 + disp
         # centers is [h, w, 2]
-        rect_size = expand_dims_n(rect_size, -2, 2) # [b, 2] -> [b, 1, 1, 2]
+        rect_size = expand_dims_n(rect_size, -2, 2)  # [b, 2] -> [b, 1, 1, 2]
         return geom.make_rect_center_size(centers, rect_size)
 
 
@@ -368,12 +368,12 @@ def rect_grid_pyr(response_size, rf, search_size, rect_size, scales, name='rect_
         disp = displacement_from_center(response_size)
         disp = tf.to_float(disp) * rf.stride / search_size
         disp = tf.multiply(tf.expand_dims(disp, -4),     # [b, h, w, 2] -> [b, 1, h, w, 2]
-                           expand_dims_n(scales, -1, 3)) # [s] -> [s, 1, 1, 1]
+                           expand_dims_n(scales, -1, 3))  # [s] -> [s, 1, 1, 1]
         # Get centers of receptive field of each pixel.
         centers = 0.5 + disp
-        rect_size = tf.multiply(tf.expand_dims(rect_size, -2), # [b, 2] -> [b, 1, 2]
+        rect_size = tf.multiply(tf.expand_dims(rect_size, -2),  # [b, 2] -> [b, 1, 2]
                                 tf.expand_dims(scales, -1))    # [s] -> [s, 1]
-        rect_size = expand_dims_n(rect_size, -2, 2) # [b, s, 2] -> [b, s, 1, 1, 2]
+        rect_size = expand_dims_n(rect_size, -2, 2)  # [b, s, 2] -> [b, s, 1, 1, 2]
         return geom.make_rect_center_size(centers, rect_size)
 
 
@@ -384,6 +384,7 @@ def colormap(x, cmap_name, name='colormap'):
         y = tf.py_func(functools.partial(_colormap_np, cmap_name), [x], tf.float32)
         y.set_shape(x_shape[:-1] + [4])
         return y
+
 
 def _colormap_np(cmap_name, x):
     cmap = matplotlib.cm.get_cmap(cmap_name)

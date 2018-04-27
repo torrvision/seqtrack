@@ -63,21 +63,24 @@ def make_rect(min_pt, max_pt, name='make_rect'):
 def rect_center_size(rect, name='rect_center_size'):
     with tf.name_scope(name) as scope:
         min_pt, max_pt = rect_min_max(rect)
-        return 0.5*(min_pt+max_pt), max_pt-min_pt
+        return 0.5 * (min_pt + max_pt), max_pt - min_pt
+
 
 def rect_center(rect, name='rect_center'):
     with tf.name_scope(name) as scope:
         min_pt, max_pt = rect_min_max(rect)
-        return 0.5*(min_pt+max_pt)
+        return 0.5 * (min_pt + max_pt)
+
 
 def rect_size(rect, name='rect_size'):
     with tf.name_scope(name) as scope:
         min_pt, max_pt = rect_min_max(rect)
-        return max_pt-min_pt
+        return max_pt - min_pt
+
 
 def make_rect_center_size(center, size, name='make_rect_center_size'):
     with tf.name_scope(name) as scope:
-        return make_rect(center-0.5*size, center+0.5*size)
+        return make_rect(center - 0.5 * size, center + 0.5 * size)
 
 
 def rect_iou(a_rect, b_rect, name='rect_iou'):
@@ -143,11 +146,11 @@ def warp_anchor(anchor, warp, name='warp_anchor'):
 
         anchor_min, anchor_max = rect_min_max(anchor)
         anchor_size = anchor_max - anchor_min
-        anchor_center = 0.5 * (anchor_min + anchor_max) # Expect zero.
+        anchor_center = 0.5 * (anchor_min + anchor_max)  # Expect zero.
 
         rect_size = tf.exp(warp_scale) * anchor_size
         rect_center = anchor_center + warp_offset
-        return make_rect(rect_center - 0.5*rect_size, rect_center + 0.5*rect_size)
+        return make_rect(rect_center - 0.5 * rect_size, rect_center + 0.5 * rect_size)
 
 
 def unit_rect(dtype=tf.float32):
@@ -166,6 +169,6 @@ def grow_rect(scale, rect, name='grow_rect'):
     '''
     with tf.name_scope(name) as scope:
         min_pt, max_pt = rect_min_max(rect)
-        center, size = 0.5*(min_pt+max_pt), max_pt-min_pt
+        center, size = 0.5 * (min_pt + max_pt), max_pt - min_pt
         size *= scale
-        return make_rect(center-0.5*size, center+0.5*size)
+        return make_rect(center - 0.5 * size, center + 0.5 * size)

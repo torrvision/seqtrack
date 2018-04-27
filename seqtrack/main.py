@@ -31,47 +31,47 @@ def parse_arguments():
     track.add_tracker_arguments(parser)
 
     parser.add_argument(
-            '-v', '--verbose', help='print arguments',
-            action='store_true')
+        '-v', '--verbose', help='print arguments',
+        action='store_true')
     parser.add_argument('--loglevel', default='info', help='debug, info, warning')
     parser.add_argument(
-            '--verbose_train', help='print train losses during train',
-            action='store_true')
+        '--verbose_train', help='print train losses during train',
+        action='store_true')
     parser.add_argument(
-            '--report', help='do not train; print report of evaluation results',
-            action='store_true')
+        '--report', help='do not train; print report of evaluation results',
+        action='store_true')
     parser.add_argument(
-            '--evaluate', help='do not train; simply evaluate tracker',
-            action='store_true')
+        '--evaluate', help='do not train; simply evaluate tracker',
+        action='store_true')
     parser.add_argument(
-            '--debugmode', help='used for debugging',
-            action='store_true')
+        '--debugmode', help='used for debugging',
+        action='store_true')
     parser.add_argument(
-            '--histograms', help='generate histograms in summary',
-            action='store_true')
+        '--histograms', help='generate histograms in summary',
+        action='store_true')
     parser.add_argument(
-            '--tfdb', help='run tensorflow debugger',
-            action='store_true')
+        '--tfdb', help='run tensorflow debugger',
+        action='store_true')
 
     parser.add_argument(
-            '--train_dataset',
-            help='specify the training dataset; string, list of strings or list of tuples',
-            type=json.loads, default='"ilsvrc_train"')
+        '--train_dataset',
+        help='specify the training dataset; string, list of strings or list of tuples',
+        type=json.loads, default='"ilsvrc_train"')
     parser.add_argument(
-            '--val_dataset',
-            type=json.loads, default='"ilsvrc_val"')
+        '--val_dataset',
+        type=json.loads, default='"ilsvrc_val"')
     parser.add_argument(
-            '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker (list)',
-            type=str, default=['ilsvrc_val', 'otb_50'])
+        '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker (list)',
+        type=str, default=['ilsvrc_val', 'otb_50'])
     parser.add_argument(
-            '--eval_tre_num', type=int, default=3,
-            help='number of points from which to start tracker in evaluation (full sampler only)')
+        '--eval_tre_num', type=int, default=3,
+        help='number of points from which to start tracker in evaluation (full sampler only)')
     parser.add_argument(
-            '--eval_samplers', nargs='+', help='',
-            type=str, default=['full'])
+        '--eval_samplers', nargs='+', help='',
+        type=str, default=['full'])
     parser.add_argument(
-            '--max_eval_videos', help='max number of videos to evaluate; not applied to OTB',
-            type=int, default=100)
+        '--max_eval_videos', help='max number of videos to evaluate; not applied to OTB',
+        type=int, default=100)
 
     parser.add_argument('--untar', action='store_true',
                         help='Untar dataset? Otherwise data must already exist')
@@ -83,18 +83,18 @@ def parse_arguments():
     parser.add_argument('--preproc', default='original')
 
     parser.add_argument(
-            '--trainsplit', help='specify the split of train dataset (ILSVRC)',
-            type=int, default=9)
+        '--trainsplit', help='specify the split of train dataset (ILSVRC)',
+        type=int, default=9)
     parser.add_argument(
-            '--seed_global', help='random seed',
-            type=int, default=9)
+        '--seed_global', help='random seed',
+        type=int, default=9)
 
     # NOTE: (NL) any reason to have two arguments for this option?
     parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
     parser.set_defaults(useresizedimg=True)
     parser.add_argument(
-            '--use_queues', help='enable queues for asynchronous data loading',
-            action='store_true')
+        '--use_queues', help='enable queues for asynchronous data loading',
+        action='store_true')
     # parser.add_argument(
     #         '--heatmap_params', help='JSON string specifying heatmap options',
     #         type=json.loads, default={'Gaussian': True})
@@ -104,118 +104,118 @@ def parse_arguments():
     #         '--losses', nargs='+', help='list of losses to be used',
     #         type=str) # example [l1, iou]
     parser.add_argument(
-            '--loss_coeffs', help='list of losses to be used',
-            type=json.loads, default='{}')
+        '--loss_coeffs', help='list of losses to be used',
+        type=json.loads, default='{}')
 
     parser.add_argument(
-            '--cnn_pretrain', help='specify if using pretrained model',
-            action='store_true')
+        '--cnn_pretrain', help='specify if using pretrained model',
+        action='store_true')
     # JV: Move to model.
     # parser.add_argument(
     #         '--cnn_trainable', help='set False to fix pretrained params',
     #         action='store_true')
     parser.add_argument(
-            '--siamese_pretrain', help='specify if using pretrained model',
-            action='store_true')
+        '--siamese_pretrain', help='specify if using pretrained model',
+        action='store_true')
     parser.add_argument(
-            '--siamese_model_file', help='specify if using pretrained model')
+        '--siamese_model_file', help='specify if using pretrained model')
 
     parser.add_argument(
-            '--num_steps', help='number of gradient steps',
-            type=int, default=200000)
+        '--num_steps', help='number of gradient steps',
+        type=int, default=200000)
     parser.add_argument(
-            '--batchsz', help='batch size',
-            type=int, default=1)
+        '--batchsz', help='batch size',
+        type=int, default=1)
     parser.add_argument(
-            '--optimizer', help='optimizer to train the model',
-            type=str, default='adam')
+        '--optimizer', help='optimizer to train the model',
+        type=str, default='adam')
     parser.add_argument(
-            '--lr_init', help='initial learning rate',
-            type=float, default=1e-4)
+        '--lr_init', help='initial learning rate',
+        type=float, default=1e-4)
     parser.add_argument(
-            '--lr_decay_rate', help='geometric step for learning rate decay',
-            type=float, default=1)
+        '--lr_decay_rate', help='geometric step for learning rate decay',
+        type=float, default=1)
     parser.add_argument(
-            '--lr_decay_steps', help='period for decaying learning rate',
-            type=int, default=10000)
+        '--lr_decay_steps', help='period for decaying learning rate',
+        type=int, default=10000)
     # parser.add_argument(
     #         '--wd', help='weight decay', type=float, default=0.0)
     parser.add_argument(
-            '--grad_clip', help='gradient clipping flag',
-            action='store_true')
+        '--grad_clip', help='gradient clipping flag',
+        action='store_true')
     parser.add_argument(
-            '--max_grad_norm', help='threshold for gradient clipping',
-            type=float, default=5.0)
+        '--max_grad_norm', help='threshold for gradient clipping',
+        type=float, default=5.0)
     parser.add_argument(
-            '--gt_decay_rate', help='decay rate for gt_ratio',
-            type=float, default=1e-6)
+        '--gt_decay_rate', help='decay rate for gt_ratio',
+        type=float, default=1e-6)
     parser.add_argument(
-            '--min_gt_ratio', help='lower bound for gt_ratio',
-            type=float, default=0.75)
+        '--min_gt_ratio', help='lower bound for gt_ratio',
+        type=float, default=0.75)
     parser.add_argument(
-            '--curriculum_learning', help='restore variables from a pre-trained model (on short sequences)',
-            action='store_true')
+        '--curriculum_learning', help='restore variables from a pre-trained model (on short sequences)',
+        action='store_true')
     parser.add_argument(
-            '--pretrained_cl', help='pretrained model to be used for curriculum_learning',
-            type=str, default=None)
+        '--pretrained_cl', help='pretrained model to be used for curriculum_learning',
+        type=str, default=None)
     parser.add_argument(
-            '--use_gt_train', help='use ground-truth during training',
-            action='store_true')
+        '--use_gt_train', help='use ground-truth during training',
+        action='store_true')
     parser.add_argument(
-            '--use_gt_eval', help='use ground-truth during evaluation', # Should be set False in most cases.
-            action='store_true')
+        '--use_gt_eval', help='use ground-truth during evaluation',  # Should be set False in most cases.
+        action='store_true')
 
     parser.add_argument(
-            '--color_augmentation', help='JSON string specifying color augmentation',
-            type=json.loads, default={'brightness': False,
-                                      'contrast': False,
-                                      'grayscale': False})
+        '--color_augmentation', help='JSON string specifying color augmentation',
+        type=json.loads, default={'brightness': False,
+                                  'contrast': False,
+                                  'grayscale': False})
 
     parser.add_argument(
-            '--sampler_params', help='JSON string specifying sampler',
-            type=json.loads, default={'kind': 'regular', 'freq': 10})
+        '--sampler_params', help='JSON string specifying sampler',
+        type=json.loads, default={'kind': 'regular', 'freq': 10})
     parser.add_argument('--augment_motion', help='enable motion augmentation?', action='store_true')
     parser.add_argument(
-            '--motion_params', help='JSON string specifying motion augmentation',
-            type=json.loads, default={})
+        '--motion_params', help='JSON string specifying motion augmentation',
+        type=json.loads, default={})
 
     # parser.add_argument(
     #         '--path_data_home', help='location of datasets',
     #         type=str, default='./data')
     parser.add_argument(
-            '--nosave', help='no need to save results?',
-            action='store_true')
+        '--nosave', help='no need to save results?',
+        action='store_true')
     parser.add_argument(
-            '--resume', help='to resume training',
-            action='store_true')
+        '--resume', help='to resume training',
+        action='store_true')
     parser.add_argument(
-            '--period_ckpt', help='period to save ckpt',
-            type=int, default=10000)
+        '--period_ckpt', help='period to save ckpt',
+        type=int, default=10000)
     parser.add_argument(
-            '--period_assess', help='period to run evaluation',
-            type=int, default=10000)
+        '--period_assess', help='period to run evaluation',
+        type=int, default=10000)
     parser.add_argument(
-            '--period_skip', help='until this period skip evaluation',
-            type=int, default=10000)
+        '--period_skip', help='until this period skip evaluation',
+        type=int, default=10000)
     parser.add_argument(
-            '--period_preview', help='period to update summary preview',
-            type=int, default=100)
+        '--period_preview', help='period to update summary preview',
+        type=int, default=100)
     parser.add_argument(
-            '--save_videos', help='create video during evaluation',
-            action='store_true')
+        '--save_videos', help='create video during evaluation',
+        action='store_true')
     parser.add_argument(
-            '--save_frames', help='save frames of video during evaluation',
-            action='store_true')
+        '--save_frames', help='save frames of video during evaluation',
+        action='store_true')
 
     parser.add_argument(
-            '--gpu_device', help='set `CUDA_VISIBLE_DEVICES`',
-            type=int, default=0)
+        '--gpu_device', help='set `CUDA_VISIBLE_DEVICES`',
+        type=int, default=0)
     parser.add_argument(
-            '--no_gpu_manctrl', help='disable manual gpu management',
-            dest='gpu_manctrl', action='store_false')
+        '--no_gpu_manctrl', help='disable manual gpu management',
+        dest='gpu_manctrl', action='store_false')
     parser.add_argument(
-            '--gpu_frac', help='fraction of gpu memory',
-            type=float, default=0.4)
+        '--gpu_frac', help='fraction of gpu memory',
+        type=float, default=0.4)
 
     args = parser.parse_args()
 

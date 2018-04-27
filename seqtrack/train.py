@@ -82,7 +82,7 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
 
     modes = ['train', 'val']
 
-    feed_loop = {} # Each value is a function to call in a thread.
+    feed_loop = {}  # Each value is a function to call in a thread.
     with tf.name_scope('input'):
         from_queue = None
         if use_queues:
@@ -91,10 +91,10 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
                 # Create a queue each for training and validation data.
                 queue, feed_loop[mode] = _make_input_pipeline(
                     ntimesteps=o.ntimesteps, batchsz=o.batchsz, im_size=(o.imheight, o.imwidth),
-                    num_load_threads=1, num_batch_threads=1, name='pipeline_'+mode)
+                    num_load_threads=1, num_batch_threads=1, name='pipeline_' + mode)
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues,
-                capacity=4, num_threads=1)
+                                                                capacity=4, num_threads=1)
         example, run_opts = graph.make_placeholders(
             o.ntimesteps, (o.imheight, o.imwidth), default=from_queue)
 
@@ -148,7 +148,7 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
     with tf.control_dependencies(update_ops):
         if not o.grad_clip:
             optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
-        else: # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
+        else:  # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
             gradients, variables = zip(*optimizer.compute_gradients(loss_var))
             gradients = [None if gradient is None else tf.clip_by_norm(gradient, o.max_grad_norm)
                          for gradient in gradients]
@@ -247,7 +247,7 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
             #                                        if v.name.split(':')[0] in vars_uninit]))
             #     assert len(sess.run(tf.report_uninitialized_variables())) == 0
             if o.curriculum_learning:
-                if o.pretrained_cl is None: # e.g., '/some_path/ckpt/iteration-150000'
+                if o.pretrained_cl is None:  # e.g., '/some_path/ckpt/iteration-150000'
                     raise ValueError('could not find checkpoint')
                 print 'restore: {}'.format(o.pretrained_cl)
                 saver_cl.restore(sess, o.pretrained_cl)
@@ -277,7 +277,7 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
                 writer[mode] = tf.summary.FileWriter(path_summary)
 
         while True:
-            global_step = global_step_var.eval() # Number of steps taken.
+            global_step = global_step_var.eval()  # Number of steps taken.
             if global_step >= o.num_steps:
                 break
 
@@ -287,12 +287,12 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
                     if not os.path.isdir(o.path_ckpt):
                         os.makedirs(o.path_ckpt)
                     print 'save model'
-                    saver.save(sess, o.path_ckpt+'/iteration', global_step=global_step)
+                    saver.save(sess, o.path_ckpt + '/iteration', global_step=global_step)
                     print 'done: save model'
                     sys.stdout.flush()
                     prev_ckpt = global_step
 
-            gt_ratio = max(1.0*np.exp(-o.gt_decay_rate*global_step), o.min_gt_ratio)
+            gt_ratio = max(1.0 * np.exp(-o.gt_decay_rate * global_step), o.min_gt_ratio)
 
             # intermediate evaluation of model
             period_assess = o.period_assess if not o.debugmode else 20
@@ -303,12 +303,12 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
 
             # Take a training step.
             start = time.time()
-            feed_dict = {run_opts['use_gt']:      o.use_gt_train,
+            feed_dict = {run_opts['use_gt']: o.use_gt_train,
                          run_opts['is_training']: True,
                          run_opts['is_tracking']: False,
-                         run_opts['gt_ratio']:    gt_ratio}
+                         run_opts['gt_ratio']: gt_ratio}
             if use_queues:
-                feed_dict.update({queue_index: 0}) # Choose validation queue.
+                feed_dict.update({queue_index: 0})  # Choose validation queue.
             else:
                 batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
                 # batch = _load_batch(batch_seqs, o)
@@ -331,12 +331,12 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
             # Evaluate validation error.
             if global_step % o.period_summary == 0:
                 start = time.time()
-                feed_dict = {run_opts['use_gt']:      o.use_gt_train,  # Match training.
-                             run_opts['is_training']: False, # Do not update bnorm stats.
+                feed_dict = {run_opts['use_gt']: o.use_gt_train,  # Match training.
+                             run_opts['is_training']: False,  # Do not update bnorm stats.
                              run_opts['is_tracking']: False,
-                             run_opts['gt_ratio']:    gt_ratio} # Match training.
+                             run_opts['gt_ratio']: gt_ratio}  # Match training.
                 if use_queues:
-                    feed_dict.update({queue_index: 1}) # Choose validation queue.
+                    feed_dict.update({queue_index: 1})  # Choose validation queue.
                 else:
                     batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
                     # batch = _load_batch(batch_seqs, o)
@@ -355,14 +355,14 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
             # Print result of one batch update
             if o.verbose_train:
                 losstime = '|loss:{:.5f}/{:.5f} (time:{:.2f}/{:.2f}) - with val'.format(
-                        loss, loss_val, dur, dur_val) if newval else \
-                        '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
+                    loss, loss_val, dur, dur_val) if newval else \
+                    '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
                 print 'global_step {} {}'.format(global_step, losstime)
                 sys.stdout.flush()
 
         # **training finished
         print '\ntraining finished! ------------------------------------------'
-        print 'total time elapsed: {0:.2f}'.format(time.time()-t_total)
+        print 'total time elapsed: {0:.2f}'.format(time.time() - t_total)
 
 
 def _get_optimizer(lr, o):
@@ -380,9 +380,9 @@ def _get_optimizer(lr, o):
 
 
 def _make_input_pipeline(ntimesteps, batchsz, im_size, dtype=tf.float32,
-        example_capacity=4, load_capacity=4, batch_capacity=4,
-        num_load_threads=1, num_batch_threads=1,
-        name='pipeline'):
+                         example_capacity=4, load_capacity=4, batch_capacity=4,
+                         num_load_threads=1, num_batch_threads=1,
+                         name='pipeline'):
     '''
     Args:
         im_size: (height, width) to construct tensor
@@ -391,15 +391,15 @@ def _make_input_pipeline(ntimesteps, batchsz, im_size, dtype=tf.float32,
         height, width = im_size
         files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
         images = pipeline.load_images(files, capacity=load_capacity,
-                num_threads=num_load_threads, image_size=[height, width, 3])
+                                      num_threads=num_load_threads, image_size=[height, width, 3])
         images_batch = pipeline.batch(images,
-            batch_size=batchsz, sequence_length=ntimesteps+1,
-            capacity=batch_capacity, num_threads=num_batch_threads)
+                                      batch_size=batchsz, sequence_length=ntimesteps + 1,
+                                      capacity=batch_capacity, num_threads=num_batch_threads)
 
         # Set static dimension of sequence length.
         # TODO: This may only be necessary due to how the model is written.
-        images_batch['images'].set_shape([None, ntimesteps+1, None, None, None])
-        images_batch['labels'].set_shape([None, ntimesteps+1, None])
+        images_batch['images'].set_shape([None, ntimesteps + 1, None, None, None])
+        images_batch['labels'].set_shape([None, ntimesteps + 1, None])
         # Cast type of images.
         # JV: convert_image_dtype changes range to 1, as expected by other tf functions
         # images_batch['images'] = tf.cast(images_batch['images'], tf.float32)
@@ -407,12 +407,12 @@ def _make_input_pipeline(ntimesteps, batchsz, im_size, dtype=tf.float32,
         # Put in format expected by model.
         # is_valid = (range(1, ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
         example_batch = {
-            'x0':         images_batch['images'][:, 0],
-            'y0':         images_batch['labels'][:, 0],
-            'x':          images_batch['images'][:, 1:],
-            'y':          images_batch['labels'][:, 1:],
+            'x0': images_batch['images'][:, 0],
+            'y0': images_batch['labels'][:, 0],
+            'x': images_batch['images'][:, 1:],
+            'y': images_batch['labels'][:, 1:],
             'y_is_valid': images_batch['label_is_valid'][:, 1:],
-            'aspect':     images_batch['aspect'],
+            'aspect': images_batch['aspect'],
         }
         return example_batch, feed_loop
 
@@ -436,21 +436,21 @@ def _perform_color_augmentation(example_raw, o, name='color_augmentation'):
                          lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(xs_aug)),
                          lambda: xs_aug)
 
-    example['x0'] = xs_aug[:,0]
-    example['x']  = xs_aug[:,1:]
+    example['x0'] = xs_aug[:, 0]
+    example['x'] = xs_aug[:, 1:]
     return example
 
 
 def generate_report(samplers, datasets, o,
-        modes=['OPE', 'TRE'],
-        metrics=['iou_mean', 'auc']):
+                    modes=['OPE', 'TRE'],
+                    metrics=['iou_mean', 'auc']):
     '''Finds all results for each evaluation distribution.
 
     Identifies the best result for each metric.
     Caution: More frequent evaluations might lead to better results.
     '''
     def helper():
-        eval_id_fn = lambda sampler, dataset: '{}-{}'.format(dataset, sampler)
+        def eval_id_fn(sampler, dataset): return '{}-{}'.format(dataset, sampler)
         best_fn = {'iou_mean': np.amax, 'auc': np.amax, 'cle_mean': np.amin, 'cle_representative': np.amax}
         report_dir = os.path.join(o.path_output, 'report')
         if not os.path.isdir(report_dir): os.makedirs(report_dir)
@@ -486,7 +486,7 @@ def generate_report(samplers, datasets, o,
                 for metric in metrics:
                     # Plot this metric over time for all datasets.
                     data_file = 'sampler-{}-mode-{}-metric-{}'.format(sampler, mode, metric)
-                    with open(os.path.join(report_dir, data_file+'.tsv'), 'w') as f:
+                    with open(os.path.join(report_dir, data_file + '.tsv'), 'w') as f:
                         write_data_file(f, mode, metric, steps, results)
                     try:
                         plot_file = plot_data(report_dir, data_file)
@@ -514,14 +514,14 @@ def generate_report(samplers, datasets, o,
 
     def write_data_file(f, mode, metric, steps, results):
         # Create a column for the variance.
-        fieldnames = ['step'] + [x+suffix for x in datasets for suffix in ['', '_std_err']]
+        fieldnames = ['step'] + [x + suffix for x in datasets for suffix in ['', '_std_err']]
         w = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
         w.writeheader()
         for step in steps:
-            # Map variance of metric to variance of 
+            # Map variance of metric to variance of
             row = {
-                dataset+suffix:
-                    gnuplot_str(results[dataset].get(step, {}).get(mode, {}).get(metric+suffix, None))
+                dataset + suffix:
+                    gnuplot_str(results[dataset].get(step, {}).get(mode, {}).get(metric + suffix, None))
                 for dataset in datasets
                 for suffix in ['', '_std_err']}
             row['step'] = step
@@ -530,14 +530,15 @@ def generate_report(samplers, datasets, o,
     def plot_data(plot_dir, filename):
         src_dir = os.path.dirname(__file__)
         args = ['gnuplot',
-            '-e', 'filename = "{}"'.format(filename),
-            os.path.join(src_dir, 'plot_eval_metric.gnuplot'),
-        ]
+                '-e', 'filename = "{}"'.format(filename),
+                os.path.join(src_dir, 'plot_eval_metric.gnuplot'),
+                ]
         p = subprocess.Popen(args, cwd=plot_dir)
         p.wait()
-        return os.path.join(plot_dir, filename+'.png')
+        return os.path.join(plot_dir, filename + '.png')
 
     return helper()
+
 
 def gnuplot_str(x):
     if x is None:
@@ -554,10 +555,12 @@ def _add_losses(losses, loss_coeffs, name='add_losses'):
                 raise AssertionError('loss not found: {}'.format(k))
         return tf.add_n([float(loss_coeffs.get(k, 1)) * v for k, v in losses.items()], name=scope)
 
+
 def _loss_summary(losses, name='loss_summary'):
     with tf.name_scope(name) as scope:
         for key, loss in losses.items():
             tf.summary.scalar(key, loss)
+
 
 def _image_summary(example, outputs, name='image_summary'):
     with tf.name_scope(name) as scope:
@@ -570,6 +573,7 @@ def _image_summary(example, outputs, name='image_summary'):
             'image_1_to_n', max_outputs=ntimesteps, collections=['IMAGE_SUMMARIES'],
             tensor=_draw_rectangles(example['x'][0], gt=example['y'][0], pred=outputs['y'][0],
                                     gt_is_valid=example['y_is_valid'][0]))
+
 
 def _draw_rectangles(im, gt, gt_is_valid=None, pred=None):
     im = tf.convert_to_tensor(im)
@@ -592,7 +596,7 @@ def evaluate_at_existing_checkpoints(o, saver, eval_sets, sess, model_inst):
                    for s in state.all_model_checkpoint_paths}
     # Identify which of these satisfy conditions.
     subset = sorted([index for index in model_files if index >= o.period_skip and
-                                                       index % o.period_assess == 0])
+                     index % o.period_assess == 0])
     # Evaluate each (with cache).
     for global_step in subset:
         saver.restore(sess, model_files[global_step])
@@ -615,14 +619,14 @@ def _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences):
     # Run the tracker on a full epoch.
     print 'evaluation: {}'.format(eval_id)
     # Cache the results.
-    result_file = os.path.join(o.path_output, 'assess', eval_id, iter_id+'.json')
+    result_file = os.path.join(o.path_output, 'assess', eval_id, iter_id + '.json')
     result = cache_json(result_file,
-        lambda: evaluate.evaluate(
-            sess, model_inst, eval_sequences,
-            # visualize=visualizer.visualize if o.save_videos else None,
-            visualize=True, vis_dir=vis_dir, save_frames=o.save_frames,
-            use_gt=o.use_gt_eval, tre_num=o.eval_tre_num),
-        makedir=True)
+                        lambda: evaluate.evaluate(
+                            sess, model_inst, eval_sequences,
+                            # visualize=visualizer.visualize if o.save_videos else None,
+                            visualize=True, vis_dir=vis_dir, save_frames=o.save_frames,
+                            use_gt=o.use_gt_eval, tre_num=o.eval_tre_num),
+                        makedir=True)
     assert 'OPE' in result
     modes = [mode for mode in ['OPE', 'TRE'] if mode in result]
     for mode in modes:
