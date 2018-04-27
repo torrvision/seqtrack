@@ -54,7 +54,8 @@ def make_placeholders(ntimesteps, im_size, default=None):
         'aspect': [None],
     }
 
-    def dtype(k): return tf.bool if k.endswith('_is_valid') else tf.float32
+    def dtype(k):
+        return tf.bool if k.endswith('_is_valid') else tf.float32
 
     if default is not None:
         assert(set(default.keys()) == set(shapes.keys()))
@@ -126,7 +127,7 @@ def load_sequence(seq, im_size):
     seq_len = len(seq['image_files'])
     assert(len(seq['labels']) == seq_len)
     assert(len(seq['label_is_valid']) == seq_len)
-    assert(seq['label_is_valid'][0] == True)
+    assert(seq['label_is_valid'][0] is True)
     # f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
     #                         dtype=np.float32)
     images = [

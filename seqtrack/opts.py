@@ -10,7 +10,7 @@ from seqtrack import helpers
 
 class Opts(object):
     def __init__(self):
-        ''' Initial parameter settings 
+        '''Initial parameter settings
         '''
         #----------------------------------------------------------------------
         # settings

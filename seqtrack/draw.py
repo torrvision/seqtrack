@@ -308,10 +308,10 @@ def plot_losses_train_val(loss_train, loss_val, o, cnt_):
 
 def plot_successplot(success_rates, auc, o, savedir):
     '''
-    Currently, only one plot is being passed. To compare the performances 
+    Currently, only one plot is being passed. To compare the performances
     between other models, you will need to consider drawing all plots at once.
     (easy..)
-    Also, the savedir is where the model (that is used to produce results) 
+    Also, the savedir is where the model (that is used to produce results)
     is located .
     '''
     fig = plt.figure(figsize=(6, 6))
@@ -331,10 +331,10 @@ def plot_successplot(success_rates, auc, o, savedir):
 
 def plot_precisionplot(precision_rates, cle_representative, o, savedir):
     '''
-    Currently, only one plot is being passed. To compare the performances 
+    Currently, only one plot is being passed. To compare the performances
     between other models, you will need to consider drawing all plots at once.
     (easy..)
-    Also, the savedir is where the model (that is used to produce results) 
+    Also, the savedir is where the model (that is used to produce results)
     is located .
     '''
     fig = plt.figure(figsize=(6, 6))

@@ -177,7 +177,8 @@ def merge_dims(x, a, b, name='merge_dims'):
         x_static = x.shape.as_list()
         n = len(x_static)
 
-        def prod(xs): return reduce(lambda x, y: x * y, xs)
+        def prod(xs):
+            return reduce(lambda x, y: x * y, xs)
         # Substitute the static size where possible.
         y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, a)] +
                      [prod([x_static[i] or x_dynamic[i] for i in range(a, b)])] +

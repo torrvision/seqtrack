@@ -18,7 +18,7 @@ class Model(object):
 
             enable_loss is True to add loss terms to the graph.
 
-        Returns: 
+        Returns:
             outputs, losses, init_state, final_state
 
         The losses are returned as a dictionary.

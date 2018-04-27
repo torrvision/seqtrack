@@ -450,7 +450,8 @@ def generate_report(samplers, datasets, o,
     Caution: More frequent evaluations might lead to better results.
     '''
     def helper():
-        def eval_id_fn(sampler, dataset): return '{}-{}'.format(dataset, sampler)
+        def eval_id_fn(sampler, dataset):
+            return '{}-{}'.format(dataset, sampler)
         best_fn = {'iou_mean': np.amax, 'auc': np.amax, 'cle_mean': np.amin, 'cle_representative': np.amax}
         report_dir = os.path.join(o.path_output, 'report')
         if not os.path.isdir(report_dir): os.makedirs(report_dir)
