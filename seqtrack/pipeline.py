@@ -36,7 +36,7 @@ import pdb
 import functools
 import tensorflow as tf
 
-from seqtrack import geom
+from seqtrack import graph
 
 
 def get_example_filenames(capacity=32, name='get_example'):
@@ -170,21 +170,8 @@ def load_images(example, image_size=[None, None, None], pad_value=128,
                              names=['images', 'labels', 'label_is_valid', 'aspect'],
                              name='image_queue')
         example = dict(example)
-        # Read files from disk.
-        file_contents = tf.map_fn(tf.read_file, example['image_files'], dtype=tf.string)
-        # Decode images.
-        images = tf.map_fn(functools.partial(tf.image.decode_jpeg, channels=3),
-                           file_contents,
-                           dtype=tf.uint8)
-        # Sample viewport in image.
-        images = tf.image.convert_image_dtype(images, tf.float32)
-        images = tf.image.crop_and_resize(images, geom.rect_to_tf_box(example['viewports']),
-                                          box_ind=tf.range(tf.shape(images)[0]),
-                                          crop_size=image_size[0:2],
-                                          extrapolation_value=pad_value / 255.)
-        # tf.image.crop_and_resize converts to float32.
-        # TODO: Avoid casting uint8 -> float32 -> uint8 -> float32.
-        images = tf.image.convert_image_dtype(images, tf.uint8)
+        images = graph.load_images(example['image_files'], image_size[0:2], example['viewports'],
+                                   pad_value=pad_value)
         # Replace files with images.
         del example['image_files']
         del example['viewports']

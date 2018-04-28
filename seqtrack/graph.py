@@ -113,8 +113,85 @@ def _whiten_image(x, mean, std, name='whiten_image'):
 #     return safe
 
 
-def load_sequence(seq, im_size):
+def load_images(image_files, image_size_hw, viewports=None, pad_value=128, name='load_images'):
+    '''Loads, crops and resizes images for a sequence.
+
+    Args:
+        image_files: Tensor [None]
+        image_size_hw: Image dimensions.
+        viewports: Tensor [None, 4] or None
     '''
+    with tf.name_scope(name) as scope:
+        # Read files from disk.
+        file_contents = tf.map_fn(tf.read_file, image_files, dtype=tf.string)
+        # Decode images.
+        images = tf.map_fn(lambda x: tf.image.decode_jpeg(x, channels=3),
+                           file_contents, dtype=tf.uint8)
+        if viewports is None:
+            # Resize entire image.
+            images = tf.image.resize_images(images, image_size_hw)
+        else:
+            # Sample viewport in image.
+            # TODO: Avoid casting uint8 -> float32 -> uint8 -> float32.
+            images = tf.image.convert_image_dtype(images, tf.float32)
+            images = tf.image.crop_and_resize(images, geom.rect_to_tf_box(viewports),
+                                              box_ind=tf.range(tf.shape(images)[0]),
+                                              crop_size=image_size_hw,
+                                              extrapolation_value=pad_value / 255.)
+            # tf.image.crop_and_resize converts to float32.
+            images = tf.image.convert_image_dtype(images, tf.uint8)
+        return images
+
+
+def load_images_batch(image_files, image_size_hw, viewports=None, name='load_images_batch',
+                      **kwargs):
+    '''Loads, crops and resizes images for a batch of sequences.
+
+    Args:
+        image_files: Tensor [batchsz, None]
+        image_size_hw: Image dimensions.
+        viewports: Tensor [batchsz, None, 4] or None
+    '''
+    with tf.name_scope(name) as scope:
+        elems = {'image_files': image_files}
+        if viewports is not None:
+            elems['viewports'] = viewports
+        images = tf.map_fn(
+            lambda elem: load_images(elem['image_files'], image_size_hw,
+                                     elem.get('viewports', None), **kwargs),
+            elems, dtype=tf.uint8)
+        return images
+
+
+def py_load_batch(seqs, ntimesteps, im_size):
+    '''Loads image data for a batch of sequences and constructs values for feed dict.
+
+    All sequences will be padded to ntimesteps.
+
+    Args:
+        im_size: (height, width)
+
+    Example has keys:
+        'x0'     # First image in sequence, shape [h, w, 3]
+        'y0'         # Position of target in first image, shape [4]
+        'x'      # Input images, shape [n-1, h, w, 3]
+        'y'          # Position of target in following frames, shape [n-1, 4]
+        'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
+        'aspect'     # Aspect ratio of original image.
+    '''
+    sequence_keys = set(['x', 'y', 'y_is_valid'])
+    examples = map(lambda x: py_load_batch_elem(x, im_size), seqs)
+    # Pad all sequences to o.ntimesteps.
+    # NOTE: Assumes that none of the arrays to be padded are empty.
+    return {k: np.stack([pad_to(x[k], ntimesteps, axis=0)
+                         if k in sequence_keys else x[k]
+                         for x in examples])
+            for k in EXAMPLE_KEYS}
+
+
+def py_load_batch_elem(seq, im_size):
+    '''Loads image data for one element of a batch.
+
     Args:
         im_size: (height, width)
 
@@ -142,26 +219,3 @@ def load_sequence(seq, im_size):
         'y_is_valid': np.array(seq['label_is_valid'][1:]),
         'aspect': seq['aspect'],
     }
-
-
-def load_batch(seqs, ntimesteps, im_size):
-    '''
-    Args:
-        im_size: (height, width)
-
-    Example has keys:
-        'x0'     # First image in sequence, shape [h, w, 3]
-        'y0'         # Position of target in first image, shape [4]
-        'x'      # Input images, shape [n-1, h, w, 3]
-        'y'          # Position of target in following frames, shape [n-1, 4]
-        'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
-        'aspect'     # Aspect ratio of original image.
-    '''
-    sequence_keys = set(['x', 'y', 'y_is_valid'])
-    examples = map(lambda x: load_sequence(x, im_size), seqs)
-    # Pad all sequences to o.ntimesteps.
-    # NOTE: Assumes that none of the arrays to be padded are empty.
-    return {k: np.stack([pad_to(x[k], ntimesteps, axis=0)
-                         if k in sequence_keys else x[k]
-                         for x in examples])
-            for k in EXAMPLE_KEYS}

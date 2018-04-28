@@ -205,7 +205,7 @@ def parse_arguments():
         type=int, default=10000)
     parser.add_argument(
         '--period_skip', help='until this period skip evaluation',
-        type=int, default=10000)
+        type=int, default=0)
     parser.add_argument(
         '--period_preview', help='period to update summary preview',
         type=int, default=100)
@@ -393,8 +393,7 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
                     ntimesteps=o.ntimesteps, batchsz=o.batchsz, im_size=(o.imheight, o.imwidth),
                     num_load_threads=1, num_batch_threads=1, name='pipeline_' + mode)
                 queues.append(queue)
-            queue_index, from_queue = pipeline.make_multiplexer(queues,
-                                                                capacity=4, num_threads=1)
+            queue_index, from_queue = pipeline.make_multiplexer(queues, capacity=4, num_threads=1)
         example, run_opts = graph.make_placeholders(
             o.ntimesteps, (o.imheight, o.imwidth), default=from_queue)
 
@@ -612,7 +611,7 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
             else:
                 batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
                 # batch = _load_batch(batch_seqs, o)
-                batch = graph.load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
+                batch = graph.py_load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
                 feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                 dur_load = time.time() - start
             if global_step % o.period_summary == 0:
@@ -640,7 +639,7 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
                 else:
                     batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
                     # batch = _load_batch(batch_seqs, o)
-                    batch = graph.load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
+                    batch = graph.py_load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
                     feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                     dur_load = time.time() - start
                 summary_var = (summary_vars_with_preview['val']

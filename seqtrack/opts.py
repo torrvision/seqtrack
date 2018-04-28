@@ -117,7 +117,7 @@ class Opts(object):
         self.resume = False
         self.period_ckpt = 10000  # this is based only on global_step; batchsz not considered
         self.period_assess = 10000
-        self.period_skip = 10000  # until this period skip evaluation
+        self.period_skip = 0  # until this period skip evaluation
         self.period_summary = 10
         self.period_preview = 100  # Ensure that period_preview % period_summary == 0.
         self.save_videos = False
