@@ -250,12 +250,11 @@ def evaluate(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
             # Take first result (full sequence).
             sequence_results = [tre_results[0] for tre_results in sequence_tre_results]
         elif mode == 'TRE':
-            # Concat all results.
-            sequence_results = [result for tre_results in sequence_tre_results for result in tre_results]
-        else:
-            sequence_results = []
-        assert(len(sequence_results) > 0)
-        for k in sequence_results[0]:
+            # Take mean over TRE sub-sequences before mean over dataset.
+            # This makes more sense for estimating the variance of the mean using
+            # bootstrap sampling because separate tracks are independent.
+            sequence_results = [np.mean(tre_results) for tre_results in sequence_tre_results]
+        for k in sequence_results[0].keys():
             # TODO: Store all results and compute this later!
             # (More flexible but breaks backwards compatibility.)
             results_k = np.array([r[k] for r in sequence_results])
@@ -266,6 +265,7 @@ def evaluate(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
             # See page 107 of "All of Statistics" (Wasserman).
             std_err = np.sqrt(var / len(results_k))
             results[mode][k] = mean.tolist()  # Convert to list for JSON.
+            results[mode][k + '_var'] = var.tolist()  # Convert to list for JSON.
             results[mode][k + '_std_err'] = std_err.tolist()
     return results
 
