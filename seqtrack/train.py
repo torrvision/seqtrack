@@ -26,7 +26,6 @@ from seqtrack import geom
 from seqtrack import graph
 from seqtrack import helpers
 from seqtrack import motion
-from seqtrack import opts
 from seqtrack import pipeline
 from seqtrack import sample
 from seqtrack import track
@@ -79,7 +78,7 @@ def parse_arguments():
         '--eval_samplers', nargs='+', help='',
         type=str, default=['full'])
     parser.add_argument(
-        '--max_eval_videos', help='max number of videos to evaluate; not applied to OTB',
+        '--max_eval_videos', help='max number of videos to evaluate',
         type=int, default=100)
 
     parser.add_argument('--untar', action='store_true',
@@ -194,6 +193,11 @@ def parse_arguments():
     parser.add_argument(
         '--nosave', help='no need to save results?',
         action='store_true')
+
+    parser.add_argument('--path_ckpt', default='./ckpt')
+    parser.add_argument('--path_output', default='./output')
+    parser.add_argument('--path_summary', default='./summary')
+
     parser.add_argument(
         '--resume', help='to resume training',
         action='store_true')
@@ -207,6 +211,9 @@ def parse_arguments():
         '--period_skip', help='until this period skip evaluation',
         type=int, default=0)
     parser.add_argument(
+        '--period_summary', help='period to update summary',
+        type=int, default=10)
+    parser.add_argument(
         '--period_preview', help='period to update summary preview',
         type=int, default=100)
     parser.add_argument(
@@ -216,9 +223,6 @@ def parse_arguments():
         '--save_frames', help='save frames of video during evaluation',
         action='store_true')
 
-    parser.add_argument(
-        '--gpu_device', help='set `CUDA_VISIBLE_DEVICES`',
-        type=int, default=0)
     parser.add_argument(
         '--no_gpu_manctrl', help='disable manual gpu management',
         dest='gpu_manctrl', action='store_false')
@@ -233,6 +237,30 @@ def parse_arguments():
     return args
 
 
+def _make_optimizer(name, lr):
+    if name == 'sgd':
+        optimizer = tf.train.GradientDescentOptimizer(lr)
+    elif name == 'momentum':
+        optimizer = tf.train.MomentumOptimizer(lr, 0.9)
+    elif name == 'rmsprop':
+        optimizer = tf.train.RMSPropOptimizer(learning_rate=lr)
+    elif name == 'adam':
+        optimizer = tf.train.AdamOptimizer(learning_rate=lr)
+    else:
+        raise ValueError('unknown optimizer: {}', helpers.quote(name))
+    return optimizer
+
+
+def _make_session_config(args):
+    config = tf.ConfigProto()
+    # TODO: not sure if this should be always true.
+    config.allow_soft_placement = True
+    # config.log_device_placement = True
+    if args.gpu_manctrl:
+        config.gpu_options.allow_growth = True
+        config.gpu_options.per_process_gpu_memory_fraction = args.gpu_frac
+
+
 def main():
     # def trace(frame, event, arg):
     #     print >> sys.stderr, '%s, %s:%d' % (event, frame.f_code.co_filename, frame.f_lineno)
@@ -240,18 +268,14 @@ def main():
     # sys.settrace(trace)  # Use this to find segfaults.
 
     args = parse_arguments()
-    # logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
     logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
-    o = opts.Opts()
-    o.update_by_sysarg(args=args)
-    o.initialize()
 
     # TODO: How to get datasets from train_dataset and eval_datasets?
     dataset_names = list(set(chain(
         _datasets_in_sampler(args.train_dataset),
         _datasets_in_sampler(args.val_dataset),
         args.eval_datasets)))
-    logger.info('load datasets: %s', _list_str(dataset_names))
+    logger.info('load datasets: %s', helpers.quote_list(dataset_names))
 
     if args.untar:
         datasets = data.untar_and_load_all(
@@ -264,17 +288,18 @@ def main():
 
     frame_sampler_presets = {
         'full': partial(sample.FrameSampler, kind='full'),
-        'train': partial(sample.FrameSampler, ntimesteps=o.ntimesteps, **o.sampler_params)}
+        'train': partial(sample.FrameSampler, ntimesteps=args.ntimesteps, **args.sampler_params)}
 
-    # Create example streams for train and val.
-    # Use a separate random number generator for each sampler.
+    # Create infinite example streams for train and val.
+    # Use a separate random number generator for each sampler as they may run in parallel.
     sampler_specs = {'train': args.train_dataset, 'val': args.val_dataset}
     streams = {}
     for i, mode in enumerate(['train', 'val']):
-        seed = o.seed_global + i  # Use a different seed for train and val.
+        # Use a different seed for train and val, in particular for augmentation!
+        seed = args.seed_global + i
         postproc_fn = (
-            None if not o.augment_motion else
-            partial(motion.augment, rand=np.random.RandomState(seed), **o.motion_params))
+            None if not args.augment_motion else
+            partial(motion.augment, rand=np.random.RandomState(seed), **args.motion_params))
         streams[mode] = sample.sample(
             _make_sampler(sampler_specs[mode], datasets), frame_sampler_presets['train'](),
             postproc_fn=postproc_fn, rand=np.random.RandomState(seed), infinite=True)
@@ -283,19 +308,20 @@ def main():
         # Give each dataset its own random seed.
         (d + '-' + s): partial(
             sample.sample, sample.EpochSampler(datasets[d]), frame_sampler_presets[s](),
-            rand=np.random.RandomState(o.seed_global), infinite=False, max_num=100)
-        for d in o.eval_datasets for s in o.eval_samplers}
+            rand=np.random.RandomState(args.seed_global),
+            infinite=False, max_num=args.max_eval_videos)
+        for d in args.eval_datasets for s in args.eval_samplers}
 
-    if o.report:
-        generate_report(sorted(o.eval_samplers), sorted(o.eval_datasets), o)
+    if args.report:
+        _generate_report(args, sorted(args.eval_samplers), sorted(args.eval_datasets))
         return
 
-    if o.model == 'SiamFC':
-        model = ModelFromIterModel(SiamFC(**o.model_params))
+    if args.model == 'SiamFC':
+        model = ModelFromIterModel(SiamFC(**args.model_params))
     else:
-        raise ValueError('unknown model: {}'.format(o.model))
+        raise ValueError('unknown model: {}'.format(args.model))
 
-    train(model, streams, eval_sample_fns, o, use_queues=o.use_queues)
+    _train(args, model, streams, eval_sample_fns)
 
 
 def _make_sampler(names, datasets):
@@ -330,7 +356,7 @@ def _datasets_in_sampler(names):
     raise ValueError('invalid structure: {}'.format(repr(names)))
 
 
-def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
+def _train(args, model, sequences, eval_sets, stat=None):
     '''Trains a network.
 
     Args:
@@ -385,28 +411,21 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
     feed_loop = {}  # Each value is a function to call in a thread.
     with tf.name_scope('input'):
         from_queue = None
-        if use_queues:
+        if args.use_queues:
             queues = []
             for mode in modes:
                 # Create a queue each for training and validation data.
                 queue, feed_loop[mode] = _make_input_pipeline(
-                    ntimesteps=o.ntimesteps, batchsz=o.batchsz, im_size=(o.imheight, o.imwidth),
+                    ntimesteps=args.ntimesteps, batchsz=args.batchsz,
+                    im_size=(args.imheight, args.imwidth),
                     num_load_threads=1, num_batch_threads=1, name='pipeline_' + mode)
                 queues.append(queue)
             queue_index, from_queue = pipeline.make_multiplexer(queues, capacity=4, num_threads=1)
         example, run_opts = graph.make_placeholders(
-            o.ntimesteps, (o.imheight, o.imwidth), default=from_queue)
+            args.ntimesteps, (args.imheight, args.imwidth), default=from_queue)
 
-    # color augmentation
-    example = _perform_color_augmentation(example, o)
+    # example = _perform_color_augmentation(example, args)
 
-    # Always use same statistics for whitening (not set dependent).
-    ## stat = datasets['train'].stat
-    # TODO: Mask y with use_gt to prevent accidental use.
-    # model = create_model(graph.whiten(graph.guard_labels(example), stat=stat),
-    #                      summaries_collections=['summaries_model'])
-    # loss_var, model.gt = get_loss(example, model.outputs, model.gt, o)
-    # example_input = graph.whiten(graph.guard_labels(example), stat=stat)
     example_input = graph.whiten(example, stat=stat)
     with tf.name_scope('model'):
         outputs, losses, init_state, final_state = model.instantiate(
@@ -414,7 +433,7 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
             image_summaries_collections=['IMAGE_SUMMARIES'])
     _loss_summary(losses)
     _image_summary(example, outputs)
-    loss_var = _add_losses(losses, o.loss_coeffs)
+    loss_var = _add_losses(losses, args.loss_coeffs)
 
     with tf.name_scope('diagnostic'):
         iou = geom.rect_iou(outputs['y'], example_input['y'])
@@ -425,8 +444,8 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
 
     model_inst = graph.ModelInstance(
         example, run_opts, outputs, init_state, final_state,
-        batchsz=outputs['y'].shape.as_list()[0], ntimesteps=o.ntimesteps,
-        imheight=o.imheight, imwidth=o.imwidth)
+        batchsz=outputs['y'].shape.as_list()[0], ntimesteps=args.ntimesteps,
+        imheight=args.imheight, imwidth=args.imwidth)
 
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     loss_var += r
@@ -437,19 +456,19 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
     # lr = init * decay^(step)
     #    = init * decay^(step / period * period / decay_steps)
     #    = init * [decay^(period / decay_steps)]^(step / period)
-    lr = tf.train.exponential_decay(o.lr_init, global_step_var,
-                                    decay_steps=o.lr_decay_steps,
-                                    decay_rate=o.lr_decay_rate,
+    lr = tf.train.exponential_decay(args.lr_init, global_step_var,
+                                    decay_steps=args.lr_decay_steps,
+                                    decay_rate=args.lr_decay_rate,
                                     staircase=True)
     tf.summary.scalar('lr', lr, collections=['summaries_train'])
-    optimizer = _get_optimizer(lr, o)
+    optimizer = _make_optimizer(args.optimizer, lr)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
-        if not o.grad_clip:
+        if not args.grad_clip:
             optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
         else:  # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
             gradients, variables = zip(*optimizer.compute_gradients(loss_var))
-            gradients = [None if gradient is None else tf.clip_by_norm(gradient, o.max_grad_norm)
+            gradients = [None if gradient is None else tf.clip_by_norm(gradient, args.max_grad_norm)
                          for gradient in gradients]
             optimize_op = optimizer.apply_gradients(zip(gradients, variables),
                                                     global_step=global_step_var)
@@ -473,7 +492,7 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver(max_to_keep=10)
 
-    if o.curriculum_learning:
+    if args.curriculum_learning:
         ''' Curriculum learning.
         Restore values of trainable variables from pre-trained model on short sequence,
         to initialize and train a model on longer sequences.
@@ -500,25 +519,25 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
     #     # Approach 2. Use collection to get variables.
     #     vars_to_restore = {v.name.split(':')[0]: v for v in tf.get_collection(o.cnn_model)}
     #     saver_external = tf.train.Saver(vars_to_restore)
-    if o.siamese_pretrain:
+    if args.siamese_pretrain:
         siamese_vars = tf.get_collection('siamese')
         print 'siamese vars:'
         pprint.pprint(siamese_vars)
         saver_siamese = tf.train.Saver(siamese_vars)
 
     t_total = time.time()
-    with tf.Session(config=o.tfconfig) as sess:
+    with tf.Session(config=_make_session_config(args)) as sess:
         print '\ntraining starts! --------------------------------------------'
         sys.stdout.flush()
 
-        if o.evaluate:
-            evaluate_at_existing_checkpoints(o, saver, eval_sets, sess, model_inst)
+        if args.evaluate:
+            _evaluate_at_existing_checkpoints(args, saver, eval_sets, sess, model_inst)
             return
 
         # 1. resume (full restore), 2. initialize from scratch, 3. curriculume learning (partial restore)
         prev_ckpt = 0
-        if o.resume:
-            model_file = tf.train.latest_checkpoint(o.path_ckpt)
+        if args.resume:
+            model_file = tf.train.latest_checkpoint(args.path_ckpt)
             if model_file is None:
                 raise ValueError('could not find checkpoint')
             print 'restore: {}'.format(model_file)
@@ -528,8 +547,8 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
             prev_ckpt = global_step_var.eval()
         else:
             sess.run(init_op)
-            if o.siamese_pretrain:
-                saver_siamese.restore(sess, o.siamese_model_file)
+            if args.siamese_pretrain:
+                saver_siamese.restore(sess, args.siamese_model_file)
                 # vars_uninit = sess.run(tf.report_uninitialized_variables())
                 # print 'vars_uninit:'
                 # pprint.pprint(vars_uninit)
@@ -545,15 +564,15 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
             #     sess.run(tf.variables_initializer([v for v in tf.global_variables()
             #                                        if v.name.split(':')[0] in vars_uninit]))
             #     assert len(sess.run(tf.report_uninitialized_variables())) == 0
-            if o.curriculum_learning:
-                if o.pretrained_cl is None:  # e.g., '/some_path/ckpt/iteration-150000'
+            if args.curriculum_learning:
+                if args.pretrained_cl is None:  # e.g., '/some_path/ckpt/iteration-150000'
                     raise ValueError('could not find checkpoint')
-                print 'restore: {}'.format(o.pretrained_cl)
-                saver_cl.restore(sess, o.pretrained_cl)
+                print 'restore: {}'.format(args.pretrained_cl)
+                saver_cl.restore(sess, args.pretrained_cl)
                 print 'done: (partial) restore for curriculum learning'
                 sys.stdout.flush()
 
-        if use_queues:
+        if args.use_queues:
             coord = tf.train.Coordinator()
             tf.train.start_queue_runners(sess, coord)
             # Run the feed loops in another thread.
@@ -563,12 +582,12 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
             for t in threads:
                 t.start()
 
-        if o.tfdb:
+        if args.tfdb:
             sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
         writer = {}
         for mode in modes:
-            path_summary = os.path.join(o.path_summary, mode)
+            path_summary = os.path.join(args.path_summary, mode)
             # Only include graph in one summary.
             if mode == 'train':
                 writer[mode] = tf.summary.FileWriter(path_summary, sess.graph)
@@ -577,46 +596,46 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
 
         while True:
             global_step = global_step_var.eval()  # Number of steps taken.
-            if global_step >= o.num_steps:
+            if global_step >= args.num_steps:
                 break
 
-            if not o.nosave:
-                period_ckpt = o.period_ckpt if not o.debugmode else 40
+            if not args.nosave:
+                period_ckpt = args.period_ckpt if not args.debugmode else 40
                 if global_step % period_ckpt == 0 and global_step > prev_ckpt:
-                    if not os.path.isdir(o.path_ckpt):
-                        os.makedirs(o.path_ckpt)
+                    if not os.path.isdir(args.path_ckpt):
+                        os.makedirs(args.path_ckpt)
                     print 'save model'
-                    saver.save(sess, o.path_ckpt + '/iteration', global_step=global_step)
+                    saver.save(sess, args.path_ckpt + '/iteration', global_step=global_step)
                     print 'done: save model'
                     sys.stdout.flush()
                     prev_ckpt = global_step
 
-            gt_ratio = max(1.0 * np.exp(-o.gt_decay_rate * global_step), o.min_gt_ratio)
+            gt_ratio = max(1.0 * np.exp(-args.gt_decay_rate * global_step), args.min_gt_ratio)
 
             # intermediate evaluation of model
-            period_assess = o.period_assess if not o.debugmode else 20
-            if global_step > 0 and global_step > o.period_skip and global_step % period_assess == 0:
+            period_assess = args.period_assess if not args.debugmode else 20
+            if global_step > 0 and global_step > args.period_skip and global_step % period_assess == 0:
                 for eval_id, sampler in eval_sets.iteritems():
                     eval_sequences = sampler()
-                    _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences)
+                    _evaluate(args, global_step, eval_id, sess, model_inst, eval_sequences)
 
             # Take a training step.
             start = time.time()
-            feed_dict = {run_opts['use_gt']: o.use_gt_train,
+            feed_dict = {run_opts['use_gt']: args.use_gt_train,
                          run_opts['is_training']: True,
                          run_opts['is_tracking']: False,
                          run_opts['gt_ratio']: gt_ratio}
-            if use_queues:
+            if args.use_queues:
                 feed_dict.update({queue_index: 0})  # Choose validation queue.
             else:
-                batch_seqs = [next(sequences['train']) for i in range(o.batchsz)]
-                # batch = _load_batch(batch_seqs, o)
-                batch = graph.py_load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
+                batch_seqs = [next(sequences['train']) for i in range(args.batchsz)]
+                # batch = _load_batch(batch_seqs, args)
+                batch = graph.py_load_batch(batch_seqs, args.ntimesteps, (args.imheight, args.imwidth))
                 feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                 dur_load = time.time() - start
-            if global_step % o.period_summary == 0:
+            if global_step % args.period_summary == 0:
                 summary_var = (summary_vars_with_preview['train']
-                               if global_step % o.period_preview == 0
+                               if global_step % args.period_preview == 0
                                else summary_vars['train'])
                 _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
                                             feed_dict=feed_dict)
@@ -628,22 +647,22 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
 
             newval = False
             # Evaluate validation error.
-            if global_step % o.period_summary == 0:
+            if global_step % args.period_summary == 0:
                 start = time.time()
-                feed_dict = {run_opts['use_gt']: o.use_gt_train,  # Match training.
+                feed_dict = {run_opts['use_gt']: args.use_gt_train,  # Match training.
                              run_opts['is_training']: False,  # Do not update bnorm stats.
                              run_opts['is_tracking']: False,
                              run_opts['gt_ratio']: gt_ratio}  # Match training.
-                if use_queues:
+                if args.use_queues:
                     feed_dict.update({queue_index: 1})  # Choose validation queue.
                 else:
-                    batch_seqs = [next(sequences['val']) for i in range(o.batchsz)]
-                    # batch = _load_batch(batch_seqs, o)
-                    batch = graph.py_load_batch(batch_seqs, o.ntimesteps, (o.imheight, o.imwidth))
+                    batch_seqs = [next(sequences['val']) for i in range(args.batchsz)]
+                    # batch = _load_batch(batch_seqs, args)
+                    batch = graph.py_load_batch(batch_seqs, args.ntimesteps, (args.imheight, args.imwidth))
                     feed_dict.update({example[k]: v for k, v in batch.iteritems()})
                     dur_load = time.time() - start
                 summary_var = (summary_vars_with_preview['val']
-                               if global_step % o.period_preview == 0
+                               if global_step % args.period_preview == 0
                                else summary_vars['val'])
                 loss_val, summary = sess.run([loss_var, summary_var],
                                              feed_dict=feed_dict)
@@ -652,7 +671,7 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
                 newval = True
 
             # Print result of one batch update
-            if o.verbose_train:
+            if args.verbose_train:
                 losstime = '|loss:{:.5f}/{:.5f} (time:{:.2f}/{:.2f}) - with val'.format(
                     loss, loss_val, dur, dur_val) if newval else \
                     '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
@@ -662,20 +681,6 @@ def train(model, sequences, eval_sets, o, stat=None, use_queues=False):
         # **training finished
         print '\ntraining finished! ------------------------------------------'
         print 'total time elapsed: {0:.2f}'.format(time.time() - t_total)
-
-
-def _get_optimizer(lr, o):
-    if o.optimizer == 'sgd':
-        optimizer = tf.train.GradientDescentOptimizer(lr)
-    elif o.optimizer == 'momentum':
-        optimizer = tf.train.MomentumOptimizer(lr, 0.9)
-    elif o.optimizer == 'rmsprop':
-        optimizer = tf.train.RMSPropOptimizer(learning_rate=lr)
-    elif o.optimizer == 'adam':
-        optimizer = tf.train.AdamOptimizer(learning_rate=lr)
-    else:
-        raise ValueError('optimizer not implemented or simply wrong.')
-    return optimizer
 
 
 def _make_input_pipeline(ntimesteps, batchsz, im_size, dtype=tf.float32,
@@ -716,31 +721,31 @@ def _make_input_pipeline(ntimesteps, batchsz, im_size, dtype=tf.float32,
         return example_batch, feed_loop
 
 
-def _perform_color_augmentation(example_raw, o, name='color_augmentation'):
+# def _perform_color_augmentation(example_raw, o, name='color_augmentation'):
+# 
+#     example = dict(example_raw)
+# 
+#     xs_aug = tf.concat([tf.expand_dims(example['x0'], 1), example['x']], 1)
+# 
+#     if o.color_augmentation.get('brightness', False):
+#         xs_aug = tf.image.random_brightness(xs_aug, 0.1)
+# 
+#     if o.color_augmentation.get('contrast', False):
+#         xs_aug = tf.image.random_contrast(xs_aug, 0.1, 1.1)
+# 
+#     if o.color_augmentation.get('grayscale', False):
+#         max_grayscale_ratio = 0.2
+#         rand_prob = tf.random_uniform(shape=[], minval=0, maxval=1)
+#         xs_aug = tf.cond(tf.less_equal(rand_prob, max_grayscale_ratio),
+#                          lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(xs_aug)),
+#                          lambda: xs_aug)
+# 
+#     example['x0'] = xs_aug[:, 0]
+#     example['x'] = xs_aug[:, 1:]
+#     return example
 
-    example = dict(example_raw)
 
-    xs_aug = tf.concat([tf.expand_dims(example['x0'], 1), example['x']], 1)
-
-    if o.color_augmentation.get('brightness', False):
-        xs_aug = tf.image.random_brightness(xs_aug, 0.1)
-
-    if o.color_augmentation.get('contrast', False):
-        xs_aug = tf.image.random_contrast(xs_aug, 0.1, 1.1)
-
-    if o.color_augmentation.get('grayscale', False):
-        max_grayscale_ratio = 0.2
-        rand_prob = tf.random_uniform(shape=[], minval=0, maxval=1)
-        xs_aug = tf.cond(tf.less_equal(rand_prob, max_grayscale_ratio),
-                         lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(xs_aug)),
-                         lambda: xs_aug)
-
-    example['x0'] = xs_aug[:, 0]
-    example['x'] = xs_aug[:, 1:]
-    return example
-
-
-def generate_report(samplers, datasets, o,
+def _generate_report(args, samplers, datasets,
                     modes=['OPE', 'TRE'],
                     metrics=['iou_mean', 'auc']):
     '''Finds all results for each evaluation distribution.
@@ -752,7 +757,7 @@ def generate_report(samplers, datasets, o,
         def eval_id_fn(sampler, dataset):
             return '{}-{}'.format(dataset, sampler)
         best_fn = {'iou_mean': np.amax, 'auc': np.amax, 'cle_mean': np.amin, 'cle_representative': np.amax}
-        report_dir = os.path.join(o.path_output, 'report')
+        report_dir = os.path.join(args.path_output, 'report')
         if not os.path.isdir(report_dir): os.makedirs(report_dir)
 
         # Plot each metric versus iteration.
@@ -796,7 +801,7 @@ def generate_report(samplers, datasets, o,
 
     def load_results(eval_id):
         '''Returns a dictionary from step number to dictionary of metrics.'''
-        dirname = os.path.join(o.path_output, 'assess', eval_id)
+        dirname = os.path.join(args.path_output, 'assess', eval_id)
         pattern = re.compile(r'^iteration(\d+)\.json$')
         results = {}
         for f in os.listdir(dirname):
@@ -889,20 +894,20 @@ def _draw_rectangles(im, gt, gt_is_valid=None, pred=None):
     return tf.image.convert_image_dtype(im, tf.uint8, saturate=True)
 
 
-def evaluate_at_existing_checkpoints(o, saver, eval_sets, sess, model_inst):
+def _evaluate_at_existing_checkpoints(args, saver, eval_sets, sess, model_inst):
     # Identify which checkpoints are available.
-    state = tf.train.get_checkpoint_state(o.path_ckpt)
+    state = tf.train.get_checkpoint_state(args.path_ckpt)
     model_files = {_index_from_checkpoint(os.path.basename(s)): s
                    for s in state.all_model_checkpoint_paths}
     # Identify which of these satisfy conditions.
-    subset = sorted([index for index in model_files if index >= o.period_skip and
-                     index % o.period_assess == 0])
+    subset = sorted([index for index in model_files if index >= args.period_skip and
+                     index % args.period_assess == 0])
     # Evaluate each (with cache).
     for global_step in subset:
         saver.restore(sess, model_files[global_step])
         for eval_id, sampler in eval_sets.iteritems():
             eval_sequences = sampler()
-            _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences)
+            _evaluate(args, global_step, eval_id, sess, model_inst, eval_sequences)
 
 
 def _index_from_checkpoint(s):
@@ -911,22 +916,22 @@ def _index_from_checkpoint(s):
     return int(parts[1])
 
 
-def _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences):
+def _evaluate(args, global_step, eval_id, sess, model_inst, eval_sequences):
     iter_id = 'iteration{}'.format(global_step)
-    vis_dir = os.path.join(o.path_output, iter_id, eval_id)
+    vis_dir = os.path.join(args.path_output, iter_id, eval_id)
     if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
     # visualizer = visualize.VideoFileWriter(vis_dir)
     # Run the tracker on a full epoch.
     print 'evaluation: {}'.format(eval_id)
     # Cache the results.
-    result_file = os.path.join(o.path_output, 'assess', eval_id, iter_id + '.json')
+    result_file = os.path.join(args.path_output, 'assess', eval_id, iter_id + '.json')
     result = helpers.cache_json(
         result_file,
         lambda: evaluate.evaluate(
             sess, model_inst, eval_sequences,
-            # visualize=visualizer.visualize if o.save_videos else None,
-            visualize=True, vis_dir=vis_dir, save_frames=o.save_frames,
-            use_gt=o.use_gt_eval, tre_num=o.eval_tre_num),
+            # visualize=visualizer.visualize if args.save_videos else None,
+            visualize=True, vis_dir=vis_dir, save_frames=args.save_frames,
+            use_gt=args.use_gt_eval, tre_num=args.eval_tre_num),
         makedir=True)
     assert 'OPE' in result
     modes = [mode for mode in ['OPE', 'TRE'] if mode in result]
@@ -938,14 +943,6 @@ def _evaluate(o, global_step, eval_id, sess, model_inst, eval_sequences):
 
 def _is_pair(x):
     return (isinstance(x, list) or isinstance(x, tuple)) and len(x) == 2
-
-
-def _quote(x):
-    return "'" + x + "'"
-
-
-def _list_str(x):
-    return ', '.join(map(_quote, x))
 
 
 if __name__ == '__main__':

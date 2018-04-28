@@ -8,7 +8,6 @@ import os
 import numpy as np
 from PIL import Image
 
-from seqtrack.opts import Opts
 from seqtrack import evaluate
 from seqtrack import geom_np
 from seqtrack import data
@@ -42,9 +41,9 @@ def parse_arguments():
 
 def main():
     args = parse_arguments()
-    o = Opts()
-    o.update_by_sysarg(args=args)
-    o.initialize()
+    # o = Opts()
+    # o.update_by_sysarg(args=args)
+    # o.initialize()
 
     # Load sequence from args.
     frames = range(args.start, args.end + 1)
@@ -59,8 +58,8 @@ def main():
     sequence['aspect'] = float(width) / height
     # sequence['original_image_size']
 
-    example = graph.make_placeholders(o.ntimesteps, (o.frmsz, o.frmsz))
-    create_model = model_pkg.load_model(o, model_params=o.model_params)
+    example = graph.make_placeholders(args.ntimesteps, (args.frmsz, args.frmsz))
+    create_model = model_pkg.load_model(args, model_params=args.model_params)
     model = create_model(graph.whiten(graph.guard_labels(example), stat=None),
                          summaries_collections=['summaries_model'])
     saver = tf.train.Saver()

@@ -378,6 +378,14 @@ def stack_dict(frames, axis=0, keys=None):
     }
 
 
+def quote(s):
+    return "'" + s + "'"
+
+
+def quote_list(x):
+    return ', '.join(map(quote, x))
+
+
 # def unstack_dict(d, keys, axis):
 #     '''Converts dictionary of tensors to list of dictionaries.'''
 #     # Gather lists of all elements at same index.
