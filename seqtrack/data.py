@@ -137,7 +137,7 @@ def untar_and_load_all(tar_dir, data_dir, preproc, subset_names, cache_dir):
         without_cache = [name for name in subset_names
                          if not os.path.isfile(_cache_file(cache_dir, name))]
         if len(without_cache) > 0:
-            logger.info('cache not found for: %s', _list_str(without_cache))
+            logger.info('cache not found for: %s', helpers.quote_list(without_cache))
             # Need to untar original version to load annotations.
             _untar(tar_dir, data_dir, 'original', _get_datasets(without_cache))
     else:
@@ -282,11 +282,3 @@ def get_tracks_by_video(metadata):
     for track_id in metadata.tracks():
         track_ids.setdefault(metadata.video(track_id), []).append(track_id)
     return track_ids
-
-
-def _quote(x):
-    return "'" + x + "'"
-
-
-def _list_str(x):
-    return ', '.join(map(_quote, x))

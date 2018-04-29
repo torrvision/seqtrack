@@ -246,26 +246,23 @@ def evaluate(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
     modes = ['OPE'] + (['TRE'] if tre_num > 1 else [])
     for mode in modes:
         results[mode] = {}
-        if mode == 'OPE':
-            # Take first result (full sequence).
-            sequence_results = [tre_results[0] for tre_results in sequence_tre_results]
-        elif mode == 'TRE':
-            # Take mean over TRE sub-sequences before mean over dataset.
-            # This makes more sense for estimating the variance of the mean using
-            # bootstrap sampling because separate tracks are independent.
-            sequence_results = [np.mean(tre_results) for tre_results in sequence_tre_results]
-        for k in sequence_results[0].keys():
+        # Convert from lists of dicts to dict
+        keys = sequence_tre_results[0][0].keys()
+        for k in keys:
             # TODO: Store all results and compute this later!
             # (More flexible but breaks backwards compatibility.)
-            results_k = np.array([r[k] for r in sequence_results])
-            mean = np.mean(results_k, axis=0)
-            var = np.var(results_k, axis=0)
+            if mode == 'OPE':
+                values = [r[0][k] for r in sequence_tre_results]
+            elif mode == 'TRE':
+                values = [np.mean([r_i[k] for r_i in r]) for r in sequence_tre_results]
+            mean = np.mean(values, axis=0)
+            var = np.var(values, axis=0)
             # Compute the standard error of the *bootstrap sample* of the mean.
             # Note that this is different from the standard deviation of a single set.
             # See page 107 of "All of Statistics" (Wasserman).
-            std_err = np.sqrt(var / len(results_k))
+            std_err = np.sqrt(var / len(values))
             results[mode][k] = mean.tolist()  # Convert to list for JSON.
-            results[mode][k + '_var'] = var.tolist()  # Convert to list for JSON.
+            results[mode][k + '_var'] = var.tolist()
             results[mode][k + '_std_err'] = std_err.tolist()
     return results
 
