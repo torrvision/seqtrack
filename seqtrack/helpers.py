@@ -5,6 +5,7 @@ import functools
 import json
 import numpy as np
 import os
+import sys
 import tempfile
 import time
 from PIL import Image
@@ -394,3 +395,78 @@ def quote_list(x):
 #     # Create a dictionary from each.
 #     # [[x0, y0], [x1, y1]] => [{'x': x0, 'y': y0}, {'x': x1, 'y': y1}]
 #     return [dict(zip(keys, vals)) for vals in value_lists]
+
+
+class ProgressMeter(object):
+
+    def __init__(self, interval_num=0, interval_time=0, num_to_print=0, print_func=None):
+        self._interval_num = interval_num
+        self._interval_time = interval_time
+        self._num_to_print = num_to_print
+        self._print_func = print_func or default_print_func
+
+    def __call__(self, elems):
+        self._num = len(elems)
+        self._iter = iter(elems)
+        self._count = 0
+        self._start = time.time()
+        self._prev_num = None
+        self._prev_time = None
+        self._prev_progress = None
+        return self
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            elem = next(self._iter)
+            self._increment()
+            return elem
+        except StopIteration:
+            self._increment()
+            raise
+
+    next = __next__  # For Python 2
+
+    def _progress(self):
+        return int(self._count * self._num_to_print / self._num)
+
+    def _to_print(self):
+        if self._count == self._num:
+            return True
+        if self._interval_num:
+            if self._prev_num is None or self._count - self._prev_num >= self._interval_num:
+                return True
+        if self._interval_time:
+            if self._prev_time is None or time.time() - self._prev_time >= self._interval_time:
+                return True
+        if self._num_to_print:
+            if self._prev_progress is None or self._progress() - self._prev_progress >= 1:
+                return True
+        return False
+
+    def _increment(self):
+        if self._to_print():
+            now = time.time()
+            self._print_func(self._count, self._num, now - self._start)
+            self._prev_num = self._count
+            self._prev_time = now
+            self._prev_progress = self._progress()
+        self._count += 1
+
+
+def default_print_func(count, num, dur):
+    if count == 0:
+        return
+    percent = float(count) / num * 100
+    total = float(num) / count * dur
+    rem = total - dur
+    progress_str = '{:3.0f}% ({:d}/{:d}); total time {}'.format(
+        percent, count, num,
+        str(datetime.timedelta(seconds=round(dur))))
+    if count < num:
+        progress_str += '; remaining {} of {}'.format(
+            str(datetime.timedelta(seconds=round(rem))),
+            str(datetime.timedelta(seconds=round(total))))
+    print >>sys.stderr, progress_str

@@ -2,7 +2,7 @@ import pdb
 import numpy as np
 import sys
 import os
-import progressbar
+# import progressbar
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +12,7 @@ from PIL import Image
 
 from seqtrack import draw
 from seqtrack import data
+from seqtrack import helpers
 from seqtrack import visualize as visualize_pkg
 from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to, to_nested_tuple
 from seqtrack.helpers import escape_filename
@@ -193,15 +194,13 @@ def _single_to_batch(x, batch_size):
 
 
 def _make_progress_bar():
-    return progressbar.ProgressBar(widgets=[
-        progressbar.SimpleProgress(format='sequence %(value_s)s/%(max_value_s)s'), ' ',
-        '(', progressbar.Percentage(), ') ',
-        progressbar.Bar(), ' ',
-        progressbar.Timer(), ' (', progressbar.ETA(format_finished='ETA: Complete'), ')',
-    ])
-    # pbar = ProgressBar(maxval=len(sequences),
-    #         widgets=['sequence ', Counter(), '/{} ('.format(len(sequences)),
-    #             Percentage(), ') ', Bar(), ' ', ETA()]).start()
+    # return progressbar.ProgressBar(widgets=[
+    #     progressbar.SimpleProgress(format='sequence %(value_s)s/%(max_value_s)s'), ' ',
+    #     '(', progressbar.Percentage(), ') ',
+    #     progressbar.Bar(), ' ',
+    #     progressbar.Timer(), ' (', progressbar.ETA(format_finished='ETA: Complete'), ')',
+    # ])
+    return helpers.ProgressMeter(interval_time=10, num_to_print=10)
 
 
 def evaluate(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
