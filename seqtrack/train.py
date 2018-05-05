@@ -72,6 +72,11 @@ def parse_arguments():
         '--eval_datasets', nargs='+', help='dataset on which to evaluate tracker (list)',
         type=str, default=['ilsvrc_val', 'otb_50'])
     parser.add_argument(
+        '--pool_datasets', type=str, nargs='+',
+        default=['tc128_ce', 'dtb70', 'uav123', 'nuspro'],
+        help='datasets to combine for pool set')
+    parser.add_argument('--pool_split', type=float, default=0.8, help='training fraction')
+    parser.add_argument(
         '--eval_tre_num', type=int, default=3,
         help='number of points from which to start tracker in evaluation (full sampler only)')
     parser.add_argument(
@@ -277,6 +282,12 @@ def main():
         args.eval_datasets)))
     logger.info('load datasets: %s', helpers.quote_list(dataset_names))
 
+    # If 'pool_train' or 'pool_val' are in dataset_names, replace them with the pool datasets.
+    use_pool = any(x.startswith('pool') for x in dataset_names)
+    if use_pool:
+        dataset_names = [x for x in dataset_names if not x.startswith('pool')]
+        dataset_names += args.pool_datasets
+
     if args.untar:
         datasets = data.untar_and_load_all(
             args.tar_dir, args.tmp_data_dir, args.preproc, dataset_names,
@@ -285,6 +296,16 @@ def main():
         datasets = {
             name: data.load(args.data_dir, args.preproc, name,
                             cache=True, cache_dir=args.data_cache_dir) for name in datasets}
+
+    if use_pool:
+        # Add pool_train and pool_val to datasets.
+        # Split the datasets into train and val.
+        pool_splits = {
+            name: split_dataset(datasets[name], [args.pool_split, 1 - args.pool_split], seed=0)
+            for name in args.pool_datasets}
+        # Concat the individual train and val datasets.
+        datasets['pool_train'] = data.Concat({x: pool_splits[x][0] for x in args.pool_datasets})
+        datasets['pool_val'] = data.Concat({x: pool_splits[x][1] for x in args.pool_datasets})
 
     frame_sampler_presets = {
         'full': partial(sample.FrameSampler, kind='full'),

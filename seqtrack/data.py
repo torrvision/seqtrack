@@ -27,10 +27,12 @@ The function untar_and_load_all() installs and loads the metadata for several da
 '''
 
 import msgpack
+import numpy as np
 import os
 import subprocess
 import time
 from functools import partial
+from itertools import chain
 
 import logging
 logger = logging.getLogger(__name__)
@@ -240,6 +242,10 @@ class Concat(object):
     '''Represents the concatenation of multiple datasets as one dataset.'''
 
     def __init__(self, datasets):
+        '''
+        Args:
+            datasets: Dict that maps string to dataset.
+        '''
         self.datasets = datasets
 
     def tracks(self):
@@ -273,6 +279,28 @@ class Concat(object):
         return dataset_id, internal_id
 
 
+class Subset(object):
+
+    def __init__(self, dataset, track_subset):
+        self.dataset = dataset
+        self.track_subset = track_subset
+
+    def tracks(self):
+        return self.track_subset
+
+    def video(self, track_id):
+        return self.dataset.video(track_id)
+
+    def labels(self, track_id):
+        return self.dataset.labels(internal_track_id)
+
+    def image_file(self, video_id, time):
+        return self.dataset.image_file(video_id, time)
+
+    def aspect(self, video_id):
+        return self.dataset.aspect(video_id)
+
+
 def get_videos(metadata):
     return sorted(set(map(metadata.video, metadata.tracks())))
 
@@ -282,3 +310,29 @@ def get_tracks_by_video(metadata):
     for track_id in metadata.tracks():
         track_ids.setdefault(metadata.video(track_id), []).append(track_id)
     return track_ids
+
+
+def split_dataset(dataset, pvals, seed=0):
+    # Map from video_id to list of track_ids.
+    tracks_by_video = get_tracks_by_video(dataset)
+    videos = sorted(tracks_by_video.keys())
+    rand = np.random.RandomState(seed)
+    rand.shuffle(videos, seed)
+    video_subsets = split_list(videos, pvals)
+    assert sum(map(len, video_subsets)) == len(videos)
+    track_subsets = [
+        sorted(chain(*[tracks_by_video[video] for video in video_subsets[i]]))
+        for i in range(len(video_subsets))]
+    assert sum(map(len, track_subsets)) == len(dataset.tracks())
+    return [Subset(dataset, track_subsets[i]) for i in range(len(track_subsets))]
+
+
+def split_list(x, pvals):
+    n = len(x)
+    pvals = np.asfarray(pvals) / np.sum(pvals)
+    stops = np.round(np.cumsum(pvals) * n).astype(np.int).tolist()
+    starts = [0] + stops
+    ys = []
+    for start, stop in zip(starts, stops):
+        ys.append(x[start:stop])
+    return ys
