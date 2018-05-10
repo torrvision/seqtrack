@@ -292,7 +292,7 @@ class Subset(object):
         return self.dataset.video(track_id)
 
     def labels(self, track_id):
-        return self.dataset.labels(internal_track_id)
+        return self.dataset.labels(track_id)
 
     def image_file(self, video_id, time):
         return self.dataset.image_file(video_id, time)
@@ -317,7 +317,7 @@ def split_dataset(dataset, pvals, seed=0):
     tracks_by_video = get_tracks_by_video(dataset)
     videos = sorted(tracks_by_video.keys())
     rand = np.random.RandomState(seed)
-    rand.shuffle(videos, seed)
+    rand.shuffle(videos)
     video_subsets = split_list(videos, pvals)
     assert sum(map(len, video_subsets)) == len(videos)
     track_subsets = [

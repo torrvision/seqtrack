@@ -301,7 +301,7 @@ def main():
         # Add pool_train and pool_val to datasets.
         # Split the datasets into train and val.
         pool_splits = {
-            name: split_dataset(datasets[name], [args.pool_split, 1 - args.pool_split], seed=0)
+            name: data.split_dataset(datasets[name], [args.pool_split, 1 - args.pool_split], seed=0)
             for name in args.pool_datasets}
         # Concat the individual train and val datasets.
         datasets['pool_train'] = data.Concat({x: pool_splits[x][0] for x in args.pool_datasets})
