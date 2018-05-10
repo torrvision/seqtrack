@@ -406,9 +406,9 @@ class ProgressMeter(object):
         self._print_func = print_func or default_print_func
 
     def __call__(self, elems):
-        self._num = len(elems)
+        self._n = len(elems)
         self._iter = iter(elems)
-        self._count = 0
+        self._i = 0
         self._start = time.time()
         self._prev_num = None
         self._prev_time = None
@@ -430,13 +430,13 @@ class ProgressMeter(object):
     next = __next__  # For Python 2
 
     def _progress(self):
-        return int(self._count * self._num_to_print / self._num)
+        return int(self._i * self._num_to_print / self._n)
 
     def _to_print(self):
-        if self._count == self._num:
+        if self._i == self._n:
             return True
         if self._interval_num:
-            if self._prev_num is None or self._count - self._prev_num >= self._interval_num:
+            if self._prev_num is None or self._i - self._prev_num >= self._interval_num:
                 return True
         if self._interval_time:
             if self._prev_time is None or time.time() - self._prev_time >= self._interval_time:
@@ -449,24 +449,28 @@ class ProgressMeter(object):
     def _increment(self):
         if self._to_print():
             now = time.time()
-            self._print_func(self._count, self._num, now - self._start)
-            self._prev_num = self._count
+            self._print_func(self._i, self._n, now - self._start)
+            self._prev_num = self._i
             self._prev_time = now
             self._prev_progress = self._progress()
-        self._count += 1
+        self._i += 1
 
 
-def default_print_func(count, num, dur):
-    if count == 0:
+def default_print_func(i, n, time_elapsed):
+    if i == 0:
         return
-    percent = float(count) / num * 100
-    total = float(num) / count * dur
-    rem = total - dur
-    progress_str = '{:3.0f}% ({:d}/{:d}); total time {}'.format(
-        percent, count, num,
-        str(datetime.timedelta(seconds=round(dur))))
-    if count < num:
+    time_per_elem = float(time_elapsed) / i
+    if n is None:
+        progress_str = '{:d}'.format(i)
+    else:
+        percent = float(i) / n * 100
+        time_total = float(n) * time_per_elem
+        progress_str = '{:3.0f}% ({:d}/{:d})'.format(percent, i, n)
+    progress_str += '; time elapsed {} ({:.3g} sec each)'.format(
+        str(datetime.timedelta(seconds=round(time_elapsed))), time_per_elem)
+    if n is not None and i < n:
+        time_rem = time_total - time_elapsed
         progress_str += '; remaining {} of {}'.format(
-            str(datetime.timedelta(seconds=round(rem))),
-            str(datetime.timedelta(seconds=round(total))))
+            str(datetime.timedelta(seconds=round(time_rem))),
+            str(datetime.timedelta(seconds=round(time_total))))
     print >>sys.stderr, progress_str

@@ -200,7 +200,7 @@ def _make_progress_bar():
     #     progressbar.Bar(), ' ',
     #     progressbar.Timer(), ' (', progressbar.ETA(format_finished='ETA: Complete'), ')',
     # ])
-    return helpers.ProgressMeter(interval_time=10, num_to_print=10)
+    return helpers.ProgressMeter(interval_time=60)
 
 
 def evaluate(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
