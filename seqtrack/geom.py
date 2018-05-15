@@ -91,13 +91,17 @@ def rect_iou(a_rect, b_rect, name='rect_iou'):
     # TODO: Add assertion?
     with tf.name_scope(name) as scope:
         intersect_min, intersect_max = rect_min_max(rect_intersect(a_rect, b_rect))
-        intersect_area = tf.reduce_prod(tf.maximum(0.0, intersect_max - intersect_min), axis=-1)
+        intersect_vol = tf.reduce_prod(tf.maximum(0.0, intersect_max - intersect_min), axis=-1)
         a_min, a_max = rect_min_max(a_rect)
         b_min, b_max = rect_min_max(b_rect)
-        a_area = tf.reduce_prod(tf.maximum(0.0, a_max - a_min), axis=-1)
-        b_area = tf.reduce_prod(tf.maximum(0.0, b_max - b_min), axis=-1)
-        union_area = a_area + b_area - intersect_area
-        return intersect_area / tf.maximum(union_area, EPSILON)
+        a_vol = tf.reduce_prod(tf.maximum(0.0, a_max - a_min), axis=-1)
+        b_vol = tf.reduce_prod(tf.maximum(0.0, b_max - b_min), axis=-1)
+        union_vol = a_vol + b_vol - intersect_vol
+        # iou = intersect_vol / tf.maximum(union_vol, EPSILON)
+        # iou = intersect_vol / union_vol
+        iou = tf.where(intersect_vol == 0.0, tf.zeros_like(intersect_vol),
+                       intersect_vol / union_vol)
+        return tf.where(tf.is_nan(iou), tf.zeros_like(iou), iou)
 
 
 def rect_intersect(a_rect, b_rect, name='rect_intersect'):

@@ -948,18 +948,29 @@ def _evaluate(args, global_step, eval_id, sess, model_inst, eval_sequences):
     result_file = os.path.join(args.path_output, 'assess', eval_id, iter_id + '.json')
     result = helpers.cache_json(
         result_file,
-        lambda: evaluate.evaluate(
+        lambda: evaluate.evaluate_model(
             sess, model_inst, eval_sequences,
             # visualize=visualizer.visualize if args.save_videos else None,
             visualize=True, vis_dir=vis_dir, save_frames=args.save_frames,
             use_gt=args.use_gt_eval, tre_num=args.eval_tre_num),
         makedir=True)
-    assert 'OPE' in result
-    modes = [mode for mode in ['OPE', 'TRE'] if mode in result]
+
+    modes = ['OPE', 'TRE_{}'.format(args.eval_tre_num)]
+    metric_keys = ['iou_seq_mean', 'iou_frame_mean', 'iou_success_0.5']
     for mode in modes:
-        print 'mode {}: IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
-            mode, result[mode]['iou_mean'], result[mode]['auc'],
-            result[mode]['cle_mean'], result[mode]['cle_representative'])
+        for metric_key in metric_keys:
+            full_key = mode + '_' + metric_key
+            var_key = full_key + '_var'
+            if full_key in result:
+                value = '{:.3g}'.format(result[full_key])
+                if var_key in result:
+                    value += ' (1.96 sigma = {:.3g})'.format(1.96 * math.sqrt(result[var_key]))
+            else:
+                value += '--'
+            print '{} {}: {}'.format(mode, metric_key, value)
+        # print 'mode {}: IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
+        #     mode, result[mode]['iou_mean'], result[mode]['auc'],
+        #     result[mode]['cle_mean'], result[mode]['cle_representative'])
 
 
 def _is_pair(x):

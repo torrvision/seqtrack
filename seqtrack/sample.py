@@ -246,7 +246,9 @@ def _rect_from_label(label):
     if 'rect' not in label:
         raise ValueError('label does not contain rect')
     rect = label['rect']
-    return [rect['xmin'], rect['ymin'], rect['xmax'], rect['ymax']]
+    min_pt = [rect['xmin'], rect['ymin']]
+    max_pt = [rect['xmax'], rect['ymax']]
+    return geom_np.make_rect(min_pt, max_pt)
 
 
 def _invalid_rect():

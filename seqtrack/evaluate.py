@@ -1,16 +1,16 @@
-import pdb
 import numpy as np
-import sys
 import os
-# import progressbar
 import shutil
 import subprocess
 import tempfile
 import time
-
+from fractions import gcd
 from PIL import Image
 
-from seqtrack import draw
+import logging
+logger = logging.getLogger(__name__)
+
+from seqtrack import assess
 from seqtrack import data
 from seqtrack import helpers
 from seqtrack import visualize as visualize_pkg
@@ -203,70 +203,62 @@ def _make_progress_bar():
     return helpers.ProgressMeter(interval_time=60)
 
 
-def evaluate(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
+def evaluate_model(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
     '''
     Returns:
         A dictionary that contains evaluation results.
     '''
-    if not tre_num or tre_num < 1:
-        tre_num = 1
-    sequences = list(sequences)
-    sequence_tre_results = []
+    subseqs, tre_names = _split_tre_all(sequences, tre_num)
+    predictions = {}
     bar = _make_progress_bar()
-    for i, full_sequence in enumerate(bar(sequences)):
-        tre_results = []
+    for name in bar(subseqs.keys()):
+        # TODO: Cache.
+        # If we use a subset of sequences, we need to ensure that the subset is the same?
+        # Could re-seed video sampler with global step number?
+        predictions[name] = track(sess, model_inst, subseqs[name], use_gt=use_gt, **kwargs)
+    return assess.assess_dataset(subseqs, predictions, tre_num, tre_names)
+
+
+def _split_tre_all(sequences, tre_num):
+    # sequences = list(sequences)
+    subseqs = {}
+    names = {}
+    for sequence in sequences:
+        seq_name = sequence['video_name']
         for tre_ind in range(tre_num):
-            sequence = extract_tre_sequence(full_sequence, tre_ind, tre_num)
-            if sequence is None:
-                # raise ValueError('could not extract TRE sequence')
+            try:
+                subseq = _extract_tre_sequence(sequence, tre_ind, tre_num)
+            except RuntimeError as ex:
+                logger.warning('sequence \'%s\': could not extract TRE sequence %d of %d: %s',
+                               sequence['video_name'], tre_ind, tre_num, str(ex))
                 continue
-            if len(sequence['image_files']) < 2:
-                #raise ValueError('sequence shorter than 2 frames')
-                continue
-            is_valid = sequence['label_is_valid']
-            # Count number of valid labels after first frame (ground truth).
-            num_valid = sum([1 for x in is_valid[1:] if x])
-            if num_valid < 1:
-                #raise ValueError('no frames with labels after first frame')
-                continue
-            #print 'sequence {} of {}'.format(i+1, len(sequences))
-            # pred, hmap_pred = track(sess, model_inst, sequence, use_gt, **kwargs)
-            pred = track(sess, model_inst, sequence, use_gt, **kwargs)
-            # if visualize:
-            #     visualize(sequence['video_name'], sequence, pred, hmap_pred, save_frames)
-            gt = np.array(sequence['labels'])
-            # Convert to original image co-ordinates.
-            # pred = _unnormalize_rect(pred, sequence['original_image_size'])
-            # gt   = _unnormalize_rect(gt,   sequence['original_image_size'])
-            tre_results.append(evaluate_track(pred, gt, is_valid))
-        sequence_tre_results.append(tre_results)
-
-    results = {}
-    modes = ['OPE'] + (['TRE'] if tre_num > 1 else [])
-    for mode in modes:
-        results[mode] = {}
-        # Convert from lists of dicts to dict
-        keys = sequence_tre_results[0][0].keys()
-        for k in keys:
-            # TODO: Store all results and compute this later!
-            # (More flexible but breaks backwards compatibility.)
-            if mode == 'OPE':
-                values = [r[0][k] for r in sequence_tre_results]
-            elif mode == 'TRE':
-                values = [np.mean([r_i[k] for r_i in r]) for r in sequence_tre_results]
-            mean = np.mean(values, axis=0)
-            var = np.var(values, axis=0)
-            # Compute the standard error of the *bootstrap sample* of the mean.
-            # Note that this is different from the standard deviation of a single set.
-            # See page 107 of "All of Statistics" (Wasserman).
-            std_err = np.sqrt(var / len(values))
-            results[mode][k] = mean.tolist()  # Convert to list for JSON.
-            results[mode][k + '_var'] = var.tolist()
-            results[mode][k + '_std_err'] = std_err.tolist()
-    return results
+            subseq_name = subseq['video_name']
+            if subseq_name in subseqs:
+                raise RuntimeError('name already exists: \'{}\''.format(subseq_name))
+            subseqs[subseq_name] = subseq
+            names.setdefault(seq_name, []).append(subseq_name)
+    return subseqs, names
 
 
-def extract_tre_sequence(seq, ind, num):
+def _tre_name(seq_name, i, n):
+    if i == 0:
+        return seq_name
+    i, n = _simplify_fraction(i, n)
+    return '{}_tre_{}_{}'.format(seq_name, i, n)
+
+
+def _simplify_fraction(i, n):
+    if i == 0:
+        assert n != 0
+        return 0, 1
+    g = gcd(i, n)
+    return i / g, n / g
+
+
+def _extract_tre_sequence(seq, ind, num):
+    if ind == 0:
+        return seq
+
     is_valid = seq['label_is_valid']
     num_frames = len(is_valid)
     valid_frames = [t for t in range(num_frames) if is_valid[t]]
@@ -277,99 +269,25 @@ def extract_tre_sequence(seq, ind, num):
     try:
         start_t = next(t for t in valid_frames if t >= start_t)
     except StopIteration:
-        return None
+        raise RuntimeError('no frames with labels')
 
-    KEYS_SEQ = ['image_files', 'viewports', 'labels', 'label_is_valid']
-    KEYS_NON_SEQ = ['aspect']
-    subseq = {}
-    subseq.update({k: seq[k][start_t:] for k in KEYS_SEQ})
-    subseq.update({k: seq[k] for k in KEYS_NON_SEQ})
-    subseq['video_name'] = seq['video_name'] + ('-seg{}'.format(ind) if ind > 0 else '')
+    subseq = _extract_interval(seq, start_t, None)
+    # subseq['video_name'] = seq['video_name'] + ('-seg{}'.format(ind) if ind > 0 else '')
+    subseq['video_name'] = _tre_name(seq['video_name'], ind, num)
+
+    # if len(subseq['image_files']) < 2:
+    #     raise RuntimeError('sequence shorter than two frames')
+    # Count number of valid labels after first frame (ground truth).
+    num_valid = sum(1 for x in subseq['label_is_valid'][1:] if x)
+    if num_valid < 1:
+        raise RuntimeError('no frames with labels after first frame')
     return subseq
 
 
-def _normalize_rect(r, size):
-    width, height = size
-    return r / np.array([width, height, width, height])
-
-
-def _unnormalize_rect(r, size):
-    width, height = size
-    return r * np.array([width, height, width, height])
-
-
-def evaluate_track(pred, gt, is_valid):
-    '''Measures the quality of a track compared to ground-truth.
-
-    Args:
-        pred: Numpy array with shape [t, 4]
-        gt: Numpy array with shape [t+1, 4]
-        is_valid: Iterable of length [t]
-    '''
-    # take only valid to compute (i.e., from frame 1)
-    gt = gt[1:]
-    is_valid = np.where(is_valid[1:])
-    gt = gt[is_valid]
-    pred = pred[is_valid]
-
-    # iou and cle
-    iou = _compute_iou(pred, gt)
-    cle = _compute_cle(pred, gt)
-
-    # Success plot: 1. iou, 2. success rates, 3. area under curve
-    success_thresholds = np.append(np.arange(0, 1, 0.05), 1)
-    success_thresholds = np.tile(success_thresholds, (iou.size, 1))
-    success_table = iou[:, np.newaxis] > success_thresholds
-    iou_mean = np.mean(iou)
-    success_rates = np.mean(success_table, axis=0)
-    auc = np.mean(success_rates)
-
-    # Precision plot: 1. cle, 2. precision rates, 3. representative precision error
-    precision_thresholds = np.arange(0, 60, 5)
-    precision_thresholds_rep = np.tile(precision_thresholds, (cle.size, 1))
-    precision_table = cle[:, np.newaxis] < precision_thresholds_rep
-    representative_precision_threshold = 20  # benchmark
-    cle_mean = np.mean(cle)
-    precision_rates = np.mean(precision_table, axis=0)
-    cle_representative = precision_rates[
-        np.where(precision_thresholds == representative_precision_threshold)][0]
-
-    results = {}
-    results['iou_mean'] = iou_mean
-    results['success_rates'] = success_rates
-    results['auc'] = auc
-    results['cle_mean'] = cle_mean
-    results['precision_rates'] = precision_rates
-    results['cle_representative'] = cle_representative
-    return results
-
-
-def _compute_iou(boxA, boxB):
-    # determine the (x, y)-coordinates of the intersection rectangle
-    xA = np.maximum(boxA[:, 0], boxB[:, 0])
-    yA = np.maximum(boxA[:, 1], boxB[:, 1])
-    xB = np.minimum(boxA[:, 2], boxB[:, 2])
-    yB = np.minimum(boxA[:, 3], boxB[:, 3])
-
-    # compute the area of intersection rectangle
-    interArea = np.maximum((xB - xA), 0) * np.maximum((yB - yA), 0)
-
-    # compute the area of both the prediction and ground-truth rectangles
-    boxAArea = ((boxA[:, 2] - boxA[:, 0]) * (boxA[:, 3] - boxA[:, 1]))
-    boxBArea = ((boxB[:, 2] - boxB[:, 0]) * (boxB[:, 3] - boxB[:, 1]))
-
-    # compute the intersection over union by taking the intersection area and
-    # dividing it by the sum of prediction + ground-truth areas - the
-    # interesection area
-    iou = interArea / (boxAArea + boxBArea - interArea)
-    return iou.astype(np.float32)
-
-
-def _compute_cle(boxA, boxB):
-    # compute center location error
-    centerA_x = (np.array(boxA[:, 0]) + np.array(boxA[:, 2])) / 2
-    centerA_y = (np.array(boxA[:, 1]) + np.array(boxA[:, 3])) / 2
-    centerB_x = (np.array(boxB[:, 0]) + np.array(boxB[:, 2])) / 2
-    centerB_y = (np.array(boxB[:, 1]) + np.array(boxB[:, 3])) / 2
-    cle = np.sqrt((centerA_x - centerB_x)**2 + (centerA_y - centerB_y)**2)
-    return cle
+def _extract_interval(seq, start, stop):
+    KEYS_SEQ = ['image_files', 'viewports', 'labels', 'label_is_valid']
+    KEYS_NON_SEQ = ['aspect']
+    subseq = {}
+    subseq.update({k: seq[k][start:stop] for k in KEYS_SEQ})
+    subseq.update({k: seq[k] for k in KEYS_NON_SEQ})
+    return subseq
