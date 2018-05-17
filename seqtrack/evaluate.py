@@ -208,7 +208,7 @@ def evaluate_model(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwarg
     Returns:
         A dictionary that contains evaluation results.
     '''
-    subseqs, tre_names = _split_tre_all(sequences, tre_num)
+    subseqs, tre_groups = _split_tre_all(sequences, tre_num)
     predictions = {}
     bar = _make_progress_bar()
     for name in bar(subseqs.keys()):
@@ -216,31 +216,55 @@ def evaluate_model(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwarg
         # If we use a subset of sequences, we need to ensure that the subset is the same?
         # Could re-seed video sampler with global step number?
         predictions[name] = track(sess, model_inst, subseqs[name], use_gt=use_gt, **kwargs)
-    return assess.assess_dataset(subseqs, predictions, tre_num, tre_names)
+    return assess.assess_dataset(subseqs, predictions, tre_groups)
 
 
 def _split_tre_all(sequences, tre_num):
-    # sequences = list(sequences)
+    sequences = list(sequences)
+
     subseqs = {}
-    names = {}
     for sequence in sequences:
-        seq_name = sequence['video_name']
         for tre_ind in range(tre_num):
+            # subseq_name = subseq['video_name']
+            subseq_name = _tre_seq_name(sequence['video_name'], tre_ind, tre_num)
+            if subseq_name in subseqs:
+                raise RuntimeError('name already exists: \'{}\''.format(subseq_name))
             try:
-                subseq = _extract_tre_sequence(sequence, tre_ind, tre_num)
+                subseq = _extract_tre_sequence(sequence, tre_ind, tre_num, subseq_name)
             except RuntimeError as ex:
                 logger.warning('sequence \'%s\': could not extract TRE sequence %d of %d: %s',
                                sequence['video_name'], tre_ind, tre_num, str(ex))
-                continue
-            subseq_name = subseq['video_name']
-            if subseq_name in subseqs:
-                raise RuntimeError('name already exists: \'{}\''.format(subseq_name))
+                # Still insert None if sequence could not be extracted.
+                subseq = None
             subseqs[subseq_name] = subseq
-            names.setdefault(seq_name, []).append(subseq_name)
-    return subseqs, names
+
+    # Build sequence groups for OPE and TRE mode.
+    # TODO: Could add all integer factors here?
+    tre_group_nums = set([1, tre_num])  # If tre_num is 1, then only OPE.
+    tre_groups = {}
+    for tre_group_num in tre_group_nums:
+        mode = _mode_name(tre_group_num)
+        tre_groups[mode] = {}
+        for sequence in sequences:
+            seq_name = sequence['video_name']
+            tre_groups[mode][seq_name] = []
+            for tre_ind in range(tre_group_num):
+                subseq_name = _tre_seq_name(seq_name, tre_ind, tre_group_num)
+                if subseqs[subseq_name] is not None:
+                    tre_groups[mode][seq_name].append(subseq_name)
+    return subseqs, tre_groups
 
 
-def _tre_name(seq_name, i, n):
+def _mode_name(tre_num):
+    if tre_num == 1:
+        return 'OPE'
+    elif tre_num > 1:
+        return 'TRE_{}'.format(tre_num)
+    else:
+        raise RuntimeError('tre_num must be at least one: {}'.format(tre_num))
+
+
+def _tre_seq_name(seq_name, i, n):
     if i == 0:
         return seq_name
     i, n = _simplify_fraction(i, n)
@@ -255,7 +279,7 @@ def _simplify_fraction(i, n):
     return i / g, n / g
 
 
-def _extract_tre_sequence(seq, ind, num):
+def _extract_tre_sequence(seq, ind, num, subseq_name):
     if ind == 0:
         return seq
 
@@ -273,7 +297,7 @@ def _extract_tre_sequence(seq, ind, num):
 
     subseq = _extract_interval(seq, start_t, None)
     # subseq['video_name'] = seq['video_name'] + ('-seg{}'.format(ind) if ind > 0 else '')
-    subseq['video_name'] = _tre_name(seq['video_name'], ind, num)
+    subseq['video_name'] = subseq_name
 
     # if len(subseq['image_files']) < 2:
     #     raise RuntimeError('sequence shorter than two frames')

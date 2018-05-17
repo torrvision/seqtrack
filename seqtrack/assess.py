@@ -8,20 +8,21 @@ logger = logging.getLogger(__name__)
 from seqtrack import geom_np
 
 
-def assess_dataset(seqs, predictions, tre_num=1, tre_subseqs=None):
+def assess_dataset(seqs, predictions, tre_groups=None):
     '''Assesses predictions for an entire dataset.
 
     Args:
         seqs: Dict that maps subseq name to sequence.
         predictions: Dict that maps subseq name to predictions.
-        tre_subseqs: Dict that maps seq name to list of subseq names.
+        tre_groups: Dict that maps protocol name (e.g. OPE, TRE_3) to:
+            dict that maps seq name to list of subseq names.
 
     Returns:
         Dict of scalar metrics.
     '''
-    if tre_subseqs is None:
-        # Use each sequence by itself.
-        tre_subseqs = {name: [name] for name in seqs.keys()}
+    if tre_groups is None:
+        # Use each sequence by itself and call it OPE mode.
+        tre_groups = {'OPE': {name: [name] for name in seqs.keys()}}
 
     # Compute per-frame metrics.
     frame_metrics = {
@@ -31,23 +32,10 @@ def assess_dataset(seqs, predictions, tre_num=1, tre_subseqs=None):
         name: assess_sequence(seqs[name], predictions[name], frame_metrics[name])
         for name in seqs.keys()}
 
-    # TODO: Could compute for all factors of tre_num?
-    # That is, if tre_num = 10, report 1, 2, 5, 10.
-    modes = ['OPE']
-    if tre_num > 1:
-        # TODO: Ugly to pass tre_num just for this purpose?
-        modes.append('TRE_{}'.format(tre_num))
-
     metrics = {}
-    for mode in modes:
-        if mode == 'OPE':
-            # Only use original sequence (should have same name).
-            mode_subseqs = {seq: [seq] for seq in tre_subseqs.keys()}
-        else:
-            # Use all TRE splits.
-            mode_subseqs = tre_subseqs
-        mode_metrics = _summarize(frame_metrics, sequence_metrics, mode_subseqs)
-        # Add metrics for OPE and TRE mode.
+    for mode in tre_groups:
+        mode_metrics = _summarize(frame_metrics, sequence_metrics, tre_groups[mode])
+        # Add metrics for all modes.
         for key in mode_metrics:
             metrics[mode + '_' + key] = mode_metrics[key]
     return metrics
@@ -85,7 +73,7 @@ def assess_frames(sequence, pred_rects):
     }
 
 
-IOU_THRESHOLDS = [0.5]
+IOU_THRESHOLDS = [0.5, 0.7]
 AUC_NUM_STEPS = 1000
 SEQUENCE_METRICS = (
     FRAME_METRICS +
@@ -108,14 +96,14 @@ def assess_sequence(sequence, predictions, frame_metrics):
     return metrics
 
 
-def _summarize(frame_metrics, sequence_metrics, tre_subseqs):
+def _summarize(frame_metrics, sequence_metrics, tre_groups):
     '''
     Args:
-        tre_subseqs: Dict that maps seq name to list of subseq names.
+        tre_groups: Dict that maps seq name to list of subseq names.
             This can be used to switch between OPE and TRE modes.
     '''
     metrics = {}
-    all_subseqs = list(chain(*tre_subseqs.values()))
+    all_subseqs = list(chain(*tre_groups.values()))
     # Compute the per-frame averages.
     for key in FRAME_METRICS:
         # Concatenate frames from all subsequences and take mean.
@@ -128,15 +116,15 @@ def _summarize(frame_metrics, sequence_metrics, tre_subseqs):
                         for subseq_name in all_subseqs}
         # Take mean over all subsequences within a sequence (in OPE mode, just one).
         seq_means = [
-            np.mean([subseq_means[subseq] for subseq in tre_subseqs[seq]])
-            for seq in tre_subseqs.keys()]
+            np.mean([subseq_means[subseq] for subseq in tre_groups[seq]])
+            for seq in tre_groups.keys()]
         metrics[key + '_seq_mean'] = np.mean(seq_means)
         # Report raw variance for debug.
         metrics[key + '_seq_var'] = np.var(seq_means)
         # Use the bootstrap estimate for the variance of the mean of a set.
         # Note that this is different from the variance of a single set.
         # See page 107 of "All of Statistics" (Wasserman).
-        metrics[key + '_seq_mean_var'] = np.var(seq_means) / len(tre_subseqs)
+        metrics[key + '_seq_mean_var'] = np.var(seq_means) / len(tre_groups)
     # Add new metrics.
     all_iou = np.concatenate([frame_metrics[subseq]['iou'] for subseq in all_subseqs])
     for thr in IOU_THRESHOLDS:

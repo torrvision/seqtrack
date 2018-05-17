@@ -30,7 +30,13 @@ class TestAssess(unittest.TestCase):
     def test_assess_dataset(self):
         num_seqs = 50
         seqs, preds = random_dataset_and_predictions(np.random.RandomState(0), num_seqs)
-        metrics = assess.assess_dataset(seqs, preds)
+        subseqs = {'OPE': {name: [name] for name in seqs.keys()}}
+        metrics = assess.assess_dataset(seqs, preds, subseqs)
+        self.assertLessEqual(0, metrics['OPE_iou_seq_mean'])
+        self.assertLessEqual(metrics['OPE_iou_seq_mean'], 1)
+        for key in metrics:
+            self.assertTrue(np.isscalar(metrics[key]),
+                            'not scalar \'{}\': {}'.format(key, metrics[key]))
 
 
 def random_sequence_and_predictions(rand, num_frames, min_size=0.1, max_size=0.5,
