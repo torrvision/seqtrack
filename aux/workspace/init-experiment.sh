@@ -62,11 +62,4 @@ fi
 
 ( cd "$dir" &&  ./create-experiment.sh ) || exit
 
-# TODO: Come up with a better place to put aux/ files? Maybe with data?
-aux_data_dir=seqtrack/aux
-if ! rsync -a "$orig_repo_dir/$aux_data_dir/" "$dir/repo/$aux_data_dir/" ; then
-    echo 'cannot copy auxiliary files'
-    exit 1
-fi
-
 echo "workspace: $dir"
