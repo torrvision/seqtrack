@@ -1,15 +1,16 @@
-import pdb
 import datetime
 import errno
 import functools
+import itertools
 import json
 import numpy as np
 import os
 import sys
 import tempfile
+import tensorflow as tf
 import time
 from PIL import Image
-import tensorflow as tf
+from contextlib import contextmanager
 
 import logging
 logger = logging.getLogger(__name__)
@@ -474,3 +475,67 @@ def default_print_func(i, n, time_elapsed):
             str(datetime.timedelta(seconds=round(time_rem))),
             str(datetime.timedelta(seconds=round(time_total))))
     print >>sys.stderr, progress_str
+
+
+def map_dict(f, items):
+    for k, v in items:
+        yield k, f(k, v)
+
+
+class CachedDictMapper(object):
+
+    def __init__(self, dir, codec=json, ext='.json', mapper=None):
+        mapper = mapper or map_dict
+        self._dir = dir
+        self._codec = codec
+        self._ext = ext
+        self._mapper = mapper
+
+    def __call__(self, func, items):
+        cache_filter = CacheFilter(self._dir, codec=self._codec, ext=self._ext)
+        uncached_items = cache_filter.filter(items)
+        uncached_results = self._mapper(func, uncached_items)
+        # Construct list here to deliberately not be lazy (write when available).
+        uncached_results = list(_dump_cache_for_each(uncached_results, self._dir,
+                                                     codec=self._codec, ext=self._ext))
+        # Combine cached and uncached results.
+        return itertools.chain(cache_filter.results, uncached_results)
+
+
+def _dump_cache_for_each(items, dir, codec=json, ext='.json'):
+    if not os.path.exists(dir):
+        os.makedirs(dir, 0755)
+    for k, v in items:
+        fname = os.path.join(dir, k + ext)
+        # TODO: Use atomic write.
+        with open_atomic_write(fname) as f:
+            codec.dump(v, f)
+        yield k, v
+
+
+@contextmanager
+def open_atomic_write(filename, mode=0644):
+    dir, basename = os.path.split(filename)
+    with tempfile.NamedTemporaryFile(delete=False, dir=dir, suffix=basename) as f:
+        yield f
+    os.chmod(f.name, mode)  # Default permissions are 600.
+    os.rename(f.name, filename)
+
+
+class CacheFilter(object):
+
+    def __init__(self, dir, codec=json, ext='.json'):
+        self.results = []
+        self._dir = dir
+        self._codec = codec
+        self._ext = ext
+
+    def filter(self, items):
+        for k, v in items:
+            fname = os.path.join(self._dir, k + self._ext)
+            if os.path.exists(fname):
+                with open(fname, 'r') as f:
+                    result = self._codec.load(f)
+                self.results.append((k, result))
+            else:
+                yield k, v

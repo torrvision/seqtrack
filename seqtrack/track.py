@@ -82,46 +82,5 @@ def main():
         # json.dump(rect_pred, sys.stdout)
 
 
-def add_tracker_arguments(parser):
-    # parser.add_argument(
-    #         '--frmsz', help='size of a square image', type=int, default=257)
-    parser.add_argument(
-        '--imwidth', type=int, default=640, help='image resolution')
-    parser.add_argument(
-        '--imheight', type=int, default=360, help='image resolution')
-    parser.add_argument(
-        '--ntimesteps', help='number of time steps for rnn',
-        type=int, default=1)
-
-    parser.add_argument(
-        '--model', help='model!',
-        type=str, default='')
-    parser.add_argument(
-        '--model_params', help='JSON string specifying model',
-        type=json.loads, default={})
-    # parser.add_argument(
-    #         '--cnn_model', help='pretrained CNN model',
-    #         type=str, default='custom')
-
-    # JV: Move these to the model.
-    # parser.add_argument(
-    #         '--search_scale', help='size of search space relative to target',
-    #         type=int, default=4)
-    # parser.add_argument(
-    #         '--target_scale', help='size of context relative to target',
-    #         type=int, default=1)
-    # parser.add_argument(
-    #         '--perspective', help='ic: image-centric, oc: object-centric',
-    #         type=str, default='oc')
-    # parser.add_argument(
-    #         '--aspect_method', help='method for fixing aspect ratio',
-    #         type=str, default='stretch',
-    #         choices=['stretch', 'area', 'perimeter'])
-
-    # parser.add_argument(
-    #         '--th_prob_stay', help='threshold probability to stay movement',
-    #         type=float, default=0.0)
-
-
 if __name__ == '__main__':
     main()

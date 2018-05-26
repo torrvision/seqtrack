@@ -3,6 +3,7 @@
 import tensorflow as tf
 import numpy as np
 
+from seqtrack import geom
 from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to
 
 EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect']

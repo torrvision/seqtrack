@@ -83,6 +83,8 @@ SUBSETS = {
     'vot2015': Subset('vot2015', trackdat.load_vot),
     'vot2016': Subset('vot2016', trackdat.load_vot),
     'vot2017': Subset('vot2017', trackdat.load_vot),
+    'vot2018': Subset('vot2018', trackdat.load_vot),
+    'vot2018_longterm': Subset('vot2018_longterm', trackdat.load_vot),
     'ytbb_train': Subset('ytbb', partial(trackdat.load_ytbb_sec, subset='train')),
     'ytbb_val': Subset('ytbb', partial(trackdat.load_ytbb_sec, subset='validation')),
 }

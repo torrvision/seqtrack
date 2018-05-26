@@ -139,8 +139,11 @@ def conv2d_rf(inputs, input_rfs, num_outputs, kernel_size, stride=1, padding='SA
     '''
     if input_rfs is None:
         input_rfs = {}
-    assert len(inputs.shape) == 4  # otherwise slim.conv2d does higher-dim convolution
-    outputs = slim.conv2d(inputs, num_outputs, kernel_size, stride, padding, **kwargs)
+    if inputs is not None:
+        assert len(inputs.shape) == 4  # otherwise slim.conv2d does higher-dim convolution
+        outputs = slim.conv2d(inputs, num_outputs, kernel_size, stride, padding, **kwargs)
+    else:
+        outputs = None
     rel_rf = _filter_rf(kernel_size, stride, padding)
     output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
     return outputs, output_rfs
@@ -150,7 +153,10 @@ def max_pool2d_rf(inputs, input_rfs, kernel_size, stride=2, padding='VALID', **k
     '''Wraps slim.max_pool2d to include receptive field calculation.'''
     if input_rfs is None:
         input_rfs = {}
-    outputs = slim.max_pool2d(inputs, kernel_size, stride, padding, **kwargs)
+    if inputs is not None:
+        outputs = slim.max_pool2d(inputs, kernel_size, stride, padding, **kwargs)
+    else:
+        outputs = None
     rel_rf = _filter_rf(kernel_size, stride, padding)
     output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
     return outputs, output_rfs

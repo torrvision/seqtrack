@@ -1,3 +1,6 @@
 [submodule "trackdat"]
 	path = trackdat
 	url = git@github.com:jvlmdr/trackdat.git
+[submodule "slurmproc"]
+	path = slurmproc
+	url = git@github.com:jvlmdr/slurmproc.git

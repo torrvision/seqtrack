@@ -39,6 +39,7 @@ class SiamFC(models_interface.IterModel):
             keep_uint8_range=False,  # Use input range of 255 instead of 1.
             feature_padding='VALID',
             feature_arch='alexnet',
+            increase_stride=None,
             feature_act='linear',
             enable_feature_bnorm=True,
             enable_template_mask=False,
@@ -80,6 +81,7 @@ class SiamFC(models_interface.IterModel):
         self._search_scale = float(search_size) / template_size * template_scale
         self._feature_padding = feature_padding
         self._feature_arch = feature_arch
+        self._increase_stride = increase_stride
         self._feature_act = feature_act
         self._enable_feature_bnorm = enable_feature_bnorm
         self._enable_template_mask = enable_template_mask
@@ -426,9 +428,9 @@ def _to_uint8(x):
 def _affine_scalar(x, name='affine', variables_collections=None):
     with tf.name_scope(name) as scope:
         gain = tf.get_variable('gain', shape=[], dtype=tf.float32,
-                               variables_collections=variables_collections)
+                               collections=variables_collections)
         bias = tf.get_variable('bias', shape=[], dtype=tf.float32,
-                               variables_collections=variables_collections)
+                               collections=variables_collections)
         return gain * x + bias
 
 
