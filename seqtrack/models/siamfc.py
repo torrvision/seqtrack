@@ -144,10 +144,9 @@ class SiamFC(models_interface.IterModel):
             feat_size = template_feat.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
             if self._enable_template_mask:
-                template_mask = tf.get_variable(
+                template_mask = slim.model_variable(
                     'template_mask', template_feat.shape.as_list()[-3:],
-                    initializer=tf.ones_initializer(),
-                    collections=['siamese', tf.GraphKeys.GLOBAL_VARIABLES])
+                    initializer=tf.ones_initializer(), collections=['siamese'])
                 template_feat *= template_mask
 
             with tf.name_scope('summary'):
@@ -427,10 +426,10 @@ def _to_uint8(x):
 
 def _affine_scalar(x, name='affine', variables_collections=None):
     with tf.name_scope(name) as scope:
-        gain = tf.get_variable('gain', shape=[], dtype=tf.float32,
-                               collections=variables_collections)
-        bias = tf.get_variable('bias', shape=[], dtype=tf.float32,
-                               collections=variables_collections)
+        gain = slim.model_variable('gain', shape=[], dtype=tf.float32,
+                                   collections=variables_collections)
+        bias = slim.model_variable('bias', shape=[], dtype=tf.float32,
+                                   collections=variables_collections)
         return gain * x + bias
 
 
@@ -453,8 +452,8 @@ def _add_motion_prior(response, name='motion_prior'):
     with tf.name_scope(name) as scope:
         response_shape = response.shape.as_list()[-3:]
         assert response_shape[-1] == 1
-        prior = tf.get_variable('prior', shape=response_shape, dtype=tf.float32,
-                                initializer=tf.zeros_initializer(dtype=tf.float32))
+        prior = slim.model_variable('prior', shape=response_shape, dtype=tf.float32,
+                                    initializer=tf.zeros_initializer(dtype=tf.float32))
         # self._info.setdefault('response_appearance', []).append(
         #     _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
         # if self._num_frames == 0:
