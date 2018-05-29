@@ -43,10 +43,10 @@ def main():
     # Print a table of vectors and results.
     names = sorted(vectors.keys())
     for name in names:
+        print '-' * 40
         print 'name:', name
         print 'vector:', vectors[name]
         print 'result:', results[name]
-        print '-' * 40
 
     summaries = {
         name: train.summarize_trials([results], val_dataset=args.optimize_dataset,
@@ -56,9 +56,9 @@ def main():
     # Print a table of vectors and results.
     print
     for name in names:
+        print '-' * 40
         print 'name:', name
         print 'summary:', summaries[name]
-        print '-' * 40
         # search.write_summary(summaries[name])
 
 

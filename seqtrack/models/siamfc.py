@@ -197,9 +197,13 @@ class SiamFC(models_interface.IterModel):
                     wd=self._wd, is_training=self._is_training,
                     variables_collections=['siamese'], trainable=(not self._freeze_siamese))
 
+            template_feat = prev_state['template_feat']
+            # template_feat = tf.Print(template_feat, [template_feat], 'template_feat')
             response, rfs = util.diag_xcorr_rf(
-                input=search_feat, filter=prev_state['template_feat'], input_rfs=rfs,
-                padding=self._xcorr_padding)
+                input=tf.verify_tensor_all_finite(search_feat, 'search features not finite'),
+                filter=tf.verify_tensor_all_finite(template_feat, 'template features not finite'),
+                input_rfs=rfs, padding=self._xcorr_padding)
+            response = tf.verify_tensor_all_finite(response, 'output of xcorr is not finite')
             response = tf.reduce_sum(response, axis=-1, keep_dims=True)
             response_size = response.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._search_size, response_size, rfs['search'])

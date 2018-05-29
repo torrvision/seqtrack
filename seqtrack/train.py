@@ -122,7 +122,7 @@ def setup_data(train_dataset, val_dataset, eval_datasets,
     else:
         datasets = {
             name: data.load(data_dir, preproc_id, name,
-                            cache=True, cache_dir=data_cache_dir) for name in datasets}
+                            cache=True, cache_dir=data_cache_dir) for name in dataset_names}
 
     if use_pool:
         # Add pool_train and pool_val to datasets.
@@ -242,7 +242,12 @@ def train_model_data(
         lr_decay_steps=None,
         lr_decay_rate=None,
         optimizer=None,
-        optimizer_params=None,
+        # optimizer_params=None,
+        momentum=None,
+        use_nesterov=None,
+        adam_beta1=None,
+        adam_beta2=None,
+        adam_epsilon=None,
         weight_decay=None,
         grad_clip=None,
         max_grad_norm=None,
@@ -299,7 +304,6 @@ def train_model_data(
     returns a collection of sequences or is a finite generator of sequences.
     '''
     session_config_kwargs = session_config_kwargs or {}
-    optimizer_params = optimizer_params or {}
 
     if not os.path.exists(dir):
         os.makedirs(dir, 0755)
@@ -368,16 +372,18 @@ def train_model_data(
     # lr = init * decay^(step)
     #    = init * decay^(step / period * period / decay_steps)
     #    = init * [decay^(period / decay_steps)]^(step / period)
-    if lr_decay_rate != 1:
+    if lr_decay_rate is None or lr_decay_rate == 1:
+        lr = tf.constant(lr_init)
+    else:
         lr = tf.train.exponential_decay(lr_init, global_step_var,
                                         decay_steps=lr_decay_steps,
                                         decay_rate=lr_decay_rate,
                                         staircase=True)
-    else:
-        lr = lr_init
     tf.summary.scalar('lr', lr, collections=['summaries_train'])
-    optimizer = _make_optimizer(optimizer, lr, **optimizer_params)
-    # TODO: Use other optimizer flags.
+    # TODO: Ugly to use same variable!
+    optimizer = _make_optimizer(
+        optimizer, lr, momentum=momentum, use_nesterov=use_nesterov,
+        adam_beta1=adam_beta1, adam_beta2=adam_beta2, adam_epsilon=adam_epsilon)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
         if not grad_clip:
@@ -514,10 +520,7 @@ def train_model_data(
                 writer[mode] = tf.summary.FileWriter(os.path.join(path_summary, mode))
 
         while True:
-            global_step = np.asscalar(global_step_var.eval())  # Number of steps taken.
-            if global_step >= num_steps:
-                break
-
+            global_step = np.asscalar(global_step_var.eval())
             if not nosave:
                 # period_ckpt = args.period_ckpt if not args.debugmode else 40
                 if global_step % period_ckpt == 0 and global_step > prev_ckpt:
@@ -528,6 +531,21 @@ def train_model_data(
                     print 'done: save model'
                     sys.stdout.flush()
                     prev_ckpt = global_step
+            # intermediate evaluation of model
+            # period_assess = args.period_assess if not args.debugmode else 20
+            if global_step > 0 and global_step > period_skip and global_step % period_assess == 0:
+                for eval_id, sampler in eval_sets.items():
+                    eval_sequences = sampler()
+                    result = _evaluate(
+                        global_step, eval_id, sess, model_inst, eval_sequences,
+                        use_gt_eval=use_gt_eval,
+                        eval_tre_num=eval_tre_num,
+                        path_output=path_output,
+                        save_frames=save_frames)
+                    metrics.setdefault(global_step, {})[eval_id] = result
+
+            if global_step >= num_steps:
+                break
 
             if use_gt_train:
                 # TODO: Use a different base!
@@ -596,21 +614,6 @@ def train_model_data(
                 print 'global_step {} {}'.format(global_step, losstime)
                 sys.stdout.flush()
 
-            # Update number of steps.
-            global_step = np.asscalar(global_step_var.eval())
-            # intermediate evaluation of model
-            # period_assess = args.period_assess if not args.debugmode else 20
-            if global_step > 0 and global_step > period_skip and global_step % period_assess == 0:
-                for eval_id, sampler in eval_sets.items():
-                    eval_sequences = sampler()
-                    result = _evaluate(
-                        global_step, eval_id, sess, model_inst, eval_sequences,
-                        use_gt_eval=use_gt_eval,
-                        eval_tre_num=eval_tre_num,
-                        path_output=path_output,
-                        save_frames=save_frames)
-                    metrics.setdefault(global_step, {})[eval_id] = result
-
         # **training finished
         print '\ntraining finished! ------------------------------------------'
         print 'total time elapsed: {0:.2f}'.format(time.time() - t_total)
@@ -618,16 +621,33 @@ def train_model_data(
         return metrics
 
 
-def _make_optimizer(name, lr, **params):
+def _make_optimizer(name, learning_rate,
+                    momentum=None,
+                    use_nesterov=None,
+                    adam_beta1=None,
+                    adam_beta2=None,
+                    adam_epsilon=None):
+    def _set_if_not_none(target, key, value):
+        if value is not None:
+            target[key] = value
+
     # TODO: Use other parameters.
     if name == 'sgd':
-        optimizer = tf.train.GradientDescentOptimizer(lr, **params)
+        optimizer = tf.train.GradientDescentOptimizer(learning_rate)
     elif name == 'momentum':
-        optimizer = tf.train.MomentumOptimizer(lr, **params)
-    elif name == 'rmsprop':
-        optimizer = tf.train.RMSPropOptimizer(lr, **params)
+        assert momentum is not None
+        kwargs = {}
+        _set_if_not_none(kwargs, 'use_nesterov', use_nesterov)
+        optimizer = tf.train.MomentumOptimizer(learning_rate, momentum, **kwargs)
+    # elif name == 'rmsprop':
+    #     kwargs = {}
+    #     optimizer = tf.train.RMSPropOptimizer(learning_rate, **kwargs)
     elif name == 'adam':
-        optimizer = tf.train.AdamOptimizer(lr, **params)
+        kwargs = {}
+        _set_if_not_none(kwargs, 'beta1', adam_beta1)
+        _set_if_not_none(kwargs, 'beta2', adam_beta2)
+        _set_if_not_none(kwargs, 'epsilon', adam_epsilon)
+        optimizer = tf.train.AdamOptimizer(learning_rate, **kwargs)
     else:
         raise ValueError('unknown optimizer: {}', helpers.quote(name))
     return optimizer

@@ -20,8 +20,8 @@ def add_setup_data_args(parser):
                         help='Untar dataset? Otherwise data must already exist')
     parser.add_argument('--data_dir', help='Location of datasets (if already installed)')
     parser.add_argument('--tar_dir', help='Location of dataset tarballs')
-    # parser.add_argument('--tmp_data_dir', default='/tmp/data/',
-    #                     help='Temporary directory in which to untar data')
+    parser.add_argument('--tmp_data_dir', default='/tmp/data/',
+                        help='Temporary directory in which to untar data (if slurm is disabled)')
     parser.add_argument('--preproc', default='original',
                         help='Name of preprocessing e.g. original, resize_fit_640x640')
     parser.add_argument('--data_cache_dir', help='Where to cache the dataset metadata')
@@ -70,7 +70,14 @@ def add_train_args(parser):
 
     parser.add_argument('--num_steps', type=int, default=200000,
                         help='number of gradient steps')
-    parser.add_argument('--optimizer', default='adam', help='optimizer to train the model')
+
+    parser.add_argument('--optimizer', default='momentum', help='optimizer to train the model')
+    parser.add_argument('--momentum', type=float, default=0.9)
+    parser.add_argument('--use_nesterov', action='store_true', help='for momentum optimizer')
+    parser.add_argument('--adam_beta1', type=float, default=0.9)
+    parser.add_argument('--adam_beta2', type=float, default=0.999)
+    parser.add_argument('--adam_epsilon', type=float, default=1e-8)
+
     parser.add_argument('--lr_init', type=float, default=1e-4, help='initial learning rate')
     parser.add_argument('--lr_decay_rate', type=float, default=1,
                         help='geometric step for learning rate decay')
