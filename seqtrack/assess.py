@@ -1,6 +1,6 @@
+import itertools
 import numpy as np
 import operator
-from itertools import chain
 
 import logging
 logger = logging.getLogger(__name__)
@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 from seqtrack import geom_np
 
 
-def assess_dataset(seqs, predictions, tre_groups=None):
+def assess_dataset(seqs, predictions, tre_groups=None, timing=None):
     '''Assesses predictions for an entire dataset.
 
     Args:
@@ -29,7 +29,8 @@ def assess_dataset(seqs, predictions, tre_groups=None):
         name: assess_frames(seqs[name], predictions[name]) for name in seqs.keys()}
     # Compute per-sequence metrics using per-frame metrics.
     sequence_metrics = {
-        name: assess_sequence(seqs[name], predictions[name], frame_metrics[name])
+        name: assess_sequence(seqs[name], predictions[name], frame_metrics[name],
+                              timing=(None if timing is None else timing[name]))
         for name in seqs.keys()}
 
     metrics = {}
@@ -77,11 +78,12 @@ IOU_THRESHOLDS = [0.5, 0.7]
 AUC_NUM_STEPS = 1000
 SEQUENCE_METRICS = (
     FRAME_METRICS +
+    ['speed_eval', 'speed_with_load', 'speed_real'] +
     ['iou_success_{}'.format(thr) for thr in IOU_THRESHOLDS] +
     ['iou_success_auc'])
 
 
-def assess_sequence(sequence, predictions, frame_metrics):
+def assess_sequence(sequence, predictions, frame_metrics, timing=None):
     '''Computes per-sequence metrics. Uses per-frame metrics.'''
     metrics = {}
     # Take mean of all per-frame metrics.
@@ -91,6 +93,12 @@ def assess_sequence(sequence, predictions, frame_metrics):
     for thr in IOU_THRESHOLDS:
         metrics['iou_success_{}'.format(thr)] = \
             np.nanmean(_compare_nan(operator.ge, frame_metrics['iou'], thr))
+
+    if timing is not None:
+        metrics['speed_eval'] = timing['num_frames'] / timing['duration_eval']
+        metrics['speed_with_load'] = timing['num_frames'] / timing['duration_with_load']
+        # Maybe this should be num_frames + 1 but at least it is an under-estimate.
+        metrics['speed_real'] = timing['num_frames'] / timing['duration_real']
 
     metrics['iou_success_auc'] = _compute_auc(frame_metrics['iou'], AUC_NUM_STEPS)
     return metrics
@@ -103,7 +111,7 @@ def _summarize(frame_metrics, sequence_metrics, tre_groups):
             This can be used to switch between OPE and TRE modes.
     '''
     metrics = {}
-    all_subseqs = list(chain(*tre_groups.values()))
+    all_subseqs = list(itertools.chain(*tre_groups.values()))
     # Compute the per-frame averages.
     for key in FRAME_METRICS:
         # Concatenate frames from all subsequences and take mean.

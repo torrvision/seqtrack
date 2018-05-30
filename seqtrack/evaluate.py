@@ -41,8 +41,11 @@ class ChunkedTracker(object):
         self._vis_dir = vis_dir
         self._save_frames = save_frames
 
-        self._num_frames = 0
+        self._num_frames = 0  # Does not include initial frame.
         self._prev_state = {}
+        self._start_time = 0
+        self._duration_eval = 0  # Does not include initial frame.
+        self._duration_with_load = 0  # Does not include initial frame.
 
         self._frame_dir = None
         if self._visualize:
@@ -61,6 +64,7 @@ class ChunkedTracker(object):
         Args:
             init_frame: Sequence of length 1.
         '''
+        self._start_time = time.time()
         # JV: Use viewport.
         # first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
         if self._aspect is None:
@@ -84,19 +88,26 @@ class ChunkedTracker(object):
         assert chunk_len <= self._model_inst.ntimesteps
         # TODO: If chunk_len != self._model.sequence_len, then set self._final.
 
-        # dur += time.time() - prev_time
+        feed_dict = {}
+        if self._num_frames > 0:
+            # This is not the first chunk.
+            # Add the previous state to the feed dictionary.
+            tensor, value = to_nested_tuple(self._model_inst.state_init, self._prev_state)
+            if tensor is not None:  # Function returns None if empty.
+                feed_dict[tensor] = value
+
+        start_load = time.time()
         image_size_hw = (self._model_inst.imheight, self._model_inst.imwidth)
         images = [
             load_image_viewport(image_file, viewport, image_size_hw)
             for image_file, viewport in zip(chunk['image_files'], chunk['viewports'])
         ]
-        # prev_time = time.time()
         labels = chunk['labels']
         is_valid = chunk['label_is_valid']
 
         # Prepare data as input to network.
         images_arr = map(im_to_arr, images)
-        feed_dict = {
+        feed_dict.update({
             self._model_inst.example['x0']: self._batch_first_image,
             self._model_inst.example['y0']: self._batch_first_label,
             self._model_inst.example['x']: self._to_batch_sequence(images_arr),
@@ -105,20 +116,19 @@ class ChunkedTracker(object):
             self._model_inst.example['aspect']: self._to_batch(self._aspect),
             self._model_inst.run_opts['use_gt']: self._use_gt,
             self._model_inst.run_opts['is_tracking']: True,
-        }
-        if self._num_frames > 0:
-            # This is not the first chunk.
-            # Add the previous state to the feed dictionary.
-            tensor, value = to_nested_tuple(self._model_inst.state_init, self._prev_state)
-            if tensor is not None:  # Function returns None if empty.
-                feed_dict[tensor] = value
+        })
 
         # Get output and final state.
         output_vars = {'y': self._model_inst.outputs['y']}
         if 'vis' in self._model_inst.outputs:
             output_vars['vis'] = self._model_inst.outputs['vis']
+        start_run = time.time()
         outputs, self._prev_state = self._sess.run(
             [output_vars, self._model_inst.state_final], feed_dict=feed_dict)
+
+        self._duration_eval += time.time() - start_run
+        self._duration_with_load += time.time() - start_load
+
         # Take first element of batch and first `chunk_len` elements of output.
         outputs['y'] = outputs['y'][0][:chunk_len]
         if 'vis' in self._model_inst.outputs:
@@ -139,6 +149,8 @@ class ChunkedTracker(object):
         return outputs
 
     def end(self):
+        end_time = time.time()
+
         if self._visualize:
             args = [
                 'ffmpeg',
@@ -158,6 +170,13 @@ class ChunkedTracker(object):
             finally:
                 if not self._save_frames:
                     shutil.rmtree(self._frame_dir)
+
+        timing = {}
+        timing['duration_eval'] = self._duration_eval
+        timing['duration_with_load'] = self._duration_with_load
+        timing['duration_real'] = end_time - self._start_time
+        timing['num_frames'] = self._num_frames
+        return timing
 
     def _to_batch(self, x):
         return _single_to_batch(x, self._model_inst.batchsz)
@@ -232,13 +251,13 @@ def track(sess, model_inst, sequence, use_gt,
         output_chunk = tracker.next(input_chunk)
         output_chunks.append(output_chunk)
 
-    tracker.end()
+    info = tracker.end()
 
     # Concatenate the results for all chunks.
     # y_pred = np.concatenate(y_pred_chunks)
     # hmap_pred = np.concatenate(hmap_pred_chunks)
     y_pred = np.concatenate([chunk['y'] for chunk in output_chunks])
-    return y_pred
+    return y_pred, info
 
 
 class SimpleTracker(object):
@@ -272,7 +291,7 @@ class SimpleTracker(object):
         return outputs
 
     def end(self):
-        self._tracker.end()
+        return self._tracker.end()
 
 
 def _only(xs):
@@ -470,13 +489,15 @@ def evaluate_model(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwarg
     '''
     subseqs, tre_groups = _split_tre_all(sequences, tre_num)
     predictions = {}
+    timing = {}
     bar = _make_progress_bar()
     for name in bar(subseqs.keys()):
         # TODO: Cache.
         # If we use a subset of sequences, we need to ensure that the subset is the same?
         # Could re-seed video sampler with global step number?
-        predictions[name] = track(sess, model_inst, subseqs[name], use_gt=use_gt, **kwargs)
-    return assess.assess_dataset(subseqs, predictions, tre_groups)
+        predictions[name], timing[name] = track(
+            sess, model_inst, subseqs[name], use_gt=use_gt, **kwargs)
+    return assess.assess_dataset(subseqs, predictions, tre_groups, timing=timing)
 
 
 def _split_tre_all(sequences, tre_num):
