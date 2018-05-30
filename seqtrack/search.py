@@ -60,7 +60,7 @@ def load(results_dir):
 def write_summary(f, samples):
     keys_vector = set(key for sample in samples.values() for key in sample['vector'].keys())
     keys_kwargs = set(key for sample in samples.values() for key in sample['kwargs'].keys())
-    keys_metrics  = set(key for sample in samples.values() for key in sample['metrics'].keys())
+    keys_metrics = set(key for sample in samples.values() for key in sample['metrics'].keys())
     keys = list(chain(['name'],
                       ['vector_' + key for key in sorted(keys_vector)],
                       ['kwargs_' + key for key in sorted(keys_kwargs)],

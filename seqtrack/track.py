@@ -53,7 +53,6 @@ def main():
                          summaries_collections=['summaries_model'])
     saver = tf.train.Saver()
 
-
     # # Load sequence from args.
     # frames = range(args.start, args.end + 1)
     # sequence = {}
@@ -76,11 +75,11 @@ def main():
         #                               visualize=args.vis, vis_dir=args.vis_dir, save_frames=args.vis_keep_frames)
 
         tracker = evaluate.SimpleTracker(sess, example, model,
-            verbose=True,
-            sequence_name=args.sequence_name,
-            visualize=args.vis,
-            vis_dir=args.vis_dir,
-            save_frames=args.vis_keep_frames)
+                                         verbose=True,
+                                         sequence_name=args.sequence_name,
+                                         visualize=args.vis,
+                                         vis_dir=args.vis_dir,
+                                         save_frames=args.vis_keep_frames)
 
         if args.vot:
             handle = vot.VOT('rectangle')
@@ -91,7 +90,7 @@ def main():
             image_size = Image.open(init_image).size
             init_rect = rect_from_vot(vot_init_rect, image_size)
         else:
-            times = range(args.start, args.end+1)
+            times = range(args.start, args.end + 1)
             init_image = args.image_format % times[0]
             init_rect = args.init_rect
 

@@ -110,7 +110,7 @@ class ChunkedTracker(object):
             # This is not the first chunk.
             # Add the previous state to the feed dictionary.
             tensor, value = to_nested_tuple(self._model_inst.state_init, self._prev_state)
-            if tensor is not None: # Function returns None if empty.
+            if tensor is not None:  # Function returns None if empty.
                 feed_dict[tensor] = value
 
         # Get output and final state.
@@ -144,12 +144,12 @@ class ChunkedTracker(object):
                 'ffmpeg',
                 '-loglevel', 'error',
                 # '-r', '1', # fps.
-                '-y', # Overwrite without asking.
-                '-nostdin', # No interaction with user.
+                '-y',  # Overwrite without asking.
+                '-nostdin',  # No interaction with user.
                 '-i', FRAME_PATTERN,
                 '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
                 os.path.join(os.path.abspath(self._vis_dir),
-                             escape_filename(self._sequence_name)+'.mp4')]
+                             escape_filename(self._sequence_name) + '.mp4')]
             try:
                 p = subprocess.Popen(args, cwd=self._frame_dir)
                 p.wait()
@@ -224,10 +224,10 @@ def track(sess, model_inst, sequence, use_gt,
         chunk_len = min(rem, model_inst.ntimesteps)
 
         input_chunk = {
-            'image_files':    sequence['image_files'][start:start+chunk_len],
-            'viewports':      sequence['viewports'][start:start+chunk_len],
-            'labels':         sequence['labels'][start:start+chunk_len],
-            'label_is_valid': sequence['label_is_valid'][start:start+chunk_len],
+            'image_files': sequence['image_files'][start:start + chunk_len],
+            'viewports': sequence['viewports'][start:start + chunk_len],
+            'labels': sequence['labels'][start:start + chunk_len],
+            'label_is_valid': sequence['label_is_valid'][start:start + chunk_len],
         }
         output_chunk = tracker.next(input_chunk)
         output_chunks.append(output_chunk)
@@ -253,17 +253,17 @@ class SimpleTracker(object):
     def start(self, image_file, rect):
         init_frame = {
             'image_files': [image_file],
-            'viewports':   [geom_np.unit_rect()],
-            'labels':      [rect],
+            'viewports': [geom_np.unit_rect()],
+            'labels': [rect],
         }
         self._tracker.start(init_frame)
 
     def next(self, image_file, gt_rect=None):
         label_valid = gt_rect is not None
         chunk = {
-            'image_files':    [image_file],
-            'viewports':      [geom_np.unit_rect()],
-            'labels':         [gt_rect if label_valid else geom_np.unit_rect()],
+            'image_files': [image_file],
+            'viewports': [geom_np.unit_rect()],
+            'labels': [gt_rect if label_valid else geom_np.unit_rect()],
             'label_is_valid': [label_valid],
         }
         outputs = self._tracker.next(chunk)

@@ -259,8 +259,7 @@ def train_model_data(
         min_gt_ratio=None,
         # Evaluation args:
         use_gt_eval=False,
-        eval_tre_num=None,
-        ):
+        eval_tre_num=None):
     '''Trains a network.
 
     Args:
@@ -903,8 +902,7 @@ def _evaluate(
         eval_tre_num,
         # Args that do not affect result:
         path_output,
-        save_frames,
-        ):
+        save_frames):
     iter_id = 'iteration{}'.format(global_step)
     vis_dir = os.path.join(path_output, iter_id, eval_id)
     if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
