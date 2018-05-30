@@ -20,6 +20,8 @@ from seqtrack.models import util
 # The pickled object must be imported to unpickle in a different package (slurmproc.worker).
 from seqtrack.tools import train_work as work
 
+import pprint
+
 
 def main():
     args = parse_arguments()
@@ -42,13 +44,15 @@ def main():
     for name in names:
         print '-' * 40
         print 'name:', name
-        print 'result:', results[name]
+        print 'result:'
+        pprint.pprint(results[name])
 
     summary = train.summarize_trials(results.values(), val_dataset=args.optimize_dataset,
                                      sort_key=lambda metrics: metrics[args.optimize_metric])
 
     print
-    print 'summary:', summary
+    print 'summary:'
+    pprint.pprint(summary)
 
 
 def parse_arguments():

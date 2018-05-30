@@ -972,15 +972,17 @@ def summarize_trials(trial_metrics, val_dataset, sort_key):
         # If there exists a metric xxx and xxx_var, then remove xxx_var from the list.
         basic_keys = keys.difference(set(key + '_var' for key in keys))
         for key in basic_keys:
-            metrics[dataset] = np.mean([best[trial][dataset][key] for trial in range(num_trials)])
+            metrics[dataset][key] = np.mean([best[trial][dataset][key]
+                                             for trial in range(num_trials)])
             if key + '_var' in keys:
                 # Use variance of means plus mean of variances.
                 # This assumes that each metric (which has a variance) is a mean.
-                metrics[key + '_var'] = (
+                metrics[dataset][key + '_var'] = (
                     np.mean([best[trial][dataset][key + '_var'] for trial in range(num_trials)]) +
                     np.var([best[trial][dataset][key] for trial in range(num_trials)]))
             else:
                 # TODO: Could report simple variance across trials if xxx_var is not present?
                 # However, this might be confusing because then some variances are more correct.
                 pass
+
     return metrics
