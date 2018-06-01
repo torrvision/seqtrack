@@ -90,9 +90,6 @@ def parse_arguments():
                         help='JSON to specify the training distribution')
     parser.add_argument('--val_dataset', type=json.loads, default='"ilsvrc_val"',
                         help='JSON to specify the validation distribution')
-    parser.add_argument('--sampler_params', type=json.loads,
-                        default={'kind': 'regular', 'freq': 10},
-                        help='JSON to specify frame sampler')
     parser.add_argument('--num_steps', type=int, default=200000,
                         help='number of gradient steps')
 

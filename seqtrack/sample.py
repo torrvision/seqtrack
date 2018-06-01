@@ -160,6 +160,8 @@ def select_frames_dataset(dataset, track_id, rand, **kwargs):
 
     t_start, t_stop = present_frames[0], present_frames[-1] + 1
     frames = select_frames_start(t_start, t_stop, present_frames, rand, **kwargs)
+    if frames is None:
+        return None
     return make_sequence(dataset, track_id, frames)
 
 
@@ -192,8 +194,12 @@ def select_frames(t_stop, valid_frames, rand, kind=None, ntimesteps=None,
         # Sample frames with `freq`, regardless of label
         # (only the first frame need to have label).
         # Note also that the returned frames can have length < ntimesteps+1.
-        frames = range(rand.choice(valid_frames), t_stop, freq)
-        return frames[:ntimesteps + 1]
+        # frames = range(rand.choice(valid_frames), t_stop, freq)
+        # frames = frames[:ntimesteps + 1]
+        a = rand.choice(valid_frames)
+        frames = [a + freq * i for i in range(ntimesteps + 1)]
+        frames = [t for t in frames if t < t_stop]
+        return frames
     elif kind == 'freq-range-fit':
         # Choose frames:
         #   a, round(a+freq), round(a+2*freq), round(a+3*freq), ...

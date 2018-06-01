@@ -2,8 +2,10 @@ import argparse
 import functools
 import itertools
 import json
+import math
 import numpy as np
 import os
+import pprint
 import tempfile
 
 import logging
@@ -19,6 +21,8 @@ from seqtrack.models import util
 
 
 def _train(args, name, vector):
+    pprint.pprint(vector)
+
     # Split vector.
     _assert_partition(set(vector.keys()), [KEYS_TRAIN, KEYS_SIAMFC])
     train_vector = {k: vector[k] for k in KEYS_TRAIN}
@@ -59,7 +63,6 @@ def _train(args, name, vector):
         preproc_id=args.preproc,
         data_cache_dir=args.data_cache_dir,
         # Sampling:
-        sampler_params=args.sampler_params,
         augment_motion=False,
         motion_params=None,
         # Args from app.add_eval_args()
@@ -126,7 +129,7 @@ def _assert_partition(x, subsets):
 
 DEFAULT_DISTRIBUTION_TRAIN = dict(
     ntimesteps=['const', 1],
-    batchsz=['choice', [8, 32]],
+    batchsz=['const', 8],
     # imsize=['const', 360],
     # weight_decay=['log_uniform_format', 1e-6, 1e-2, '.2g'],
     optimizer=['choice', ['momentum', 'adam']],
@@ -141,29 +144,34 @@ DEFAULT_DISTRIBUTION_TRAIN = dict(
     grad_clip=['choice', [True, False]],
     max_grad_norm=['log_uniform_format', 1e-3, 1e3, '.1g'],
     # num_steps=['const', 100000],
+    sampler_kind=['choice', ['sampling', 'regular', 'freq-range-fit']],
+    sampler_freq=['log_uniform_format', 5, 200, '.2g'],
+    sampler_center_freq=['log_uniform_format', 5, 200, '.2g'],
+    sampler_relative_freq_range=['uniform_format', 0, 1, '.2f'],
+    sampler_use_log=['choice', [True, False]],
 )
 
 DEFAULT_DISTRIBUTION_SIAMFC = dict(
     # Options required for determining stride of network.
-    feature_padding=['choice', ['VALID', 'SAME']],
+    feature_padding=['const', 'VALID'],
     feature_arch=['choice', ['alexnet', 'darknet']],
     increase_stride=['choice', [[], [2], [4], [2, 2], [1, 2]]],
-    desired_template_size=['choice', [64, 128, 256]],
+    desired_template_size=['choice', [96, 128]],
     desired_relative_search_size=['choice', [1.5, 2, 3]],
     template_scale=['uniform_format', 1, 3, '.2g'],
     aspect_method=['choice', ['perimeter', 'area', 'stretch']],
-    use_gt=['choice', [True, False]],
-    curr_as_prev=['choice', [True, False]],
-    pad_with_mean=['choice', [True, False]],
-    feather=['choice', [True, False]],
+    use_gt=['const', True],
+    curr_as_prev=['const', True],
+    pad_with_mean=['const', True],
+    feather=['const', True],
     feather_margin=['log_uniform_format', 0.01, 0.1, '.1g'],
     center_input_range=['const', True],
     keep_uint8_range=['const', False],
     feature_act=['const', 'linear'],
-    enable_feature_bnorm=['choice', [True, False]],
-    enable_template_mask=['const', False],
+    enable_feature_bnorm=['const', True],
+    enable_template_mask=['choice', [True, False]],
     xcorr_padding=['const', 'VALID'],
-    bnorm_after_xcorr=['choice', [True, False]],
+    bnorm_after_xcorr=['const', True],
     freeze_siamese=['const', False],
     learnable_prior=['const', False],
     train_multiscale=['const', False],
@@ -173,14 +181,14 @@ DEFAULT_DISTRIBUTION_SIAMFC = dict(
     max_scale_delta=['log_uniform_format', 0.03, 0.3, '.2g'],
     scale_update_rate=['choice', [0, 0.5]],
     report_square=['const', False],
-    hann_method=['choice', ['none', 'add_logit']],  # none, mul_prob, add_logit
+    hann_method=['const', 'add_logit'],  # none, mul_prob, add_logit
     hann_coeff=['log_uniform_format', 0.1, 10, '.1g'],
-    arg_max_eps_rel=['choice', [0, 0.05]],
+    arg_max_eps_rel=['choice', [0, 0.02, 0.05, 0.1]],
     # Loss parameters:
-    wd=['const', 1e-6],
+    wd=['choice', [1e-4, 1e-6]],
     enable_ce_loss=['const', True],
     ce_label=['choice', ['gaussian_distance', 'best_iou']],
-    ce_label_structure=['choice', ['independent', 'joint']],
+    ce_label_structure=['const', 'independent'],
     sigma=['choice', [0.1, 0.2, 0.3]],
     balance_classes=['choice', [True, False]],
     enable_margin_loss=['const', False],
@@ -225,6 +233,16 @@ def sample_vector_train(rand, p):
     if x['grad_clip']:
         x['max_grad_norm'] = sample(p['max_grad_norm'])
     # x['num_steps'] = sample(p['num_steps'])
+
+    x['sampler_kind'] = sample(p['sampler_kind'])
+    if x['sampler_kind'] == 'sampling':
+        pass
+    elif x['sampler_kind'] == 'regular':
+        x['sampler_freq'] = sample(p['sampler_freq'])
+    elif x['sampler_kind'] == 'freq-range-fit':
+        x['sampler_center_freq'] = sample(p['sampler_center_freq'])
+        x['sampler_relative_freq_range'] = sample(p['sampler_relative_freq_range'])
+        x['sampler_use_log'] = sample(p['sampler_use_log'])
     return x
 
 
@@ -301,20 +319,45 @@ def train_vector_to_kwargs(x):
     kwargs = dict(x)
     info = {}
 
-    del kwargs['momentum']
-    del kwargs['use_nesterov']
-    del kwargs['adam_beta1']
-    del kwargs['adam_beta2']
-    del kwargs['adam_epsilon']
-    optimizer_params = {}
-    if x['optimizer'] == 'momentum':
-        optimizer_params['momentum'] = x['momentum']
-        optimizer_params['use_nesterov'] = x['use_nesterov']
-    elif x['optimizer'] == 'adam':
-        optimizer_params['beta1'] = x['adam_beta1']
-        optimizer_params['beta2'] = x['adam_beta2']
-        optimizer_params['epsilon'] = x['adam_epsilon']
-    kwargs['optimizer_params'] = optimizer_params
+    # del kwargs['momentum']
+    # del kwargs['use_nesterov']
+    # del kwargs['adam_beta1']
+    # del kwargs['adam_beta2']
+    # del kwargs['adam_epsilon']
+    # optimizer_params = {}
+    # if x['optimizer'] == 'momentum':
+    #     optimizer_params['momentum'] = x['momentum']
+    #     optimizer_params['use_nesterov'] = x['use_nesterov']
+    # elif x['optimizer'] == 'adam':
+    #     optimizer_params['beta1'] = x['adam_beta1']
+    #     optimizer_params['beta2'] = x['adam_beta2']
+    #     optimizer_params['epsilon'] = x['adam_epsilon']
+    # kwargs['optimizer_params'] = optimizer_params
+
+    del kwargs['sampler_kind']
+    del kwargs['sampler_freq']
+    del kwargs['sampler_center_freq']
+    del kwargs['sampler_relative_freq_range']
+    del kwargs['sampler_use_log']
+    kwargs['sampler_params'] = {'kind': x['sampler_kind']}
+    if x['sampler_kind'] == 'sampling':
+        pass
+    elif x['sampler_kind'] == 'regular':
+        kwargs['sampler_params']['freq'] = x['sampler_freq']
+    elif x['sampler_kind'] == 'freq-range-fit':
+        center_freq = x['sampler_center_freq']
+        radius = x['sampler_relative_freq_range']
+        min_freq = max(1, (1 - radius) * center_freq)
+        kwargs['sampler_params']['min_freq'] = min_freq
+        if not x['sampler_use_log']:
+            max_freq = center_freq + (center_freq - min_freq)
+        else:
+            log_center_freq = math.log(center_freq)
+            log_min_freq = math.log(min_freq)
+            log_max_freq = log_center_freq + (log_center_freq - log_min_freq)
+            max_freq = math.exp(log_max_freq)
+        kwargs['sampler_params']['max_freq'] = max_freq
+        kwargs['sampler_params']['use_log'] = x['sampler_use_log']
 
     return kwargs, info
 
