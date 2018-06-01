@@ -83,7 +83,7 @@ def parse_arguments():
     app.add_eval_args(parser)
     app.add_parallel_args(parser)
     # Keep image resolution fixed across trials.
-    parser.add_argument('--imwidth', type=int, default=640, help='image resolution')
+    parser.add_argument('--imwidth', type=int, default=360, help='image resolution')
     parser.add_argument('--imheight', type=int, default=360, help='image resolution')
 
     parser.add_argument('--train_dataset', type=json.loads, default='"ilsvrc_train"',

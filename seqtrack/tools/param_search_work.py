@@ -48,7 +48,9 @@ def _train(args, name, vector):
         period_preview=args.period_preview,
         # save_videos=args.save_videos,
         save_frames=args.save_frames,
-        session_config_kwargs=dict(gpu_manctrl=args.gpu_manctrl, gpu_frac=args.gpu_frac),
+        session_config_kwargs=dict(
+            gpu_manctrl=args.gpu_manctrl, gpu_frac=args.gpu_frac,
+            log_device_placement=args.log_device_placement),
         # Arguments required for setting up data.
         # TODO: How to make this a parameter?
         train_dataset=args.train_dataset,

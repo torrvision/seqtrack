@@ -56,10 +56,9 @@ def add_tracker_config_args(parser):
     parser.add_argument('--save_frames', action='store_true',
                         help='save frames of video during evaluation')
 
-    parser.add_argument('--no_gpu_manctrl', dest='gpu_manctrl', action='store_false',
-                        help='disable manual gpu management')
-    parser.add_argument('--gpu_frac', type=float, default=0.4,
-                        help='fraction of gpu memory')
+    parser.add_argument('--gpu_manctrl', action='store_true', help='manual gpu management')
+    parser.add_argument('--gpu_frac', type=float, default=0.4, help='fraction of gpu memory')
+    parser.add_argument('--log_device_placement', action='store_true')
 
 
 def add_train_args(parser):

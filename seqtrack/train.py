@@ -652,8 +652,8 @@ def _make_optimizer(name, learning_rate,
     return optimizer
 
 
-def _make_session_config(gpu_manctrl=False, gpu_frac=1.0):
-    config = tf.ConfigProto()
+def _make_session_config(gpu_manctrl=False, gpu_frac=1.0, log_device_placement=False):
+    config = tf.ConfigProto(log_device_placement=log_device_placement)
     # TODO: not sure if this should be always true.
     config.allow_soft_placement = True
     # config.log_device_placement = True
