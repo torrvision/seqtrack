@@ -32,6 +32,10 @@ The function `get_example_filenames` instead gets its input from a placeholder.
 This must be manually fed using a loop running in a Python thread.
 '''
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import pdb
 import functools
 import tensorflow as tf

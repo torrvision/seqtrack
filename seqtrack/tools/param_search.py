@@ -1,3 +1,7 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import argparse
 import functools
 import itertools
@@ -43,10 +47,10 @@ def main():
     # Print a table of vectors and results.
     names = sorted(vectors.keys())
     for name in names:
-        print '-' * 40
-        print 'name:', name
-        print 'vector:', vectors[name]
-        print 'result:', results[name]
+        print('-' * 40)
+        print('name:', name)
+        print('vector:', vectors[name])
+        print('result:', results[name])
 
     summaries = {
         name: train.summarize_trials([results], val_dataset=args.optimize_dataset,
@@ -54,11 +58,11 @@ def main():
         for name, results in results.items()}
 
     # Print a table of vectors and results.
-    print
+    print()
     for name in names:
-        print '-' * 40
-        print 'name:', name
-        print 'summary:', summaries[name]
+        print('-' * 40)
+        print('name:', name)
+        print('summary:', summaries[name])
         # search.write_summary(summaries[name])
 
 

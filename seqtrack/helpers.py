@@ -1,3 +1,7 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import datetime
 import errno
 import functools
@@ -112,7 +116,7 @@ def pad_to(x, n, axis=0, mode='constant'):
     return np.pad(x, width, mode=mode)
 
 
-def cache(codec, filename, func, makedir=False, mode=0644):
+def cache(codec, filename, func, makedir=False, perm=0o644, binary=False):
     '''Caches the result of a function in a file.
 
     Args:
@@ -141,7 +145,7 @@ def cache(codec, filename, func, makedir=False, mode=0644):
         with tempfile.NamedTemporaryFile(delete=False, dir=dir, suffix=basename) as f:
             codec.dump(result, f)
         dur = time.clock() - start
-        os.chmod(f.name, mode)  # Default permissions are 600.
+        os.chmod(f.name, perm)  # Default permissions are 600.
         os.rename(f.name, filename)
         logger.info('time to dump cache: %.3g sec "%s"', dur, filename)
     return result
@@ -180,7 +184,7 @@ def merge_dims(x, a, b, name='merge_dims'):
         n = len(x_static)
 
         def prod(xs):
-            return reduce(lambda x, y: x * y, xs)
+            return functools.reduce(lambda x, y: x * y, xs)
         # Substitute the static size where possible.
         y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, a)] +
                      [prod([x_static[i] or x_dynamic[i] for i in range(a, b)])] +
@@ -247,9 +251,9 @@ def to_nested_tuple(tensor, value):
             assert isinstance(value, list) or isinstance(value, tuple)
             assert len(tensor) == len(value)
             pairs = zip(tensor, value)
-        pairs = map(lambda pair: to_nested_tuple(*pair), pairs)
+        pairs = list(map(lambda pair: to_nested_tuple(*pair), pairs))
         # Remove pairs that are empty.
-        pairs = filter(lambda x: x != (None, None), pairs)
+        pairs = list(filter(lambda x: x != (None, None), pairs))
         if len(pairs) == 0:
             return None, None
         # Convert from list of tuples to tuple of lists.
@@ -474,7 +478,7 @@ def default_print_func(i, n, time_elapsed):
         progress_str += '; remaining {} of {}'.format(
             str(datetime.timedelta(seconds=round(time_rem))),
             str(datetime.timedelta(seconds=round(time_total))))
-    print >>sys.stderr, progress_str
+    print(progress_str, file=sys.stderr)
 
 
 def map_dict(f, items):
@@ -504,7 +508,7 @@ class CachedDictMapper(object):
 
 def _dump_cache_for_each(items, dir, codec=json, ext='.json'):
     if not os.path.exists(dir):
-        os.makedirs(dir, 0755)
+        os.makedirs(dir, 0o755)
     for k, v in items:
         fname = os.path.join(dir, k + ext)
         # TODO: Use atomic write.
@@ -514,7 +518,7 @@ def _dump_cache_for_each(items, dir, codec=json, ext='.json'):
 
 
 @contextmanager
-def open_atomic_write(filename, mode=0644):
+def open_atomic_write(filename, mode=0o644):
     dir, basename = os.path.split(filename)
     with tempfile.NamedTemporaryFile(delete=False, dir=dir, suffix=basename) as f:
         yield f

@@ -1,4 +1,7 @@
-import pdb
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import numpy as np
 import os
 from PIL import Image, ImageDraw, ImageColor
@@ -6,6 +9,9 @@ import shutil
 import subprocess
 import tempfile
 import matplotlib.cm as cm
+
+import logging
+logger = logging.getLogger(__name__)
 
 from seqtrack import geom_np
 from seqtrack.helpers import load_image, load_image_viewport, escape_filename
@@ -80,10 +86,9 @@ class VideoFileWriter:
                           os.path.join(os.path.abspath(self.root),
                                        escape_filename(sequence_name) + '.mp4')]
         try:
-            p = subprocess.Popen(args, cwd=sequence_dir)
-            p.wait()
-        except Exception as inst:
-            print 'error:', inst
+            subprocess.check_call(args, cwd=sequence_dir)
+        except Exception as ex:
+            logger.warning('error calling ffmpeg: %s', str(ex))
         finally:
             if not save_frames:
                 shutil.rmtree(sequence_dir)
@@ -96,4 +101,4 @@ def _unnormalize_rect(r, size):
 
 
 def _rect_to_int_list(rect):
-    return map(lambda x: int(round(x)), list(rect))
+    return list(map(lambda x: int(round(x)), list(rect)))

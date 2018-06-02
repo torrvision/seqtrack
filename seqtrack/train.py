@@ -1,3 +1,7 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import sys
 import csv
 import json
@@ -15,6 +19,7 @@ import subprocess
 import threading
 from functools import partial
 from itertools import chain
+from six import string_types
 
 import logging
 logger = logging.getLogger(__name__)
@@ -183,11 +188,11 @@ def make_samplers(datasets, seed, ntimesteps, sampler_params, train_dataset, val
 
 
 def _datasets_in_sampler(names):
-    if isinstance(names, basestring):
+    if isinstance(names, string_types):
         return [names]
     if isinstance(names, list):
         assert len(names) > 0
-        if all(isinstance(name, basestring) for name in names):
+        if all(isinstance(name, string_types) for name in names):
             return names
         elif all(_is_pair(elem) for elem in names):
             return [name for _, name in names]
@@ -200,11 +205,11 @@ def _make_video_sampler(names, datasets):
         names: string (EpochSampler), list of strings (EpochSampler of Concat) or
             list of float-string-pairs (MixtureSampler).
     '''
-    if isinstance(names, basestring):
+    if isinstance(names, string_types):
         return sample.EpochSampler(datasets[names])
     if isinstance(names, list):
         assert len(names) > 0
-        if all(isinstance(name, basestring) for name in names):
+        if all(isinstance(name, string_types) for name in names):
             concat = data.Concat({name: datasets[name] for name in names})
             return sample.EpochSampler(concat)
         elif all(_is_pair(elem) for elem in names):
@@ -305,7 +310,7 @@ def train_model_data(
     session_config_kwargs = session_config_kwargs or {}
 
     if not os.path.exists(dir):
-        os.makedirs(dir, 0755)
+        os.makedirs(dir, 0o755)
     path_ckpt = os.path.join(dir, 'ckpt')
     path_output = os.path.join(dir, 'output')
     if summary_dir:
@@ -452,7 +457,7 @@ def train_model_data(
 
     t_total = time.time()
     with tf.Session(config=_make_session_config(**session_config_kwargs)) as sess:
-        print '\ntraining starts! --------------------------------------------'
+        print('\ntraining starts! --------------------------------------------')
         sys.stdout.flush()
 
         # if args.evaluate:
@@ -465,9 +470,9 @@ def train_model_data(
             model_file = tf.train.latest_checkpoint(path_ckpt)
             if model_file is None:
                 raise ValueError('could not find checkpoint')
-            print 'restore: {}'.format(model_file)
+            print('restore: {}'.format(model_file))
             saver.restore(sess, model_file)
-            print 'done: restore'
+            print('done: restore')
             sys.stdout.flush()
             prev_ckpt = np.asscalar(global_step_var.eval())
         else:
@@ -525,9 +530,9 @@ def train_model_data(
                 if global_step % period_ckpt == 0 and global_step > prev_ckpt:
                     if not os.path.isdir(path_ckpt):
                         os.makedirs(path_ckpt)
-                    print 'save model'
+                    print('save model')
                     saver.save(sess, path_ckpt + '/iteration', global_step=global_step)
-                    print 'done: save model'
+                    print('done: save model')
                     sys.stdout.flush()
                     prev_ckpt = global_step
             # intermediate evaluation of model
@@ -610,12 +615,12 @@ def train_model_data(
                 losstime = '|loss:{:.5f}/{:.5f} (time:{:.2f}/{:.2f}) - with val'.format(
                     loss, loss_val, dur, dur_val) if newval else \
                     '|loss:{:.5f} (time:{:.2f})'.format(loss, dur)
-                print 'global_step {} {}'.format(global_step, losstime)
+                print('global_step {} {}'.format(global_step, losstime))
                 sys.stdout.flush()
 
         # **training finished
-        print '\ntraining finished! ------------------------------------------'
-        print 'total time elapsed: {0:.2f}'.format(time.time() - t_total)
+        print('\ntraining finished! ------------------------------------------')
+        print('total time elapsed: {0:.2f}'.format(time.time() - t_total))
 
         return metrics
 
@@ -747,7 +752,7 @@ def _generate_report(args, samplers, datasets,
             # Print results for each dataset.
             for dataset in datasets:
                 for mode in modes:
-                    print '==== evaluation: sampler {}, dataset {}, mode {} ===='.format(sampler, dataset, mode)
+                    print('==== evaluation: sampler {}, dataset {}, mode {} ===='.format(sampler, dataset, mode))
                     steps = sorted(results[dataset].keys())
                     # for step in steps:
                     #     print 'iter {}:  {}'.format(step,
@@ -758,11 +763,11 @@ def _generate_report(args, samplers, datasets,
                     #     print 'best {}: {:.3g}'.format(metric, np.asscalar(best_fn[metric](values)))
                     for metric in metrics:
                         r = {step: results[dataset][step][mode] for step in steps}
-                        print metric
-                        print ';'.join([str(step) for step in steps])
-                        print ';'.join(['{:04g}'.format(r[step][metric]) for step in steps])
+                        print(metric)
+                        print(';'.join([str(step) for step in steps]))
+                        print(';'.join(['{:04g}'.format(r[step][metric]) for step in steps]))
                         metric_stddev = metric + '_std_err'
-                        print ';'.join(['{:04g}'.format(r[step][metric_stddev]) for step in steps])
+                        print(';'.join(['{:04g}'.format(r[step][metric_stddev]) for step in steps]))
             for mode in modes:
                 # Generate plot for each metric.
                 # Take union of steps for all datasets.
@@ -774,9 +779,9 @@ def _generate_report(args, samplers, datasets,
                         write_data_file(f, mode, metric, steps, results)
                     try:
                         plot_file = plot_data(report_dir, data_file)
-                        print 'plot created:', plot_file
+                        print('plot created:', plot_file)
                     except Exception as e:
-                        print 'could not create plot:', e
+                        print('could not create plot:', e)
 
     def load_results(eval_id):
         '''Returns a dictionary from step number to dictionary of metrics.'''
@@ -793,7 +798,7 @@ def _generate_report(args, samplers, datasets,
             with open(os.path.join(dirname, f), 'r') as r:
                 results[step] = json.load(r)
         if not results:
-            print 'warning: no results found:', eval_id
+            print('warning: no results found:', eval_id)
         return results
 
     def write_data_file(f, mode, metric, steps, results):
@@ -868,7 +873,7 @@ def _draw_rectangles(im, gt, gt_is_valid=None, pred=None):
     boxes = [gt]
     if pred is not None:
         boxes.append(pred)
-    boxes = map(geom.rect_to_tf_box, boxes)
+    boxes = list(map(geom.rect_to_tf_box, boxes))
     im = tf.image.draw_bounding_boxes(im, tf.stack(boxes, axis=1))
     return tf.image.convert_image_dtype(im, tf.uint8, saturate=True)
 
@@ -905,10 +910,10 @@ def _evaluate(
         save_frames):
     iter_id = 'iteration{}'.format(global_step)
     vis_dir = os.path.join(path_output, iter_id, eval_id)
-    if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0755)
+    if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0o755)
     # visualizer = visualize.VideoFileWriter(vis_dir)
     # Run the tracker on a full epoch.
-    print 'evaluation: {}'.format(eval_id)
+    print('evaluation: {}'.format(eval_id))
     # Cache the results.
     result_file = os.path.join(path_output, 'assess', eval_id, iter_id + '.json')
     result = helpers.cache_json(
@@ -932,7 +937,7 @@ def _evaluate(
                     value += ' (1.96 sigma = {:.3g})'.format(1.96 * math.sqrt(result[var_key]))
             else:
                 value += '--'
-            print '{} {}: {}'.format(mode, metric_key, value)
+            print('{} {}: {}'.format(mode, metric_key, value))
         # print 'mode {}: IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
         #     mode, result[mode]['iou_mean'], result[mode]['auc'],
         #     result[mode]['cle_mean'], result[mode]['cle_representative'])

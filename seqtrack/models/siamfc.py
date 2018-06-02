@@ -1,8 +1,14 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import numpy as np
-
 import math
+
+import logging
+logger = logging.getLogger(__name__)
 
 from seqtrack import cnnutil
 from seqtrack import geom
@@ -177,7 +183,7 @@ class SiamFC(models_interface.IterModel):
             # Extract an image pyramid (use 1 scale when not in tracking mode).
             num_scales = tf.cond(tf.logical_or(self._is_tracking, self._train_multiscale),
                                  lambda: self._num_scales, lambda: 1)
-            mid_scale = (num_scales - 1) / 2
+            mid_scale = (num_scales - 1) // 2
             scales = util.scale_range(num_scales, self._scale_step)
             search_ims, search_rects = util.crop_pyr(
                 frame['x'], search_rect, self._search_size, scales,
@@ -628,9 +634,10 @@ def _finalize_scores(response, stride, hann_method, hann_coeff, name='finalize_s
     '''
     with tf.name_scope(name) as scope:
         response_size = response.shape.as_list()[-3:-1]
-        assert all(response_size)
+        assert all(response_size), 'response size invalid: {}'.format(str(response_size))
         response_size = np.array(response_size)
-        assert all(response_size % 2 == 1)
+        if not all(response_size % 2 == 1):
+            logger.warning('response size not odd: %s', str(response_size))
         stride = np.array(n_positive_integers(2, stride))
         upsample_size = (response_size - 1) * stride + 1
         # Upsample.

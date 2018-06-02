@@ -1,3 +1,7 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import datetime
 import functools
 import os
@@ -28,14 +32,14 @@ class SlurmDictMapper(object):
         if not dir:
             assert tempdir
             if not os.path.exists(tempdir):
-                os.makedirs(tempdir, 0755)
+                os.makedirs(tempdir, 0o755)
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M')
             dir = tempfile.mkdtemp(dir=tempdir, prefix=('tmp_{}_'.format(timestamp)))
         else:
             if os.path.exists(dir):
                 raise RuntimeError('dir already exists')
         if not os.path.exists(dir):
-            os.makedirs(dir, 0755)
+            os.makedirs(dir, 0o755)
         self._dir = dir
 
     def __call__(self, func, items):
@@ -51,6 +55,8 @@ class SlurmDictMapper(object):
             while True:
                 # Obtain remaining keys by job ID.
                 remaining = {proc.job_id(): key for key, proc in self._procs.items()}
+                if len(remaining) == 0:
+                    break
                 completed = slurmproc.wait_any(set(remaining.keys()), period=self._poll_period)
                 for job_id in completed:
                     key = remaining[job_id]

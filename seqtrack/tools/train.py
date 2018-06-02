@@ -1,3 +1,7 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import argparse
 import functools
 import itertools
@@ -42,16 +46,16 @@ def main():
 
     names = sorted(seeds.keys())
     for name in names:
-        print '-' * 40
-        print 'name:', name
-        print 'result:'
+        print('-' * 40)
+        print('name:', name)
+        print('result:')
         pprint.pprint(results[name])
 
     summary = train.summarize_trials(results.values(), val_dataset=args.optimize_dataset,
                                      sort_key=lambda metrics: metrics[args.optimize_metric])
 
-    print
-    print 'summary:'
+    print()
+    print('summary:')
     pprint.pprint(summary)
 
 

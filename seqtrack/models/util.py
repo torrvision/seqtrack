@@ -1,9 +1,16 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import numpy as np
 
 import functools
 import matplotlib.cm
+
+import logging
+logger = logging.getLogger(__name__)
 
 from seqtrack import cnnutil
 from seqtrack import geom
@@ -323,7 +330,8 @@ def displacement_from_center(im_size, name='displacement_grid'):
     with tf.name_scope(name) as scope:
         # Get the translation from the center.
         im_size = np.asarray(im_size)
-        assert all(im_size % 2 == 1)
+        # assert all(im_size % 2 == 1), 'image size not odd: {}'.format(str(im_size))
+        logger.warning('use center of image with non-odd size %s', str(im_size))
         center = (im_size - 1) / 2
         size_y, size_x = im_size
         center_y, center_x = center

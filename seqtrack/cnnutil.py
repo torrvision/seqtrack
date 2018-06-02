@@ -1,3 +1,7 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import numpy as np
 
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers

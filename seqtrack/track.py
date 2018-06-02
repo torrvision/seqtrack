@@ -1,4 +1,7 @@
-import pdb
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import tensorflow as tf
 import argparse
 import csv
@@ -118,7 +121,7 @@ def main():
             writer.writerow(['frame', 'xmin', 'ymin', 'xmax', 'ymax'])
             # times = range(args.start, args.end + 1)
             for t, rect_t in zip(times[1:], pred):
-                writer.writerow([t] + map(lambda x: '{:.6g}'.format(x), rect_t))
+                writer.writerow([t] + list(map(lambda x: '{:.6g}'.format(x), rect_t)))
 
 
 if __name__ == '__main__':

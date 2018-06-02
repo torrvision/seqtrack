@@ -1,3 +1,7 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import pdb
 import numpy as np
 import os
@@ -64,7 +68,7 @@ def show_dataset_batch(batch, dataset, frmsz):
     #     assert(stat is not None)
 
     for t in range(vids.shape[1]):  # timesteps
-        print 'drawing batch examples, time: {}'.format(t)
+        print('drawing batch examples, time: {}'.format(t))
         fig = plt.figure(figsize=(12, 12))
         for i in range(vids.shape[0]):  # batch
             plt.subplot(5, 5, i + 1)
@@ -223,11 +227,11 @@ def show_track_results_fl(results, loader, o, savedir):
     for i in range(len(results['inputs_raw'])):
         if o.dataset in ['OTB-50', 'OTB-100']:
             c = loader.classes[o.dataset][i]
-            print 'drawing track results for {} [{}]'.format(o.dataset, c)
+            print('drawing track results for {} [{}]'.format(o.dataset, c))
             savedir_track = os.path.join(savedir, 'track_results/{}'.format(c))
         elif o.dataset == 'ILSVRC':
-            print 'drawing track results for {} [exp{}]'.format(
-                o.dataset, results['idx'][i])
+            print('drawing track results for {} [exp{}]'.format(
+                o.dataset, results['idx'][i]))
             savedir_track = os.path.join(
                 savedir, 'track_results/exp{}'.format(results['idx'][i]))
         else:

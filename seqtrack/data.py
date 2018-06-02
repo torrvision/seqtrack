@@ -26,6 +26,10 @@ The module also include functionality to install the dataset from a tarball.
 The function untar_and_load_all() installs and loads the metadata for several datasets.
 '''
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import msgpack
 import numpy as np
 import os
@@ -107,7 +111,8 @@ def load_metadata(data_dir, subset_name, cache=False, cache_dir=None):
     if cache:
         return helpers.cache(trackdat.dataset.Serializer(CACHE_CODEC),
                              _cache_file(cache_dir, subset_name),
-                             lambda: load_metadata(data_dir, subset_name))
+                             lambda: load_metadata(data_dir, subset_name),
+                             makedir=True)
 
     logger.info('load metadata: "%s"', subset_name)
     subset = SUBSETS[subset_name]
@@ -135,7 +140,7 @@ def untar_and_load_all(tar_dir, data_dir, preproc, subset_names, cache_dir):
         {cache_dir}/dataset_{subset_name}.json
     '''
     if not os.path.isdir(data_dir):
-        os.makedirs(data_dir, 0755)
+        os.makedirs(data_dir, 0o755)
 
     if preproc != 'original':
         without_cache = [name for name in subset_names
@@ -180,7 +185,7 @@ def _untar(tar_dir, data_dir, preproc, names):
             raise RuntimeError('tar file not found: "{}"'.format(tar_files[name]))
     dst_dir = os.path.join(data_dir, preproc)
     if not os.path.isdir(dst_dir):
-        os.makedirs(dst_dir, 0755)
+        os.makedirs(dst_dir, 0o755)
     dataset_dirs = {name: os.path.join(dst_dir, name) for name in names}
 
     # Start a process to untar each file.

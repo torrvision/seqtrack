@@ -1,3 +1,7 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import numpy as np
 import os
 import shutil
@@ -51,7 +55,7 @@ class ChunkedTracker(object):
         if self._visualize:
             assert self._vis_dir is not None
             if not os.path.exists(self._vis_dir):
-                os.makedirs(self._vis_dir, 0755)
+                os.makedirs(self._vis_dir, 0o755)
             if not self._save_frames:
                 self._frame_dir = tempfile.mkdtemp()
             else:
@@ -106,7 +110,7 @@ class ChunkedTracker(object):
         is_valid = chunk['label_is_valid']
 
         # Prepare data as input to network.
-        images_arr = map(im_to_arr, images)
+        images_arr = list(map(im_to_arr, images))
         feed_dict.update({
             self._model_inst.example['x0']: self._batch_first_image,
             self._model_inst.example['y0']: self._batch_first_label,
@@ -163,10 +167,9 @@ class ChunkedTracker(object):
                 os.path.join(os.path.abspath(self._vis_dir),
                              escape_filename(self._sequence_name) + '.mp4')]
             try:
-                p = subprocess.Popen(args, cwd=self._frame_dir)
-                p.wait()
-            except Exception as inst:
-                print 'error:', inst
+                subprocess.check_call(args, cwd=self._frame_dir)
+            except Exception as ex:
+                logger.warning('error calling ffmpeg: %s', str(ex))
             finally:
                 if not self._save_frames:
                     shutil.rmtree(self._frame_dir)
@@ -329,7 +332,7 @@ def track_old(sess, model_inst, sequence, use_gt,
 
     if visualize:
         assert vis_dir is not None
-        if not os.path.exists(vis_dir): os.makedirs(vis_dir, 0755)
+        if not os.path.exists(vis_dir): os.makedirs(vis_dir, 0o755)
         if not save_frames:
             frame_dir = tempfile.mkdtemp()
         else:
@@ -382,7 +385,7 @@ def track_old(sess, model_inst, sequence, use_gt,
         is_valid = sequence['label_is_valid'][start:start + chunk_len]
 
         # Prepare data as input to network.
-        images_arr = map(im_to_arr, images)
+        images_arr = list(map(im_to_arr, images))
         feed_dict = {
             model_inst.example['x0']: batch_first_image,
             model_inst.example['y0']: batch_first_label,
@@ -437,8 +440,7 @@ def track_old(sess, model_inst, sequence, use_gt,
         # hmap_pred_chunks.append(hmap_pred)
 
     dur += time.time() - prev_time
-    if verbose:
-        print 'time: {:.3g} sec ({:.3g} fps)'.format(dur, (sequence_len - 1) / dur)
+    logger.debug('time: {:.3g} sec ({:.3g} fps)'.format(dur, (sequence_len - 1) / dur))
 
     if visualize:
         args = ['ffmpeg', '-loglevel', 'error',
@@ -450,10 +452,9 @@ def track_old(sess, model_inst, sequence, use_gt,
                           os.path.join(os.path.abspath(vis_dir),
                                        escape_filename(sequence['video_name']) + '.mp4')]
         try:
-            p = subprocess.Popen(args, cwd=frame_dir)
-            p.wait()
-        except Exception as inst:
-            print 'error:', inst
+            subprocess.check_call(args, cwd=frame_dir)
+        except Exception as ex:
+            logger.warning('error calling ffmpeg: %s', str(ex))
         finally:
             if not save_frames:
                 shutil.rmtree(frame_dir)
@@ -557,7 +558,7 @@ def _simplify_fraction(i, n):
         assert n != 0
         return 0, 1
     g = gcd(i, n)
-    return i / g, n / g
+    return i // g, n // g
 
 
 def _extract_tre_sequence(seq, ind, num, subseq_name):

@@ -1,3 +1,7 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import unittest
 
 import numpy as np
@@ -65,5 +69,5 @@ def random_dataset_and_predictions(rand, num_seqs, min_len=200, max_len=400, **k
     lens = [int(round(x)) for x in rand.uniform(min_len, max_len, size=num_seqs)]
     seqs, preds = zip(*[random_sequence_and_predictions(rand, lens[i], **kwargs)
                         for i in range(num_seqs)])
-    names = map(str, range(num_seqs))
+    names = list(map(str, range(num_seqs)))
     return dict(zip(names, seqs)), dict(zip(names, preds))

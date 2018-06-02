@@ -15,6 +15,10 @@ A sequence sampler has the interface:
 The function sample() returns a track ID that belongs to the dataset.
 '''
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import pdb
 import math
 import numpy as np
@@ -197,7 +201,7 @@ def select_frames(t_stop, valid_frames, rand, kind=None, ntimesteps=None,
         # frames = range(rand.choice(valid_frames), t_stop, freq)
         # frames = frames[:ntimesteps + 1]
         a = rand.choice(valid_frames)
-        frames = [a + freq * i for i in range(ntimesteps + 1)]
+        frames = [int(round(a + freq * i)) for i in range(ntimesteps + 1)]
         frames = [t for t in frames if t < t_stop]
         return frames
     elif kind == 'freq-range-fit':

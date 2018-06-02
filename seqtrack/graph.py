@@ -1,5 +1,9 @@
 '''Contains functions for constructing the TF graph.'''
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import tensorflow as tf
 import numpy as np
 
@@ -181,7 +185,7 @@ def py_load_batch(seqs, ntimesteps, im_size):
         'aspect'     # Aspect ratio of original image.
     '''
     sequence_keys = set(['x', 'y', 'y_is_valid'])
-    examples = map(lambda x: py_load_batch_elem(x, im_size), seqs)
+    examples = list(map(lambda x: py_load_batch_elem(x, im_size), seqs))
     # Pad all sequences to o.ntimesteps.
     # NOTE: Assumes that none of the arrays to be padded are empty.
     return {k: np.stack([pad_to(x[k], ntimesteps, axis=0)
