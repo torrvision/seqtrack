@@ -55,10 +55,10 @@ def add_tracker_config_args(parser):
     parser.add_argument('--period_preview', type=int, default=100,
                         help='period to include images in summary (number of steps)')
 
-    # parser.add_argument('--save_videos', action='store_true',
-    #                     help='create video during evaluation')
-    parser.add_argument('--save_frames', action='store_true',
-                        help='save frames of video during evaluation')
+    parser.add_argument('--visualize', action='store_true',
+                        help='create video during evaluation')
+    parser.add_argument('--keep_frames', action='store_true',
+                        help='keep frames of video during evaluation')
 
     parser.add_argument('--gpu_manctrl', action='store_true', help='manual gpu management')
     parser.add_argument('--gpu_frac', type=float, default=0.4, help='fraction of gpu memory')

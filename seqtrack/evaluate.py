@@ -34,7 +34,7 @@ class ChunkedTracker(object):
                  # Visualization options:
                  visualize=False,
                  vis_dir=None,
-                 save_frames=False):
+                 keep_frames=False):
         self._sess = sess
         self._model_inst = model_inst
         self._use_gt = use_gt
@@ -43,7 +43,7 @@ class ChunkedTracker(object):
         self._aspect = sequence_aspect
         self._visualize = visualize
         self._vis_dir = vis_dir
-        self._save_frames = save_frames
+        self._keep_frames = keep_frames
 
         self._num_frames = 0  # Does not include initial frame.
         self._prev_state = {}
@@ -56,7 +56,7 @@ class ChunkedTracker(object):
             assert self._vis_dir is not None
             if not os.path.exists(self._vis_dir):
                 os.makedirs(self._vis_dir, 0o755)
-            if not self._save_frames:
+            if not self._keep_frames:
                 self._frame_dir = tempfile.mkdtemp()
             else:
                 self._frame_dir = os.path.join(self._vis_dir, 'frames', escape_filename(self._sequence_name))
@@ -171,7 +171,7 @@ class ChunkedTracker(object):
             except Exception as ex:
                 logger.warning('error calling ffmpeg: %s', str(ex))
             finally:
-                if not self._save_frames:
+                if not self._keep_frames:
                     shutil.rmtree(self._frame_dir)
 
         timing = {}
@@ -193,7 +193,7 @@ def track(sess, model_inst, sequence, use_gt,
           # Visualization options:
           visualize=False,
           vis_dir=None,
-          save_frames=False):
+          keep_frames=False):
     '''Run an instantiated tracker on a sequence.
 
     model_inst.batchsz      -- Integer or None
@@ -224,7 +224,7 @@ def track(sess, model_inst, sequence, use_gt,
         sequence_aspect=sequence['aspect'],
         visualize=visualize,
         vis_dir=vis_dir,
-        save_frames=save_frames,
+        keep_frames=keep_frames,
     )
     init_frame = {
         'image_files': sequence['image_files'][0:1],
@@ -307,7 +307,7 @@ def track_old(sess, model_inst, sequence, use_gt,
               # Visualization options:
               visualize=False,
               vis_dir=None,
-              save_frames=False):
+              keep_frames=False):
     '''Run an instantiated tracker on a sequence.
 
     model_inst.batchsz      -- Integer or None
@@ -333,7 +333,7 @@ def track_old(sess, model_inst, sequence, use_gt,
     if visualize:
         assert vis_dir is not None
         if not os.path.exists(vis_dir): os.makedirs(vis_dir, 0o755)
-        if not save_frames:
+        if not keep_frames:
             frame_dir = tempfile.mkdtemp()
         else:
             frame_dir = os.path.join(vis_dir, 'frames', escape_filename(sequence['video_name']))
@@ -456,7 +456,7 @@ def track_old(sess, model_inst, sequence, use_gt,
         except Exception as ex:
             logger.warning('error calling ffmpeg: %s', str(ex))
         finally:
-            if not save_frames:
+            if not keep_frames:
                 shutil.rmtree(frame_dir)
 
     # Concatenate the results for all chunks.

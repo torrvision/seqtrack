@@ -48,8 +48,8 @@ def _train(args, name, seed):
         period_skip=args.period_skip,
         period_summary=args.period_summary,
         period_preview=args.period_preview,
-        # save_videos=args.save_videos,
-        save_frames=args.save_frames,
+        visualize=args.visualize,
+        keep_frames=args.keep_frames,
         session_config_kwargs=dict(
             gpu_manctrl=args.gpu_manctrl, gpu_frac=args.gpu_frac,
             log_device_placement=args.log_device_placement),

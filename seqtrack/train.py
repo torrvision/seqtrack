@@ -34,7 +34,6 @@ from seqtrack import motion
 from seqtrack import pipeline
 from seqtrack import sample
 from seqtrack import track
-from seqtrack import visualize
 from seqtrack.models.itermodel import ModelFromIterModel
 from seqtrack.models.siamfc import SiamFC
 
@@ -236,7 +235,8 @@ def train_model_data(
         period_summary=10,
         period_preview=100,
         verbose_train=False,
-        save_frames=False,
+        visualize=False,
+        keep_frames=False,
         session_config_kwargs=None,
         # Training args:
         ntimesteps=None,
@@ -545,7 +545,8 @@ def train_model_data(
                         use_gt_eval=use_gt_eval,
                         eval_tre_num=eval_tre_num,
                         path_output=path_output,
-                        save_frames=save_frames)
+                        visualize=visualize,
+                        keep_frames=keep_frames)
                     metrics.setdefault(global_step, {})[eval_id] = result
 
             if global_step >= num_steps:
@@ -907,7 +908,8 @@ def _evaluate(
         eval_tre_num,
         # Args that do not affect result:
         path_output,
-        save_frames):
+        visualize,
+        keep_frames):
     iter_id = 'iteration{}'.format(global_step)
     vis_dir = os.path.join(path_output, iter_id, eval_id)
     if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0o755)
@@ -920,8 +922,7 @@ def _evaluate(
         result_file,
         lambda: evaluate.evaluate_model(
             sess, model_inst, eval_sequences,
-            # visualize=visualizer.visualize if save_videos else None,
-            visualize=True, vis_dir=vis_dir, save_frames=save_frames,
+            visualize=True, vis_dir=vis_dir, keep_frames=keep_frames,
             use_gt=use_gt_eval, tre_num=eval_tre_num),
         makedir=True)
 

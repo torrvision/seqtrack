@@ -75,14 +75,14 @@ def main():
     with tf.Session(config=config) as sess:
         saver.restore(sess, args.model_file)
         # rect_pred, _ = evaluate.track(sess, example, model, sequence, use_gt=False, verbose=True,
-        #                               visualize=args.vis, vis_dir=args.vis_dir, save_frames=args.vis_keep_frames)
+        #                               visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
 
         tracker = evaluate.SimpleTracker(sess, example, model,
                                          verbose=True,
                                          sequence_name=args.sequence_name,
                                          visualize=args.vis,
                                          vis_dir=args.vis_dir,
-                                         save_frames=args.vis_keep_frames)
+                                         keep_frames=args.vis_keep_frames)
 
         if args.vot:
             handle = vot.VOT('rectangle')
