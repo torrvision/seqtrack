@@ -66,6 +66,7 @@ class SiamFC(models_interface.IterModel):
             wd=0.0,
             enable_ce_loss=True,
             ce_label='gaussian_distance',
+            ce_pos_weight=1.0,
             ce_label_structure='independent',
             sigma=0.2,
             balance_classes=True,
@@ -107,6 +108,7 @@ class SiamFC(models_interface.IterModel):
         self._enable_ce_loss = enable_ce_loss
         self._ce_label = ce_label
         self._ce_label_structure = ce_label_structure
+        self._ce_pos_weight = ce_pos_weight
         self._sigma = sigma
         self._balance_classes = balance_classes
         self._enable_margin_loss = enable_margin_loss
@@ -238,7 +240,7 @@ class SiamFC(models_interface.IterModel):
                         search_rect, scales, search_size=self._search_size,
                         search_scale=self._search_scale, label_method=self._ce_label,
                         label_structure=self._ce_label_structure, sigma=self._sigma,
-                        balance_classes=self._balance_classes)
+                        balance_classes=self._balance_classes, pos_weight=self._ce_pos_weight)
                     self._info.setdefault('ce_labels', []).append(_to_uint8(
                         util.colormap(tf.expand_dims(labels[:, mid_scale], -1), _COLORMAP)))
                 if self._enable_margin_loss:
@@ -476,7 +478,7 @@ def _add_motion_prior(response, name='motion_prior'):
 
 def _cross_entropy_loss(
         response, response_rf, prev_rect, gt_rect, gt_is_valid, search_rect, scales,
-        search_size, sigma, search_scale, balance_classes,
+        search_size, sigma, search_scale, balance_classes, pos_weight=1.0,
         label_method='gaussian_distance', label_structure='independent',
         name='cross_entropy_translation'):
     '''Computes the loss for a 2D map of logits.
@@ -525,7 +527,8 @@ def _cross_entropy_loss(
             raise ValueError('unknown label method: {}'.format(label_method))
 
         if label_structure == 'independent':
-            loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=response)
+            loss = tf.nn.weighted_cross_entropy_with_logits(
+                targets=labels, logits=response, pos_weight=pos_weight)
             if balance_classes:
                 weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-3, -2, -1))
             else:
@@ -535,8 +538,8 @@ def _cross_entropy_loss(
             labels = normalize_prob(labels, axis=(1, 2, 3))
             labels_flat, _ = merge_dims(labels, 1, 4)
             response_flat, _ = merge_dims(response, 1, 4)
-            loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels_flat,
-                                                           logits=response_flat)
+            loss = tf.nn.weighted_cross_entropy_with_logits(
+                targets=labels_flat, logits=response_flat, pos_weight=pos_weight)
         else:
             raise ValueError('unknown label structure: {}'.format(label_structure))
 

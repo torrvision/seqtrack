@@ -195,6 +195,7 @@ DEFAULT_DISTRIBUTION_SIAMFC = dict(
     enable_ce_loss=['const', True],
     ce_label=['choice', ['gaussian_distance', 'best_iou']],
     ce_label_structure=['const', 'independent'],
+    ce_pos_weight=['choice', [0.1, 1, 10]],
     sigma=['choice', [0.1, 0.2, 0.3]],
     balance_classes=['choice', [True, False]],
     enable_margin_loss=['const', False],
@@ -304,6 +305,7 @@ def sample_vector_siamfc(rand, p):
     if x['enable_ce_loss']:
         x['ce_label'] = sample(p['ce_label'])
         x['ce_label_structure'] = sample(p['ce_label_structure'])
+        x['ce_pos_weight'] = sample(p['ce_pos_weight'])
         x['sigma'] = sample(p['sigma'])
         x['balance_classes'] = sample(p['balance_classes'])
     x['enable_margin_loss'] = sample(p['enable_margin_loss'])
