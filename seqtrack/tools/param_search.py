@@ -9,6 +9,7 @@ import json
 import msgpack
 import numpy as np
 import os
+import pprint
 
 import logging
 logger = logging.getLogger(__name__)
@@ -49,8 +50,10 @@ def main():
     for name in names:
         print('-' * 40)
         print('name:', name)
-        print('vector:', vectors[name])
-        print('result:', results[name])
+        print('vector:')
+        pprint.pprint(vectors[name])
+        print('result:')
+        pprint.pprint(results[name])
 
     summaries = {
         name: train.summarize_trials([results], val_dataset=args.optimize_dataset,
@@ -62,7 +65,8 @@ def main():
     for name in names:
         print('-' * 40)
         print('name:', name)
-        print('summary:', summaries[name])
+        print('summary:')
+        pprint.pprint(summaries[name])
         # search.write_summary(summaries[name])
 
 
