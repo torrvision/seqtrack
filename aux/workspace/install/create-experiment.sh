@@ -13,6 +13,11 @@ if ! ( cd repo && git checkout "$commit" ) ; then
     exit 1
 fi
 
+if ! ( cd repo && git submodule update --init --recursive ) ; then
+    echo 'cannot update submodules'
+    exit 1
+fi
+
 # if ! virtualenv env ; then
 #     echo 'could not create virtual environment'
 #     exit 1
