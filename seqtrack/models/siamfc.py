@@ -151,14 +151,35 @@ class SiamFC(models_interface.IterModel):
                     variables_collections=['siamese'], trainable=(not self._freeze_siamese))
             feat_size = template_feat.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
-            if self._enable_template_mask:
-                template_mask = slim.model_variable(
-                    'template_mask', template_feat.shape.as_list()[-3:],
-                    initializer=tf.ones_initializer(), collections=['siamese'])
-                template_feat *= template_mask
+
+            # if self._enable_template_mask:
+            #     template_mask = slim.model_variable(
+            #         'template_mask', template_feat.shape.as_list()[-3:],
+            #         initializer=tf.ones_initializer(), collections=['siamese'])
+            #     template_feat *= template_mask
+
+            with tf.variable_scope('mask_net', reuse=False):
+                template_fg, _ = lossfunc.foreground_labels_grid(
+                    self._template_size, geom.crop_rect(y, template_rect), shape='rect')
+                template_fg = tf.expand_dims(template_fg, -1)  # 1 channel
+                # TODO: Try tanh?
+                template_mask, _ = _feature_net(
+                    template_fg, None, padding=self._feature_padding, arch=self._feature_arch,
+                    output_act='linear', enable_bnorm=self._enable_feature_bnorm,
+                    wd=self._wd, is_training=self._is_training,
+                    variables_collections=['siamese'], trainable=(not self._freeze_siamese))
+            template_feat *= template_mask
 
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
+                                 max_outputs=1, collections=self._image_summaries_collections)
+                tf.summary.image('template_fg', _to_uint8(template_fg[0:1]),
+                                 max_outputs=1, collections=self._image_summaries_collections)
+                mask_pos = tf.reduce_mean(tf.maximum(0., template_mask), axis=-1, keep_dims=True)
+                mask_neg = tf.reduce_mean(tf.maximum(0., -template_mask), axis=-1, keep_dims=True)
+                tf.summary.image('template_mask_pos', mask_pos[0:1],
+                                 max_outputs=1, collections=self._image_summaries_collections)
+                tf.summary.image('template_mask_neg', mask_neg[0:1],
                                  max_outputs=1, collections=self._image_summaries_collections)
 
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
