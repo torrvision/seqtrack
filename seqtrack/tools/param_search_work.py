@@ -40,7 +40,7 @@ def _train(args, name, vector):
     # Temporary hack: Write model_params to file.
     if not os.path.exists('model_params'):
         os.makedirs('model_params', 0o755)
-    with open(os.path.join('model_params', name + '.json'), 'r') as f:
+    with open(os.path.join('model_params', name + '.json'), 'w') as f:
         json.dump(model_kwargs, f)
 
     tmp_dir = _get_tmp_dir()
