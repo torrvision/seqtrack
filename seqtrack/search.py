@@ -23,6 +23,10 @@ def make_sample(vector, kwargs, metrics):
     return dict(vector=vector, kwargs=kwargs, metrics=metrics)
 
 
+# TODO: Use function that maps vector to kwargs and write kwargs to file.
+# Then these kwargs can be used to call the function again later, regardless of the vector?
+
+
 # def search(vectors, func, results_dir, to_kwargs=None):
 #     '''Evaluates the function at each vector and saves results to results_dir.
 #

@@ -37,6 +37,12 @@ def _train(args, name, vector):
     # Merge info dicts.
     info = dict(itertools.chain(train_info.items(), model_info.items()))
 
+    # Temporary hack: Write model_params to file.
+    if not os.path.exists('model_params'):
+        os.makedirs('model_params', 0o755)
+    with open(os.path.join('model_params', name + '.json'), 'r') as f:
+        json.dump(model_kwargs, f)
+
     tmp_dir = _get_tmp_dir()
     metrics = train.train(
         dir=os.path.join('trials', name), model_params=model_kwargs, seed=0,
