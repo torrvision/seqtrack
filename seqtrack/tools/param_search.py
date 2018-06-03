@@ -146,6 +146,7 @@ def _report(args, vectors, results):
         for name in results.keys()}
 
     # TODO: Use of summary name for two things is really bad!
+    logger.info('write report to report.csv')
     with open('report.csv', 'w') as f:
         search.write_summary(f, vectors, results_best)
 

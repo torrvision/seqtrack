@@ -23,44 +23,44 @@ def make_sample(vector, kwargs, metrics):
     return dict(vector=vector, kwargs=kwargs, metrics=metrics)
 
 
-def search(vectors, func, results_dir, to_kwargs=None):
-    '''Evaluates the function at each vector and saves results to results_dir.
+# def search(vectors, func, results_dir, to_kwargs=None):
+#     '''Evaluates the function at each vector and saves results to results_dir.
+#
+#     Evaluates func(**to_kwargs(vector)).
+#
+#     Args:
+#         func: Function that accepts kwargs and returns a dict.
+#
+#     Returns:
+#         Dictionary of evaluated samples.
+#     '''
+#     samples = {}
+#     for vector in vectors:
+#         # TODO: Should name be derived from vector or kwargs?
+#         name = _hash(vector)
+#         if to_kwargs is not None:
+#             kwargs = to_kwargs(vector)
+#         else:
+#             kwargs = vector
+#         # TODO: Use parallel, cached dict-mapper here?
+#         samples[name] = helpers.cache(
+#             os.path.join(results_dir, name + '.json'),
+#             lambda: make_sample(vector, kwargs, metrics=func(**kwargs)))
 
-    Evaluates func(**to_kwargs(vector)).
 
-    Args:
-        func: Function that accepts kwargs and returns a dict.
-
-    Returns:
-        Dictionary of evaluated samples.
-    '''
-    samples = {}
-    for vector in vectors:
-        # TODO: Should name be derived from vector or kwargs?
-        name = _hash(vector)
-        if to_kwargs is not None:
-            kwargs = to_kwargs(vector)
-        else:
-            kwargs = vector
-        # TODO: Use parallel, cached dict-mapper here?
-        samples[name] = helpers.cache(
-            os.path.join(results_dir, name + '.json'),
-            lambda: make_sample(vector, kwargs, metrics=func(**kwargs)))
-
-
-def load(results_dir):
-    files = os.listdir(results_dir)
-    json_files = [x for x in files if x.endswith('.json')]
-    samples = {}
-    for basename in json_files:
-        name, _ = os.path.splitext(basename)
-        try:
-            with open(os.path.join(results_dir, basename), 'r') as f:
-                samples[name] = json.load(f)
-        except (IOError, ValueError) as ex:
-            logger.warning('could not load results from "{}": {}'.format(
-                os.path.join(results_dir, basename), str(ex)))
-    return samples
+# def load(results_dir):
+#     files = os.listdir(results_dir)
+#     json_files = [x for x in files if x.endswith('.json')]
+#     samples = {}
+#     for basename in json_files:
+#         name, _ = os.path.splitext(basename)
+#         try:
+#             with open(os.path.join(results_dir, basename), 'r') as f:
+#                 samples[name] = json.load(f)
+#         except (IOError, ValueError) as ex:
+#             logger.warning('could not load results from "{}": {}'.format(
+#                 os.path.join(results_dir, basename), str(ex)))
+#     return samples
 
 
 def write_summary(f, vectors, outputs):
@@ -73,6 +73,7 @@ def write_summary(f, vectors, outputs):
         ['output_' + key for key in sorted(keys_output)]))
 
     writer = csv.DictWriter(f, keys)
+    writer.writeheader()
     for name in names:
         record = dict(itertools.chain(
             [('name', name)],
