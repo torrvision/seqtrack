@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 from seqtrack import cnnutil
 from seqtrack import geom
+from seqtrack import lossfunc
 
 from seqtrack.cnnutil import ReceptiveField, IntRect
 from seqtrack.helpers import merge_dims
@@ -116,7 +117,7 @@ def feather_mask(im_size, margin, name='feather_mask'):
     '''
     # TODO: Should account for aspect ratio.
     with tf.name_scope(name) as scope:
-        grid = make_grid_centers(im_size)
+        grid = lossfunc.make_grid_centers(im_size)
         # Distance from interior on either side.
         lower, upper = margin, 1 - margin
         below_lower = tf.clip_by_value((lower - grid) / margin, 0., 1.)
@@ -299,24 +300,6 @@ def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_py
                               is_max,                         # [b, s, h, w]
                               axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
         return translation, scale
-
-
-def make_grid_centers(im_size, name='make_grid_centers'):
-    '''Make grid of center positions of each pixel.
-
-    Args:
-        im_size: (height, width)
-
-    Returns:
-        Tensor grid of size [height, width, 2] as (x, y).
-    '''
-    with tf.name_scope(name) as scope:
-        size_y, size_x = n_positive_integers(2, im_size)
-        grid_y = (tf.to_float(tf.range(size_y)) + 0.5) / float(size_y)
-        grid_x = (tf.to_float(tf.range(size_x)) + 0.5) / float(size_x)
-        grid = tf.stack((tf.tile(tf.expand_dims(grid_x, 0), [size_y, 1]),
-                         tf.tile(tf.expand_dims(grid_y, 1), [1, size_x])), axis=-1)
-        return grid
 
 
 def displacement_from_center(im_size, name='displacement_grid'):
