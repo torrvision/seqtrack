@@ -167,7 +167,7 @@ DEFAULT_DISTRIBUTION_SIAMFC = dict(
     # Options required for determining stride of network.
     feature_padding=['const', 'VALID'],
     feature_arch=['choice', ['alexnet', 'darknet']],
-    increase_stride=['constant', []],
+    increase_stride=['const', []],
     desired_template_size=['choice', [96, 128, 192]],
     desired_relative_search_size=['choice', [1.5, 2, 3]],
     template_scale=['uniform_format', 1, 3, '.2g'],

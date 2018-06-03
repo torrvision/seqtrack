@@ -33,7 +33,6 @@ from seqtrack import helpers
 from seqtrack import motion
 from seqtrack import pipeline
 from seqtrack import sample
-from seqtrack import track
 from seqtrack.models.itermodel import ModelFromIterModel
 from seqtrack.models.siamfc import SiamFC
 
