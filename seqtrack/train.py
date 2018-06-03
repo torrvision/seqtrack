@@ -951,7 +951,7 @@ def _is_pair(x):
 
 
 def summarize_trials(trial_metrics, val_dataset, sort_key):
-    '''Summarizes the results of multiple training trials.
+    '''Takes the mean over multiple trials of the best checkpoint.
 
     Args:
         trial_metrics: List of dicts, each of which is the result of train().
@@ -970,18 +970,17 @@ def summarize_trials(trial_metrics, val_dataset, sort_key):
 
     metrics = {}
     for dataset in datasets:
-        metrics[dataset] = {}
         # Take union of metric keys across trials (should be identical).
         keys = set(key for trial in range(num_trials) for key in best[trial][dataset].keys())
         # If there exists a metric xxx and xxx_var, then remove xxx_var from the list.
         basic_keys = keys.difference(set(key + '_var' for key in keys))
         for key in basic_keys:
-            metrics[dataset][key] = np.mean([best[trial][dataset][key]
-                                             for trial in range(num_trials)])
+            metrics[dataset + '_' + key] = np.mean(
+                [best[trial][dataset][key] for trial in range(num_trials)])
             if key + '_var' in keys:
                 # Use variance of means plus mean of variances.
                 # This assumes that each metric (which has a variance) is a mean.
-                metrics[dataset][key + '_var'] = (
+                metrics[dataset + '_' + key + '_var'] = (
                     np.mean([best[trial][dataset][key + '_var'] for trial in range(num_trials)]) +
                     np.var([best[trial][dataset][key] for trial in range(num_trials)]))
             else:

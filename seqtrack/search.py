@@ -2,7 +2,9 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import csv
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -61,23 +63,22 @@ def load(results_dir):
     return samples
 
 
-def write_summary(f, samples):
-    keys_vector = set(key for sample in samples.values() for key in sample['vector'].keys())
-    keys_kwargs = set(key for sample in samples.values() for key in sample['kwargs'].keys())
-    keys_metrics = set(key for sample in samples.values() for key in sample['metrics'].keys())
-    keys = list(chain(['name'],
-                      ['vector_' + key for key in sorted(keys_vector)],
-                      ['kwargs_' + key for key in sorted(keys_kwargs)],
-                      ['metrics_' + key for key in sorted(keys_metrics)]))
+def write_summary(f, vectors, outputs):
+    names = outputs.keys()
+    keys_vector = set(key for name in names for key in vectors[name].keys())
+    keys_output = set(key for name in names for key in outputs[name].keys())
+    keys = list(itertools.chain(
+        ['name'],
+        ['vector_' + key for key in sorted(keys_vector)],
+        ['output_' + key for key in sorted(keys_output)]))
 
-    writer = csv.DictWriter(fieldnames=keys)
-    for name, sample in samples.items():
-        record = dict(chain(
+    writer = csv.DictWriter(f, keys)
+    for name in names:
+        record = dict(itertools.chain(
             [('name', name)],
-            [('vector_' + key, val) for key, val in sample['vector'].items()],
-            [('kwargs_' + key, val) for key, val in sample['kwargs'].items()],
-            [('metrics_' + key, val) for key, val in sample['metrics'].items()]))
-        writer.write(record)
+            [('vector_' + key, val) for key, val in vectors[name].items()],
+            [('output_' + key, val) for key, val in outputs[name].items()]))
+        writer.writerow(record)
 
 
 # Could use hyperopt for this? At least to define the space?
