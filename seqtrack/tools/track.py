@@ -11,17 +11,25 @@ import os
 import numpy as np
 from PIL import Image
 
+from seqtrack import app
 from seqtrack import evaluate
 from seqtrack import geom_np
 from seqtrack import data
-# from seqtrack import model as model_pkg
 from seqtrack import draw
 from seqtrack import graph
+from seqtrack.models.itermodel import ModelFromIterModel
+from seqtrack.models.siamfc import SiamFC
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='run tracker on one sequence')
-    add_tracker_arguments(parser)
+    # add_tracker_arguments(parser)
+    app.add_instance_arguments(parser)
+
+    # TODO: Move to app?
+    parser.add_argument('--model_params', type=json.loads, default={},
+                        help='JSON string specifying model')
+
     parser.add_argument('model_file',
                         help='e.g. iteration-100000; where iteration-100000.index exists')
 
@@ -29,14 +37,13 @@ def parse_arguments():
     parser.add_argument('--vot', action='store_true')
 
     parser.add_argument('--sequence_name', type=str, default='untitled')
-    parser.add_argument('--init_rect', type=json.loads, required=True,
+    parser.add_argument('--init_rect', type=json.loads,
                         help='e.g. {"xmin": 0.1, "ymin": 0.7, "xmax": 0.4, "ymax": 0.9}')
-    parser.add_argument('--start', type=int, required=True)
-    parser.add_argument('--end', type=int, required=True)
-    parser.add_argument('--image_format', type=str, required=True,
-                        help='e.g. sequence/%%06d.jpeg')
+    parser.add_argument('--start', type=int)
+    parser.add_argument('--end', type=int)
+    parser.add_argument('--image_format', type=str, help='e.g. sequence/%%06d.jpeg')
 
-    parser.add_argument('--gpu_frac', type=float, default='1.0', help='fraction of gpu memory')
+    # parser.add_argument('--gpu_frac', type=float, default='1.0', help='fraction of gpu memory')
     parser.add_argument('--vis', action='store_true')
     parser.add_argument('--vis_dir', type=str)
     parser.add_argument('--vis_keep_frames', action='store_true')
@@ -50,10 +57,20 @@ def main():
         global vot
         vot = __import__('vot', globals(), locals())
 
-    example = graph.make_placeholders(args.ntimesteps, (args.frmsz, args.frmsz))
-    create_model = model_pkg.load_model(args, model_params=args.model_params)
-    model = create_model(graph.whiten(graph.guard_labels(example), stat=None),
-                         summaries_collections=['summaries_model'])
+    model_spec = ModelFromIterModel(SiamFC(**args.model_params))
+
+    example, run_opts = graph.make_placeholders(
+        args.ntimesteps, (args.imheight, args.imwidth))
+    example_preproc = graph.whiten(example)
+    with tf.name_scope('model'):
+        # TODO: Can ignore image_summaries here?
+        outputs, losses, init_state, final_state = model_spec.instantiate(
+            example_preproc, run_opts, enable_loss=False)
+    model_inst = graph.ModelInstance(
+        example, run_opts, outputs, init_state, final_state,
+        batchsz=outputs['y'].shape.as_list()[0], ntimesteps=args.ntimesteps,
+        imheight=args.imheight, imwidth=args.imwidth)
+
     saver = tf.train.Saver()
 
     # # Load sequence from args.
@@ -70,19 +87,16 @@ def main():
     # # sequence['original_image_size']
 
     config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    config.gpu_options.per_process_gpu_memory_fraction = args.gpu_frac
+    # config.gpu_options.allow_growth = True
+    # config.gpu_options.per_process_gpu_memory_fraction = args.gpu_frac
     with tf.Session(config=config) as sess:
         saver.restore(sess, args.model_file)
         # rect_pred, _ = evaluate.track(sess, example, model, sequence, use_gt=False, verbose=True,
         #                               visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
 
-        tracker = evaluate.SimpleTracker(sess, example, model,
-                                         verbose=True,
-                                         sequence_name=args.sequence_name,
-                                         visualize=args.vis,
-                                         vis_dir=args.vis_dir,
-                                         keep_frames=args.vis_keep_frames)
+        tracker = evaluate.SimpleTracker(
+            sess, example, model_inst, verbose=True, sequence_name=args.sequence_name,
+            visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
 
         if args.vot:
             handle = vot.VOT('rectangle')
