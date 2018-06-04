@@ -1,6 +1,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+from future_builtins import filter
 
 import argparse
 import functools
@@ -30,50 +31,49 @@ def main():
     args = parse_arguments()
     logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
 
-    # Make infinite stream of (named) vectors.
+    if args.report_only:
+        vectors = _discover_dict(os.path.join('cache', 'vectors'), codec=json, ext='.json')
+        results = _discover_dict(os.path.join('cache', 'results'), codec=msgpack, ext='.msgpack')
+        if len(results) == 0:
+            raise RuntimeError('zero results found')
+        logger.info('found %d results', len(results))
+        _report(args, vectors, results)
+        return
+
+    vectors_existing = _discover_dict(os.path.join('cache', 'vectors'), codec=json, ext='.json')
+    # Make stream of (named) vectors.
     vector_stream = _make_vector_stream(np.random.RandomState(0))
+    vector_stream = filter(lambda pair: pair[0] not in vectors_existing, vector_stream)
+    # Concatenate existing and new vectors.
+    vector_stream = itertools.chain(vectors_existing.items(), vector_stream)
+
+    # Take first n vectors.
     vectors = dict(itertools.islice(vector_stream, args.num_configs))
+    vector_stream = vectors.items()
+
+    # Write vectors as they are mapped.
+    vector_stream = _dump_dict_stream(vector_stream, dir=os.path.join('cache', 'vectors'),
+                                      codec=json, ext='.json')
     # Map stream of named vectors to stream of named results (order may be different).
     if args.slurm:
         mapper = slurm.SlurmDictMapper(tempdir='tmp', opts=['--' + x for x in args.slurm_flags])
     else:
         mapper = helpers.map_dict
     # Cache the results and use SLURM mapper to evaluate those without cache.
-    mapper = helpers.CachedDictMapper(dir=os.path.join('cache', 'trials'),
+    mapper = helpers.CachedDictMapper(dir=os.path.join('cache', 'results'),
                                       codec=msgpack, ext='.msgpack', mapper=mapper)
-    result_stream = mapper(functools.partial(work._train, args), vectors.items())
+    result_stream = mapper(functools.partial(work._train, args), vector_stream)
     # Construct dictionary from stream.
     results = dict(result_stream)
 
-    # Print a table of vectors and results.
-    names = sorted(vectors.keys())
-    for name in names:
-        print('-' * 40)
-        print('name:', name)
-        print('vector:')
-        pprint.pprint(vectors[name])
-        print('result:')
-        pprint.pprint(results[name])
-
-    summaries = {
-        name: train.summarize_trials([results], val_dataset=args.optimize_dataset,
-                                     sort_key=lambda metrics: metrics[args.optimize_metric])
-        for name, results in results.items()}
-
-    # Print a table of vectors and results.
-    print()
-    for name in names:
-        print('-' * 40)
-        print('name:', name)
-        print('summary:')
-        pprint.pprint(summaries[name])
-        # search.write_summary(summaries[name])
+    _report(args, vectors, results)
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--num_configs', type=int, default=10,
                         help='number of configurations')
+    parser.add_argument('--report_only', action='store_true')
 
     parser.add_argument('--loglevel', default='info', help='debug, info, warning')
     parser.add_argument('--verbose_train', action='store_true')
@@ -111,6 +111,44 @@ def _make_vector_stream(rand):
         vector.update(work.sample_vector_siamfc(rand, work.DEFAULT_DISTRIBUTION_SIAMFC))
         name = search.hash_vector(vector)
         yield name, vector
+
+
+def _dump_dict_stream(items, dir, codec, ext):
+    if not os.path.exists(dir):
+        os.makedirs(dir, 0o755)
+    for key, value in items:
+        fname = os.path.join(dir, key + ext)
+        with helpers.open_atomic_write(fname) as f:
+            codec.dump(value, f)
+        yield key, value
+
+
+def _discover_dict(dir, codec, ext):
+    names = os.listdir(dir) if os.path.isdir(dir) else []
+    names = [name for name in names if name.endswith(ext)]
+    names = [name for name in names if os.path.isfile(os.path.join(dir, name))]
+
+    x = {}
+    for name in names:
+        key = name[:-len(ext)]
+        with open(os.path.join(dir, name), 'r') as f:
+            value = codec.load(f)
+        x[key] = value
+    return x
+
+
+def _report(args, vectors, results):
+    # Use optimize_dataset to choose checkpoint of each experiment.
+    # If there were multiple trials, take mean over trials.
+    results_best = {
+        name: train.summarize_trials([results[name]], val_dataset=args.optimize_dataset,
+                                     sort_key=lambda metrics: metrics[args.optimize_metric])
+        for name in results.keys()}
+
+    # TODO: Use of summary name for two things is really bad!
+    logger.info('write report to report.csv')
+    with open('report.csv', 'w') as f:
+        search.write_summary(f, vectors, results_best)
 
 
 if __name__ == '__main__':

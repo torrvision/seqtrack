@@ -37,6 +37,12 @@ def _train(args, name, vector):
     # Merge info dicts.
     info = dict(itertools.chain(train_info.items(), model_info.items()))
 
+    # Temporary hack: Write model_params to file.
+    if not os.path.exists('model_params'):
+        os.makedirs('model_params', 0o755)
+    with open(os.path.join('model_params', name + '.json'), 'w') as f:
+        json.dump(model_kwargs, f)
+
     tmp_dir = _get_tmp_dir()
     metrics = train.train(
         dir=os.path.join('trials', name), model_params=model_kwargs, seed=0,
@@ -161,8 +167,8 @@ DEFAULT_DISTRIBUTION_SIAMFC = dict(
     # Options required for determining stride of network.
     feature_padding=['const', 'VALID'],
     feature_arch=['choice', ['alexnet', 'darknet']],
-    increase_stride=['choice', [[], [2], [4], [2, 2], [1, 2]]],
-    desired_template_size=['choice', [96, 128]],
+    increase_stride=['const', []],
+    desired_template_size=['choice', [96, 128, 192]],
     desired_relative_search_size=['choice', [1.5, 2, 3]],
     template_scale=['uniform_format', 1, 3, '.2g'],
     aspect_method=['choice', ['perimeter', 'area', 'stretch']],
@@ -175,7 +181,7 @@ DEFAULT_DISTRIBUTION_SIAMFC = dict(
     keep_uint8_range=['const', False],
     feature_act=['const', 'linear'],
     enable_feature_bnorm=['const', True],
-    enable_template_mask=['choice', [True, False]],
+    template_mask_kind=['choice', ['none', 'static', 'dynamic']],
     xcorr_padding=['const', 'VALID'],
     bnorm_after_xcorr=['const', True],
     freeze_siamese=['const', False],
@@ -281,7 +287,7 @@ def sample_vector_siamfc(rand, p):
     x['keep_uint8_range'] = sample(p['keep_uint8_range'])
     x['feature_act'] = sample(p['feature_act'])
     x['enable_feature_bnorm'] = sample(p['enable_feature_bnorm'])
-    x['enable_template_mask'] = sample(p['enable_template_mask'])
+    x['template_mask_kind'] = sample(p['template_mask_kind'])
     x['xcorr_padding'] = sample(p['xcorr_padding'])
     x['bnorm_after_xcorr'] = sample(p['bnorm_after_xcorr'])
     x['freeze_siamese'] = sample(p['freeze_siamese'])

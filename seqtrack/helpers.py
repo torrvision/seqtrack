@@ -518,11 +518,11 @@ def _dump_cache_for_each(items, dir, codec=json, ext='.json'):
 
 
 @contextmanager
-def open_atomic_write(filename, mode=0o644):
+def open_atomic_write(filename, perm=0o644):
     dir, basename = os.path.split(filename)
     with tempfile.NamedTemporaryFile(delete=False, dir=dir, suffix=basename) as f:
         yield f
-    os.chmod(f.name, mode)  # Default permissions are 600.
+    os.chmod(f.name, perm)  # Default permissions are 600.
     os.rename(f.name, filename)
 
 

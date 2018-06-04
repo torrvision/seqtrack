@@ -38,7 +38,7 @@ class SiamFC(models_interface.IterModel):
             aspect_method='perimeter',  # TODO: Equivalent to SiamFC?
             use_gt=True,
             curr_as_prev=True,
-            pad_with_mean=False,  # Use mean of first image for padding.
+            pad_with_mean=True,  # Use mean of first image for padding.
             feather=True,
             feather_margin=0.1,
             center_input_range=True,  # Make range [-0.5, 0.5] instead of [0, 1].
@@ -48,7 +48,7 @@ class SiamFC(models_interface.IterModel):
             increase_stride=None,
             feature_act='linear',
             enable_feature_bnorm=True,
-            enable_template_mask=False,
+            template_mask_kind='none',  # none, static, dynamic
             xcorr_padding='VALID',
             bnorm_after_xcorr=True,
             freeze_siamese=False,
@@ -91,7 +91,7 @@ class SiamFC(models_interface.IterModel):
         self._increase_stride = increase_stride
         self._feature_act = feature_act
         self._enable_feature_bnorm = enable_feature_bnorm
-        self._enable_template_mask = enable_template_mask
+        self._template_mask_kind = template_mask_kind
         self._xcorr_padding = xcorr_padding
         self._bnorm_after_xcorr = bnorm_after_xcorr
         self._freeze_siamese = freeze_siamese
@@ -151,10 +151,34 @@ class SiamFC(models_interface.IterModel):
                     variables_collections=['siamese'], trainable=(not self._freeze_siamese))
             feat_size = template_feat.shape.as_list()[-3:-1]
             cnnutil.assert_center_alignment(self._template_size, feat_size, rfs['template'])
-            if self._enable_template_mask:
-                template_mask = slim.model_variable(
-                    'template_mask', template_feat.shape.as_list()[-3:],
-                    initializer=tf.ones_initializer(), collections=['siamese'])
+
+            if self._template_mask_kind != 'none':
+                if self._template_mask_kind == 'static':
+                    template_mask = slim.model_variable(
+                        'template_mask', template_feat.shape.as_list()[-3:],
+                        initializer=tf.ones_initializer(), collections=['siamese'])
+                elif self._template_mask_kind == 'dynamic':
+                    with tf.variable_scope('mask_net', reuse=False):
+                        template_fg, _ = lossfunc.foreground_labels_grid(
+                            self._template_size, geom.crop_rect(y, template_rect), shape='rect')
+                        template_fg = tf.expand_dims(template_fg, -1)  # 1 channel
+                        # TODO: Try tanh?
+                        template_mask, _ = _feature_net(
+                            template_fg, None, padding=self._feature_padding, arch=self._feature_arch,
+                            output_act='linear', enable_bnorm=self._enable_feature_bnorm,
+                            wd=self._wd, is_training=self._is_training,
+                            variables_collections=['siamese'], trainable=(not self._freeze_siamese))
+                        with tf.name_scope('summary'):
+                            tf.summary.image('template_fg', _to_uint8(template_fg[0:1]),
+                                             max_outputs=1, collections=self._image_summaries_collections)
+                            mask_pos = tf.reduce_mean(tf.maximum(0., template_mask), axis=-1, keep_dims=True)
+                            mask_neg = tf.reduce_mean(tf.maximum(0., -template_mask), axis=-1, keep_dims=True)
+                            tf.summary.image('template_mask_pos', mask_pos[0:1],
+                                             max_outputs=1, collections=self._image_summaries_collections)
+                            tf.summary.image('template_mask_neg', mask_neg[0:1],
+                                             max_outputs=1, collections=self._image_summaries_collections)
+                else:
+                    raise ValueError('unknown mask kind: {}'.format(self._template_mask_kind))
                 template_feat *= template_mask
 
             with tf.name_scope('summary'):

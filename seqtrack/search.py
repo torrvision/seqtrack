@@ -2,7 +2,9 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import csv
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -21,63 +23,67 @@ def make_sample(vector, kwargs, metrics):
     return dict(vector=vector, kwargs=kwargs, metrics=metrics)
 
 
-def search(vectors, func, results_dir, to_kwargs=None):
-    '''Evaluates the function at each vector and saves results to results_dir.
-
-    Evaluates func(**to_kwargs(vector)).
-
-    Args:
-        func: Function that accepts kwargs and returns a dict.
-
-    Returns:
-        Dictionary of evaluated samples.
-    '''
-    samples = {}
-    for vector in vectors:
-        # TODO: Should name be derived from vector or kwargs?
-        name = _hash(vector)
-        if to_kwargs is not None:
-            kwargs = to_kwargs(vector)
-        else:
-            kwargs = vector
-        # TODO: Use parallel, cached dict-mapper here?
-        samples[name] = helpers.cache(
-            os.path.join(results_dir, name + '.json'),
-            lambda: make_sample(vector, kwargs, metrics=func(**kwargs)))
+# TODO: Use function that maps vector to kwargs and write kwargs to file.
+# Then these kwargs can be used to call the function again later, regardless of the vector?
 
 
-def load(results_dir):
-    files = os.listdir(results_dir)
-    json_files = [x for x in files if x.endswith('.json')]
-    samples = {}
-    for basename in json_files:
-        name, _ = os.path.splitext(basename)
-        try:
-            with open(os.path.join(results_dir, basename), 'r') as f:
-                samples[name] = json.load(f)
-        except (IOError, ValueError) as ex:
-            logger.warning('could not load results from "{}": {}'.format(
-                os.path.join(results_dir, basename), str(ex)))
-    return samples
+# def search(vectors, func, results_dir, to_kwargs=None):
+#     '''Evaluates the function at each vector and saves results to results_dir.
+#
+#     Evaluates func(**to_kwargs(vector)).
+#
+#     Args:
+#         func: Function that accepts kwargs and returns a dict.
+#
+#     Returns:
+#         Dictionary of evaluated samples.
+#     '''
+#     samples = {}
+#     for vector in vectors:
+#         # TODO: Should name be derived from vector or kwargs?
+#         name = _hash(vector)
+#         if to_kwargs is not None:
+#             kwargs = to_kwargs(vector)
+#         else:
+#             kwargs = vector
+#         # TODO: Use parallel, cached dict-mapper here?
+#         samples[name] = helpers.cache(
+#             os.path.join(results_dir, name + '.json'),
+#             lambda: make_sample(vector, kwargs, metrics=func(**kwargs)))
 
 
-def write_summary(f, samples):
-    keys_vector = set(key for sample in samples.values() for key in sample['vector'].keys())
-    keys_kwargs = set(key for sample in samples.values() for key in sample['kwargs'].keys())
-    keys_metrics = set(key for sample in samples.values() for key in sample['metrics'].keys())
-    keys = list(chain(['name'],
-                      ['vector_' + key for key in sorted(keys_vector)],
-                      ['kwargs_' + key for key in sorted(keys_kwargs)],
-                      ['metrics_' + key for key in sorted(keys_metrics)]))
+# def load(results_dir):
+#     files = os.listdir(results_dir)
+#     json_files = [x for x in files if x.endswith('.json')]
+#     samples = {}
+#     for basename in json_files:
+#         name, _ = os.path.splitext(basename)
+#         try:
+#             with open(os.path.join(results_dir, basename), 'r') as f:
+#                 samples[name] = json.load(f)
+#         except (IOError, ValueError) as ex:
+#             logger.warning('could not load results from "{}": {}'.format(
+#                 os.path.join(results_dir, basename), str(ex)))
+#     return samples
 
-    writer = csv.DictWriter(fieldnames=keys)
-    for name, sample in samples.items():
-        record = dict(chain(
+
+def write_summary(f, vectors, outputs):
+    names = outputs.keys()
+    keys_vector = set(key for name in names for key in vectors[name].keys())
+    keys_output = set(key for name in names for key in outputs[name].keys())
+    keys = list(itertools.chain(
+        ['name'],
+        ['vector_' + key for key in sorted(keys_vector)],
+        ['output_' + key for key in sorted(keys_output)]))
+
+    writer = csv.DictWriter(f, keys)
+    writer.writeheader()
+    for name in names:
+        record = dict(itertools.chain(
             [('name', name)],
-            [('vector_' + key, val) for key, val in sample['vector'].items()],
-            [('kwargs_' + key, val) for key, val in sample['kwargs'].items()],
-            [('metrics_' + key, val) for key, val in sample['metrics'].items()]))
-        writer.write(record)
+            [('vector_' + key, val) for key, val in vectors[name].items()],
+            [('output_' + key, val) for key, val in outputs[name].items()]))
+        writer.writerow(record)
 
 
 # Could use hyperopt for this? At least to define the space?
