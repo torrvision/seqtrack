@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 from seqtrack import assess
 from seqtrack import data
+from seqtrack import geom_np
 from seqtrack import helpers
 from seqtrack import visualize as visualize_pkg
 from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to, to_nested_tuple

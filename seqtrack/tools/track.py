@@ -22,6 +22,7 @@ from seqtrack import draw
 from seqtrack import graph
 from seqtrack.models.itermodel import ModelFromIterModel
 from seqtrack.models.siamfc import SiamFC
+import trackdat
 
 
 def parse_arguments():
@@ -116,12 +117,14 @@ def main():
             logger.debug('try to obtain VOT handle')
             handle = vot.VOT('rectangle')
             logger.debug('obtained VOT handle')
-            vot_init_rect = handle.region()
+            init_rect_vot = handle.region()
+            logger.debug('init rectangle: %s', init_rect_vot)
             init_image = handle.frame()
             if not init_image:
                 return
-            image_size = Image.open(init_image).size
-            init_rect = rect_from_vot(vot_init_rect, image_size)
+            imwidth, imheight = Image.open(init_image).size
+            logger.debug('imwidth=%d imheight=%s', imwidth, imheight)
+            init_rect = from_vot(init_rect_vot, imwidth=imwidth, imheight=imheight)
         else:
             times = range(args.start, args.end + 1)
             init_image = args.image_format % times[0]
@@ -133,13 +136,15 @@ def main():
                 image_t = handle.frame()
                 if image_t is None:
                     break
-                pred_t = tracker.next(image_t)
-                handle.report(rect_to_vot(rect_from_vec(pred_t), image_size))
+                pred_t = tracker.next(image_t)['y']
+                pred_t_vot = to_vot(rect_from_vec(pred_t), imwidth=imwidth, imheight=imheight)
+                logger.debug('report rectangle: %s', pred_t_vot)
+                handle.report(pred_t_vot)
         else:
             pred = []
             for t in times[1:]:
                 image_t = args.image_format % t
-                pred_t = tracker.next(image_t)
+                pred_t = tracker.next(image_t)['y']
                 pred.append(pred_t)
         tracker.end()
 
@@ -152,6 +157,37 @@ def main():
             # times = range(args.start, args.end + 1)
             for t, rect_t in zip(times[1:], pred):
                 writer.writerow([t] + list(map(lambda x: '{:.6g}'.format(x), rect_t)))
+
+
+def from_vot(r, imheight, imwidth):
+    # Matlab images are rendered in the continuous interval [0.5, size + 0.5].
+    # To move them to the range [0, size] we must subtract 0.5.
+    return trackdat.dataset.make_rect_pix(
+        xmin=r.x - 0.5, xmax=r.x - 0.5 + r.width,
+        ymin=r.y - 0.5, ymax=r.y - 0.5 + r.height,
+        imheight=imheight,
+        imwidth=imwidth)
+
+
+def to_vot(r, imheight, imwidth):
+    return vot.Rectangle(
+        x=(r['xmin'] * imwidth + 0.5),
+        y=(r['ymin'] * imheight + 0.5),
+        width=((r['xmax'] - r['xmin']) * imwidth),
+        height=((r['ymax'] - r['ymin']) * imheight))
+
+
+def rect_to_vec(rect):
+    min_pt = (rect['xmin'], rect['ymin'])
+    max_pt = (rect['xmax'], rect['ymax'])
+    return geom_np.make_rect(min_pt, max_pt)
+
+
+def rect_from_vec(vec):
+    min_pt, max_pt = geom_np.rect_min_max(vec)
+    xmin, ymin = min_pt.tolist()
+    xmax, ymax = max_pt.tolist()
+    return dict(xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
 
 
 if __name__ == '__main__':
