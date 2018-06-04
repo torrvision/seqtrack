@@ -11,6 +11,9 @@ import os
 import numpy as np
 from PIL import Image
 
+import logging
+logger = logging.getLogger(__name__)
+
 from seqtrack import app
 from seqtrack import evaluate
 from seqtrack import geom_np
@@ -23,12 +26,13 @@ from seqtrack.models.siamfc import SiamFC
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='run tracker on one sequence')
+    parser.add_argument('--loglevel', default='warning', help='debug, info, warning')
     # add_tracker_arguments(parser)
     app.add_instance_arguments(parser)
 
     # TODO: Move to app?
-    parser.add_argument('--model_params', type=json.loads, default={},
-                        help='JSON string specifying model')
+    parser.add_argument('--model_params', type=json.loads, help='JSON string')
+    parser.add_argument('--model_params_file', type=str, help='JSON file')
 
     parser.add_argument('model_file',
                         help='e.g. iteration-100000; where iteration-100000.index exists')
@@ -53,19 +57,29 @@ def parse_arguments():
 
 def main():
     args = parse_arguments()
+    logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
     if args.vot:
         global vot
         vot = __import__('vot', globals(), locals())
 
-    model_spec = ModelFromIterModel(SiamFC(**args.model_params))
+    if args.model_params and args.model_params_file:
+        raise RuntimeError('cannot specify both model_params and model_params_file')
+    model_params = {}
+    if args.model_params_file:
+        with open(args.model_params_file, 'r') as f:
+            model_params = json.load(f)
+    elif args.model_params:
+        model_params = args.model_params
+
+    model_spec = ModelFromIterModel(SiamFC(**model_params))
 
     example, run_opts = graph.make_placeholders(
         args.ntimesteps, (args.imheight, args.imwidth))
-    example_preproc = graph.whiten(example)
+    example_proc = graph.whiten(example)
     with tf.name_scope('model'):
         # TODO: Can ignore image_summaries here?
         outputs, losses, init_state, final_state = model_spec.instantiate(
-            example_preproc, run_opts, enable_loss=False)
+            example_proc, run_opts, enable_loss=False)
     model_inst = graph.ModelInstance(
         example, run_opts, outputs, init_state, final_state,
         batchsz=outputs['y'].shape.as_list()[0], ntimesteps=args.ntimesteps,
@@ -95,11 +109,13 @@ def main():
         #                               visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
 
         tracker = evaluate.SimpleTracker(
-            sess, example, model_inst, verbose=True, sequence_name=args.sequence_name,
+            sess, model_inst, verbose=True, sequence_name=args.sequence_name,
             visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
 
         if args.vot:
+            logger.debug('try to obtain VOT handle')
             handle = vot.VOT('rectangle')
+            logger.debug('obtained VOT handle')
             vot_init_rect = handle.region()
             init_image = handle.frame()
             if not init_image:
