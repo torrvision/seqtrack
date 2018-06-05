@@ -63,8 +63,6 @@ def _train(args, name, vector):
             log_device_placement=args.log_device_placement),
         # Arguments required for setting up data.
         # TODO: How to make this a parameter?
-        train_dataset=args.train_dataset,
-        val_dataset=args.val_dataset,
         eval_datasets=args.eval_datasets,
         pool_datasets=args.pool_datasets,
         pool_split=args.pool_split,
@@ -140,6 +138,8 @@ def _assert_partition(x, subsets):
 
 
 DEFAULT_DISTRIBUTION_TRAIN = dict(
+    dataset=['choice', ['ilsvrc', 'ytbb', 'ilsvrc_ytbb']],
+    ilsvrc_frac=['choice', [0.3, 0.5, 0.7]],
     ntimesteps=['const', 1],
     batchsz=['const', 8],
     # imsize=['const', 360],
@@ -156,7 +156,8 @@ DEFAULT_DISTRIBUTION_TRAIN = dict(
     grad_clip=['choice', [True, False]],
     max_grad_norm=['log_uniform_format', 1e-3, 1e3, '.1g'],
     # num_steps=['const', 100000],
-    sampler_kind=['choice', ['sampling', 'regular', 'freq-range-fit']],
+    # sampler_kind=['choice', ['sampling', 'regular', 'freq-range-fit']],
+    sampler_kind=['choice', ['sampling']],  # Until FPS is implemented!
     sampler_freq=['log_uniform_format', 5, 200, '.2g'],
     sampler_center_freq=['log_uniform_format', 5, 200, '.2g'],
     sampler_relative_freq_range=['uniform_format', 0, 1, '.2f'],
@@ -226,6 +227,9 @@ def sample_vector_train(rand, p):
         return search.sample_param(rand, *spec)
 
     x = {k: None for k in KEYS_TRAIN}
+    x['dataset'] = sample(p['dataset'])
+    if x['dataset'] == 'ilsvrc_ytbb':
+        x['ilsvrc_frac'] = sample(p['ilsvrc_frac'])
     x['ntimesteps'] = sample(p['ntimesteps'])
     x['batchsz'] = sample(p['batchsz'])
     # x['imsize'] = sample(p['imsize'])
@@ -347,6 +351,16 @@ def train_vector_to_kwargs(x):
     #     optimizer_params['beta2'] = x['adam_beta2']
     #     optimizer_params['epsilon'] = x['adam_epsilon']
     # kwargs['optimizer_params'] = optimizer_params
+
+    del kwargs['dataset']
+    del kwargs['ilsvrc_frac']
+    if x['dataset'] in ['ilsvrc', 'ytbb']:
+        kwargs['train_dataset'] = x['dataset'] + '_train'
+        kwargs['val_dataset'] = x['dataset'] + '_val'
+    elif x['dataset'] == 'ilsvrc_ytbb':
+        p_ilsvrc = x['ilsvrc_frac']
+        kwargs['train_dataset'] = [[p_ilsvrc, 'ilsvrc_train'], [1 - p_ilsvrc, 'ytbb_train']]
+        kwargs['val_dataset'] = [[p_ilsvrc, 'ilsvrc_val'], [1 - p_ilsvrc, 'ytbb_val']]
 
     del kwargs['sampler_kind']
     del kwargs['sampler_freq']
