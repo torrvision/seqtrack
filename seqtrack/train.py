@@ -350,16 +350,16 @@ def train_model_data(
             example_input, run_opts, enable_loss=True,
             image_summaries_collections=['IMAGE_SUMMARIES'])
     _loss_summary(losses)
-    _image_summary(example, outputs)
+    # _image_summary(example, outputs)
     # loss_var = _add_losses(losses, args.loss_coeffs)
     loss_var = _add_losses(losses, {})
 
-    with tf.name_scope('diagnostic'):
-        iou = geom.rect_iou(outputs['y'], example_input['y'])
-        tf.summary.scalar('iou', tf.reduce_mean(tf.boolean_mask(iou, example_input['y_is_valid'])))
-        dist = tf.norm(geom.rect_center(outputs['y']) - geom.rect_center(example_input['y']), axis=-1)
-        dist = dist / tf.reduce_mean(geom.rect_size(example_input['y']), axis=-1)
-        tf.summary.scalar('dist', tf.reduce_mean(tf.boolean_mask(dist, example_input['y_is_valid'])))
+    # with tf.name_scope('diagnostic'):
+    #     iou = geom.rect_iou(outputs['y'], example_input['y'])
+    #     tf.summary.scalar('iou', tf.reduce_mean(tf.boolean_mask(iou, example_input['y_is_valid'])))
+    #     dist = tf.norm(geom.rect_center(outputs['y']) - geom.rect_center(example_input['y']), axis=-1)
+    #     dist = dist / tf.reduce_mean(geom.rect_size(example_input['y']), axis=-1)
+    #     tf.summary.scalar('dist', tf.reduce_mean(tf.boolean_mask(dist, example_input['y_is_valid'])))
 
     model_inst = graph.ModelInstance(
         example, run_opts, outputs, init_state, final_state,
