@@ -64,6 +64,42 @@ class ChunkedTracker(object):
                 if not os.path.exists(self._frame_dir):
                     os.makedirs(self._frame_dir)
 
+    def warmup(self):
+        r = np.random.RandomState(0)
+        first_image = np.random.normal(
+            size=(self._model_inst.imheight, self._model_inst.imwidth, 3))
+        first_label = geom_np.make_rect([0.4, 0.4], [0.6, 0.6])
+
+        images_arr = np.random.normal(
+            size=(self._model_inst.ntimesteps,
+                  self._model_inst.imheight, self._model_inst.imwidth, 3))
+        labels = [geom_np.make_rect([0.4, 0.4], [0.6, 0.6])
+                  for _ in range(self._model_inst.ntimesteps)]
+        is_valid = [True for _ in range(self._model_inst.ntimesteps)]
+        aspect = 1
+
+        feed_dict = {}
+        feed_dict.update({
+            self._model_inst.example['x0']: self._to_batch(first_image),
+            self._model_inst.example['y0']: self._to_batch(first_label),
+            self._model_inst.example['x']: self._to_batch_sequence(images_arr),
+            self._model_inst.example['y']: self._to_batch_sequence(labels),
+            self._model_inst.example['y_is_valid']: self._to_batch_sequence(is_valid),
+            self._model_inst.example['aspect']: self._to_batch(aspect),
+            self._model_inst.run_opts['use_gt']: self._use_gt,
+            self._model_inst.run_opts['is_tracking']: True,
+        })
+
+        # Get output and final state.
+        output_vars = {'y': self._model_inst.outputs['y'],
+                       'score': self._model_inst.outputs['score']}
+        if self._visualize and 'vis' in self._model_inst.outputs:
+            output_vars['vis'] = self._model_inst.outputs['vis']
+        for i in range(3):
+            outputs, self._prev_state = self._sess.run(
+                [output_vars, self._model_inst.state_final], feed_dict=feed_dict)
+
+
     def start(self, init_frame):
         '''
         Args:
@@ -274,6 +310,9 @@ class SimpleTracker(object):
         kwargs for ChunkedTracker
         '''
         self._tracker = ChunkedTracker(sess, model_inst, **kwargs)
+
+    def warmup(self):
+        self._tracker.warmup()
 
     def start(self, image_file, rect):
         init_frame = {

@@ -5,6 +5,7 @@ from __future__ import print_function
 import tensorflow as tf
 import argparse
 import csv
+import datetime
 import json
 import time
 import os
@@ -41,7 +42,7 @@ def parse_arguments():
     parser.add_argument('--out_file', help='e.g. track.csv')
     parser.add_argument('--vot', action='store_true')
 
-    parser.add_argument('--sequence_name', type=str, default='untitled')
+    parser.add_argument('--sequence_name', type=str)
     parser.add_argument('--init_rect', type=json.loads,
                         help='e.g. {"xmin": 0.1, "ymin": 0.7, "xmax": 0.4, "ymax": 0.9}')
     parser.add_argument('--start', type=int)
@@ -88,6 +89,9 @@ def main():
 
     saver = tf.train.Saver()
 
+    sequence_name = (args.sequence_name or
+                     'untitled_{}'.format(datetime.datetime.now().strftime('%Y%m%dT%H%M%S')))
+
     # # Load sequence from args.
     # frames = range(args.start, args.end + 1)
     # sequence = {}
@@ -110,8 +114,9 @@ def main():
         #                               visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
 
         tracker = evaluate.SimpleTracker(
-            sess, model_inst, verbose=True, sequence_name=args.sequence_name,
+            sess, model_inst, verbose=True, sequence_name=sequence_name,
             visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
+        tracker.warmup()
 
         if args.vot:
             logger.debug('try to obtain VOT handle')
