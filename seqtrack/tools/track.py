@@ -146,7 +146,11 @@ def main():
                 image_t = args.image_format % t
                 pred_t = tracker.next(image_t)['y']
                 pred.append(pred_t)
-        tracker.end()
+        info = tracker.end()
+        logger.info('tracker speed (eval): %.3g', info['num_frames'] / info['duration_eval'])
+        logger.info('tracker speed (with_load): %.3g',
+                     info['num_frames'] / info['duration_with_load'])
+        logger.info('tracker speed (real): %.3g', info['num_frames'] / info['duration_real'])
 
     if args.out_file is not None:
         # Write to file.

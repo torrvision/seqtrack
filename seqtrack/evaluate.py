@@ -125,7 +125,7 @@ class ChunkedTracker(object):
 
         # Get output and final state.
         output_vars = {'y': self._model_inst.outputs['y']}
-        if 'vis' in self._model_inst.outputs:
+        if self._visualize and 'vis' in self._model_inst.outputs:
             output_vars['vis'] = self._model_inst.outputs['vis']
         start_run = time.time()
         outputs, self._prev_state = self._sess.run(
@@ -136,7 +136,7 @@ class ChunkedTracker(object):
 
         # Take first element of batch and first `chunk_len` elements of output.
         outputs['y'] = outputs['y'][0][:chunk_len]
-        if 'vis' in self._model_inst.outputs:
+        if self._visualize and 'vis' in self._model_inst.outputs:
             outputs['vis'] = outputs['vis'][0][:chunk_len]
 
         # if self._visualize:
