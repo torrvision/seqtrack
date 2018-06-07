@@ -94,10 +94,10 @@ def parse_arguments():
     parser.add_argument('--imwidth', type=int, default=360, help='image resolution')
     parser.add_argument('--imheight', type=int, default=360, help='image resolution')
 
-    parser.add_argument('--train_dataset', type=json.loads, default='"ilsvrc_train"',
-                        help='JSON to specify the training distribution')
-    parser.add_argument('--val_dataset', type=json.loads, default='"ilsvrc_val"',
-                        help='JSON to specify the validation distribution')
+    # parser.add_argument('--train_dataset', type=json.loads, default='"ilsvrc_train"',
+    #                     help='JSON to specify the training distribution')
+    # parser.add_argument('--val_dataset', type=json.loads, default='"ilsvrc_val"',
+    #                     help='JSON to specify the validation distribution')
     parser.add_argument('--num_steps', type=int, default=200000,
                         help='number of gradient steps')
 

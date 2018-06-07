@@ -55,6 +55,10 @@ class SiamFC(models_interface.IterModel):
             learnable_prior=False,
             train_multiscale=False,
             # Tracking parameters:
+            search_method='local',
+            global_search_min_resolution=64,
+            global_search_max_resolution=512,
+            global_search_num_scales=4, # 64, 128, 256, 512
             num_scales=5,
             scale_step=1.03,
             scale_update_rate=0.6,
@@ -73,6 +77,7 @@ class SiamFC(models_interface.IterModel):
             enable_margin_loss=False,
             margin_cost='iou',
             margin_reduce_method='max'):
+
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
@@ -97,6 +102,10 @@ class SiamFC(models_interface.IterModel):
         self._freeze_siamese = freeze_siamese
         self._learnable_prior = learnable_prior
         self._train_multiscale = train_multiscale
+        self._search_method = search_method
+        self._global_search_min_resolution = global_search_min_resolution
+        self._global_search_max_resolution = global_search_max_resolution
+        self._global_search_num_scales = global_search_num_scales
         self._num_scales = num_scales
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
@@ -139,6 +148,8 @@ class SiamFC(models_interface.IterModel):
             template_im = util.crop(frame['x'], template_rect, self._template_size,
                                     pad_value=mean_color if self._pad_with_mean else 0.5,
                                     feather=self._feather, feather_margin=self._feather_margin)
+
+            self._target_in_template = geom.crop_rect(y, template_rect)
 
             rfs = {'template': cnnutil.identity_rf()}
             template_input = _preproc(template_im, center_input_range=self._center_input_range,
@@ -243,6 +254,7 @@ class SiamFC(models_interface.IterModel):
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
                 if self._bnorm_after_xcorr:
                     response = slim.batch_norm(response, scale=True, is_training=self._is_training,
+                                               trainable=(not self._freeze_siamese),
                                                variables_collections=['siamese'])
                 else:
                     response = _affine_scalar(response, variables_collections=['siamese'])
@@ -276,29 +288,183 @@ class SiamFC(models_interface.IterModel):
                     self._info.setdefault('margin_cost', []).append(_to_uint8(
                         util.colormap(tf.expand_dims(cost[:, mid_scale], -1), _COLORMAP)))
 
-            # Get relative translation and scale from response.
-            response_final = _finalize_scores(response, rfs['search'].stride,
-                                              self._hann_method, self._hann_coeff)
-            # upsample_response_size = response_final.shape.as_list()[-3:-1]
-            # assert np.all(upsample_response_size <= self._search_size)
-            translation, scale = util.find_peak_pyr(response_final, scales,
-                                                    eps_rel=self._arg_max_eps_rel)
-            translation = translation / self._search_size
+            if self._search_method == 'local':
+                # Use pyramid from loss function to obtain position.
+                # Get relative translation and scale from response.
+                response_final = _finalize_scores(response, rfs['search'].stride,
+                                                  self._hann_method, self._hann_coeff)
+                # upsample_response_size = response_final.shape.as_list()[-3:-1]
+                # assert np.all(upsample_response_size <= self._search_size)
+                translation, scale = util.find_peak_pyr(response_final, scales,
+                                                        eps_rel=self._arg_max_eps_rel)
+                translation = translation / self._search_size
 
-            vis = _visualize_response(
-                response[:, mid_scale], response_final[:, mid_scale],
-                search_ims[:, mid_scale], rfs['search'], frame['x'], search_rect)
-            self._info.setdefault('vis', []).append(_to_uint8(vis))
+                # vis = _visualize_response(
+                #     response[:, mid_scale], response_final[:, mid_scale],
+                #     search_ims[:, mid_scale], rfs['search'], frame['x'], search_rect)
+                # self._info.setdefault('vis', []).append(_to_uint8(vis))
 
-            # Damp the scale update towards 1.
-            scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
-            # Get rectangle in search image.
-            prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
-            pred_in_search = _rect_translate_scale(prev_target_in_search, translation,
-                                                   tf.expand_dims(scale, -1))
-            # Move from search back to original image.
-            # TODO: Test that this is equivalent to scaling translation?
-            pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
+                # Damp the scale update towards 1.
+                scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
+                # Get rectangle in search image.
+                prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
+                pred_in_search = _rect_translate_scale(prev_target_in_search, translation,
+                                                       tf.expand_dims(scale, -1))
+                # Move from search back to original image.
+                # TODO: Test that this is equivalent to scaling translation?
+                pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
+
+            elif self._search_method == 'global':
+                # Construct new search pyramid for entire image.
+                # Careful! Any summaries or update opts (e.g. bnorm) can cause
+                # this to be evaluated unnecessarily during training.
+
+                # TODO: Determine automatically!!
+                # Receptive field of feature transform is 87 at stride 8.
+                # Feature template is size 5.
+                rf_edge = 87 + 8 * (5 - 1)
+                rf_half = (rf_edge - 1) / 2
+                rf_stride = 8
+                # TODO: Assert that these are correct.
+
+                # Resize the image to multiple sizes.
+                # The image itself takes up `valid_edge` pixels within an image of size `edge`.
+                ideal_edges = np.geomspace(self._global_search_min_resolution,
+                                           self._global_search_max_resolution,
+                                           self._global_search_num_scales)
+                valid_edges = [
+                    int(round(float(ideal_edge-1)/rf_stride))*rf_stride+1
+                    for ideal_edge in ideal_edges]
+                assert len(set(valid_edges)) == len(valid_edges)
+                logger.debug('ideal edges:', ['{:.1f}'.format(edge) for edge in ideal_edges])
+                logger.debug('valid edges:', valid_edges)
+                edges = [2*rf_half + valid_edge for valid_edge in valid_edges]
+                # The image is a rectangle with the correct aspect ratio within a square.
+                # The square has size `valid_edge` within a larger padded image of size `edge`.
+                # TODO: Use a random region within the square.
+                im_in_square = _center_rect_with_aspect(self._aspect)
+                square_in_padded = [
+                    geom.make_rect_center_size(
+                        0.5 * tf.ones(2, tf.float32),
+                        (float(valid_edges[i])/edges[i]) * tf.ones(2, tf.float32))
+                    for i in range(self._global_search_num_scales)]
+                # Get aspect within inset rect.
+                im_in_padded = [
+                    geom.crop_rect(im_in_square, geom.crop_inverse(square_in_padded[i]))
+                    for i in range(self._global_search_num_scales)]
+                search_im = [
+                    util.crop(frame['x'], geom.crop_inverse(im_in_padded[i]), (edges[i], edges[i]),
+                              pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
+                              feather=self._feather, feather_margin=self._feather_margin)
+                    for i in range(self._global_search_num_scales)]
+
+                # Extract features, perform search, get receptive field of response wrt image.
+                search_input = [
+                    _preproc(search_im[i], center_input_range=self._center_input_range,
+                             keep_uint8_range=self._keep_uint8_range)
+                    for i in range(self._global_search_num_scales)]
+
+                rfs = [{'search': cnnutil.identity_rf()} for _ in edges]
+                search_feat = [None for _ in edges]
+                for i in range(self._global_search_num_scales):
+                    with tf.variable_scope('feature_net', reuse=True):
+                        search_feat[i], rfs[i] = _feature_net(
+                            search_input[i], rfs[i], padding=self._feature_padding, arch=self._feature_arch,
+                            output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
+                            wd=self._wd, is_training=self._is_training,
+                            # variables_collections=['siamese'], trainable=(not self._freeze_siamese))
+                            variables_collections=['siamese'], trainable=False)
+
+                response = [None for _ in edges]
+                for i in range(self._global_search_num_scales):
+                    response[i], rfs[i] = util.diag_xcorr_rf(
+                        input=search_feat[i], filter=prev_state['template_feat'], input_rfs=rfs[i],
+                        padding=self._xcorr_padding)
+                    response[i] = tf.reduce_sum(response[i], axis=-1, keep_dims=True)
+                    cnnutil.assert_center_alignment(n_positive_integers(2, edges[i]),
+                                                    response[i].shape.as_list()[-3:-1],
+                                                    rfs[i]['search'])
+
+                # Compute batch-norm of all responses together.
+                # This requires concatenating into a large vector.
+                response, unvec = _merge_dims_and_concat(response, 1, 3)
+
+                # with tf.variable_scope('output', reuse=(self._num_frames > 0)):
+                with tf.variable_scope('output', reuse=True):
+                    if self._bnorm_after_xcorr:
+                        response = slim.batch_norm(response, scale=True, is_training=self._is_training,
+                                                   # trainable=(not self._freeze_siamese),
+                                                   trainable=False,
+                                                   variables_collections=['siamese'])
+                    else:
+                        response = _affine_scalar(response, variables_collections=['siamese'])
+                    if self._freeze_siamese:
+                        # TODO: Prevent batch-norm updates as well.
+                        # TODO: Set trainable=False for all variables above.
+                        response = tf.stop_gradient(response)
+                    if self._learnable_prior:
+                        response = _add_motion_prior(response)
+
+                # Return from super-vector to separate images per scale.
+                response = unvec(response)
+
+                # Compute the rectangle for each position.
+                # Size of object at each scale.
+                # Given size of object in template and resolution of template.
+                size_in_template = geom.rect_size(self._target_in_template)
+                # TODO: Original image covers `valid_edge` pixels.
+                # sizes = (size_in_template *
+                #     tf.expand_dims(float(self._template_size) / tf.to_float(valid_edges), axis=-1))
+                # scales = float(self._template_size) / np.asfarray(valid_edges)
+                size = [
+                    (float(self._template_size) / valid_edges[i]) * size_in_template
+                    for i in range(self._global_search_num_scales)]
+                # Center of receptive field at each location.
+                # TODO: The corners at 0 and 1 are off by half a pixel?
+                centers = [
+                    _position_grid(response[i].shape.as_list()[-3:-1])
+                    for i in range(self._global_search_num_scales)]
+                rects = [
+                    geom.make_rect_center_size(centers[i], expand_dims_n(size[i], -2, 2))
+                    for i in range(self._global_search_num_scales)]
+
+                # for i in range(self._global_search_num_scales):
+                #     self._info.setdefault('search/scale_{}'.format(i), []).append(_to_uint8(
+                #         search_im[i]))
+                #     response_cmap = util.colormap(tf.sigmoid(response[i]), _COLORMAP)
+                #     self._info.setdefault('response/scale_{}'.format(i), []).append(_to_uint8(
+                #         response_cmap))
+                #     self._info.setdefault('response_overlay/scale_{}'.format(i), []).append(_to_uint8(
+                #         _visualize_response(search_im[i], response_cmap, rfs[i]['search'])))
+
+                # TODO: Add multi-scale loss here?
+
+                # Upsample all responses to same size.
+                response_size = response[-1].shape.as_list()[-3:-1]
+                response_resize = [
+                    tf.image.resize_images(
+                        response[i], response_size,
+                        method=tf.image.ResizeMethod.BICUBIC, align_corners=True)
+                    if i < self._global_search_num_scales - 1 else response[i]
+                    for i in range(self._global_search_num_scales)]
+                response_resize = tf.stack(response_resize, axis=1)
+
+                # TODO: Unify this code with above `rects`.
+                # Find max over all responses.
+                response_sigmoid = tf.sigmoid(response_resize)
+                is_max = tf.to_float(util.is_peak(response_sigmoid, axis=(-4, -3, -2)))
+                sizes = tf.stack(size, axis=1)
+                pred_size = weighted_mean(expand_dims_n(sizes, -2, 2), is_max, axis=(-4, -3, -2))
+                center_grid = _position_grid(response_resize.shape.as_list()[-3:-1])
+                pred_center = weighted_mean(tf.expand_dims(center_grid, -4), is_max, axis=(-4, -3, -2))
+                pred = geom.make_rect_center_size(pred_center, pred_size)
+
+                # Move back from square image to valid part.
+                pred = geom.crop_rect(pred, im_in_square)
+
+            else:
+                raise ValueError('unknown search method "{}"'.format(self._search_method))
+
             # Limit size of object.
             pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
 
@@ -311,7 +477,8 @@ class SiamFC(models_interface.IterModel):
                 next_prev_rect = pred
 
             self._num_frames += 1
-            outputs = {'y': pred, 'vis': vis}
+            # outputs = {'y': pred, 'vis': vis}
+            outputs = {'y': pred}
             state = {
                 'y': next_prev_rect,
                 'template_feat': prev_state['template_feat'],
@@ -359,6 +526,7 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
                 normalizer_fn=slim.batch_norm,
                 normalizer_params=dict(
                     is_training=is_training if trainable else False,  # Fix bnorm if not trainable.
+                    trainable=trainable,
                     variables_collections=variables_collections)))
         with slim.arg_scope([slim.conv2d], **conv_args):
             if arch == 'alexnet':
@@ -750,3 +918,44 @@ def _clip_rect_size(rect, min_size=None, max_size=None, name='clip_rect_size'):
         if min_size is not None:
             size = tf.maximum(size, min_size)
         return geom.make_rect_center_size(center, size)
+
+
+def _center_rect_with_aspect(aspect, name='center_rect_with_aspect'):
+    '''
+    Args:
+        aspect -- [b]
+
+    Returns:
+        [b, 4]
+    '''
+    with tf.name_scope(name) as scope:
+        # From definition, aspect = width / height; width = aspect * height
+        # Want max(width, height) = 1.
+        width, height = aspect, tf.ones_like(aspect)
+        max_dim = tf.maximum(width, height)
+        width, height = width / max_dim, height / max_dim
+        size = tf.stack((width, height), axis=-1)
+        return geom.make_rect_center_size(0.5*tf.ones_like(size), size)
+
+
+def _position_grid(size):
+    size_y, size_x = size
+    # Index from 0 to 1 since corners are aligned.
+    range_y = tf.to_float(tf.range(size_y)) / float(size_y - 1)
+    range_x = tf.to_float(tf.range(size_x)) / float(size_x - 1)
+    grid_y, grid_x = tf.meshgrid(range_y, range_x, indexing='ij')
+    return tf.stack((grid_x, grid_y), axis=-1)
+
+
+def _merge_dims_and_concat(xs, a, b):
+    pairs = map(lambda x: merge_dims(x, a, b), xs)
+    xs, restores = zip(*pairs) # Inverse of zip is zip-star.
+    ns = [x.shape.as_list()[a] for x in xs]
+    xs = tf.concat(xs, axis=a)
+
+    def _restore(ys):
+        ys = tf.split(ys, ns, axis=a)
+        ys = [r(y, axis=a) for y, r in zip(ys, restores)]
+        return ys
+
+    return xs, _restore

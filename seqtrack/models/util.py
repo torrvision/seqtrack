@@ -264,6 +264,21 @@ def find_center_in_scoremap(scoremap, threshold=0.95):
     return center
 
 
+def is_peak(response, axis=None, eps_rel=0.0, eps_abs=0.0, name='is_peak'):
+    '''
+    Args:
+        response: [b, s, h, w, 1]
+    '''
+    with tf.name_scope(name) as scope:
+        # Find arg max over all scales.
+        response = tf.verify_tensor_all_finite(response, 'response is not finite')
+        max_val = tf.reduce_max(response, axis=axis, keep_dims=True)
+        is_max = tf.logical_or(
+            tf.greater_equal(response, max_val - eps_rel*tf.abs(max_val)),
+            tf.greater_equal(response, max_val - eps_abs))
+        return is_max
+
+
 def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_pyr'):
     '''
     Args:
@@ -314,7 +329,8 @@ def displacement_from_center(im_size, name='displacement_grid'):
         # Get the translation from the center.
         im_size = np.asarray(im_size)
         # assert all(im_size % 2 == 1), 'image size not odd: {}'.format(str(im_size))
-        logger.warning('use center of image with non-odd size %s', str(im_size))
+        if not all(im_size % 2 == 1):
+            logger.warning('use center of image with non-odd size %s', str(im_size))
         center = (im_size - 1) / 2
         size_y, size_x = im_size
         center_y, center_x = center
