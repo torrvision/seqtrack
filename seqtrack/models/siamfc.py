@@ -263,7 +263,7 @@ class SiamFC(models_interface.IterModel):
                     # TODO: Set trainable=False for all variables above.
                     response = tf.stop_gradient(response)
                 if self._learnable_prior:
-                    response = _add_motion_prior(response)
+                    response = _add_learnable_motion_prior(response)
 
             self._info.setdefault('response', []).append(
                 _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
@@ -291,10 +291,12 @@ class SiamFC(models_interface.IterModel):
             if self._search_method == 'local':
                 # Use pyramid from loss function to obtain position.
                 # Get relative translation and scale from response.
-                response_final = _finalize_scores(response, rfs['search'].stride,
-                                                  self._hann_method, self._hann_coeff)
+
+                response_resize = _upsample_scores(response, rfs['search'].stride)
+                response_final = _finalize_scores(response_resize, self._hann_method, self._hann_coeff)
                 # upsample_response_size = response_final.shape.as_list()[-3:-1]
                 # assert np.all(upsample_response_size <= self._search_size)
+                # TODO: Use is_max?
                 translation, scale = util.find_peak_pyr(response_final, scales,
                                                         eps_rel=self._arg_max_eps_rel)
                 translation = translation / self._search_size
@@ -313,6 +315,11 @@ class SiamFC(models_interface.IterModel):
                 # Move from search back to original image.
                 # TODO: Test that this is equivalent to scaling translation?
                 pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
+
+                # TODO: Unify with find_peak_pyr above!
+                is_max = tf.to_float(util.is_peak(response_final, axis=(-4, -3, -2),
+                                                  eps_rel=self._arg_max_eps_rel))
+                score = weighted_mean(response_resize, is_max, axis=(-4, -3, -2))
 
             elif self._search_method == 'global':
                 # Construct new search pyramid for entire image.
@@ -336,8 +343,8 @@ class SiamFC(models_interface.IterModel):
                     int(round(float(ideal_edge-1)/rf_stride))*rf_stride+1
                     for ideal_edge in ideal_edges]
                 assert len(set(valid_edges)) == len(valid_edges)
-                logger.debug('ideal edges:', ['{:.1f}'.format(edge) for edge in ideal_edges])
-                logger.debug('valid edges:', valid_edges)
+                logger.debug('ideal edges: %s', ['{:.1f}'.format(edge) for edge in ideal_edges])
+                logger.debug('valid edges: %s', valid_edges)
                 edges = [2*rf_half + valid_edge for valid_edge in valid_edges]
                 # The image is a rectangle with the correct aspect ratio within a square.
                 # The square has size `valid_edge` within a larger padded image of size `edge`.
@@ -402,8 +409,8 @@ class SiamFC(models_interface.IterModel):
                         # TODO: Prevent batch-norm updates as well.
                         # TODO: Set trainable=False for all variables above.
                         response = tf.stop_gradient(response)
-                    if self._learnable_prior:
-                        response = _add_motion_prior(response)
+                    # if self._learnable_prior:
+                    #     response = _add_learnable_motion_prior(response)
 
                 # Return from super-vector to separate images per scale.
                 response = unvec(response)
@@ -452,13 +459,14 @@ class SiamFC(models_interface.IterModel):
                 # TODO: Unify this code with above `rects`.
                 # Find max over all responses.
                 response_sigmoid = tf.sigmoid(response_resize)
-                is_max = tf.to_float(util.is_peak(response_sigmoid, axis=(-4, -3, -2)))
+                is_max = tf.to_float(util.is_peak(response_sigmoid, axis=(-4, -3, -2),
+                                                  eps_rel=self._arg_max_eps_rel))
+                score = weighted_mean(response_resize, is_max, axis=(-4, -3, -2))
                 sizes = tf.stack(size, axis=1)
                 pred_size = weighted_mean(expand_dims_n(sizes, -2, 2), is_max, axis=(-4, -3, -2))
                 center_grid = _position_grid(response_resize.shape.as_list()[-3:-1])
                 pred_center = weighted_mean(tf.expand_dims(center_grid, -4), is_max, axis=(-4, -3, -2))
                 pred = geom.make_rect_center_size(pred_center, pred_size)
-
                 # Move back from square image to valid part.
                 pred = geom.crop_rect(pred, im_in_square)
 
@@ -478,7 +486,7 @@ class SiamFC(models_interface.IterModel):
 
             self._num_frames += 1
             # outputs = {'y': pred, 'vis': vis}
-            outputs = {'y': pred}
+            outputs = {'y': pred, 'score': score}
             state = {
                 'y': next_prev_rect,
                 'template_feat': prev_state['template_feat'],
@@ -652,7 +660,7 @@ def _get_context_rect(rect, context_amount, aspect, aspect_method):
     return context, square
 
 
-def _add_motion_prior(response, name='motion_prior'):
+def _add_learnable_motion_prior(response, name='motion_prior'):
     with tf.name_scope(name) as scope:
         response_shape = response.shape.as_list()[-3:]
         assert response_shape[-1] == 1
@@ -814,10 +822,30 @@ def _max_margin(score, cost, axis=None, reduce_method='max', name='max_margin'):
         return loss
 
 
-def _finalize_scores(response, stride, hann_method, hann_coeff, name='finalize_scores'):
+def _upsample_scores(response, stride, method=tf.image.ResizeMethod.BICUBIC, align_corners=True,
+                     name='upsample_scores'):
+    with tf.name_scope(name) as scope:
+        # Size must be known.
+        response_size = response.shape.as_list()[-3:-1]
+        assert all(response_size), 'response size invalid: {}'.format(str(response_size))
+        # Check that size is odd.
+        response_size = np.array(response_size)
+        if not all(response_size % 2 == 1):
+            logger.warning('response size not odd: %s', response_size)
+        stride = np.array(n_positive_integers(2, stride))
+        upsample_size = (response_size - 1) * stride + 1
+
+        response, restore_fn = merge_dims(response, 0, 2)
+        response = tf.image.resize_images(response, upsample_size, method=method,
+                                          align_corners=align_corners)
+        response = restore_fn(response, 0)
+        return response
+
+
+def _finalize_scores(response, hann_method, hann_coeff, name='finalize_scores'):
     '''Modify scores before finding arg max.
 
-    Includes upsampling, sigmoid and Hann window.
+    Includes sigmoid and Hann window.
 
     Args:
         response: [b, s, h, w, 1]
@@ -829,24 +857,13 @@ def _finalize_scores(response, stride, hann_method, hann_coeff, name='finalize_s
     '''
     with tf.name_scope(name) as scope:
         response_size = response.shape.as_list()[-3:-1]
-        assert all(response_size), 'response size invalid: {}'.format(str(response_size))
-        response_size = np.array(response_size)
-        if not all(response_size % 2 == 1):
-            logger.warning('response size not odd: %s', str(response_size))
-        stride = np.array(n_positive_integers(2, stride))
-        upsample_size = (response_size - 1) * stride + 1
-        # Upsample.
-        response, restore_fn = merge_dims(response, 0, 2)
-        response = tf.image.resize_images(
-            response, upsample_size, method=tf.image.ResizeMethod.BICUBIC, align_corners=True)
-        response = restore_fn(response, 0)
         # Apply motion penalty at all scales.
         if hann_method == 'add_logit':
-            response += hann_coeff * tf.expand_dims(hann_2d(upsample_size), -1)
+            response += hann_coeff * tf.expand_dims(hann_2d(response_size), -1)
             response = tf.sigmoid(response)
         elif hann_method == 'mul_prob':
             response = tf.sigmoid(response)
-            response *= tf.expand_dims(hann_2d(upsample_size), -1)
+            response *= tf.expand_dims(hann_2d(response_size), -1)
         elif hann_method == 'none' or not hann_method:
             response = tf.sigmoid(response)
         else:

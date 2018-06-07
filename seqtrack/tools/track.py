@@ -136,10 +136,11 @@ def main():
                 image_t = handle.frame()
                 if image_t is None:
                     break
-                pred_t = tracker.next(image_t)['y']
-                pred_t_vot = to_vot(rect_from_vec(pred_t), imwidth=imwidth, imheight=imheight)
-                logger.debug('report rectangle: %s', pred_t_vot)
-                handle.report(pred_t_vot)
+                outputs_t = tracker.next(image_t)
+                rect_vot = to_vot(rect_from_vec(outputs_t['y']),
+                                  imwidth=imwidth, imheight=imheight)
+                logger.debug('report rectangle: %s', rect_vot)
+                handle.report(rect_vot, outputs_t['score'])
         else:
             pred = []
             for t in times[1:]:

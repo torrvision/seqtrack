@@ -124,7 +124,8 @@ class ChunkedTracker(object):
         })
 
         # Get output and final state.
-        output_vars = {'y': self._model_inst.outputs['y']}
+        output_vars = {'y': self._model_inst.outputs['y'],
+                       'score': self._model_inst.outputs['score']}
         if self._visualize and 'vis' in self._model_inst.outputs:
             output_vars['vis'] = self._model_inst.outputs['vis']
         start_run = time.time()
@@ -136,6 +137,7 @@ class ChunkedTracker(object):
 
         # Take first element of batch and first `chunk_len` elements of output.
         outputs['y'] = outputs['y'][0][:chunk_len]
+        outputs['score'] = outputs['score'][0][:chunk_len]
         if self._visualize and 'vis' in self._model_inst.outputs:
             outputs['vis'] = outputs['vis'][0][:chunk_len]
 
@@ -301,170 +303,6 @@ class SimpleTracker(object):
 def _only(xs):
     x, = xs
     return x
-
-
-def track_old(sess, model_inst, sequence, use_gt,
-              verbose=False,
-              # Visualization options:
-              visualize=False,
-              vis_dir=None,
-              keep_frames=False):
-    '''Run an instantiated tracker on a sequence.
-
-    model_inst.batchsz      -- Integer or None
-    model_inst.ntimesteps   -- Integer
-    model_inst.imheight     -- Integer
-    model_inst.imwidth      -- Integer
-    model_inst.example      -- Dictionary of tensors
-    model_inst.run_opts     -- Dictionary of tensors
-    model_inst.outputs      -- Dictionary of tensors
-    model_inst.state_init   -- Nested collection of tensors.
-    model_inst.state_final  -- Nested collection of tensors.
-
-    sequence['image_files']    -- List of strings of length n.
-    sequence['viewports']      -- Numpy array of rectangles [n, 4].
-    sequence['labels']         -- Numpy array of shape [n, 4]
-    sequence['label_is_valid'] -- List of booleans of length n.
-    sequence['aspect']         -- Aspect ratio of original image.
-        Required to compute IOU, etc. with correct aspect ratio.
-    '''
-    # TODO: Variable batch size.
-    # TODO: Run on a batch of sequences for speed.
-
-    if visualize:
-        assert vis_dir is not None
-        if not os.path.exists(vis_dir): os.makedirs(vis_dir, 0o755)
-        if not keep_frames:
-            frame_dir = tempfile.mkdtemp()
-        else:
-            frame_dir = os.path.join(vis_dir, 'frames', escape_filename(sequence['video_name']))
-            if not os.path.exists(frame_dir): os.makedirs(frame_dir)
-
-    # JV: Use viewport.
-    # first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
-    first_image = load_image_viewport(
-        sequence['image_files'][0],
-        sequence['viewports'][0],
-        size_hw=(model_inst.imheight, model_inst.imwidth))
-    first_label = sequence['labels'][0]
-    # Prepare for input to network.
-    batch_first_image = _single_to_batch(im_to_arr(first_image), model_inst.batchsz)
-    batch_first_label = _single_to_batch(first_label, model_inst.batchsz)
-
-    if visualize:
-        im_vis = visualize_pkg.draw_output(first_image.copy(), rect_gt=first_label)
-        im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % 0))
-
-    sequence_len = len(sequence['image_files'])
-    assert(sequence_len >= 2)
-
-    dur = 0.
-    prev_time = time.time()
-
-    # If the length of the sequence is greater than the instantiated RNN,
-    # it will need to be run in chunks.
-    y_pred_chunks = []
-    # hmap_pred_chunks = []
-    prev_state = {}
-    for start in range(1, sequence_len, model_inst.ntimesteps):
-        rem = sequence_len - start
-        # Feed the next `chunk_len` frames into the model.
-        chunk_len = min(rem, model_inst.ntimesteps)
-        dur += time.time() - prev_time
-        # JV: Use viewport.
-        # images = map(lambda x: load_image(x, model.image_size, resize=True),
-        #              sequence['image_files'][start:start+chunk_len]) # Create single array of all images.
-        images = [
-            load_image_viewport(image_file, viewport,
-                                size_hw=(model_inst.imheight, model_inst.imwidth))
-            for image_file, viewport in zip(
-                sequence['image_files'][start:start + chunk_len],
-                sequence['viewports'][start:start + chunk_len])
-        ]
-        prev_time = time.time()
-        labels = sequence['labels'][start:start + chunk_len]
-        is_valid = sequence['label_is_valid'][start:start + chunk_len]
-
-        # Prepare data as input to network.
-        images_arr = list(map(im_to_arr, images))
-        feed_dict = {
-            model_inst.example['x0']: batch_first_image,
-            model_inst.example['y0']: batch_first_label,
-            model_inst.example['x']:
-                _single_to_batch(pad_to(images_arr, model_inst.ntimesteps), model_inst.batchsz),
-            model_inst.example['y']:
-                _single_to_batch(pad_to(labels, model_inst.ntimesteps), model_inst.batchsz),
-            model_inst.example['y_is_valid']:
-                _single_to_batch(pad_to(is_valid, model_inst.ntimesteps), model_inst.batchsz),
-            model_inst.example['aspect']:
-                _single_to_batch(sequence['aspect'], model_inst.batchsz),
-            model_inst.run_opts['use_gt']: use_gt,
-            model_inst.run_opts['is_tracking']: True,
-        }
-        if start > 1:
-            # This is not the first chunk.
-            # Add the previous state to the feed dictionary.
-            tensor, value = to_nested_tuple(model_inst.state_init, prev_state)
-            if tensor is not None:  # Function returns None if empty.
-                feed_dict[tensor] = value
-        # Get output and final state.
-        # y_pred, prev_state, hmap_pred = sess.run(
-        #     [model_inst.outputs['y']['ic'], model_inst.state_final, model_inst.outputs['hmap']['ic']],
-        #     feed_dict=feed_dict)
-        output_vars = {'y': model_inst.outputs['y']}
-        if 'vis' in model_inst.outputs:
-            output_vars['vis'] = model_inst.outputs['vis']
-        outputs, prev_state = sess.run(
-            [output_vars, model_inst.state_final], feed_dict=feed_dict)
-        # Take first element of batch and first `chunk_len` elements of output.
-        outputs['y'] = outputs['y'][0][:chunk_len]
-        if 'vis' in outputs:
-            outputs['vis'] = outputs['vis'][0][:chunk_len]
-
-        if visualize:
-            for i in range(len(images)):
-                t = start + i
-                if 'vis' in outputs:
-                    image_i = Image.fromarray(np.uint8(255 * outputs['vis'][i]))
-                else:
-                    image_i = images[i]
-                # im_vis = visualize_pkg.draw_output(images[i].copy(),
-                #     rect_gt=(labels[i] if is_valid[i] else None),
-                #     rect_pred=y_pred[i],
-                #     hmap_pred=hmap_pred[i])
-                im_vis = visualize_pkg.draw_output(image_i,
-                                                   rect_gt=(labels[i] if is_valid[i] else None),
-                                                   rect_pred=outputs['y'][i])
-                im_vis.save(os.path.join(frame_dir, FRAME_PATTERN % t))
-
-        y_pred_chunks.append(outputs['y'])
-        # hmap_pred_chunks.append(hmap_pred)
-
-    dur += time.time() - prev_time
-    logger.debug('time: {:.3g} sec ({:.3g} fps)'.format(dur, (sequence_len - 1) / dur))
-
-    if visualize:
-        args = ['ffmpeg', '-loglevel', 'error',
-                          # '-r', '1', # fps.
-                          '-y',  # Overwrite without asking.
-                          '-nostdin',  # No interaction with user.
-                          '-i', FRAME_PATTERN,
-                          '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-                          os.path.join(os.path.abspath(vis_dir),
-                                       escape_filename(sequence['video_name']) + '.mp4')]
-        try:
-            subprocess.check_call(args, cwd=frame_dir)
-        except Exception as ex:
-            logger.warning('error calling ffmpeg: %s', str(ex))
-        finally:
-            if not keep_frames:
-                shutil.rmtree(frame_dir)
-
-    # Concatenate the results for all chunks.
-    y_pred = np.concatenate(y_pred_chunks)
-    # hmap_pred = np.concatenate(hmap_pred_chunks)
-    # return y_pred, hmap_pred
-    return y_pred
 
 
 def _single_to_batch(x, batch_size):
