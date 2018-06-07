@@ -177,15 +177,14 @@ class ChunkedTracker(object):
         if self._visualize and 'vis' in self._model_inst.outputs:
             outputs['vis'] = outputs['vis'][0][:chunk_len]
 
-        # if self._visualize:
-        #     for i in range(len(images)):
-        #         t = self._num_frames + i + 1
-        #         im_vis = visualize_pkg.draw_output(
-        #             images[i].copy(),
-        #             rect_gt=(labels[i] if is_valid[i] else None),
-        #             rect_pred=y_pred[i],
-        #             hmap_pred=hmap_pred[i])
-        #         im_vis.save(os.path.join(self._frame_dir, FRAME_PATTERN % t))
+        if self._visualize:
+            for i in range(len(images)):
+                t = self._num_frames + i + 1
+                im_vis = visualize_pkg.draw_output(
+                    images[i].copy(),
+                    rect_gt=(labels[i] if is_valid[i] else None),
+                    rect_pred=outputs['y'][i])
+                im_vis.save(os.path.join(self._frame_dir, FRAME_PATTERN % t))
 
         self._num_frames += chunk_len
         # return y_pred, hmap_pred
