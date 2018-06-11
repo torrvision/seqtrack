@@ -55,13 +55,13 @@ def train(
         data_cache_dir=None,
         # Sampling:
         sampler_params=None,
-        augment_motion=None,
+        augment_motion=False,
         motion_params=None,
         # Evaluation:
         eval_samplers=None,
         max_eval_videos=None,
         # Training process:
-        ntimesteps=None,
+        ntimesteps=None,  # Needed for constructing sampler.
         **kwargs):
     '''
     Args:

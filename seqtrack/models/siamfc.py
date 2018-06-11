@@ -515,7 +515,7 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
     if rfs is None:
         rfs = {}
     # For feature pyramid, support rank > 4.
-    if len(x.shape) > 4:
+    if x is not None and len(x.shape) > 4:
         # Merge dims (0, ..., n-4), n-3, n-2, n-1
         x, restore = merge_dims(x, 0, len(x.shape) - 3)
         x, rfs = _feature_net(
@@ -965,7 +965,7 @@ def _position_grid(size):
 
 
 def _merge_dims_and_concat(xs, a, b):
-    pairs = map(lambda x: merge_dims(x, a, b), xs)
+    pairs = list(map(lambda x: merge_dims(x, a, b), xs))
     xs, restores = zip(*pairs) # Inverse of zip is zip-star.
     ns = [x.shape.as_list()[a] for x in xs]
     xs = tf.concat(xs, axis=a)

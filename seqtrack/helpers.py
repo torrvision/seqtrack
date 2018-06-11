@@ -23,6 +23,14 @@ from seqtrack import geom
 from seqtrack import geom_np
 
 
+Codec = collections.namedtuple('Codec', ['module', 'ext', 'binary'])
+
+CODECS = {
+    'json': Codec(module=json, ext='.json'),
+    'msgpack': Codec(module=msgpack, ext='.msgpack'),
+}
+
+
 def get_time():
     dt = datetime.datetime.now()
     time = '{0:04d}{1:02d}{2:02d}_h{3:02d}m{4:02d}s{5:02d}'.format(
@@ -116,18 +124,18 @@ def pad_to(x, n, axis=0, mode='constant'):
     return np.pad(x, width, mode=mode)
 
 
-def cache(codec, filename, func, makedir=False, perm=0o644, binary=False):
+def cache(codec_module, filename, func, makedir=False, perm=0o644, binary=False):
     '''Caches the result of a function in a file.
 
     Args:
-        codec -- Object with methods dump() and load().
+        codec_module -- Object with methods dump() and load().
         func -- Function with zero arguments.
     '''
     if os.path.exists(filename):
         logger.info('load from cache file: "%s"', filename)
         start = time.clock()
         with open(filename, 'r') as f:
-            result = codec.load(f)
+            result = codec_module.load(f)
         dur = time.clock() - start
         logger.info('time to load cache: %.3g sec "%s"', dur, filename)
     else:
@@ -143,7 +151,7 @@ def cache(codec, filename, func, makedir=False, perm=0o644, binary=False):
         # TODO: Clean up tmp file on exception.
         start = time.clock()
         with tempfile.NamedTemporaryFile(delete=False, dir=dir, suffix=basename) as f:
-            codec.dump(result, f)
+            codec_module.dump(result, f)
         dur = time.clock() - start
         os.chmod(f.name, perm)  # Default permissions are 600.
         os.rename(f.name, filename)
@@ -481,65 +489,100 @@ def default_print_func(i, n, time_elapsed):
     print(progress_str, file=sys.stderr)
 
 
-def map_dict(f, items):
+def map_dict(func, items):
     for k, v in items:
-        yield k, f(k, v)
+        yield k, func(k, v)
+
+
+def filter_dict(func, items):
+    for k, v in items:
+        if func(k, v):
+            yield k, v
 
 
 class CachedDictMapper(object):
 
-    def __init__(self, dir, codec=json, ext='.json', mapper=None):
+    def __init__(self, dir, codec_name='json', mapper=None):
         mapper = mapper or map_dict
         self._dir = dir
-        self._codec = codec
-        self._ext = ext
+        self._codec_name = codec_name
         self._mapper = mapper
 
     def __call__(self, func, items):
-        cache_filter = CacheFilter(self._dir, codec=self._codec, ext=self._ext)
+        cache_filter = CacheFilter(self._dir, codec_name=self._codec_name)
         uncached_items = cache_filter.filter(items)
         uncached_results = self._mapper(func, uncached_items)
         # Construct list here to deliberately not be lazy (write when available).
         uncached_results = list(_dump_cache_for_each(uncached_results, self._dir,
-                                                     codec=self._codec, ext=self._ext))
+                                                     codec_name=self._codec_name))
         # Combine cached and uncached results.
         return itertools.chain(cache_filter.results, uncached_results)
 
 
-def _dump_cache_for_each(items, dir, codec=json, ext='.json'):
+def _dump_cache_for_each(items, dir, codec_name='json'):
+    codec = CODECS[codec_name]
     if not os.path.exists(dir):
         os.makedirs(dir, 0o755)
     for k, v in items:
-        fname = os.path.join(dir, k + ext)
-        # TODO: Use atomic write.
-        with open_atomic_write(fname) as f:
-            codec.dump(v, f)
+        fname = os.path.join(dir, k + codec.ext)
+        with open_atomic_write(fname, 'wb' if codec.binary else 'w') as f:
+            codec.module.dump(v, f)
         yield k, v
 
 
 @contextmanager
-def open_atomic_write(filename, perm=0o644):
+def open_atomic_write(filename, mode='w+b', perm=0o644):
     dir, basename = os.path.split(filename)
-    with tempfile.NamedTemporaryFile(delete=False, dir=dir, suffix=basename) as f:
+    with tempfile.NamedTemporaryFile(mode=mode, delete=False, dir=dir, suffix=basename) as f:
         yield f
     os.chmod(f.name, perm)  # Default permissions are 600.
     os.rename(f.name, filename)
 
 
 class CacheFilter(object):
+    '''Keeps only items that do not have a cached value.
 
-    def __init__(self, dir, codec=json, ext='.json'):
+    Items that do have a cache are loaded and stored in results.
+    '''
+
+    def __init__(self, dir, codec_name='json'):
         self.results = []
         self._dir = dir
-        self._codec = codec
-        self._ext = ext
+        self._codec_name = codec_name
 
     def filter(self, items):
+        codec = CODECS[self._codec_name]
         for k, v in items:
-            fname = os.path.join(self._dir, k + self._ext)
+            fname = os.path.join(self._dir, k + codec.ext)
             if os.path.exists(fname):
-                with open(fname, 'r') as f:
-                    result = self._codec.load(f)
+                with open(fname, 'rb' if codec.binary else 'r') as f:
+                    result = codec.module.load(f)
                 self.results.append((k, result))
             else:
                 yield k, v
+
+
+def assert_partition(x, subsets):
+    assert isinstance(x, set)
+    counts = {}
+    for subset in subsets:
+        for elem in subset:
+            counts[elem] = counts.get(elem, 0) + 1
+    union = set(counts.keys())
+    missing = x.difference(union)
+    if len(missing) > 0:
+        raise RuntimeError('missing from partition: {}'.format(helpers.quote_list(missing)))
+    extra = union.difference(x)
+    if len(extra) > 0:
+        raise RuntimeError('extra in partition: {}'.format(helpers.quote_list(extra)))
+    multiple = [elem for elem, count in counts.items() if count > 1]
+    if len(multiple) > 0:
+        raise RuntimeError('repeated in partition: {}'.format(helpers.quote_list(multiple)))
+    # Unnecessary but just for sanity.
+    assert len(x) == sum(map(len, subsets))
+
+
+def assert_key_subset(lhs, rhs):
+    extra = set(lhs.keys()).difference(set(rhs.keys()))
+    if len(extra) > 0:
+        raise RuntimeError('extra keys: {}'.format(str(list(extra))))

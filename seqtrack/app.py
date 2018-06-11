@@ -150,8 +150,3 @@ def add_eval_args(parser):
 #     # parser.add_argument('--siamese_pretrain', action='store_true',
 #     #                     help='specify if using pretrained model')
 #     # parser.add_argument('--siamese_model_file', help='specify if using pretrained model')
-
-
-def add_parallel_args(parser):
-    parser.add_argument('--parallel', default='none',
-                        help='Method to perform parallel execution (none, slurm, proc)')
