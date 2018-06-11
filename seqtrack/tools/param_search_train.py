@@ -24,7 +24,7 @@ from seqtrack import train
 from seqtrack.models import util
 
 # The pickled object must be imported to unpickle in a different package (slurmproc.worker).
-from seqtrack.tools import param_search_work as work
+from seqtrack.tools import param_search_train_work as work
 
 
 def main():
