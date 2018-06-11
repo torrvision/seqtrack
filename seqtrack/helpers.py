@@ -2,11 +2,13 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import collections
 import datetime
 import errno
 import functools
 import itertools
 import json
+import msgpack
 import numpy as np
 import os
 import sys
@@ -26,8 +28,8 @@ from seqtrack import geom_np
 Codec = collections.namedtuple('Codec', ['module', 'ext', 'binary'])
 
 CODECS = {
-    'json': Codec(module=json, ext='.json'),
-    'msgpack': Codec(module=msgpack, ext='.msgpack'),
+    'json': Codec(module=json, ext='.json', binary=False),
+    'msgpack': Codec(module=msgpack, ext='.msgpack', binary=True),
 }
 
 

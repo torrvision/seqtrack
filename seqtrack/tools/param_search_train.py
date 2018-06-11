@@ -67,6 +67,8 @@ def parse_arguments():
     # Keep image resolution fixed across trials.
     parser.add_argument('--imwidth', type=int, default=360, help='image resolution')
     parser.add_argument('--imheight', type=int, default=360, help='image resolution')
+    parser.add_argument('--num_steps', type=int, default=100000,
+                        help='Total number of gradient steps')
     parser.add_argument('--verbose_train', action='store_true')
 
     parser.add_argument('--optimize_dataset', default='pool_val-full',
@@ -180,7 +182,7 @@ def sample_vector(rand, p):
     p_train = {k: p[k] for k in KEYS_TRAIN}
     p_model = {k: p[k] for k in KEYS_SIAMFC}
     x_train = sample_vector_train(rand, p_train)
-    x_model = sample_vector_train(rand, p_model)
+    x_model = sample_vector_siamfc(rand, p_model)
     x = {}
     x.update(x_train)
     x.update(x_model)
@@ -344,7 +346,7 @@ def to_kwargs_train(args, x):
     kwargs['data_dir'] = args.data_dir
     kwargs['tar_dir'] = args.tar_dir
     # tmp_data_dir=None,
-    kwargs['preproc_id'] = args.preproc_id
+    kwargs['preproc_id'] = args.preproc
     kwargs['data_cache_dir'] = args.data_cache_dir
 
     # Sampling:
@@ -400,9 +402,9 @@ def to_kwargs_train(args, x):
     kwargs['batchsz'] = x['batchsz']
     kwargs['imwidth'] = args.imwidth
     kwargs['imheight'] = args.imheight
-    kwargs['lr_init'] = args.lr_init
-    kwargs['lr_decay_steps'] = args.lr_decay_steps
-    kwargs['lr_decay_rate'] = args.lr_decay_rate
+    kwargs['lr_init'] = x['lr_init']
+    kwargs['lr_decay_steps'] = x['lr_decay_steps']
+    kwargs['lr_decay_rate'] = x['lr_decay_rate']
     kwargs['optimizer'] = x['optimizer']
     # optimizer_params = {}
     # if x['optimizer'] == 'momentum':
@@ -418,7 +420,7 @@ def to_kwargs_train(args, x):
     kwargs['adam_beta1'] = x['adam_beta1']
     kwargs['adam_beta2'] = x['adam_beta2']
     kwargs['adam_epsilon'] = x['adam_epsilon']
-    kwargs['weight_decay'] = x['weight_decay']
+    # kwargs['weight_decay'] = x['weight_decay']
     kwargs['grad_clip'] = x['grad_clip']
     kwargs['max_grad_norm'] = x['max_grad_norm']
     # siamese_pretrain=None,

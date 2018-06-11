@@ -5,6 +5,7 @@ from future_builtins import map
 from future_builtins import filter
 
 import csv
+import functools
 import hashlib
 import itertools
 import json
@@ -15,6 +16,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from seqtrack import helpers
+from seqtrack import slurm
 
 
 # class FunctionInterface(object):
@@ -85,8 +87,7 @@ def main(func, input_stream, kwargs_fn=None, postproc_fn=None,
 
         # Map stream of named kwargs to stream of named outputs (order may be different).
         if use_slurm:
-            func_mapper = slurm.SlurmDictMapper(tempdir='tmp',
-                                                opts=['--' + x for x in slurm_flags])
+            func_mapper = slurm.SlurmDictMapper(tempdir='tmp', opts=slurm_flags)
         else:
             func_mapper = helpers.map_dict
         # Cache the outputs and use slurm mapper to evaluate those without cache.
