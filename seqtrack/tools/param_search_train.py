@@ -41,7 +41,8 @@ def main():
         cache_dir='cache',
         input_codec='json', kwargs_codec='json', output_codec='msgpack',
         use_slurm=args.use_slurm,
-        slurm_flags=['--' + x for x in args.slurm_flags])
+        slurm_flags=['--' + x for x in args.slurm_flags],
+        slurm_group_size=args.slurm_group_size)
 
 
 def parse_arguments():
@@ -60,6 +61,7 @@ def parse_arguments():
     parser.add_argument('--no_slurm', dest='use_slurm', action='store_false',
                         help='Submit jobs to slurm or run directly?')
     parser.add_argument('--slurm_flags', nargs='+', help='flags for sbatch (without "--")')
+    parser.add_argument('--slurm_group_size', type=int, default=1)
 
     app.add_setup_data_args(parser)
     app.add_tracker_config_args(parser)

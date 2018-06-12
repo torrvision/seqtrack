@@ -41,7 +41,7 @@ from seqtrack import slurm
 def main(func, input_stream, kwargs_fn=None, postproc_fn=None,
          use_existing_inputs=True, max_num_configs=None, report_only=False,
          cache_dir='cache', input_codec='json', kwargs_codec='json', output_codec='json',
-         use_slurm=True, slurm_flags=None):
+         use_slurm=True, slurm_flags=None, slurm_group_size=None):
     '''Evaluates an expensive function on named inputs and saves the outputs.
 
     Args:
@@ -87,7 +87,11 @@ def main(func, input_stream, kwargs_fn=None, postproc_fn=None,
 
         # Map stream of named kwargs to stream of named outputs (order may be different).
         if use_slurm:
-            func_mapper = slurm.SlurmDictMapper(tempdir='tmp', opts=slurm_flags)
+            if slurm_group_size and slurm_group_size > 1:
+                func_mapper = slurm.SlurmDictGroupMapper(tempdir='tmp', opts=slurm_flags,
+                                                         group_size=slurm_group_size)
+            else:
+                func_mapper = slurm.SlurmDictMapper(tempdir='tmp', opts=slurm_flags)
         else:
             func_mapper = helpers.map_dict
         # Cache the outputs and use slurm mapper to evaluate those without cache.

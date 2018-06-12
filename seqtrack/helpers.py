@@ -496,6 +496,10 @@ def map_dict(func, items):
         yield k, func(k, v)
 
 
+def map_dict_list(func, items):
+    return list(map_dict(func, items))
+
+
 def filter_dict(func, items):
     for k, v in items:
         if func(k, v):
