@@ -5,10 +5,7 @@ from __future__ import print_function
 import argparse
 import functools
 import json
-import msgpack
 import numpy as np
-import os
-import pprint
 
 import logging
 logger = logging.getLogger(__name__)

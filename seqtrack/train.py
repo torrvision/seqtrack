@@ -70,6 +70,8 @@ def train(
     tf.reset_default_graph()
     _set_global_seed(seed)  # Caution: Global side effects!
 
+    # TODO: Do not copy train data and val data if only_evaluate_existing.
+
     # TODO: Flag to enable/disable.
     datasets = setup_data(
         train_dataset=train_dataset,
@@ -221,7 +223,9 @@ def _make_video_sampler(names, datasets):
 
 def train_model_data(
         dir, model, sequences, eval_sets,
+        override_ckpt_dir=None,
         # Args that affect the operation but not the result.
+        only_evaluate_existing=False,
         resume=False,
         tfdb=False,
         use_queues=True,
@@ -310,7 +314,7 @@ def train_model_data(
 
     if not os.path.exists(dir):
         os.makedirs(dir, 0o755)
-    path_ckpt = os.path.join(dir, 'ckpt')
+    path_ckpt = override_ckpt_dir or os.path.join(dir, 'ckpt')
     path_output = os.path.join(dir, 'output')
     if summary_dir:
         assert summary_name is not None
@@ -415,7 +419,7 @@ def train_model_data(
                 summary_vars_with_preview[mode] = tf.summary.merge(summaries)
 
     init_op = tf.global_variables_initializer()
-    saver = tf.train.Saver(max_to_keep=None)
+    saver = tf.train.Saver(max_to_keep=100)
 
     # if args.curriculum_learning:
     #     ''' Curriculum learning.
@@ -459,9 +463,18 @@ def train_model_data(
         print('\ntraining starts! --------------------------------------------')
         sys.stdout.flush()
 
-        # if args.evaluate:
-        #     _evaluate_at_existing_checkpoints(args, saver, eval_sets, sess, model_inst)
-        #     return
+        if only_evaluate_existing:
+            return _evaluate_at_existing_checkpoints(
+                saver, eval_sets, sess, model_inst,
+                path_ckpt=path_ckpt,
+                period_skip=period_skip,
+                period_assess=period_assess,
+                # For _evaluate():
+                use_gt_eval=use_gt_eval,
+                eval_tre_num=eval_tre_num,
+                path_output=path_output,
+                visualize=visualize,
+                keep_frames=keep_frames)
 
         # 1. resume (full restore), 2. initialize from scratch, 3. curriculume learning (partial restore)
         prev_ckpt = 0
@@ -878,20 +891,32 @@ def _draw_rectangles(im, gt, gt_is_valid=None, pred=None):
     return tf.image.convert_image_dtype(im, tf.uint8, saturate=True)
 
 
-def _evaluate_at_existing_checkpoints(args, saver, eval_sets, sess, model_inst):
+def _evaluate_at_existing_checkpoints(saver, eval_sets, sess, model_inst,
+                                      path_ckpt, period_skip, period_assess, **kwargs):
+    '''
+    Args:
+        kwargs: For _evaluate()
+    '''
+    # TODO: Add option to raise exception if not all requested checkpoints exist.
+
+    metrics = {}
     # Identify which checkpoints are available.
-    state = tf.train.get_checkpoint_state(args.path_ckpt)
+    state = tf.train.get_checkpoint_state(path_ckpt)
+    logger.debug('model files: %s', state.all_model_checkpoint_paths)
     model_files = {_index_from_checkpoint(os.path.basename(s)): s
                    for s in state.all_model_checkpoint_paths}
     # Identify which of these satisfy conditions.
-    subset = sorted([index for index in model_files if index >= args.period_skip and
-                     index % args.period_assess == 0])
+    subset = sorted([index for index in model_files if index >= period_skip and
+                     index % period_assess == 0])
+    logger.debug('global steps to assess: %s', subset)
     # Evaluate each (with cache).
     for global_step in subset:
         saver.restore(sess, model_files[global_step])
         for eval_id, sampler in eval_sets.items():
             eval_sequences = sampler()
-            _evaluate(args, global_step, eval_id, sess, model_inst, eval_sequences)
+            result = _evaluate(global_step, eval_id, sess, model_inst, eval_sequences, **kwargs)
+            metrics.setdefault(global_step, {})[eval_id] = result
+    return metrics
 
 
 def _index_from_checkpoint(s):
