@@ -41,6 +41,7 @@ def train(
         dir,
         model_params,
         seed,
+        only_evaluate_existing=False,
         # Dataset:
         train_dataset=None,
         val_dataset=None,
@@ -70,7 +71,9 @@ def train(
     tf.reset_default_graph()
     _set_global_seed(seed)  # Caution: Global side effects!
 
-    # TODO: Do not copy train data and val data if only_evaluate_existing.
+    if only_evaluate_existing:
+        train_dataset = None
+        val_dataset = None
 
     # TODO: Flag to enable/disable.
     datasets = setup_data(
@@ -102,7 +105,9 @@ def train(
 
     return train_model_data(
         dir, model, streams, eval_sample_fns,
-        ntimesteps=ntimesteps, **kwargs)
+        only_evaluate_existing=only_evaluate_existing,
+        ntimesteps=ntimesteps,
+        **kwargs)
 
 
 def setup_data(train_dataset, val_dataset, eval_datasets,
@@ -169,6 +174,8 @@ def make_samplers(datasets, seed, ntimesteps, sampler_params, train_dataset, val
     sampler_specs = {'train': train_dataset, 'val': val_dataset}
     streams = {}
     for i, mode in enumerate(['train', 'val']):
+        if sampler_specs[mode] is None:
+            continue
         # Use a different seed for train and val, in particular for augmentation!
         postproc_fn = (
             None if not augment_motion else
@@ -188,6 +195,8 @@ def make_samplers(datasets, seed, ntimesteps, sampler_params, train_dataset, val
 
 
 def _datasets_in_sampler(names):
+    if names is None:
+        return []
     if isinstance(names, string_types):
         return [names]
     if isinstance(names, list):
