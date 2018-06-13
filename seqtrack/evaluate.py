@@ -357,11 +357,14 @@ def _make_progress_bar():
     #     progressbar.Bar(), ' ',
     #     progressbar.Timer(), ' (', progressbar.ETA(format_finished='ETA: Complete'), ')',
     # ])
-    return helpers.ProgressMeter(interval_time=60)
+    return helpers.ProgressMeter(interval_time=1)
 
 
 def evaluate_model(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
     '''
+    Args:
+        kwargs: For track().
+
     Returns:
         A dictionary that contains evaluation results.
     '''

@@ -6,9 +6,9 @@ import argparse
 import functools
 import itertools
 import json
-import msgpack
 import numpy as np
 import os
+import pprint
 
 import logging
 logger = logging.getLogger(__name__)
@@ -24,8 +24,6 @@ from seqtrack.models import util
 # The pickled object must be imported to unpickle in a different package (slurmproc.worker).
 from seqtrack.tools import train_work as work
 
-import pprint
-
 
 def main():
     args = parse_arguments()
@@ -39,7 +37,7 @@ def main():
         mapper = helpers.map_dict
     # Cache the results and use SLURM mapper to evaluate those without cache.
     mapper = helpers.CachedDictMapper(dir=os.path.join('cache', 'trials'),
-                                      codec=msgpack, ext='.msgpack', mapper=mapper)
+                                      codec_name='msgpack', mapper=mapper)
     result_stream = mapper(functools.partial(work._train, args), seeds.items())
     # Construct dictionary from stream.
     results = dict(result_stream)
@@ -65,7 +63,6 @@ def parse_arguments():
     app.add_setup_data_args(parser)
     app.add_tracker_config_args(parser)
     app.add_eval_args(parser)
-    app.add_parallel_args(parser)
 
     parser.add_argument('--loglevel', default='info', help='debug, info, warning')
     parser.add_argument('--verbose_train', action='store_true')

@@ -46,7 +46,7 @@ def assess_dataset(seqs, predictions, tre_groups=None, timing=None):
     return metrics
 
 
-FRAME_METRICS = ['iou', 'center_dist', 'oracle_size_iou']
+FRAME_METRICS = ['iou', 'center_dist', 'oracle_size_iou', 'iou_until_zero']
 
 
 def assess_frames(sequence, pred_rects):
@@ -71,20 +71,30 @@ def assess_frames(sequence, pred_rects):
     oracle_size_iou = geom_np.rect_iou(label_rects, oracle_size_rect)
 
     # Set metrics to nan when object is not present.
+    iou = np.where(label_present, iou, float('nan'))
+    center_dist = np.where(label_present, center_dist, float('nan'))
+    oracle_size_iou = np.where(label_present, oracle_size_iou, float('nan'))
+
+    # Set IOU to zero after it first reaches zero.
+    iou_until_zero = np.where(np.isnan(iou), np.nan,
+                              np.where(_is_before_first(iou == 0), iou, 0))
+
     return {
-        'iou': np.where(label_present, iou, float('nan')),
-        'center_dist': np.where(label_present, center_dist, float('nan')),
-        'oracle_size_iou': np.where(label_present, oracle_size_iou, float('nan')),
+        'iou': iou,
+        'center_dist': center_dist,
+        'oracle_size_iou': oracle_size_iou,
+        'iou_until_zero': iou_until_zero,
     }
 
 
 IOU_THRESHOLDS = [0.5, 0.7]
 AUC_NUM_STEPS = 1000
-SEQUENCE_METRICS = (
-    FRAME_METRICS +
-    ['speed_eval', 'speed_with_load', 'speed_real'] +
-    ['iou_success_{}'.format(thr) for thr in IOU_THRESHOLDS] +
-    ['iou_success_auc'])
+SEQUENCE_METRICS = list(itertools.chain(
+    FRAME_METRICS,
+    ['speed_eval', 'speed_with_load', 'speed_real'],
+    ['iou_success_{}'.format(thr) for thr in IOU_THRESHOLDS],
+    ['iou_success_auc'],
+    ['iou_success_until_failure_{}'.format(thr) for thr in IOU_THRESHOLDS]))
 
 
 def assess_sequence(sequence, predictions, frame_metrics, timing=None):
@@ -93,10 +103,16 @@ def assess_sequence(sequence, predictions, frame_metrics, timing=None):
     # Take mean of all per-frame metrics.
     for key in FRAME_METRICS:
         metrics[key] = np.nanmean(frame_metrics[key])
+    # metrics['iou_until_zero'] = np.nanmean(
+    #     np.where(np.isnan(frame_metrics['iou']), np.nan,
+    #              np.where(_is_before_first(frame_metrics['iou'] == 0), frame_metrics['iou'], 0)))
     # Add new metrics.
     for thr in IOU_THRESHOLDS:
-        metrics['iou_success_{}'.format(thr)] = \
-            np.nanmean(_compare_nan(operator.ge, frame_metrics['iou'], thr))
+        correct = _greater_equal_keep_nan(frame_metrics['iou'], thr)
+        metrics['iou_success_{}'.format(thr)] = np.nanmean(correct)
+        metrics['iou_success_until_failure_{}'.format(thr)] = np.nanmean(
+            np.where(np.isnan(correct), np.nan,
+                     np.where(_is_before_first(correct == 0), correct, 0)))
 
     if timing is not None:
         metrics['speed_eval'] = timing['num_frames'] / timing['duration_eval']
@@ -140,7 +156,7 @@ def _summarize(frame_metrics, sequence_metrics, tre_groups):
     # Add new metrics.
     all_iou = np.concatenate([frame_metrics[subseq]['iou'] for subseq in all_subseqs])
     for thr in IOU_THRESHOLDS:
-        metrics['iou_success_{}'.format(thr)] = np.nanmean(_compare_nan(operator.ge, all_iou, thr))
+        metrics['iou_success_{}'.format(thr)] = np.nanmean(_greater_equal_keep_nan(all_iou, thr))
     metrics['iou_success_auc'] = _compute_auc(all_iou, AUC_NUM_STEPS)
     return metrics
 
@@ -148,16 +164,35 @@ def _summarize(frame_metrics, sequence_metrics, tre_groups):
 def _compute_auc(iou, num):
     thresholds, step = np.linspace(0, 1, num + 1, retstep=True)
     # success = np.nanmean(iou[:, np.newaxis] >= thresholds, axis=0)
-    success = np.nanmean(_compare_nan(operator.ge, iou[:, np.newaxis], thresholds), axis=0)
+    success = np.nanmean(_greater_equal_keep_nan(iou[:, np.newaxis], thresholds), axis=0)
     return np.trapz(success, dx=step)
 
 
-def _compare_nan(op, x, y):
+def _greater_equal_keep_nan(x, y):
+    '''
+    Args:
+        x, y: Float.
+    '''
+    return _keep_nan(np.greater_equal, x, y)
+
+
+def _keep_nan(op, x, y):
     '''Computes op(x, y).astype(float) and restores nan values.
 
+    This is for evaluating boolean operations with nans.
     The resulting array contains {0, 1, nan}.
     '''
     isnan = np.logical_or(np.isnan(x), np.isnan(y))
     with np.errstate(invalid='ignore'):
         val = op(x, y)
     return np.where(isnan, float('nan'), val.astype(float))
+
+
+def _is_before_first(xs):
+    '''Returns a list of booleans that indicates whether each element is before the first True.
+
+    Args:
+        xs: List of bools.
+    '''
+    first = next((i for i, x in enumerate(xs) if x), len(xs))
+    return [i < first for i in range(len(xs))]

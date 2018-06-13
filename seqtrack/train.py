@@ -955,7 +955,7 @@ def _evaluate(
         result_file,
         lambda: evaluate.evaluate_model(
             sess, model_inst, eval_sequences,
-            visualize=True, vis_dir=vis_dir, keep_frames=keep_frames,
+            visualize=visualize, vis_dir=vis_dir, keep_frames=keep_frames,
             use_gt=use_gt_eval, tre_num=eval_tre_num),
         makedir=True)
 
