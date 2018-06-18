@@ -75,11 +75,13 @@ def train(
         train_dataset = None
         val_dataset = None
 
+    # TODO: How to get datasets from train_dataset and eval_datasets?
+    dataset_names = list(set(chain(_datasets_in_sampler(train_dataset),
+                                   _datasets_in_sampler(val_dataset),
+                                   eval_datasets)))
     # TODO: Flag to enable/disable.
     datasets = setup_data(
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
-        eval_datasets=eval_datasets,
+        dataset_names=dataset_names,
         pool_datasets=pool_datasets,
         pool_split=pool_split,
         untar=untar,
@@ -110,13 +112,8 @@ def train(
         **kwargs)
 
 
-def setup_data(train_dataset, val_dataset, eval_datasets,
-               pool_datasets, pool_split,
+def setup_data(dataset_names, pool_datasets, pool_split,
                untar, data_dir, tar_dir, tmp_data_dir, preproc_id, data_cache_dir):
-    # TODO: How to get datasets from train_dataset and eval_datasets?
-    dataset_names = list(set(chain(_datasets_in_sampler(train_dataset),
-                                   _datasets_in_sampler(val_dataset),
-                                   eval_datasets)))
     logger.info('load datasets: %s', helpers.quote_list(dataset_names))
 
     # If 'pool_train' or 'pool_val' are in dataset_names, replace them with the pool datasets.
