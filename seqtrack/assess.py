@@ -94,7 +94,8 @@ SEQUENCE_METRICS = list(itertools.chain(
     ['speed_eval', 'speed_with_load', 'speed_real'],
     ['iou_success_{}'.format(thr) for thr in IOU_THRESHOLDS],
     ['iou_success_auc'],
-    ['iou_success_until_failure_{}'.format(thr) for thr in IOU_THRESHOLDS]))
+    ['iou_success_until_failure_{}'.format(thr) for thr in IOU_THRESHOLDS],
+    ['iou_success_until_failure_auc']))
 
 
 def assess_sequence(sequence, predictions, frame_metrics, timing=None):
@@ -121,6 +122,8 @@ def assess_sequence(sequence, predictions, frame_metrics, timing=None):
         metrics['speed_real'] = timing['num_frames'] / timing['duration_real']
 
     metrics['iou_success_auc'] = _compute_auc(frame_metrics['iou'], AUC_NUM_STEPS)
+    metrics['iou_success_until_failure_auc'] = _compute_auc(frame_metrics['iou'], AUC_NUM_STEPS,
+                                                            only_until_failure=True)
     return metrics
 
 
@@ -161,10 +164,17 @@ def _summarize(frame_metrics, sequence_metrics, tre_groups):
     return metrics
 
 
-def _compute_auc(iou, num):
+def _compute_auc(iou, num, only_until_failure=False):
     thresholds, step = np.linspace(0, 1, num + 1, retstep=True)
-    # success = np.nanmean(iou[:, np.newaxis] >= thresholds, axis=0)
-    success = np.nanmean(_greater_equal_keep_nan(iou[:, np.newaxis], thresholds), axis=0)
+    # correct: [num_frames, num_thresholds]
+    # Type is float with values in {0, 1, nan}.
+    correct = _greater_equal_keep_nan(iou[:, np.newaxis], thresholds)
+    if only_until_failure:
+        # The condition correct == 0 represents a failure and not an unlabelled frame (nan).
+        is_before_failure = np.apply_along_axis(_is_before_first, 0, correct == 0)
+        correct = np.where(np.isnan(correct), np.nan,
+                           np.asfarray(np.logical_and(correct == 1, is_before_failure)))
+    success = np.nanmean(correct, axis=0)
     return np.trapz(success, dx=step)
 
 
@@ -194,5 +204,11 @@ def _is_before_first(xs):
     Args:
         xs: List of bools.
     '''
-    first = next((i for i, x in enumerate(xs) if x), len(xs))
-    return [i < first for i in range(len(xs))]
+    # first = next((i for i, x in enumerate(xs) if x), len(xs))
+    # return [i < first for i in range(len(xs))]
+    assert len(np.shape(xs)) == 1, 'not a list: shape {}'.format(np.shape(xs))
+    if np.any(xs):
+        # Use argmax to find first True (True > False).
+        return np.less(np.arange(len(xs)), np.argmax(xs))
+    else:
+        return np.ones(len(xs), dtype=np.bool)
