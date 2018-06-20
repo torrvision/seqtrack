@@ -155,13 +155,16 @@ def resnet_v1(inputs,
               num_classes=None,
               is_training=True,
               # global_pool=True,
-              output_stride=None,
+              output_stride=None,  # Not supported.
               include_root_block=True,
               # spatial_squeeze=True,
               store_non_strided_activations=False,
-              padding='SAME',
               reuse=None,
-              scope=None):
+              scope=None,
+              # Modifications:
+              padding='SAME',
+              conv1_stride=2,
+              pool1_stride=2):
     """Generator for v1 ResNet models.
 
     This function generates a family of ResNet v1 models. See the resnet_v1_*()
@@ -244,14 +247,16 @@ def resnet_v1(inputs,
                             raise ValueError('The output_stride needs to be a multiple of 4.')
                         output_stride /= 4
                     # net = resnet_utils.conv2d_same(net, 64, 7, stride=2, scope='conv1')
-                    net = resnet_utils.conv2d(net, 64, 7, stride=2, padding=padding, scope='conv1')
+                    net = resnet_utils.conv2d(net, 64, 7, stride=conv1_stride,
+                                              padding=padding, scope='conv1')
                     # JV: Override option from arg_scope when padding is 'VALID'.
                     # net = slim.max_pool2d(net, [3, 3], stride=2, scope='pool1')
                     if padding == 'VALID':
-                        net = cnnutil.max_pool2d(net, [3, 3], stride=2, padding='VALID', scope='pool1')
+                        net = cnnutil.max_pool2d(net, [3, 3], stride=pool1_stride,
+                                                 padding='VALID', scope='pool1')
                     else:
                         # Use default value of padding from arg_scope.
-                        net = cnnutil.max_pool2d(net, [3, 3], stride=2, scope='pool1')
+                        net = cnnutil.max_pool2d(net, [3, 3], stride=pool1_stride, scope='pool1')
                 net = resnet_utils.stack_blocks_dense(net, blocks, output_stride,
                                                       store_non_strided_activations,
                                                       padding=padding)
@@ -306,21 +311,29 @@ def resnet_v1_50(inputs,
                  is_training=True,
                  output_stride=None,
                  store_non_strided_activations=False,
-                 padding='SAME',
                  reuse=None,
-                 scope='resnet_v1_50'):
+                 scope='resnet_v1_50',
+                 # Modifications:
+                 padding='SAME',
+                 conv1_stride=2,
+                 pool1_stride=2,
+                 num_blocks=4,
+                 block1_stride=2,
+                 block2_stride=2):
     """ResNet-50 model of [1]. See resnet_v1() for arg and return description."""
     blocks = [
-        resnet_v1_block('block1', base_depth=64, num_units=3, stride=2),
-        resnet_v1_block('block2', base_depth=128, num_units=4, stride=2),
+        resnet_v1_block('block1', base_depth=64, num_units=3, stride=block1_stride),
+        resnet_v1_block('block2', base_depth=128, num_units=4, stride=block2_stride),
         resnet_v1_block('block3', base_depth=256, num_units=6, stride=2),
         resnet_v1_block('block4', base_depth=512, num_units=3, stride=1),
     ]
+    blocks = blocks[:num_blocks]
     return resnet_v1(inputs, blocks, num_classes, is_training,
                      output_stride=output_stride,
                      include_root_block=True,
                      store_non_strided_activations=store_non_strided_activations,
-                     padding=padding, reuse=reuse, scope=scope)
+                     reuse=reuse, scope=scope,
+                     padding=padding, conv1_stride=conv1_stride, pool1_stride=pool1_stride)
 
 
 resnet_v1_50.default_image_size = resnet_v1.default_image_size
