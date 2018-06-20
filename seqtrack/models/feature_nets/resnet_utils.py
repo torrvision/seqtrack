@@ -76,6 +76,14 @@ def subsample(inputs, factor, scope=None):
         return slim.max_pool2d(inputs, [1, 1], stride=factor, scope=scope)
 
 
+def conv2d(inputs, num_outputs, kernel_size, stride, rate=1, padding='SAME', **kwargs):
+    if padding == 'VALID':
+        return slim.conv2d(inputs, num_outputs, kernel_size, stride=stride, rate=rate,
+                           padding='VALID', **kwargs)
+    else:
+        return conv2d_same(inputs, num_outputs, kernel_size, stride=stride, rate=rate, **kwargs)
+
+
 def conv2d_same(inputs, num_outputs, kernel_size, stride, rate=1, scope=None):
     """Strided 2-D convolution with 'SAME' padding.
 
@@ -126,7 +134,7 @@ def conv2d_same(inputs, num_outputs, kernel_size, stride, rate=1, scope=None):
 
 @slim.add_arg_scope
 def stack_blocks_dense(net, blocks, output_stride=None,
-                       store_non_strided_activations=False,
+                       store_non_strided_activations=False, padding='SAME',
                        outputs_collections=None):
     """Stacks ResNet `Blocks` and controls output feature density.
 
@@ -194,11 +202,11 @@ def stack_blocks_dense(net, blocks, output_stride=None,
                     # atrous convolution with stride=1 and multiply the atrous rate by the
                     # current unit's stride for use in subsequent layers.
                     if output_stride is not None and current_stride == output_stride:
-                        net = block.unit_fn(net, rate=rate, **dict(unit, stride=1))
+                        net = block.unit_fn(net, rate=rate, padding=padding, **dict(unit, stride=1))
                         rate *= unit.get('stride', 1)
 
                     else:
-                        net = block.unit_fn(net, rate=1, **unit)
+                        net = block.unit_fn(net, rate=1, padding=padding, **unit)
                         current_stride *= unit.get('stride', 1)
                         if output_stride is not None and current_stride > output_stride:
                             raise ValueError('The target output_stride cannot be reached.')

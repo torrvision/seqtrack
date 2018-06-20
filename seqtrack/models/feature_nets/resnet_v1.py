@@ -60,7 +60,7 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-from nets import resnet_utils
+from seqtrack.models.feature_nets import resnet_utils
 
 
 resnet_arg_scope = resnet_utils.resnet_arg_scope
@@ -83,6 +83,7 @@ def bottleneck(inputs,
                depth_bottleneck,
                stride,
                rate=1,
+               padding='SAME',
                outputs_collections=None,
                scope=None,
                use_bounded_activations=False):
@@ -112,11 +113,16 @@ def bottleneck(inputs,
     """
     with tf.variable_scope(scope, 'bottleneck_v1', [inputs]) as sc:
         depth_in = slim.utils.last_dimension(inputs.get_shape(), min_rank=4)
+        shortcut = inputs
+        if padding == 'VALID':
+            # Necessary to crop the edge to make the spatial dimensions match.
+            # Kernel size is always 3 so trim 1 from all sides of input.
+            shortcut = shortcut[:, 1:-1, 1:-1, :]
         if depth == depth_in:
-            shortcut = resnet_utils.subsample(inputs, stride, 'shortcut')
+            shortcut = resnet_utils.subsample(shortcut, stride, 'shortcut')
         else:
             shortcut = slim.conv2d(
-                inputs,
+                shortcut,
                 depth, [1, 1],
                 stride=stride,
                 activation_fn=tf.nn.relu6 if use_bounded_activations else None,
@@ -124,8 +130,10 @@ def bottleneck(inputs,
 
         residual = slim.conv2d(inputs, depth_bottleneck, [1, 1], stride=1,
                                scope='conv1')
-        residual = resnet_utils.conv2d_same(residual, depth_bottleneck, 3, stride,
-                                            rate=rate, scope='conv2')
+        # residual = resnet_utils.conv2d_same(residual, depth_bottleneck, 3, stride,
+        #                                     rate=rate, scope='conv2')
+        residual = resnet_utils.conv2d(residual, depth_bottleneck, 3, stride,
+                                       rate=rate, padding=padding, scope='conv2')
         residual = slim.conv2d(residual, depth, [1, 1], stride=1,
                                activation_fn=None, scope='conv3')
 
@@ -150,6 +158,7 @@ def resnet_v1(inputs,
               include_root_block=True,
               spatial_squeeze=True,
               store_non_strided_activations=False,
+              padding='SAME',
               reuse=None,
               scope=None):
     """Generator for v1 ResNet models.
@@ -233,10 +242,18 @@ def resnet_v1(inputs,
                         if output_stride % 4 != 0:
                             raise ValueError('The output_stride needs to be a multiple of 4.')
                         output_stride /= 4
-                    net = resnet_utils.conv2d_same(net, 64, 7, stride=2, scope='conv1')
-                    net = slim.max_pool2d(net, [3, 3], stride=2, scope='pool1')
+                    # net = resnet_utils.conv2d_same(net, 64, 7, stride=2, scope='conv1')
+                    net = resnet_utils.conv2d(net, 64, 7, stride=2, padding=padding, scope='conv1')
+                    # JV: Override option from arg_scope when padding is 'VALID'.
+                    # net = slim.max_pool2d(net, [3, 3], stride=2, scope='pool1')
+                    if padding == 'VALID':
+                        net = slim.max_pool2d(net, [3, 3], stride=2, padding='VALID', scope='pool1')
+                    else:
+                        # Use default value of padding from arg_scope.
+                        net = slim.max_pool2d(net, [3, 3], stride=2, scope='pool1')
                 net = resnet_utils.stack_blocks_dense(net, blocks, output_stride,
-                                                      store_non_strided_activations)
+                                                      store_non_strided_activations,
+                                                      padding=padding)
                 # Convert end_points_collection into a dictionary of end_points.
                 end_points = slim.utils.convert_collection_to_dict(
                     end_points_collection)
@@ -290,6 +307,7 @@ def resnet_v1_50(inputs,
                  output_stride=None,
                  spatial_squeeze=True,
                  store_non_strided_activations=False,
+                 padding='SAME',
                  reuse=None,
                  scope='resnet_v1_50'):
     """ResNet-50 model of [1]. See resnet_v1() for arg and return description."""
@@ -303,7 +321,7 @@ def resnet_v1_50(inputs,
                      global_pool=global_pool, output_stride=output_stride,
                      include_root_block=True, spatial_squeeze=spatial_squeeze,
                      store_non_strided_activations=store_non_strided_activations,
-                     reuse=reuse, scope=scope)
+                     padding=padding, reuse=reuse, scope=scope)
 
 
 resnet_v1_50.default_image_size = resnet_v1.default_image_size
@@ -316,6 +334,7 @@ def resnet_v1_101(inputs,
                   output_stride=None,
                   spatial_squeeze=True,
                   store_non_strided_activations=False,
+                  padding='SAME',
                   reuse=None,
                   scope='resnet_v1_101'):
     """ResNet-101 model of [1]. See resnet_v1() for arg and return description."""
@@ -329,7 +348,7 @@ def resnet_v1_101(inputs,
                      global_pool=global_pool, output_stride=output_stride,
                      include_root_block=True, spatial_squeeze=spatial_squeeze,
                      store_non_strided_activations=store_non_strided_activations,
-                     reuse=reuse, scope=scope)
+                     padding=padding, reuse=reuse, scope=scope)
 
 
 resnet_v1_101.default_image_size = resnet_v1.default_image_size
@@ -342,6 +361,7 @@ def resnet_v1_152(inputs,
                   output_stride=None,
                   store_non_strided_activations=False,
                   spatial_squeeze=True,
+                  padding='SAME',
                   reuse=None,
                   scope='resnet_v1_152'):
     """ResNet-152 model of [1]. See resnet_v1() for arg and return description."""
@@ -355,7 +375,7 @@ def resnet_v1_152(inputs,
                      global_pool=global_pool, output_stride=output_stride,
                      include_root_block=True, spatial_squeeze=spatial_squeeze,
                      store_non_strided_activations=store_non_strided_activations,
-                     reuse=reuse, scope=scope)
+                     padding=padding, reuse=reuse, scope=scope)
 
 
 resnet_v1_152.default_image_size = resnet_v1.default_image_size
@@ -368,6 +388,7 @@ def resnet_v1_200(inputs,
                   output_stride=None,
                   store_non_strided_activations=False,
                   spatial_squeeze=True,
+                  padding='SAME',
                   reuse=None,
                   scope='resnet_v1_200'):
     """ResNet-200 model of [2]. See resnet_v1() for arg and return description."""
@@ -381,7 +402,7 @@ def resnet_v1_200(inputs,
                      global_pool=global_pool, output_stride=output_stride,
                      include_root_block=True, spatial_squeeze=spatial_squeeze,
                      store_non_strided_activations=store_non_strided_activations,
-                     reuse=reuse, scope=scope)
+                     padding=padding, reuse=reuse, scope=scope)
 
 
 resnet_v1_200.default_image_size = resnet_v1.default_image_size
