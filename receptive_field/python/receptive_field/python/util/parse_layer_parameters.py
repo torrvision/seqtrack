@@ -232,6 +232,79 @@ def _padding_size_pad_layer(node, name_to_node):
   return total_padding_x, padding_x, total_padding_y, padding_y
 
 
+def _padding_size_slice_layer(node, name_to_node):
+  """Computes padding size given a TF slice node.
+
+  Args:
+    node: Tensorflow node (NodeDef proto).
+    name_to_node: Dict keyed by node name, each entry containing the node's
+      NodeDef.
+
+  Returns:
+    total_padding_x: Total padding size for horizontal direction (integer).
+    padding_x: Padding size for horizontal direction, left side (integer).
+    total_padding_y: Total padding size for vertical direction (integer).
+    padding_y: Padding size for vertical direction, top side (integer).
+
+  Raises:
+    ValueError: If padding layer is invalid.
+  """
+  input_layer_name = node.input[0]
+  begin_layer_name = node.input[1]
+  size_layer_name = node.input[2]
+  input_node = name_to_node[input_layer_name]
+  begin_node = name_to_node[begin_layer_name]
+  size_node = name_to_node[size_layer_name]
+  if begin_node.op != "Const":
+    raise ValueError("Begin op is not Const")
+  if size_node.op != "Const":
+    raise ValueError("Size op is not Const")
+  begin = make_ndarray(begin_node.attr["value"].tensor)
+  size = make_ndarray(size_node.attr["value"].tensor)
+  padding_y = -begin[1]
+  padding_x = -begin[2]
+  raise RuntimeError("not sure how to get size of input")
+  # total_padding_y = (padding_y if size[1] == -1 else size[1] - input_size[1])
+  # total_padding_x = (padding_x if size[2] == -1 else size[2] - input_size[2])
+  if (begin[0] != 0) or (size[0] != -1):
+    raise ValueError("first dimension is sliced")
+  if (begin[3] != 0) or (size[3] != -1):
+    raise ValueError("last dimension is sliced")
+  return total_padding_x, padding_x, total_padding_y, padding_y
+
+
+def _parse_strided_slice(node, name_to_node):
+  # input_name = node.input[0]
+  start_name = node.input[1]
+  stop_name = node.input[2]
+  step_name = node.input[3]
+  # input_node = name_to_node[input_name]
+  start_node = name_to_node[start_name]
+  stop_node = name_to_node[stop_name]
+  step_node = name_to_node[step_name]
+  if start_node.op != "Const":
+    raise ValueError("Start op is not Const")
+  if stop_node.op != "Const":
+    raise ValueError("Stop op is not Const")
+  if step_node.op != "Const":
+    raise ValueError("Step op is not Const")
+  start = make_ndarray(start_node.attr['value'].tensor)
+  stop = make_ndarray(stop_node.attr['value'].tensor)
+  step = make_ndarray(step_node.attr['value'].tensor)
+  if step[1] != 1 or step[2] != 1:
+    raise ValueError("spatial stride is not 1")
+  stride_y = 1
+  stride_x = 1
+  padding_y = -start[1]
+  padding_x = -start[2]
+  if stop[1] >= 0 or stop[2] >= 0:
+    # Would need to use input size.
+    raise ValueError("stop is not negative")
+  total_padding_y = -start[1] + stop[1]
+  total_padding_x = -start[2] + stop[2]
+  return stride_x, stride_y, padding_x, padding_y, total_padding_x, total_padding_y
+
+
 def get_layer_params(node, name_to_node, input_resolution=None, force=False):
   """Gets layer parameters relevant for RF computation.
 
@@ -289,6 +362,19 @@ def get_layer_params(node, name_to_node, input_resolution=None, force=False):
     stride_y = 1
     total_padding_x, padding_x, total_padding_y, padding_y = (
         _padding_size_pad_layer(node, name_to_node))
+  elif node.op == "Slice":
+    # Kernel and stride are simply 1 in this case.
+    kernel_size_x = 1
+    kernel_size_y = 1
+    stride_x = 1
+    stride_y = 1
+    total_padding_x, padding_x, total_padding_y, padding_y = (
+        _padding_size_slice_layer(node, name_to_node))
+  elif node.op == "StridedSlice":
+    kernel_size_x = 1
+    kernel_size_y = 1
+    stride_x, stride_y, padding_x, padding_y, total_padding_x, total_padding_y = (
+        _parse_strided_slice(node, name_to_node))
   elif node.op == "MaxPool" or node.op == "MaxPoolV2" or node.op == "AvgPool":
     stride_x, stride_y = _stride_size(node, name_to_node)
     kernel_size_x, kernel_size_y = _pool_kernel_size(node, name_to_node)
