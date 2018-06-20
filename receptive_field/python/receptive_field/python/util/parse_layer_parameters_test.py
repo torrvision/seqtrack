@@ -19,8 +19,8 @@ from __future__ import division
 from __future__ import print_function
 
 from tensorflow.contrib import slim
-from tensorflow.contrib.receptive_field.python.util import graph_compute_order
-from tensorflow.contrib.receptive_field.python.util import parse_layer_parameters
+from . import graph_compute_order
+from . import parse_layer_parameters
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops

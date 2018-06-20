@@ -21,7 +21,7 @@ from __future__ import print_function
 import numpy as np
 
 from tensorflow.contrib import slim
-from tensorflow.contrib.receptive_field import receptive_field_api as receptive_field
+from receptive_field import receptive_field_api as receptive_field
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops

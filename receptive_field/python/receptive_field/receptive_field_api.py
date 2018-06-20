@@ -18,8 +18,8 @@ from __future__ import division
 from __future__ import print_function
 
 # pylint: disable=unused-import
-from tensorflow.contrib.receptive_field.python.util.graph_compute_order import get_compute_order
-from tensorflow.contrib.receptive_field.python.util.receptive_field import compute_receptive_field_from_graph_def
+from .python.util.graph_compute_order import get_compute_order
+from .python.util.receptive_field import compute_receptive_field_from_graph_def
 # pylint: enable=unused-import
 
 del absolute_import

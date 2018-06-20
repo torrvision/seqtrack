@@ -21,7 +21,7 @@ from __future__ import print_function
 
 import collections
 import math
-from tensorflow.contrib.receptive_field.python.util import parse_layer_parameters
+from . import parse_layer_parameters
 from tensorflow.python.platform import tf_logging as logging
 
 

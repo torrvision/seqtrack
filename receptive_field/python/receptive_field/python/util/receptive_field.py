@@ -24,8 +24,8 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
-from tensorflow.contrib.receptive_field.python.util import graph_compute_order
-from tensorflow.contrib.receptive_field.python.util import parse_layer_parameters
+from . import graph_compute_order
+from . import parse_layer_parameters
 from tensorflow.python.framework import ops as framework_ops
 from tensorflow.python.platform import tf_logging as logging
 
