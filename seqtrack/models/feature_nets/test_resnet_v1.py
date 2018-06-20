@@ -81,11 +81,79 @@ class TestResnetV1(tf.test.TestCase):
         image = cnnutil.Tensor(image, rfs={'image': cnnutil.identity_rf()})
         with slim.arg_scope(resnet_v1.resnet_arg_scope()):
             output, _ = resnet_v1.resnet_v1_50(image, padding=padding)
+        rf = output.rfs['image']
 
         if padding == 'VALID':
-            self.assertTrue(all(output.rfs['image'].rect.min == 0))
+            self.assertTrue(all(rf.rect.min == 0))
         else:
-            self.assertTrue(all(output.rfs['image'].rect.int_center() == 0))
+            self.assertTrue(all(rf.rect.int_center() == 0))
+
+    def test_input_size_padding_same(self):
+        self._test_input_size_padding(padding='SAME')
+
+    def test_input_size_padding_valid(self):
+        self._test_input_size_padding(padding='VALID')
+
+    def _test_input_size_padding(self, padding):
+        g = tf.Graph()
+        with g.as_default():
+            image = tf.placeholder(shape=INPUT_SHAPE, dtype=tf.float32, name='image')
+            image = cnnutil.Tensor(image, rfs={'image': cnnutil.identity_rf()})
+            with slim.arg_scope(resnet_v1.resnet_arg_scope()):
+                output, _ = resnet_v1.resnet_v1_50(image, padding=padding)
+            rf = output.rfs['image']
+
+        # See if the receptive field can be used to get a desired output size.
+        for desired_size in [1, 2, 5]:
+            if padding == 'VALID':
+                input_size = (desired_size - 1) * rf.stride + rf.rect.max
+            else:
+                input_size = (desired_size - 1) * rf.stride + 1
+            input_shape = [8] + list(input_size) + [3]
+
+            g = tf.Graph()
+            with g.as_default():
+                image = tf.placeholder(shape=input_shape, dtype=tf.float32, name='image')
+                with slim.arg_scope(resnet_v1.resnet_arg_scope()):
+                    output, _ = resnet_v1.resnet_v1_50(image, padding=padding)
+                output_size = output.shape.as_list()[1:3]
+                self.assertTrue(all(np.array(output_size) == desired_size),
+                                'try input size {} to get output size {} but got {}'.format(
+                                    input_size, desired_size, output_size))
+
+    def test_input_size_is_minimum_padding_same(self):
+        self._test_input_size_is_minimum_padding(padding='SAME')
+
+    def test_input_size_is_minimum_padding_valid(self):
+        self._test_input_size_is_minimum_padding(padding='VALID')
+
+    def _test_input_size_is_minimum_padding(self, padding):
+        g = tf.Graph()
+        with g.as_default():
+            image = tf.placeholder(shape=INPUT_SHAPE, dtype=tf.float32, name='image')
+            image = cnnutil.Tensor(image, rfs={'image': cnnutil.identity_rf()})
+            with slim.arg_scope(resnet_v1.resnet_arg_scope()):
+                output, _ = resnet_v1.resnet_v1_50(image, padding=padding)
+            rf = output.rfs['image']
+
+        # See if the receptive field can be used to get a desired output size.
+        for desired_size in [2, 5]:
+            if padding == 'VALID':
+                input_size = (desired_size - 1) * rf.stride + rf.rect.max
+            else:
+                input_size = (desired_size - 1) * rf.stride + 1
+            # Test that decreasing the input size reduces the output size.
+            input_size = input_size - 1
+            input_shape = [8] + list(input_size) + [3]
+
+            g = tf.Graph()
+            with g.as_default():
+                image = tf.placeholder(shape=input_shape, dtype=tf.float32, name='image')
+                with slim.arg_scope(resnet_v1.resnet_arg_scope()):
+                    output, _ = resnet_v1.resnet_v1_50(image, padding=padding)
+                output_size = output.shape.as_list()[1:3]
+                self.assertTrue(all(np.array(output_size) < desired_size),
+                                'input size {} does not decrease output size'.format(input_size))
 
 
 if __name__ == '__main__':
