@@ -58,7 +58,7 @@ class SiamFC(models_interface.IterModel):
             search_method='local',
             global_search_min_resolution=64,
             global_search_max_resolution=512,
-            global_search_num_scales=4, # 64, 128, 256, 512
+            global_search_num_scales=4,  # 64, 128, 256, 512
             num_scales=5,
             scale_step=1.03,
             scale_update_rate=0.6,
@@ -340,12 +340,12 @@ class SiamFC(models_interface.IterModel):
                                            self._global_search_max_resolution,
                                            self._global_search_num_scales)
                 valid_edges = [
-                    int(round(float(ideal_edge-1)/rf_stride))*rf_stride+1
+                    int(round(float(ideal_edge - 1) / rf_stride)) * rf_stride + 1
                     for ideal_edge in ideal_edges]
                 assert len(set(valid_edges)) == len(valid_edges)
                 logger.debug('ideal edges: %s', ['{:.1f}'.format(edge) for edge in ideal_edges])
                 logger.debug('valid edges: %s', valid_edges)
-                edges = [2*rf_half + valid_edge for valid_edge in valid_edges]
+                edges = [2 * rf_half + valid_edge for valid_edge in valid_edges]
                 # The image is a rectangle with the correct aspect ratio within a square.
                 # The square has size `valid_edge` within a larger padded image of size `edge`.
                 # TODO: Use a random region within the square.
@@ -353,7 +353,7 @@ class SiamFC(models_interface.IterModel):
                 square_in_padded = [
                     geom.make_rect_center_size(
                         0.5 * tf.ones(2, tf.float32),
-                        (float(valid_edges[i])/edges[i]) * tf.ones(2, tf.float32))
+                        (float(valid_edges[i]) / edges[i]) * tf.ones(2, tf.float32))
                     for i in range(self._global_search_num_scales)]
                 # Get aspect within inset rect.
                 im_in_padded = [
@@ -952,7 +952,7 @@ def _center_rect_with_aspect(aspect, name='center_rect_with_aspect'):
         max_dim = tf.maximum(width, height)
         width, height = width / max_dim, height / max_dim
         size = tf.stack((width, height), axis=-1)
-        return geom.make_rect_center_size(0.5*tf.ones_like(size), size)
+        return geom.make_rect_center_size(0.5 * tf.ones_like(size), size)
 
 
 def _position_grid(size):
@@ -966,7 +966,7 @@ def _position_grid(size):
 
 def _merge_dims_and_concat(xs, a, b):
     pairs = list(map(lambda x: merge_dims(x, a, b), xs))
-    xs, restores = zip(*pairs) # Inverse of zip is zip-star.
+    xs, restores = zip(*pairs)  # Inverse of zip is zip-star.
     ns = [x.shape.as_list()[a] for x in xs]
     xs = tf.concat(xs, axis=a)
 
