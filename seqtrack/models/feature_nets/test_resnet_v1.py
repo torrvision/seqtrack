@@ -9,7 +9,7 @@ from tensorflow.contrib import slim
 from seqtrack import cnnutil
 
 from seqtrack.models.feature_nets import resnet_v1
-from nets import resnet_v1 as original
+from tensorflow.contrib.slim.nets import resnet_v1 as original
 
 
 INPUT_SHAPE = (8, 512, 512, 3)
@@ -95,6 +95,7 @@ class TestResnetV1(tf.test.TestCase):
         self._test_input_size_padding(padding='VALID')
 
     def _test_input_size_padding(self, padding):
+        '''Uses the receptive field to compute the input size for a desired output size.'''
         g = tf.Graph()
         with g.as_default():
             image = tf.placeholder(shape=INPUT_SHAPE, dtype=tf.float32, name='image')
@@ -128,6 +129,7 @@ class TestResnetV1(tf.test.TestCase):
         self._test_input_size_is_minimum_padding(padding='VALID')
 
     def _test_input_size_is_minimum_padding(self, padding):
+        '''Tests that the input size computed using the receptive field is the minimum.'''
         g = tf.Graph()
         with g.as_default():
             image = tf.placeholder(shape=INPUT_SHAPE, dtype=tf.float32, name='image')
