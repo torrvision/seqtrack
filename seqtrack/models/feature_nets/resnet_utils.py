@@ -235,7 +235,8 @@ def resnet_arg_scope(weight_decay=0.0001,
                      batch_norm_epsilon=1e-5,
                      batch_norm_scale=True,
                      activation_fn=tf.nn.relu,
-                     use_batch_norm=True):
+                     use_batch_norm=True,
+                     variables_collections=None):
     """Defines the default ResNet arg scope.
 
     TODO(gpapan): The batch-normalization related default values above are
@@ -263,12 +264,14 @@ def resnet_arg_scope(weight_decay=0.0001,
         'scale': batch_norm_scale,
         'updates_collections': tf.GraphKeys.UPDATE_OPS,
         'fused': None,  # Use fused batch norm if possible.
+        'variables_collections': variables_collections,
     }
 
     with slim.arg_scope(
         [cnnutil.conv2d],
         weights_regularizer=slim.l2_regularizer(weight_decay),
         weights_initializer=slim.variance_scaling_initializer(),
+        variables_collections=variables_collections,
         activation_fn=activation_fn,
         normalizer_fn=slim.batch_norm if use_batch_norm else None,
             normalizer_params=batch_norm_params):

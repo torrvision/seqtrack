@@ -17,6 +17,8 @@ from seqtrack import models
 from seqtrack.models import interface as models_interface
 from seqtrack.models import util
 
+from .feature_nets import resnet_v1
+
 from seqtrack.helpers import merge_dims
 from seqtrack.helpers import get_act
 from seqtrack.helpers import leaky_relu
@@ -526,45 +528,62 @@ def _feature_net(x, rfs=None, padding=None, arch='alexnet', output_act='linear',
         return x, rfs
 
     with tf.name_scope(name) as scope:
-        conv_args = dict(weights_regularizer=slim.l2_regularizer(wd) if wd > 0 else None,
-                         variables_collections=variables_collections,
-                         trainable=trainable)
-        if enable_bnorm:
-            conv_args.update(dict(
-                normalizer_fn=slim.batch_norm,
-                normalizer_params=dict(
-                    is_training=is_training if trainable else False,  # Fix bnorm if not trainable.
-                    trainable=trainable,
-                    variables_collections=variables_collections)))
-        with slim.arg_scope([slim.conv2d], **conv_args):
-            if arch == 'alexnet':
-                # https://github.com/bertinetto/siamese-fc/blob/master/training/vid_create_net.m
-                # https://github.com/tensorflow/models/blob/master/research/slim/nets/alexnet.py
-                # TODO: Support arg_scope for padding?
-                x, rfs = util.conv2d_rf(x, rfs, 96, [11, 11], 2, padding=padding, scope='conv1')
-                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool1')
-                x, rfs = util.conv2d_rf(x, rfs, 256, [5, 5], padding=padding, scope='conv2')
-                x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool2')
-                x, rfs = util.conv2d_rf(x, rfs, 384, [3, 3], padding=padding, scope='conv3')
-                x, rfs = util.conv2d_rf(x, rfs, 384, [3, 3], padding=padding, scope='conv4')
-                x, rfs = util.conv2d_rf(x, rfs, 256, [3, 3], padding=padding, scope='conv5',
-                                        activation_fn=get_act(output_act), normalizer_fn=None)
-            elif arch == 'darknet':
-                # https://github.com/pjreddie/darknet/blob/master/cfg/darknet.cfg
-                with slim.arg_scope([slim.conv2d], activation_fn=leaky_relu):
-                    x, rfs = util.conv2d_rf(x, rfs, 16, [3, 3], 1, padding=padding, scope='conv1')
-                    x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool1')
-                    x, rfs = util.conv2d_rf(x, rfs, 32, [3, 3], 1, padding=padding, scope='conv2')
-                    x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool2')
-                    x, rfs = util.conv2d_rf(x, rfs, 64, [3, 3], 1, padding=padding, scope='conv3')
-                    x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool3')
-                    x, rfs = util.conv2d_rf(x, rfs, 128, [3, 3], 1, padding=padding, scope='conv4')
-                    x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool4')
-                    x, rfs = util.conv2d_rf(x, rfs, 256, [3, 3], 1, padding=padding, scope='conv5',
-                                            activation_fn=get_act(output_act), normalizer_fn=None)
+        if arch.startswith('slim_'):
+            x = cnnutil.Tensor(x, rfs)
+            if arch == 'slim_resnet_v1_50':
+                # CAUTION: Batch-norm parameters are not defaults?
+                resnet_scope_args = dict(weight_decay=wd,
+                                         use_batch_norm=enable_bnorm,
+                                         variables_collections=variables_collections)
+                with slim.arg_scope(resnet_v1.resnet_arg_scope(**resnet_scope_args)):
+                    x, end_points = resnet_v1.resnet_v1_50(x, is_training=is_training,
+                                                           padding='VALID', num_blocks=2)
             else:
                 raise ValueError('unknown architecture: {}'.format(arch))
-            return x, rfs
+            # TODO: Add final conv layer? 1x1?
+            x, rfs = x.value, x.rfs
+
+        else:
+            conv_args = dict(weights_regularizer=slim.l2_regularizer(wd) if wd > 0 else None,
+                             variables_collections=variables_collections,
+                             trainable=trainable)
+            if enable_bnorm:
+                conv_args.update(dict(
+                    normalizer_fn=slim.batch_norm,
+                    normalizer_params=dict(
+                        is_training=is_training if trainable else False,  # Fix bnorm if not trainable.
+                        trainable=trainable,
+                        variables_collections=variables_collections)))
+            with slim.arg_scope([slim.conv2d], **conv_args):
+                if arch == 'alexnet':
+                    # https://github.com/bertinetto/siamese-fc/blob/master/training/vid_create_net.m
+                    # https://github.com/tensorflow/models/blob/master/research/slim/nets/alexnet.py
+                    # TODO: Support arg_scope for padding?
+                    x, rfs = util.conv2d_rf(x, rfs, 96, [11, 11], 2, padding=padding, scope='conv1')
+                    x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool1')
+                    x, rfs = util.conv2d_rf(x, rfs, 256, [5, 5], padding=padding, scope='conv2')
+                    x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool2')
+                    x, rfs = util.conv2d_rf(x, rfs, 384, [3, 3], padding=padding, scope='conv3')
+                    x, rfs = util.conv2d_rf(x, rfs, 384, [3, 3], padding=padding, scope='conv4')
+                    x, rfs = util.conv2d_rf(x, rfs, 256, [3, 3], padding=padding, scope='conv5',
+                                            activation_fn=get_act(output_act), normalizer_fn=None)
+                elif arch == 'darknet':
+                    # https://github.com/pjreddie/darknet/blob/master/cfg/darknet.cfg
+                    with slim.arg_scope([slim.conv2d], activation_fn=leaky_relu):
+                        x, rfs = util.conv2d_rf(x, rfs, 16, [3, 3], 1, padding=padding, scope='conv1')
+                        x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool1')
+                        x, rfs = util.conv2d_rf(x, rfs, 32, [3, 3], 1, padding=padding, scope='conv2')
+                        x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool2')
+                        x, rfs = util.conv2d_rf(x, rfs, 64, [3, 3], 1, padding=padding, scope='conv3')
+                        x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool3')
+                        x, rfs = util.conv2d_rf(x, rfs, 128, [3, 3], 1, padding=padding, scope='conv4')
+                        x, rfs = util.max_pool2d_rf(x, rfs, [3, 3], 2, padding=padding, scope='pool4')
+                        x, rfs = util.conv2d_rf(x, rfs, 256, [3, 3], 1, padding=padding, scope='conv5',
+                                                activation_fn=get_act(output_act), normalizer_fn=None)
+                else:
+                    raise ValueError('unknown architecture: {}'.format(arch))
+
+    return x, rfs
 
 
 def hann(n, name='hann'):

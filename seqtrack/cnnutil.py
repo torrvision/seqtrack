@@ -286,7 +286,7 @@ def add_rf(x, x_rfs, y, y_rfs, assert_aligned=False):
     y_rfs = y_rfs or {}
 
     # Do not allow broadcasting.
-    assert x.shape == y.shape, 'shapes not equal: {}, {}'.format(x.shape, y.shape)
+    # assert x.shape == y.shape, 'shapes not equal: {}, {}'.format(x.shape, y.shape)
     z = x + y
 
     keys = set(itertools.chain(x_rfs.keys(), y_rfs.keys()))
