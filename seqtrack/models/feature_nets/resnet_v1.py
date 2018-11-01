@@ -59,12 +59,15 @@ from __future__ import division
 from __future__ import print_function
 
 import tensorflow as tf
+slim = tf.contrib.slim
 
 from seqtrack.models.feature_nets import resnet_utils
-from seqtrack import cnnutil
+from seqtrack import cnn
 
 resnet_arg_scope = resnet_utils.resnet_arg_scope
-slim = tf.contrib.slim
+
+conv2d = cnn.slim_conv2d
+max_pool2d = cnn.slim_max_pool2d
 
 
 class NoOpScope(object):
@@ -118,32 +121,33 @@ def bottleneck(inputs,
             # Necessary to crop the edge to make the spatial dimensions match.
             # Kernel size is always 3 so trim 1 from all sides of input.
             # shortcut = shortcut[:, 1:-1, 1:-1, :]
-            shortcut = cnnutil.spatial_trim(shortcut, 1, 1)
+            shortcut = cnn.spatial_trim(shortcut, 1, 1)
         if depth == depth_in:
             shortcut = resnet_utils.subsample(shortcut, stride, 'shortcut')
         else:
-            shortcut = cnnutil.conv2d(
+            shortcut = conv2d(
                 shortcut,
                 depth, [1, 1],
                 stride=stride,
                 activation_fn=tf.nn.relu6 if use_bounded_activations else None,
                 scope='shortcut')
 
-        residual = cnnutil.conv2d(inputs, depth_bottleneck, [1, 1], stride=1,
-                               scope='conv1')
+        residual = conv2d(inputs, depth_bottleneck, [1, 1], stride=1, scope='conv1')
         # residual = resnet_utils.conv2d_same(residual, depth_bottleneck, 3, stride,
         #                                     rate=rate, scope='conv2')
-        residual = resnet_utils.conv2d(residual, depth_bottleneck, 3, stride,
-                                       rate=rate, padding=padding, scope='conv2')
-        residual = cnnutil.conv2d(residual, depth, [1, 1], stride=1,
-                                  activation_fn=None, scope='conv3')
+        # residual = resnet_utils.conv2d(residual, depth_bottleneck, 3, stride,
+        #                                rate=rate, padding=padding, scope='conv2')
+        residual = conv2d(residual, depth_bottleneck, 3, stride,
+                          rate=rate, padding=padding, scope='conv2')
+        residual = conv2d(residual, depth, [1, 1], stride=1,
+                          activation_fn=None, scope='conv3')
 
         if use_bounded_activations:
             # Use clip_by_value to simulate bandpass activation.
-            residual = cnnutil.clip_by_value(residual, -6.0, 6.0)
-            output = cnnutil.relu6(cnnutil.add(shortcut, residual, assert_aligned=True))
+            residual = cnn.clip_by_value(residual, -6.0, 6.0)
+            output = cnn.nn_relu6(shortcut + residual)
         else:
-            output = cnnutil.relu(cnnutil.add(shortcut, residual, assert_aligned=True))
+            output = cnn.nn_relu(shortcut + residual)
 
         return slim.utils.collect_named_outputs(outputs_collections,
                                                 sc.name,
@@ -235,7 +239,7 @@ def resnet_v1(inputs,
     """
     with tf.variable_scope(scope, 'resnet_v1', [inputs], reuse=reuse) as sc:
         end_points_collection = sc.original_name_scope + '_end_points'
-        with slim.arg_scope([cnnutil.conv2d, bottleneck,
+        with slim.arg_scope([conv2d, bottleneck,
                              resnet_utils.stack_blocks_dense],
                             outputs_collections=end_points_collection):
             with (slim.arg_scope([slim.batch_norm], is_training=is_training)
@@ -247,16 +251,18 @@ def resnet_v1(inputs,
                             raise ValueError('The output_stride needs to be a multiple of 4.')
                         output_stride /= 4
                     # net = resnet_utils.conv2d_same(net, 64, 7, stride=2, scope='conv1')
-                    net = resnet_utils.conv2d(net, 64, 7, stride=conv1_stride,
-                                              padding=padding, scope='conv1')
+                    # net = resnet_utils.conv2d(net, 64, 7, stride=conv1_stride,
+                    #                           padding=padding, scope='conv1')
+                    net = conv2d(net, 64, 7, stride=conv1_stride,
+                                 padding=padding, scope='conv1')
                     # JV: Override option from arg_scope when padding is 'VALID'.
                     # net = slim.max_pool2d(net, [3, 3], stride=2, scope='pool1')
                     if padding == 'VALID':
-                        net = cnnutil.max_pool2d(net, [3, 3], stride=pool1_stride,
-                                                 padding='VALID', scope='pool1')
+                        net = max_pool2d(net, [3, 3], stride=pool1_stride,
+                                         padding='VALID', scope='pool1')
                     else:
                         # Use default value of padding from arg_scope.
-                        net = cnnutil.max_pool2d(net, [3, 3], stride=pool1_stride, scope='pool1')
+                        net = max_pool2d(net, [3, 3], stride=pool1_stride, scope='pool1')
                 net = resnet_utils.stack_blocks_dense(net, blocks, output_stride,
                                                       store_non_strided_activations,
                                                       padding=padding)
@@ -269,13 +275,13 @@ def resnet_v1(inputs,
                 #     net = tf.reduce_mean(net, [1, 2], name='pool5', keep_dims=True)
                 #     end_points['global_pool'] = net
                 if num_classes:
-                    net = cnnutil.conv2d(net, num_classes, [1, 1], activation_fn=None,
-                                         normalizer_fn=None, scope='logits')
+                    net = conv2d(net, num_classes, [1, 1], activation_fn=None,
+                                 normalizer_fn=None, scope='logits')
                     end_points[sc.name + '/logits'] = net
                     # if spatial_squeeze:
                     #     net = tf.squeeze(net, [1, 2], name='SpatialSqueeze')
                     #     end_points[sc.name + '/spatial_squeeze'] = net
-                    end_points['predictions'] = cnnutil.softmax(net, scope='predictions')
+                    end_points['predictions'] = cnn.nn_softmax(net, scope='predictions')
                 return net, end_points
 
 
@@ -319,12 +325,13 @@ def resnet_v1_50(inputs,
                  pool1_stride=2,
                  num_blocks=4,
                  block1_stride=2,
-                 block2_stride=2):
+                 block2_stride=2,
+                 block3_stride=2):
     """ResNet-50 model of [1]. See resnet_v1() for arg and return description."""
     blocks = [
         resnet_v1_block('block1', base_depth=64, num_units=3, stride=block1_stride),
         resnet_v1_block('block2', base_depth=128, num_units=4, stride=block2_stride),
-        resnet_v1_block('block3', base_depth=256, num_units=6, stride=2),
+        resnet_v1_block('block3', base_depth=256, num_units=6, stride=block3_stride),
         resnet_v1_block('block4', base_depth=512, num_units=3, stride=1),
     ]
     blocks = blocks[:num_blocks]

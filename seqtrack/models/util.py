@@ -12,14 +12,13 @@ import matplotlib.cm
 import logging
 logger = logging.getLogger(__name__)
 
-from seqtrack import cnnutil
 from seqtrack import geom
 from seqtrack import lossfunc
+from seqtrack import receptive_field
 
-from seqtrack.cnnutil import ReceptiveField, IntRect
 from seqtrack.helpers import merge_dims
 from seqtrack.helpers import modify_aspect_ratio
-from seqtrack.helpers import diag_xcorr
+# from seqtrack.helpers import diag_xcorr
 from seqtrack.helpers import expand_dims_n
 from seqtrack.helpers import weighted_mean
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
@@ -139,53 +138,53 @@ def scale_range(num, step, name='scale_range'):
         return tf.exp(log_step * tf.to_float(tf.range(-half, half + 1)))
 
 
-def conv2d_rf(inputs, input_rfs, num_outputs, kernel_size, stride=1, padding='SAME', **kwargs):
-    '''Wraps slim.conv2d to include receptive field calculation.
-
-    input_rfs['var_name'] is the receptive field of input w.r.t. var_name.
-    output_rfs['var_name'] is the receptive field of output w.r.t. var_name.
-    '''
-    if input_rfs is None:
-        input_rfs = {}
-    if inputs is not None:
-        assert len(inputs.shape) == 4  # otherwise slim.conv2d does higher-dim convolution
-        outputs = slim.conv2d(inputs, num_outputs, kernel_size, stride, padding, **kwargs)
-    else:
-        outputs = None
-    rel_rf = _filter_rf(kernel_size, stride, padding)
-    output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
-    return outputs, output_rfs
-
-
-def max_pool2d_rf(inputs, input_rfs, kernel_size, stride=2, padding='VALID', **kwargs):
-    '''Wraps slim.max_pool2d to include receptive field calculation.'''
-    if input_rfs is None:
-        input_rfs = {}
-    if inputs is not None:
-        outputs = slim.max_pool2d(inputs, kernel_size, stride, padding, **kwargs)
-    else:
-        outputs = None
-    rel_rf = _filter_rf(kernel_size, stride, padding)
-    output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
-    return outputs, output_rfs
+# def conv2d_rf(inputs, input_rfs, num_outputs, kernel_size, stride=1, padding='SAME', **kwargs):
+#     '''Wraps slim.conv2d to include receptive field calculation.
+# 
+#     input_rfs['var_name'] is the receptive field of input w.r.t. var_name.
+#     output_rfs['var_name'] is the receptive field of output w.r.t. var_name.
+#     '''
+#     if input_rfs is None:
+#         input_rfs = {}
+#     if inputs is not None:
+#         assert len(inputs.shape) == 4  # otherwise slim.conv2d does higher-dim convolution
+#         outputs = slim.conv2d(inputs, num_outputs, kernel_size, stride, padding, **kwargs)
+#     else:
+#         outputs = None
+#     rel_rf = _filter_rf(kernel_size, stride, padding)
+#     output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
+#     return outputs, output_rfs
 
 
-def diag_xcorr_rf(input, filter, input_rfs, stride=1, padding='VALID', name='diag_xcorr'):
-    '''
-    Args:
-        input: [b, ..., h, w, c]
-        filter: [b, fh, fw, c]
-        stride: Either an integer or length 2 (as for slim operations).
-    '''
-    stride = n_positive_integers(2, stride)
-    kernel_size = filter.shape.as_list()[-3:-1]
-    assert all(kernel_size)  # Must not be None or 0.
-    rel_rf = _filter_rf(kernel_size, stride, padding)
-    output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
+# def max_pool2d_rf(inputs, input_rfs, kernel_size, stride=2, padding='VALID', **kwargs):
+#     '''Wraps slim.max_pool2d to include receptive field calculation.'''
+#     if input_rfs is None:
+#         input_rfs = {}
+#     if inputs is not None:
+#         outputs = slim.max_pool2d(inputs, kernel_size, stride, padding, **kwargs)
+#     else:
+#         outputs = None
+#     rel_rf = _filter_rf(kernel_size, stride, padding)
+#     output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
+#     return outputs, output_rfs
 
-    nhwc_strides = [1, stride[0], stride[1], 1]
-    output = diag_xcorr(input, filter, strides=nhwc_strides, padding=padding, name=name)
-    return output, output_rfs
+
+# def diag_xcorr_rf(input, filter, input_rfs, stride=1, padding='VALID', name='diag_xcorr'):
+#     '''
+#     Args:
+#         input: [b, ..., h, w, c]
+#         filter: [b, fh, fw, c]
+#         stride: Either an integer or length 2 (as for slim operations).
+#     '''
+#     stride = n_positive_integers(2, stride)
+#     kernel_size = filter.shape.as_list()[-3:-1]
+#     assert all(kernel_size)  # Must not be None or 0.
+#     rel_rf = _filter_rf(kernel_size, stride, padding)
+#     output_rfs = {k: cnnutil.compose_rf(v, rel_rf) for k, v in input_rfs.items()}
+# 
+#     nhwc_strides = [1, stride[0], stride[1], 1]
+#     output = diag_xcorr(input, filter, strides=nhwc_strides, padding=padding, name=name)
+#     return output, output_rfs
 
 
 # def xcorr_rf(input, filter, input_rfs, padding='VALID'):
@@ -205,22 +204,22 @@ def diag_xcorr_rf(input, filter, input_rfs, stride=1, padding='VALID', name='dia
 #     return output, output_rfs
 
 
-def _filter_rf(kernel_size, stride, padding):
-    '''Computes the receptive field of a filter.'''
-    kernel_size = np.array(n_positive_integers(2, kernel_size))
-    stride = np.array(n_positive_integers(2, stride))
-    # Get relative receptive field.
-    if padding == 'SAME':
-        assert np.all(kernel_size % 2 == 1)
-        half = (kernel_size - 1) / 2
-        rect = IntRect(-half, half + 1)
-        rel_rf = ReceptiveField(rect=rect, stride=stride)
-    elif padding == 'VALID':
-        rect = IntRect(np.zeros_like(kernel_size), kernel_size)
-        rel_rf = ReceptiveField(rect=rect, stride=stride)
-    else:
-        raise ValueError('invalid padding: {}'.format(padding))
-    return rel_rf
+# def _filter_rf(kernel_size, stride, padding):
+#     '''Computes the receptive field of a filter.'''
+#     kernel_size = np.array(n_positive_integers(2, kernel_size))
+#     stride = np.array(n_positive_integers(2, stride))
+#     # Get relative receptive field.
+#     if padding == 'SAME':
+#         assert np.all(kernel_size % 2 == 1)
+#         half = (kernel_size - 1) / 2
+#         rect = IntRect(-half, half + 1)
+#         rel_rf = ReceptiveField(rect=rect, stride=stride)
+#     elif padding == 'VALID':
+#         rect = IntRect(np.zeros_like(kernel_size), kernel_size)
+#         rel_rf = ReceptiveField(rect=rect, stride=stride)
+#     else:
+#         raise ValueError('invalid padding: {}'.format(padding))
+#     return rel_rf
 
 
 def coerce_aspect(target, im_aspect, aspect_method='stretch', name='coerce_aspect'):
@@ -352,7 +351,7 @@ def rect_grid(response_size, rf, search_size, rect_size, name='rect_grid'):
     '''
     with tf.name_scope(name) as scope:
         # Assert that receptive fields are centered.
-        cnnutil.assert_center_alignment(search_size, response_size, rf)
+        receptive_field.assert_center_alignment(search_size, response_size, rf)
         # Obtain displacement from center of search image.
         # Not necessary to use receptive field offset because it is centered.
         disp = displacement_from_center(response_size)
@@ -375,7 +374,7 @@ def rect_grid_pyr(response_size, rf, search_size, rect_size, scales, name='rect_
     '''
     with tf.name_scope(name) as scope:
         # Assert that receptive fields are centered.
-        cnnutil.assert_center_alignment(search_size, response_size, rf)
+        receptive_field.assert_center_alignment(search_size, response_size, rf)
         # Obtain displacement from center of search image.
         # Not necessary to use receptive field offset because it is centered.
         disp = displacement_from_center(response_size)

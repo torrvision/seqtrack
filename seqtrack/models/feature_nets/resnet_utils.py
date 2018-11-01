@@ -41,10 +41,12 @@ from __future__ import print_function
 
 import collections
 import tensorflow as tf
-
-from seqtrack import cnnutil
-
 slim = tf.contrib.slim
+
+from seqtrack import cnn
+
+conv2d = cnn.slim_conv2d
+max_pool2d = cnn.slim_max_pool2d
 
 
 class Block(collections.namedtuple('Block', ['scope', 'unit_fn', 'args'])):
@@ -75,62 +77,62 @@ def subsample(inputs, factor, scope=None):
     if factor == 1:
         return inputs
     else:
-        return cnnutil.max_pool2d(inputs, [1, 1], stride=factor, scope=scope)
+        return max_pool2d(inputs, [1, 1], stride=factor, scope=scope)
 
 
-def conv2d(inputs, num_outputs, kernel_size, stride, rate=1, padding='SAME', **kwargs):
-    if padding == 'VALID':
-        return cnnutil.conv2d(inputs, num_outputs, kernel_size, stride=stride, rate=rate,
-                           padding='VALID', **kwargs)
-    else:
-        return conv2d_same(inputs, num_outputs, kernel_size, stride=stride, rate=rate, **kwargs)
-
-
-def conv2d_same(inputs, num_outputs, kernel_size, stride, rate=1, scope=None):
-    """Strided 2-D convolution with 'SAME' padding.
-
-    When stride > 1, then we do explicit zero-padding, followed by conv2d with
-    'VALID' padding.
-
-    Note that
-
-       net = conv2d_same(inputs, num_outputs, 3, stride=stride)
-
-    is equivalent to
-
-       net = slim.conv2d(inputs, num_outputs, 3, stride=1, padding='SAME')
-       net = subsample(net, factor=stride)
-
-    whereas
-
-       net = slim.conv2d(inputs, num_outputs, 3, stride=stride, padding='SAME')
-
-    is different when the input's height or width is even, which is why we add the
-    current function. For more details, see ResnetUtilsTest.testConv2DSameEven().
-
-    Args:
-      inputs: A 4-D tensor of size [batch, height_in, width_in, channels].
-      num_outputs: An integer, the number of output filters.
-      kernel_size: An int with the kernel_size of the filters.
-      stride: An integer, the output stride.
-      rate: An integer, rate for atrous convolution.
-      scope: Scope.
-
-    Returns:
-      output: A 4-D tensor of size [batch, height_out, width_out, channels] with
-        the convolution output.
-    """
-    if stride == 1:
-        return cnnutil.conv2d(inputs, num_outputs, kernel_size, stride=1, rate=rate,
-                              padding='SAME', scope=scope)
-    else:
-        kernel_size_effective = kernel_size + (kernel_size - 1) * (rate - 1)
-        pad_total = kernel_size_effective - 1
-        pad_beg = pad_total // 2
-        pad_end = pad_total - pad_beg
-        inputs = cnnutil.spatial_pad(inputs, [pad_beg, pad_end], [pad_beg, pad_end])
-        return cnnutil.conv2d(inputs, num_outputs, kernel_size, stride=stride,
-                              rate=rate, padding='VALID', scope=scope)
+# def conv2d(inputs, num_outputs, kernel_size, stride, rate=1, padding='SAME', **kwargs):
+#     if padding == 'VALID':
+#         return cnnutil.conv2d(inputs, num_outputs, kernel_size, stride=stride, rate=rate,
+#                            padding='VALID', **kwargs)
+#     else:
+#         return conv2d_same(inputs, num_outputs, kernel_size, stride=stride, rate=rate, **kwargs)
+# 
+# 
+# def conv2d_same(inputs, num_outputs, kernel_size, stride, rate=1, scope=None):
+#     """Strided 2-D convolution with 'SAME' padding.
+# 
+#     When stride > 1, then we do explicit zero-padding, followed by conv2d with
+#     'VALID' padding.
+# 
+#     Note that
+# 
+#        net = conv2d_same(inputs, num_outputs, 3, stride=stride)
+# 
+#     is equivalent to
+# 
+#        net = slim.conv2d(inputs, num_outputs, 3, stride=1, padding='SAME')
+#        net = subsample(net, factor=stride)
+# 
+#     whereas
+# 
+#        net = slim.conv2d(inputs, num_outputs, 3, stride=stride, padding='SAME')
+# 
+#     is different when the input's height or width is even, which is why we add the
+#     current function. For more details, see ResnetUtilsTest.testConv2DSameEven().
+# 
+#     Args:
+#       inputs: A 4-D tensor of size [batch, height_in, width_in, channels].
+#       num_outputs: An integer, the number of output filters.
+#       kernel_size: An int with the kernel_size of the filters.
+#       stride: An integer, the output stride.
+#       rate: An integer, rate for atrous convolution.
+#       scope: Scope.
+# 
+#     Returns:
+#       output: A 4-D tensor of size [batch, height_out, width_out, channels] with
+#         the convolution output.
+#     """
+#     if stride == 1:
+#         return cnnutil.conv2d(inputs, num_outputs, kernel_size, stride=1, rate=rate,
+#                               padding='SAME', scope=scope)
+#     else:
+#         kernel_size_effective = kernel_size + (kernel_size - 1) * (rate - 1)
+#         pad_total = kernel_size_effective - 1
+#         pad_beg = pad_total // 2
+#         pad_end = pad_total - pad_beg
+#         inputs = cnnutil.spatial_pad(inputs, [pad_beg, pad_end], [pad_beg, pad_end])
+#         return cnnutil.conv2d(inputs, num_outputs, kernel_size, stride=stride,
+#                               rate=rate, padding='VALID', scope=scope)
 
 
 @slim.add_arg_scope
@@ -268,12 +270,12 @@ def resnet_arg_scope(weight_decay=0.0001,
     }
 
     with slim.arg_scope(
-        [cnnutil.conv2d],
-        weights_regularizer=slim.l2_regularizer(weight_decay),
-        weights_initializer=slim.variance_scaling_initializer(),
-        variables_collections=variables_collections,
-        activation_fn=activation_fn,
-        normalizer_fn=slim.batch_norm if use_batch_norm else None,
+            [conv2d],
+            weights_regularizer=slim.l2_regularizer(weight_decay),
+            weights_initializer=slim.variance_scaling_initializer(),
+            variables_collections=variables_collections,
+            activation_fn=activation_fn,
+            normalizer_fn=slim.batch_norm if use_batch_norm else None,
             normalizer_params=batch_norm_params):
         with slim.arg_scope([slim.batch_norm], **batch_norm_params):
             # The following implies padding='SAME' for pool1, which makes feature
@@ -282,5 +284,5 @@ def resnet_arg_scope(weight_decay=0.0001,
             # code of 'Deep Residual Learning for Image Recognition' uses
             # padding='VALID' for pool1. You can switch to that choice by setting
             # slim.arg_scope([cnnutil.max_pool2d], padding='VALID').
-            with slim.arg_scope([cnnutil.max_pool2d], padding='SAME') as arg_sc:
+            with slim.arg_scope([max_pool2d], padding='VALID') as arg_sc:
                 return arg_sc
