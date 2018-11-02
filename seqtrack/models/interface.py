@@ -30,6 +30,9 @@ class Model(object):
         '''
         raise NotImplementedError()
 
+    def init(self, sess):
+        raise NotImplementedError()
+
 
 class IterModel(object):
     '''

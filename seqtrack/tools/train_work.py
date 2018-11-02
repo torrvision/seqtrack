@@ -23,11 +23,10 @@ from seqtrack.models import util
 
 
 def _train(args, name, seed):
-    tmp_dir = _get_tmp_dir()
     if args.slurm:
         # Python will invoke slurm to run jobs.
         # Use different tmp dir for each job.
-        tmp_data_dir = os.path.join(tmp_dir, 'data')
+        tmp_data_dir = os.path.join(_get_tmp_dir(), 'data')
     else:
         # Jobs will be run in for loop.
         # Use specified tmp dir.

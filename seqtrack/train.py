@@ -355,7 +355,7 @@ def train_model_data(
     # example = _perform_color_augmentation(example, args)
 
     example_input = graph.whiten(example)
-    with tf.name_scope('model'):
+    with tf.variable_scope('model'):
         outputs, losses, init_state, final_state = model.instantiate(
             example_input, run_opts, enable_loss=True,
             image_summaries_collections=['IMAGE_SUMMARIES'])
@@ -427,17 +427,6 @@ def train_model_data(
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver(max_to_keep=100)
 
-    # if args.curriculum_learning:
-    #     ''' Curriculum learning.
-    #     Restore values of trainable variables from pre-trained model on short sequence,
-    #     to initialize and train a model on longer sequences.
-    #     Note that since I define restoring variables from `trainable variables`
-    #     in the current model, if the pre-trained model doesn't have those variables,
-    #     it will fail to restore by the saver.
-    #     '''
-    #     vars_to_restore = list(tf.trainable_variables())
-    #     saver_cl = tf.train.Saver(vars_to_restore)
-
     # if o.cnn_pretrain:
     #     ''' In case of loading pre-trained CNN (e.g., vgg_16), create a separate
     #     Saver object that is going to be used to restore when session starts.
@@ -495,6 +484,8 @@ def train_model_data(
             prev_ckpt = np.asscalar(global_step_var.eval())
         else:
             sess.run(init_op)
+            model.init(sess)
+
             # if args.siamese_pretrain:
             #     saver_siamese.restore(sess, args.siamese_model_file)
             #     # vars_uninit = sess.run(tf.report_uninitialized_variables())

@@ -67,7 +67,7 @@ def parse_arguments():
     parser.add_argument('--loglevel', default='info', help='debug, info, warning')
     parser.add_argument('--verbose_train', action='store_true')
 
-    parser.add_argument('--no_slurm', dest='slurm', action='store_false',
+    parser.add_argument('--slurm', action='store_true',
                         help='Submit jobs to slurm or run directly?')
     parser.add_argument('--slurm_flags', nargs='+', help='flags for sbatch (without "--")')
 

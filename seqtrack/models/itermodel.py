@@ -68,6 +68,9 @@ class ModelFromIterModel(models_interface.Model):
         losses.update(extra_losses)
         return outputs, losses, init_state, final_state
 
+    def init(self, sess):
+        self._model.init(sess)
+
 
 def _assert_no_keys_in_common(a, b):
     intersection = set(a.keys()).intersection(set(b.keys()))

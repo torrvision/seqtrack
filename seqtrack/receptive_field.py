@@ -267,8 +267,9 @@ def assert_center_alignment(input_size, output_size, field):
     gap_before = first_min
     gap_after = input_size - last_max
     if not np.array_equal(gap_before, gap_after):
-        raise AssertionError('centers are not aligned: before {}, after {}'.format(
-            gap_before, gap_after))
+        raise AssertionError(
+            'centers are not aligned: gap before {:s}, gap after {:s} (stride {:s})'.format(
+                gap_before, gap_after, field.stride))
 
 
 # def centers_in_input(output_size, rf):

@@ -6,6 +6,7 @@ import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import numpy as np
 import math
+import pprint
 
 import logging
 logger = logging.getLogger(__name__)
@@ -46,7 +47,8 @@ class SiamFC(models_interface.IterModel):
             feather_margin=0.1,
             center_input_range=True,  # Make range [-0.5, 0.5] instead of [0, 1].
             keep_uint8_range=False,  # Use input range of 255 instead of 1.
-            feature_params=None,  # Args to _feature_net.
+            feature_params=None,  # Args to _branch_net.
+            feature_model_file='',
             # feature_act='linear',
             # enable_feature_bnorm=True,
             template_mask_kind='none',  # none, static, dynamic
@@ -92,10 +94,8 @@ class SiamFC(models_interface.IterModel):
         self._template_scale = template_scale
         # Size of search area relative to object.
         self._search_scale = float(search_size) / template_size * template_scale
-        # self._feature_arch = feature_arch
         self._feature_params = feature_params
-        # self._feature_act = feature_act
-        # self._enable_feature_bnorm = enable_feature_bnorm
+        self._feature_model_file = feature_model_file
         self._template_mask_kind = template_mask_kind
         self._xcorr_padding = xcorr_padding
         self._bnorm_after_xcorr = bnorm_after_xcorr
@@ -128,6 +128,8 @@ class SiamFC(models_interface.IterModel):
         # For summaries in end():
         self._info = {}
 
+        self._feature_saver = None
+
     def start(self, frame, aspect, run_opts, enable_loss,
               image_summaries_collections=None, name='start'):
         with tf.name_scope(name) as scope:
@@ -154,12 +156,16 @@ class SiamFC(models_interface.IterModel):
             template_input = _preproc(template_im, center_input_range=self._center_input_range,
                                       keep_uint8_range=self._keep_uint8_range)
             template_input = cnn.as_tensor(template_input, add_to_set=True)
-            with tf.variable_scope('feature_net', reuse=False):
-                template_feat = _feature_net(template_input, self._is_training,
-                                             trainable=(not self._freeze_siamese),
-                                             variables_collections=['siamese'],
-                                             weight_decay=self._wd,
-                                             **self._feature_params)
+            with tf.variable_scope('embed', reuse=False):
+                template_feat, feature_scope = _branch_net(
+                    template_input, self._is_training,
+                    trainable=(not self._freeze_siamese),
+                    variables_collections=['siamese'],
+                    weight_decay=self._wd,
+                    **self._feature_params)
+                # Get names relative to this scope for loading pre-trained.
+                self._feature_vars = _global_variables_relative_to_scope(feature_scope)
+
             rf_template = template_feat.fields[template_input.value]
             template_feat = cnn.get_value(template_feat)
             feat_size = template_feat.shape.as_list()[-3:-1]
@@ -167,6 +173,8 @@ class SiamFC(models_interface.IterModel):
                 receptive_field.assert_center_alignment(self._template_size, feat_size, rf_template)
             except AssertionError as ex:
                 raise ValueError('template features not centered: {:s}'.format(ex))
+
+            self._feature_saver = tf.train.Saver(self._feature_vars)
 
             if self._template_mask_kind != 'none':
                 if self._template_mask_kind == 'static':
@@ -179,7 +187,7 @@ class SiamFC(models_interface.IterModel):
                 #             self._template_size, geom.crop_rect(y, template_rect), shape='rect')
                 #         template_fg = tf.expand_dims(template_fg, -1)  # 1 channel
                 #         # TODO: Try tanh?
-                #         template_mask, _ = _feature_net(
+                #         template_mask, _ = _branch_net(
                 #             template_fg, None, padding=self._feature_padding, arch=self._feature_arch,
                 #             output_act='linear', enable_bnorm=self._enable_feature_bnorm,
                 #             wd=self._wd, is_training=self._is_training,
@@ -241,12 +249,12 @@ class SiamFC(models_interface.IterModel):
 
             # Convert to cnn.Tensor to track receptive field.
             search_input = cnn.as_tensor(search_input, add_to_set=True)
-            with tf.variable_scope('feature_net', reuse=True):
-                search_feat = _feature_net(search_input, self._is_training,
-                                           trainable=(not self._freeze_siamese),
-                                           variables_collections=['siamese'],
-                                           weight_decay=self._wd,
-                                           **self._feature_params)
+            with tf.variable_scope('embed', reuse=True):
+                search_feat, _ = _branch_net(search_input, self._is_training,
+                                             trainable=(not self._freeze_siamese),
+                                             variables_collections=['siamese'],
+                                             weight_decay=self._wd,
+                                             **self._feature_params)
             rf_search = search_feat.fields[search_input.value]
             search_feat_size = search_feat.value.shape.as_list()[-3:-1]
             try:
@@ -392,8 +400,8 @@ class SiamFC(models_interface.IterModel):
             #     rfs = [{'search': cnnutil.identity_rf()} for _ in edges]
             #     search_feat = [None for _ in edges]
             #     for i in range(self._global_search_num_scales):
-            #         with tf.variable_scope('feature_net', reuse=True):
-            #             search_feat[i], rfs[i] = _feature_net(
+            #         with tf.variable_scope('embed', reuse=True):
+            #             search_feat[i], rfs[i] = _branch_net(
             #                 search_input[i], rfs[i], padding=self._feature_padding, arch=self._feature_arch,
             #                 output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
             #                 wd=self._wd, is_training=self._is_training,
@@ -520,19 +528,40 @@ class SiamFC(models_interface.IterModel):
                                         collections=self._image_summaries_collections)
         return losses
 
+    def init(self, sess):
+        if self._feature_model_file:
+            # TODO: Confirm that all variables were loaded?
+            try:
+                self._feature_saver.restore(sess, self._feature_model_file)
+            except tf.errors.NotFoundError as ex:
+                pprint.pprint(tf.contrib.framework.list_variables(self._feature_model_file))
+                raise
+            # # initialize uninitialized variables
+            # vars_uninit = sess.run(tf.report_uninitialized_variables())
+            # sess.run(tf.variables_initializer([v for v in tf.global_variables()
+            #                                    if v.name.split(':')[0] in vars_uninit]))
+            # assert len(sess.run(tf.report_uninitialized_variables())) == 0
 
-def _feature_net(x, is_training, trainable, variables_collections,
-                 weight_decay=0,
-                 name='feature_net',
-                 # Additional arguments:
-                 arch='alexnet',
-                 arch_params=None,
-                 # output_act=self._feature_act,
-                 # enable_bnorm=self._enable_feature_bnorm,
-                 extra_conv_enable=False,
-                 extra_conv_params=None):
+
+def _branch_net(x, is_training, trainable, variables_collections,
+                weight_decay=0,
+                name='embed',
+                # Additional arguments:
+                arch='alexnet',
+                arch_params=None,
+                # output_act=self._feature_act,
+                # enable_bnorm=self._enable_feature_bnorm,
+                extra_conv_enable=False,
+                extra_conv_params=None):
+    '''
+    Returns:
+        Output of network, variable scope of feature net.
+        The variables in the feature scope can be loaded from a pre-trained model.
+    '''
+
     with tf.name_scope(name) as scope:
         arch_params = arch_params or {}
+        extra_conv_params = extra_conv_params or {}
         try:
             func = {
                 'alexnet': feature_nets.alexnet,
@@ -540,20 +569,21 @@ def _feature_net(x, is_training, trainable, variables_collections,
                 'slim_alexnet_v2': feature_nets.slim_alexnet_v2,
                 'slim_resnet_v1_50': feature_nets.slim_resnet_v1_50,
                 'slim_vgg_a': feature_nets.slim_vgg_a,
+                'slim_vgg_16': feature_nets.slim_vgg_16,
             }[arch]
         except KeyError:
             raise ValueError('unknown architecture: {}'.format(arch))
 
         x = cnn.as_tensor(x)
-        x = func(x, is_training, trainable, variables_collections,
-                 weight_decay=weight_decay,
-                 **arch_params)
-
+        with tf.variable_scope('feature') as feature_vs:
+            x = func(x, is_training, trainable, variables_collections,
+                     weight_decay=weight_decay,
+                     **arch_params)
         if extra_conv_enable:
             with tf.variable_scope('extra'):
                 x = _extra_conv(x, is_training, trainable, variables_collections,
                                 **extra_conv_params)
-        return x
+        return x, feature_vs
 
 
 def _extra_conv(x, is_training, trainable, variables_collections,
@@ -983,3 +1013,20 @@ def _merge_dims_and_concat(xs, a, b):
         return ys
 
     return xs, _restore
+
+
+def _global_variables_relative_to_scope(scope):
+    '''
+    Args:
+        scope: VariableScope
+    '''
+    prefix = scope.name + '/'
+    # tf.Saver uses var.op.name to get variable name.
+    # https://stackoverflow.com/a/36156697/1136018
+    return {_remove_prefix(prefix, v.op.name): v for v in scope.global_variables()}
+
+
+def _remove_prefix(prefix, x):
+    if not x.startswith(prefix):
+        raise ValueError('does not have prefix "{}": "{}"'.format(prefix, x))
+    return x[len(prefix):]
