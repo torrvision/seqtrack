@@ -11,3 +11,4 @@ output
 aux/*.npy
 dbg
 docs/_*
+*.ckpt

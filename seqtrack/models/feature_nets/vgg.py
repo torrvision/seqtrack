@@ -79,6 +79,7 @@ def vgg_a(inputs,
           fc_conv_padding='VALID',
           output_layer='conv5/conv5_2',
           output_activation_fn=None,
+          freeze_until_layer=None,
           scope='vgg_a'):
     """Oxford Net VGG 11-Layers version A Example.
 
@@ -140,7 +141,8 @@ def vgg_a(inputs,
                 ('fc7', util.partial(conv2d, 4096, [1, 1])),
             ]
             net = util.evaluate_until(layers, inputs, output_layer,
-                                      output_kwargs=dict(activation_fn=output_activation_fn))
+                                      output_kwargs=dict(activation_fn=output_activation_fn),
+                                      freeze_until_layer=freeze_until_layer)
             # Convert end_points_collection into a end_point dict.
             end_points = slim.utils.convert_collection_to_dict(end_points_collection)
             return net, end_points
@@ -155,6 +157,7 @@ def vgg_16(inputs,
            fc_conv_padding='VALID',
            output_layer='conv5/conv5_3',
            output_activation_fn=None,
+           freeze_until_layer=None,
            scope='vgg_16'):
     """Oxford Net VGG 16-Layers version D Example.
 
@@ -221,7 +224,8 @@ def vgg_16(inputs,
                 ('fc7', util.partial(conv2d, 4096, [1, 1])),
             ]
             net = util.evaluate_until(layers, inputs, output_layer,
-                                      output_kwargs=dict(activation_fn=output_activation_fn))
+                                      output_kwargs=dict(activation_fn=output_activation_fn),
+                                      freeze_until_layer=freeze_until_layer)
             # Convert end_points_collection into a end_point dict.
             end_points = slim.utils.convert_collection_to_dict(end_points_collection)
             return net, end_points

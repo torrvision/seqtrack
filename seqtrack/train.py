@@ -427,23 +427,6 @@ def train_model_data(
     init_op = tf.global_variables_initializer()
     saver = tf.train.Saver(max_to_keep=100)
 
-    # if o.cnn_pretrain:
-    #     ''' In case of loading pre-trained CNN (e.g., vgg_16), create a separate
-    #     Saver object that is going to be used to restore when session starts.
-    #     '''
-    #     #from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
-    #     #print_tensors_in_checkpoint_file('./pretrained/vgg_16.ckpt', None, False)
-    #     # or
-    #     #from tensorflow.python import pywrap_tensorflow
-    #     #reader = pywrap_tensorflow.NewCheckpointReader('./pretrained/vgg_16.ckpt')
-    #     #var_to_shape_map = reader.get_variable_to_shape_map()
-    #     # Approach 1. Use tf.trainable_variables won't work if variables are non-trainable.
-    #     #vars_to_restore = {v.name.split(':')[0]: v for v in tf.trainable_variables()
-    #     #                   if o.cnn_model in v.name}
-    #     # Approach 2. Use collection to get variables.
-    #     vars_to_restore = {v.name.split(':')[0]: v for v in tf.get_collection(o.cnn_model)}
-    #     saver_external = tf.train.Saver(vars_to_restore)
-
     # if args.siamese_pretrain:
     #     siamese_vars = tf.get_collection('siamese')
     #     print 'siamese vars:'
@@ -484,8 +467,7 @@ def train_model_data(
             prev_ckpt = np.asscalar(global_step_var.eval())
         else:
             sess.run(init_op)
-            model.init(sess)
-
+            model.init(sess)  # Loads pre-trained features if applicable.
             # if args.siamese_pretrain:
             #     saver_siamese.restore(sess, args.siamese_model_file)
             #     # vars_uninit = sess.run(tf.report_uninitialized_variables())
@@ -494,22 +476,6 @@ def train_model_data(
             #     # sess.run(tf.variables_initializer([v for v in tf.global_variables()
             #     #                                    if v.name.split(':')[0] in vars_uninit]))
             #     # assert len(sess.run(tf.report_uninitialized_variables())) == 0
-            # elif o.cnn_pretrain:
-            #     model_file = os.path.join(o.path_data_home, 'pretrained', '{}.ckpt'.format(o.cnn_model))
-            #     saver_external.restore(sess, model_file)
-            #     #print sess.run(tf.report_uninitialized_variables()) # To check
-            #     # initialize uninitialized variables
-            #     vars_uninit = sess.run(tf.report_uninitialized_variables())
-            #     sess.run(tf.variables_initializer([v for v in tf.global_variables()
-            #                                        if v.name.split(':')[0] in vars_uninit]))
-            #     assert len(sess.run(tf.report_uninitialized_variables())) == 0
-            # if args.curriculum_learning:
-            #     if args.pretrained_cl is None:  # e.g., '/some_path/ckpt/iteration-150000'
-            #         raise ValueError('could not find checkpoint')
-            #     print 'restore: {}'.format(args.pretrained_cl)
-            #     saver_cl.restore(sess, args.pretrained_cl)
-            #     print 'done: (partial) restore for curriculum learning'
-            #     sys.stdout.flush()
 
         if use_queues:
             coord = tf.train.Coordinator()

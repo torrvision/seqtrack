@@ -558,19 +558,11 @@ def _branch_net(x, is_training, trainable, variables_collections,
         Output of network, variable scope of feature net.
         The variables in the feature scope can be loaded from a pre-trained model.
     '''
-
     with tf.name_scope(name) as scope:
         arch_params = arch_params or {}
         extra_conv_params = extra_conv_params or {}
         try:
-            func = {
-                'alexnet': feature_nets.alexnet,
-                'darknet': feature_nets.darknet,
-                'slim_alexnet_v2': feature_nets.slim_alexnet_v2,
-                'slim_resnet_v1_50': feature_nets.slim_resnet_v1_50,
-                'slim_vgg_a': feature_nets.slim_vgg_a,
-                'slim_vgg_16': feature_nets.slim_vgg_16,
-            }[arch]
+            func = feature_nets.by_name[arch]
         except KeyError:
             raise ValueError('unknown architecture: {}'.format(arch))
 

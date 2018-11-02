@@ -38,13 +38,17 @@ from . import resnet_v1 as slim_resnet_v1
 
 def alexnet(x, is_training, trainable, variables_collections,
             weight_decay=0,
+            output_layer='conv5',
             output_act='linear',
+            freeze_until_layer=None,
             padding='VALID',
             enable_bnorm=True):
     with slim.arg_scope(feature_arg_scope(
             weight_decay=weight_decay, enable_bnorm=enable_bnorm, padding=padding)):
         return _alexnet_layers(x, is_training, trainable, variables_collections,
-                               output_activation_fn=helpers.get_act(output_act))
+                               output_layer=output_layer,
+                               output_activation_fn=helpers.get_act(output_act),
+                               freeze_until_layer=freeze_until_layer)
 
 
 def feature_arg_scope(weight_decay, enable_bnorm, padding):
@@ -59,7 +63,8 @@ def feature_arg_scope(weight_decay, enable_bnorm, padding):
 
 def _alexnet_layers(x, is_training, trainable, variables_collections,
                     output_layer='conv5',
-                    output_activation_fn=None):
+                    output_activation_fn=None,
+                    freeze_until_layer=None):
         # Should is_training be disabled with trainable=False?
         with slim.arg_scope([slim.batch_norm], is_training=is_training):
             with slim.arg_scope([cnn.slim_conv2d, slim.batch_norm],
@@ -85,26 +90,31 @@ def _alexnet_layers(x, is_training, trainable, variables_collections,
                     ('conv5', util.partial(cnn.slim_conv2d, 256, [3, 3])),
                 ]
                 x = util.evaluate_until(layers, x, output_layer,
-                                        output_kwargs=dict(
-                                            activation_fn=output_activation_fn,
-                                            normalizer_fn=None))
+                                        output_kwargs=dict(activation_fn=output_activation_fn,
+                                                           normalizer_fn=None),
+                                        freeze_until_layer=freeze_until_layer)
                 return x
 
 
 def darknet(x, is_training, trainable, variables_collections,
             weight_decay=0,
+            output_layer='conv5',
             output_act='linear',
+            freeze_until_layer=None,
             padding='VALID',
             enable_bnorm=True):
     with slim.arg_scope(feature_arg_scope(
             weight_decay=weight_decay, enable_bnorm=enable_bnorm, padding=padding)):
         return _darknet_layers(x, is_training, trainable, variables_collections,
-                               output_activation_fn=helpers.get_act(output_act))
+                               output_layer=output_layer,
+                               output_activation_fn=helpers.get_act(output_act),
+                               freeze_until_layer=freeze_until_layer)
 
 
 def _darknet_layers(x, is_training, trainable, variables_collections,
                     output_layer='conv5',
-                    output_activation_fn=None):
+                    output_activation_fn=None,
+                    freeze_until_layer=None):
     # Should is_training be disabled with trainable=False?
     with slim.arg_scope([slim.batch_norm], is_training=is_training):
         with slim.arg_scope([cnn.slim_conv2d, slim.batch_norm],
@@ -134,9 +144,9 @@ def _darknet_layers(x, is_training, trainable, variables_collections,
                     ('conv5', util.partial(cnn.slim_conv2d, 256, [3, 3], 1)),
                 ]
                 x = util.evaluate_until(layers, x, output_layer,
-                                        output_kwargs=dict(
-                                            activation_fn=output_activation_fn,
-                                            normalizer_fn=None))
+                                        output_kwargs=dict(activation_fn=output_activation_fn,
+                                                           normalizer_fn=None),
+                                        freeze_until_layer=freeze_until_layer)
                 return x
 
 
@@ -145,7 +155,8 @@ def slim_alexnet_v2(x, is_training, trainable, variables_collections,
                     padding='VALID',
                     conv1_stride=4,
                     output_layer='conv5',
-                    output_act='linear'):
+                    output_act='linear',
+                    freeze_until_layer=None):
     if not trainable:
         raise NotImplementedError('trainable not supported')
     # TODO: Support variables_collections.
@@ -159,7 +170,8 @@ def slim_alexnet_v2(x, is_training, trainable, variables_collections,
             is_training=is_training,
             conv1_stride=conv1_stride,
             output_layer=output_layer,
-            output_activation_fn=helpers.get_act(output_act))
+            output_activation_fn=helpers.get_act(output_act),
+            freeze_until_layer=freeze_until_layer)
         return x
 
 
@@ -167,7 +179,8 @@ def slim_vgg_a(x, is_training, trainable, variables_collections,
                weight_decay=0.0005,
                padding='VALID',
                output_layer='conv5/conv5_2',
-               output_act='linear'):
+               output_act='linear',
+               freeze_until_layer=None):
     if not trainable:
         raise NotImplementedError('trainable not supported')
     # TODO: Support variables_collections.
@@ -179,7 +192,8 @@ def slim_vgg_a(x, is_training, trainable, variables_collections,
         x, end_points = slim_vgg.vgg_a(
             x, is_training=is_training,
             output_layer=output_layer,
-            output_activation_fn=helpers.get_act(output_act))
+            output_activation_fn=helpers.get_act(output_act),
+            freeze_until_layer=freeze_until_layer)
         return x
 
 
@@ -187,7 +201,8 @@ def slim_vgg_16(x, is_training, trainable, variables_collections,
                 weight_decay=0.0005,
                 padding='VALID',
                 output_layer='conv5/conv5_3',
-                output_act='linear'):
+                output_act='linear',
+                freeze_until_layer=None):
     if not trainable:
         raise NotImplementedError('trainable not supported')
     # TODO: Support variables_collections.
@@ -199,7 +214,8 @@ def slim_vgg_16(x, is_training, trainable, variables_collections,
         x, end_points = slim_vgg.vgg_16(
             x, is_training=is_training,
             output_layer=output_layer,
-            output_activation_fn=helpers.get_act(output_act))
+            output_activation_fn=helpers.get_act(output_act),
+            freeze_until_layer=freeze_until_layer)
         return x
 
 
@@ -234,3 +250,15 @@ def slim_resnet_v1_50(x, is_training, trainable, variables_collections,
             block2_stride=block2_stride,
             block3_stride=block3_stride)
         return x
+
+
+names = [
+    'alexnet',
+    'darknet',
+    'slim_alexnet_v2',
+    'slim_resnet_v1_50',
+    'slim_vgg_a',
+    'slim_vgg_16',
+]
+
+by_name = {name: globals()[name] for name in names}

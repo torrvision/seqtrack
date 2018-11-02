@@ -67,6 +67,7 @@ def alexnet_v2(inputs,
                conv1_stride=4,
                output_layer='conv5',
                output_activation_fn=tf.nn.relu,
+               freeze_until_layer=None,
                scope='alexnet_v2'):
     """AlexNet version 2.
 
@@ -118,8 +119,8 @@ def alexnet_v2(inputs,
                 ('pool5', util.partial(max_pool2d, [3, 3], 2)),
             ]
             net = util.evaluate_until(layers, inputs, output_layer,
-                                      output_kwargs=dict(
-                                          activation_fn=output_activation_fn))
+                                      output_kwargs=dict(activation_fn=output_activation_fn),
+                                      freeze_until_layer=freeze_until_layer)
 
             # Convert end_points_collection into a end_point dict.
             end_points = slim.utils.convert_collection_to_dict(end_points_collection)
