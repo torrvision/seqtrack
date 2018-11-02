@@ -33,6 +33,8 @@ from . import resnet_v1 as slim_resnet_v1
 # Takes an image and returns an output and a series of named intermediate endpoints (tensors).
 # The intermediate endpoints may be used for multi-depth cross-correlation.
 
+# TODO: Avoid duplication of default parameters here if possible?
+
 
 def alexnet(x, is_training, trainable, variables_collections,
             weight_decay=0,
@@ -164,7 +166,7 @@ def slim_alexnet_v2(x, is_training, trainable, variables_collections,
 def slim_vgg_a(x, is_training, trainable, variables_collections,
                weight_decay=0.0005,
                padding='VALID',
-               output_layer='conv5',
+               output_layer='conv5/conv5_2',
                output_act='linear'):
     if not trainable:
         raise NotImplementedError('trainable not supported')
@@ -175,6 +177,26 @@ def slim_vgg_a(x, is_training, trainable, variables_collections,
             conv_padding=padding,
             pool_padding=padding)):
         x, end_points = slim_vgg.vgg_a(
+            x, is_training=is_training,
+            output_layer=output_layer,
+            output_activation_fn=helpers.get_act(output_act))
+        return x
+
+
+def slim_vgg_16(x, is_training, trainable, variables_collections,
+                weight_decay=0.0005,
+                padding='VALID',
+                output_layer='conv5/conv5_3',
+                output_act='linear'):
+    if not trainable:
+        raise NotImplementedError('trainable not supported')
+    # TODO: Support variables_collections.
+
+    with slim.arg_scope(slim_vgg.vgg_arg_scope(
+            weight_decay=weight_decay,
+            conv_padding=padding,
+            pool_padding=padding)):
+        x, end_points = slim_vgg.vgg_16(
             x, is_training=is_training,
             output_layer=output_layer,
             output_activation_fn=helpers.get_act(output_act))

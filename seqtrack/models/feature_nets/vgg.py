@@ -75,12 +75,11 @@ def vgg_arg_scope(weight_decay=0.0005, conv_padding='SAME', pool_padding='SAME')
 
 def vgg_a(inputs,
           is_training=True,
-          dropout_keep_prob=0.5,
+          # dropout_keep_prob=0.5,
           fc_conv_padding='VALID',
-          output_layer='fc6',
+          output_layer='conv5/conv5_2',
           output_activation_fn=None,
-          scope='vgg_a',
-          ):
+          scope='vgg_a'):
     """Oxford Net VGG 11-Layers version A Example.
 
     Note: All the fully_connected layers have been transformed to conv2d layers.
@@ -118,32 +117,30 @@ def vgg_a(inputs,
                             outputs_collections=end_points_collection):
             layers = [
                 # ('conv1', util.partial(slim.repeat, 1, conv2d, 64, [3, 3])),
-                ('conv1_1', util.partial(conv2d, 64, [3, 3])),
+                ('conv1/conv1_1', util.partial(conv2d, 64, [3, 3])),
                 ('pool1', util.partial(max_pool2d, [2, 2])),
                 # ('conv2', util.partial(slim.repeat, 1, conv2d, 128, [3, 3])),
-                ('conv2_1', util.partial(conv2d, 128, [3, 3])),
+                ('conv2/conv2_1', util.partial(conv2d, 128, [3, 3])),
                 ('pool2', util.partial(max_pool2d, [2, 2])),
                 # ('conv3', util.partial(slim.repeat, 2, conv2d, 256, [3, 3])),
-                ('conv3_1', util.partial(conv2d, 256, [3, 3])),
-                ('conv3_2', util.partial(conv2d, 256, [3, 3])),
+                ('conv3/conv3_1', util.partial(conv2d, 256, [3, 3])),
+                ('conv3/conv3_2', util.partial(conv2d, 256, [3, 3])),
                 ('pool3', util.partial(max_pool2d, [2, 2])),
                 # ('conv4', util.partial(slim.repeat, 2, conv2d, 512, [3, 3])),
-                ('conv4_1', util.partial(conv2d, 512, [3, 3])),
-                ('conv4_2', util.partial(conv2d, 512, [3, 3])),
+                ('conv4/conv4_1', util.partial(conv2d, 512, [3, 3])),
+                ('conv4/conv4_2', util.partial(conv2d, 512, [3, 3])),
                 ('pool4', util.partial(max_pool2d, [2, 2])),
                 # ('conv5', util.partial(slim.repeat, 2, conv2d, 512, [3, 3])),
-                ('conv5_1', util.partial(conv2d, 512, [3, 3])),
-                ('conv5_2', util.partial(conv2d, 512, [3, 3])),
+                ('conv5/conv5_1', util.partial(conv2d, 512, [3, 3])),
+                ('conv5/conv5_2', util.partial(conv2d, 512, [3, 3])),
                 ('pool5', util.partial(max_pool2d, [2, 2])),
                 # Use conv2d instead of fully_connected layers.
                 ('fc6', util.partial(conv2d, 4096, [7, 7], padding=fc_conv_padding)),
                 # ('dropout6', util.partial(dropout, dropout_keep_prob)),
-                # ('fc7', util.partial(conv2d, 4096, [1)),
+                ('fc7', util.partial(conv2d, 4096, [1, 1])),
             ]
             net = util.evaluate_until(layers, inputs, output_layer,
-                                      output_kwargs=dict(
-                                          activation_fn=output_activation_fn))
-
+                                      output_kwargs=dict(activation_fn=output_activation_fn))
             # Convert end_points_collection into a end_point dict.
             end_points = slim.utils.convert_collection_to_dict(end_points_collection)
             return net, end_points
@@ -153,13 +150,12 @@ vgg_a.default_image_size = 224
 
 
 def vgg_16(inputs,
-           num_classes=1000,
            is_training=True,
-           dropout_keep_prob=0.5,
-           spatial_squeeze=True,
-           scope='vgg_16',
+           # dropout_keep_prob=0.5,
            fc_conv_padding='VALID',
-           global_pool=False):
+           output_layer='conv5/conv5_3',
+           output_activation_fn=None,
+           scope='vgg_16'):
     """Oxford Net VGG 16-Layers version D Example.
 
     Note: All the fully_connected layers have been transformed to conv2d layers.
@@ -190,41 +186,44 @@ def vgg_16(inputs,
         or the input to the logits layer (if num_classes is 0 or None).
       end_points: a dict of tensors with intermediate activations.
     """
-    raise NotImplementedError('vgg_16 not supported')
     with tf.variable_scope(scope, 'vgg_16', [inputs]) as sc:
         end_points_collection = sc.original_name_scope + '_end_points'
         # Collect outputs for conv2d, fully_connected and max_pool2d.
         with slim.arg_scope([conv2d, slim.fully_connected, max_pool2d],
                             outputs_collections=end_points_collection):
-            net = slim.repeat(inputs, 2, conv2d, 64, [3, 3], scope='conv1')
-            net = max_pool2d(net, [2, 2], scope='pool1')
-            net = slim.repeat(net, 2, conv2d, 128, [3, 3], scope='conv2')
-            net = max_pool2d(net, [2, 2], scope='pool2')
-            net = slim.repeat(net, 3, conv2d, 256, [3, 3], scope='conv3')
-            net = max_pool2d(net, [2, 2], scope='pool3')
-            net = slim.repeat(net, 3, conv2d, 512, [3, 3], scope='conv4')
-            net = max_pool2d(net, [2, 2], scope='pool4')
-            net = slim.repeat(net, 3, conv2d, 512, [3, 3], scope='conv5')
-            net = max_pool2d(net, [2, 2], scope='pool5')
-
-            # Use conv2d instead of fully_connected layers.
-            net = conv2d(net, 4096, [7, 7], padding=fc_conv_padding, scope='fc6')
-            net = dropout(net, dropout_keep_prob, is_training=is_training, scope='dropout6')
-            net = conv2d(net, 4096, [1, 1], scope='fc7')
+            layers = [
+                # net = slim.repeat(conv2d, 64, [3, 3], scope='conv1')
+                ('conv1/conv1_1', util.partial(conv2d, 64, [3, 3])),
+                ('conv1/conv1_2', util.partial(conv2d, 64, [3, 3])),
+                ('pool1', util.partial(max_pool2d, [2, 2])),
+                # net = slim.repeat(net, 2, conv2d, 128, [3, 3], scope='conv2')
+                ('conv2/conv2_1', util.partial(conv2d, 128, [3, 3])),
+                ('conv2/conv2_2', util.partial(conv2d, 128, [3, 3])),
+                ('pool2', util.partial(max_pool2d, [2, 2])),
+                # net = slim.repeat(net, 3, conv2d, 256, [3, 3], scope='conv3')
+                ('conv3/conv3_1', util.partial(conv2d, 256, [3, 3])),
+                ('conv3/conv3_2', util.partial(conv2d, 256, [3, 3])),
+                ('conv3/conv3_3', util.partial(conv2d, 256, [3, 3])),
+                ('pool3', util.partial(max_pool2d, [2, 2])),
+                # net = slim.repeat(net, 3, conv2d, 512, [3, 3], scope='conv4')
+                ('conv4/conv4_1', util.partial(conv2d, 512, [3, 3])),
+                ('conv4/conv4_2', util.partial(conv2d, 512, [3, 3])),
+                ('conv4/conv4_3', util.partial(conv2d, 512, [3, 3])),
+                ('pool4', util.partial(max_pool2d, [2, 2])),
+                # net = slim.repeat(net, 3, conv2d, 512, [3, 3], scope='conv5')
+                ('conv5/conv5_1', util.partial(conv2d, 512, [3, 3])),
+                ('conv5/conv5_2', util.partial(conv2d, 512, [3, 3])),
+                ('conv5/conv5_3', util.partial(conv2d, 512, [3, 3])),
+                ('pool5', util.partial(max_pool2d, [2, 2])),
+                # Use conv2d instead of fully_connected layers.
+                ('fc6', util.partial(conv2d, 4096, [7, 7], padding=fc_conv_padding)),
+                # ('dropout6', util.partial(dropout, dropout_keep_prob, is_training=is_training)),
+                ('fc7', util.partial(conv2d, 4096, [1, 1])),
+            ]
+            net = util.evaluate_until(layers, inputs, output_layer,
+                                      output_kwargs=dict(activation_fn=output_activation_fn))
             # Convert end_points_collection into a end_point dict.
             end_points = slim.utils.convert_collection_to_dict(end_points_collection)
-            if global_pool:
-                net = tf.reduce_mean(net, [1, 2], keep_dims=True, name='global_pool')
-                end_points['global_pool'] = net
-            if num_classes:
-                net = dropout(net, dropout_keep_prob, is_training=is_training, scope='dropout7')
-                net = conv2d(net, num_classes, [1, 1],
-                             activation_fn=None,
-                             normalizer_fn=None,
-                             scope='fc8')
-                if spatial_squeeze:
-                    net = tf.squeeze(net, [1, 2], name='fc8/squeezed')
-                end_points[sc.name + '/fc8'] = net
             return net, end_points
 
 
