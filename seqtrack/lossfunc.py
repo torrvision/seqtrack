@@ -109,26 +109,20 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
         return labels, has_label
 
 
-def make_balanced_weights(labels, has_label, axis=None, name='make_balanced_weights'):
-    '''
-    Caution: Enforces minimum mass of 1 per label.
-    If there is almost zero weight for a label, this will make it effectively zero.
-    '''
+def normalized_sigmoid_cross_entropy_with_logits(
+        targets, logits, weights, pos_weight=1.0, balanced=False, axis=None,
+        name='normalized_sigmoid_cross_entropy_with_logits'):
     with tf.name_scope(name) as scope:
-        mass_pos = tf.where(has_label, labels, tf.zeros_like(labels))
-        mass_neg = tf.where(has_label, 1. - labels, tf.zeros_like(labels))
-        total_mass_pos = tf.maximum(1., tf.reduce_sum(mass_pos, axis=axis, keep_dims=True))
-        total_mass_neg = tf.maximum(1., tf.reduce_sum(mass_neg, axis=axis, keep_dims=True))
-        weights_pos = mass_pos / total_mass_pos
-        weights_neg = mass_neg / total_mass_neg
-        weights = 0.5 * weights_pos + 0.5 * weights_neg
-        return weights
-
-
-def make_uniform_weights(has_label, axis=None, name='make_uniform_weights'):
-    with tf.name_scope(name) as scope:
-        mass = tf.to_float(has_label)
-        total_mass = tf.reduce_sum(mass, axis=axis, keep_dims=True)
-        weights = mass / total_mass
-        weights = tf.where(has_label, weights, tf.zeros_like(weights))
-        return weights
+        sum_p = tf.reduce_sum(weights * targets, axis=axis, keepdims=True)
+        sum_not_p = tf.reduce_sum(weights * (1 - targets), axis=axis, keepdims=True)
+        if balanced:
+            gamma_base = sum_not_p / sum_p
+        else:
+            gamma_base = 1
+        gamma = pos_weight * gamma_base
+        cross_ent = (2 / (gamma + 1)) * tf.nn.weighted_cross_entropy_with_logits(
+            targets=targets, logits=logits, pos_weight=gamma)
+        # Find constant alpha that normalizes mass to one.
+        beta = gamma / (gamma + 1)
+        alpha = 1 / (2 * beta * sum_p + 2 * (1 - beta) * sum_not_p)
+        return tf.reduce_sum(alpha * weights * cross_ent, axis=axis, keepdims=False)

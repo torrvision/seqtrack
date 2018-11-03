@@ -756,13 +756,9 @@ def _cross_entropy_loss(
             raise ValueError('unknown label method: {}'.format(label_method))
 
         if label_structure == 'independent':
-            loss = tf.nn.weighted_cross_entropy_with_logits(
-                targets=labels, logits=response, pos_weight=pos_weight)
-            if balance_classes:
-                weights = lossfunc.make_balanced_weights(labels, has_label, axis=(-3, -2, -1))
-            else:
-                weights = lossfunc.make_uniform_weights(has_label, axis=(-3, -2, -1))
-            loss = tf.reduce_sum(weights * loss, axis=(1, 2, 3))
+            loss = lossfunc.normalized_sigmoid_cross_entropy_with_logits(
+                targets=labels, logits=response, weights=tf.to_float(has_label),
+                pos_weight=pos_weight, balanced=balance_classes, axis=(-3, -2, -1))
         elif label_structure == 'joint':
             labels = normalize_prob(labels, axis=(1, 2, 3))
             labels_flat, _ = merge_dims(labels, 1, 4)
