@@ -391,10 +391,9 @@ def rect_grid_pyr(response_size, rf, search_size, rect_size, scales, name='rect_
 
 def colormap(x, cmap_name, name='colormap'):
     with tf.name_scope(name) as scope:
-        x_shape = x.shape.as_list()
-        assert x_shape[-1] == 1
+        assert x.shape[-1].value == 1
         y = tf.py_func(functools.partial(_colormap_np, cmap_name), [x], tf.float32)
-        y.set_shape(x_shape[:-1] + [4])
+        y.set_shape(x.shape[:-1].as_list() + [4])
         return y
 
 

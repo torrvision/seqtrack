@@ -22,6 +22,7 @@ from seqtrack import receptive_field
 from . import interface as models_interface
 from . import util
 from . import feature_nets
+from . import join_nets
 
 from seqtrack.helpers import merge_dims
 from seqtrack.helpers import expand_dims_n
@@ -48,6 +49,8 @@ class SiamFC(models_interface.IterModel):
             center_input_range=True,  # Make range [-0.5, 0.5] instead of [0, 1].
             keep_uint8_range=False,  # Use input range of 255 instead of 1.
             feature_params=None,  # Args to _branch_net.
+            join_arch='conv2d',
+            join_params=None,
             feature_model_file='',
             # feature_act='linear',
             # enable_feature_bnorm=True,
@@ -96,9 +99,8 @@ class SiamFC(models_interface.IterModel):
         self._search_scale = float(search_size) / template_size * template_scale
         self._feature_params = feature_params
         self._feature_model_file = feature_model_file
-        self._template_mask_kind = template_mask_kind
-        self._xcorr_padding = xcorr_padding
-        self._bnorm_after_xcorr = bnorm_after_xcorr
+        self._join_arch = join_arch
+        self._join_params = join_params or {}
         self._freeze_siamese = freeze_siamese
         self._learnable_prior = learnable_prior
         self._train_multiscale = train_multiscale
@@ -176,35 +178,6 @@ class SiamFC(models_interface.IterModel):
 
             self._feature_saver = tf.train.Saver(self._feature_vars)
 
-            if self._template_mask_kind != 'none':
-                if self._template_mask_kind == 'static':
-                    template_mask = slim.model_variable(
-                        'template_mask', template_feat.shape.as_list()[-3:],
-                        initializer=tf.ones_initializer(), collections=['siamese'])
-                # elif self._template_mask_kind == 'dynamic':
-                #     with tf.variable_scope('mask_net', reuse=False):
-                #         template_fg, _ = lossfunc.foreground_labels_grid(
-                #             self._template_size, geom.crop_rect(y, template_rect), shape='rect')
-                #         template_fg = tf.expand_dims(template_fg, -1)  # 1 channel
-                #         # TODO: Try tanh?
-                #         template_mask, _ = _branch_net(
-                #             template_fg, None, padding=self._feature_padding, arch=self._feature_arch,
-                #             output_act='linear', enable_bnorm=self._enable_feature_bnorm,
-                #             wd=self._wd, is_training=self._is_training,
-                #             variables_collections=['siamese'], trainable=(not self._freeze_siamese))
-                #         with tf.name_scope('summary'):
-                #             tf.summary.image('template_fg', _to_uint8(template_fg[0:1]),
-                #                              max_outputs=1, collections=self._image_summaries_collections)
-                #             mask_pos = tf.reduce_mean(tf.maximum(0., template_mask), axis=-1, keep_dims=True)
-                #             mask_neg = tf.reduce_mean(tf.maximum(0., -template_mask), axis=-1, keep_dims=True)
-                #             tf.summary.image('template_mask_pos', mask_pos[0:1],
-                #                              max_outputs=1, collections=self._image_summaries_collections)
-                #             tf.summary.image('template_mask_neg', mask_neg[0:1],
-                #                              max_outputs=1, collections=self._image_summaries_collections)
-                else:
-                    raise ValueError('unknown mask kind: {}'.format(self._template_mask_kind))
-                template_feat *= template_mask
-
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
                                  max_outputs=1, collections=self._image_summaries_collections)
@@ -263,33 +236,34 @@ class SiamFC(models_interface.IterModel):
                 raise ValueError('search features not centered: {:s}'.format(ex))
 
             template_feat = prev_state['template_feat']
-            response = cnn.diag_xcorr(search_feat, template_feat, padding=self._xcorr_padding)
-            response = cnn.channel_sum(response)
-            # Get receptive field with respect to input.
+            with tf.variable_scope('join', reuse=(self._num_frames >= 1)):
+                join_fn = join_nets.BY_NAME[self._join_arch]
+                response = join_fn(template_feat, search_feat, **self._join_params)
             rf_response = response.fields[search_input.value]
             response = cnn.get_value(response)
-
-            response = unmerge(response, axis=0)
-            response = tf.verify_tensor_all_finite(response, 'output of xcorr is not finite')
-            response_size = response.shape.as_list()[-3:-1]
+            response_size = response.shape[-3:-1].as_list()
             try:
                 receptive_field.assert_center_alignment(self._search_size, response_size, rf_response)
             except AssertionError as ex:
                 raise ValueError('response map not centered: {:s}'.format(ex))
 
-            with tf.variable_scope('output', reuse=(self._num_frames > 0)):
-                if self._bnorm_after_xcorr:
-                    response = slim.batch_norm(response, scale=True, is_training=self._is_training,
-                                               trainable=(not self._freeze_siamese),
-                                               variables_collections=['siamese'])
-                else:
-                    response = _affine_scalar(response, variables_collections=['siamese'])
-                if self._freeze_siamese:
-                    # TODO: Prevent batch-norm updates as well.
-                    # TODO: Set trainable=False for all variables above.
-                    response = tf.stop_gradient(response)
-                if self._learnable_prior:
-                    response = _add_learnable_motion_prior(response)
+            response = tf.verify_tensor_all_finite(response, 'output of xcorr is not finite')
+
+            response = unmerge(response, axis=0)
+
+            # with tf.variable_scope('output', reuse=(self._num_frames > 0)):
+            #     if self._bnorm_after_xcorr:
+            #         response = slim.batch_norm(response, scale=True, is_training=self._is_training,
+            #                                    trainable=(not self._freeze_siamese),
+            #                                    variables_collections=['siamese'])
+            #     else:
+            #         response = _affine_scalar(response, variables_collections=['siamese'])
+            #     if self._freeze_siamese:
+            #         # TODO: Prevent batch-norm updates as well.
+            #         # TODO: Set trainable=False for all variables above.
+            #         response = tf.stop_gradient(response)
+            #     if self._learnable_prior:
+            #         response = _add_learnable_motion_prior(response)
 
             self._info.setdefault('response', []).append(
                 _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
@@ -562,7 +536,7 @@ def _branch_net(x, is_training, trainable, variables_collections,
         arch_params = arch_params or {}
         extra_conv_params = extra_conv_params or {}
         try:
-            func = feature_nets.by_name[arch]
+            func = feature_nets.BY_NAME[arch]
         except KeyError:
             raise ValueError('unknown architecture: {}'.format(arch))
 
@@ -594,6 +568,17 @@ def _extra_conv(x, is_training, trainable, variables_collections,
                                    stride=stride,
                                    padding=padding,
                                    activation_fn=helpers.get_act(activation))
+
+
+def _join_net(template_feat, search_feat):
+    '''
+    Args:
+        template_feat: Tensor
+        search_feat: Tensor
+
+    Assumes that both template and search have center-aligned receptive fields.
+    '''
+    pass
 
 
 def hann(n, name='hann'):

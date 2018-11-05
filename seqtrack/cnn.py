@@ -44,14 +44,16 @@ class Tensor(object):
     def add_to_set(self):
         self.fields[self.value] = receptive_field.identity()
 
+    # TODO: How to support 1 + x as well as x + 1?
+
     def __add__(a, b):
-        return _call_binary_elementwise(operator.__add__, a, b)
+        return pixelwise_binary(operator.__add__, a, b)
 
     def __sub__(a, b):
-        return _call_binary_elementwise(operator.__sub__, a, b)
+        return pixelwise_binary(operator.__sub__, a, b)
 
     def __mul__(a, b):
-        return _call_binary_elementwise(operator.__mul__, a, b)
+        return pixelwise_binary(operator.__mul__, a, b)
 
 
 def get_value(x):
@@ -70,27 +72,29 @@ def as_tensor(x, add_to_set=False):
     return x
 
 
-def _call_elementwise(func, x):
+def pixelwise(func, x, *args, **kwargs):
+    '''Calls a function that operates on each spatial location independently.'''
     x = as_tensor(x)
-    return Tensor(func(x.value), x.fields)
+    return Tensor(func(x.value, *args, **kwargs), x.fields)
 
 
-def _elementwise(func):
-    return functools.partial(_call_elementwise, func)
+def partial_pixelwise(func):
+    return functools.partial(pixelwise, func)
 
 
-nn_relu = _elementwise(tf.nn.relu)
-nn_relu6 = _elementwise(tf.nn.relu6)
-nn_softmax = _elementwise(tf.nn.softmax)
-clip_by_value = _elementwise(tf.clip_by_value)
+nn_relu = partial_pixelwise(tf.nn.relu)
+nn_relu6 = partial_pixelwise(tf.nn.relu6)
+nn_softmax = partial_pixelwise(tf.nn.softmax)
+clip_by_value = partial_pixelwise(tf.clip_by_value)
 
-slim_dropout = _elementwise(slim.dropout)
-# slim_softmax = _elementwise(slim.softmax)
+slim_dropout = partial_pixelwise(slim.dropout)
+# slim_softmax = partial_pixelwise(slim.softmax)
 
-channel_sum = _elementwise(lambda x, **kwargs: tf.reduce_sum(x, axis=3, keepdims=True, **kwargs))
+channel_sum = partial_pixelwise(
+    lambda x, **kwargs: tf.reduce_sum(x, axis=3, keepdims=True, **kwargs))
 
 
-def _call_binary_elementwise(func, a, b):
+def pixelwise_binary(func, a, b):
     a = as_tensor(a)
     b = as_tensor(b)
     _assert_is_image(a)
@@ -98,6 +102,32 @@ def _call_binary_elementwise(func, a, b):
     # TODO: Support broadcasting across space.
     _assert_equal_spatial_dim(a, b)
     return Tensor(func(a.value, b.value), receptive_field.merge_dicts(a.fields, b.fields))
+
+
+def nn_conv2d(input, filter, strides, padding, **kwargs):
+    # Assumes data_format == 'NHWC'
+    # Assumes dilations == [1, 1, 1, 1]
+    input = as_tensor(input)
+    filter = as_tensor(filter)
+    assert len(input.value.shape) == 4
+    assert len(filter.value.shape) == 4
+    kernel_size = filter.value.shape[0:2].as_list()
+    # Check that strides are [1, ..., 1]
+    assert len(strides) == 4
+    assert strides[0] == 1
+    assert strides[3] == 1
+    spatial_stride = strides[1:3]
+
+    if padding != 'VALID' and tuple(kernel_size) != (1, 1):
+        raise ValueError('padding must be VALID: {}'.format(padding))
+
+    output = Tensor()
+    output.value = tf.nn.conv2d(input.value, filter.value,
+                                strides=strides, padding=padding, **kwargs)
+    # Update receptive fields.
+    relative = receptive_field.conv2d(kernel_size, spatial_stride, 'VALID')
+    output.fields = {k: receptive_field.compose(v, relative) for k, v in input.fields.items()}
+    return output
 
 
 @slim.add_arg_scope
@@ -245,3 +275,23 @@ def _assert_equal_spatial_dim(x, y):
         raise ValueError('spatial dim of y is not known: {}'.format(y.shape))
     if x_shape[1:3] != y_shape[1:3]:
         raise ValueError('spatial dims not equal: {}'.format(x.shape, y.shape))
+
+
+@partial_pixelwise
+def mlp(net, num_layers, num_hidden, num_outputs,
+        normalizer_fn=slim.batch_norm,
+        activation_fn=tf.nn.relu,
+        output_normalizer_fn=None,
+        output_activation_fn=None,
+        scope='mlp'):
+    with tf.variable_scope(scope, 'mlp'):
+        for i in range(num_layers - 1):
+            net = slim.conv2d(net, num_hidden, kernel_size=1, stride=1, padding='VALID',
+                              normalizer_fn=normalizer_fn,
+                              activation_fn=activation_fn,
+                              scope='fc{}'.format(i + 1))
+        net = slim.conv2d(net, num_outputs, kernel_size=1, stride=1, padding='VALID',
+                          normalizer_fn=output_normalizer_fn,
+                          activation_fn=output_activation_fn,
+                          scope='fc{}'.format(num_layers))
+        return net

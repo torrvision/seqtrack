@@ -252,7 +252,7 @@ def slim_resnet_v1_50(x, is_training, trainable, variables_collections,
         return x
 
 
-names = [
+NAMES = [
     'alexnet',
     'darknet',
     'slim_alexnet_v2',
@@ -261,4 +261,4 @@ names = [
     'slim_vgg_16',
 ]
 
-by_name = {name: globals()[name] for name in names}
+BY_NAME = {name: globals()[name] for name in NAMES}
