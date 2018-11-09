@@ -115,7 +115,8 @@ def vgg_a(inputs,
         end_points_collection = sc.original_name_scope + '_end_points'
         # Collect outputs for conv2d, fully_connected and max_pool2d.
         with slim.arg_scope([conv2d, max_pool2d],
-                            outputs_collections=end_points_collection):
+                            outputs_collections=end_points_collection), \
+             slim.arg_scope([slim.batch_norm], is_training=is_training):
             layers = [
                 # ('conv1', util.partial(slim.repeat, 1, conv2d, 64, [3, 3])),
                 ('conv1/conv1_1', util.partial(conv2d, 64, [3, 3])),
@@ -140,11 +141,10 @@ def vgg_a(inputs,
                 # ('dropout6', util.partial(dropout, dropout_keep_prob)),
                 ('fc7', util.partial(conv2d, 4096, [1, 1])),
             ]
-            net = util.evaluate_until(layers, inputs, output_layer,
-                                      output_kwargs=dict(activation_fn=output_activation_fn),
-                                      freeze_until_layer=freeze_until_layer)
-            # Convert end_points_collection into a end_point dict.
-            end_points = slim.utils.convert_collection_to_dict(end_points_collection)
+            net, end_points = util.evaluate_until(
+                layers, inputs, output_layer,
+                output_kwargs=dict(activation_fn=output_activation_fn),
+                freeze_until_layer=freeze_until_layer)
             return net, end_points
 
 
@@ -193,7 +193,8 @@ def vgg_16(inputs,
         end_points_collection = sc.original_name_scope + '_end_points'
         # Collect outputs for conv2d, fully_connected and max_pool2d.
         with slim.arg_scope([conv2d, slim.fully_connected, max_pool2d],
-                            outputs_collections=end_points_collection):
+                            outputs_collections=end_points_collection), \
+             slim.arg_scope([slim.batch_norm], is_training=is_training):
             layers = [
                 # net = slim.repeat(conv2d, 64, [3, 3], scope='conv1')
                 ('conv1/conv1_1', util.partial(conv2d, 64, [3, 3])),
@@ -223,11 +224,10 @@ def vgg_16(inputs,
                 # ('dropout6', util.partial(dropout, dropout_keep_prob, is_training=is_training)),
                 ('fc7', util.partial(conv2d, 4096, [1, 1])),
             ]
-            net = util.evaluate_until(layers, inputs, output_layer,
-                                      output_kwargs=dict(activation_fn=output_activation_fn),
-                                      freeze_until_layer=freeze_until_layer)
-            # Convert end_points_collection into a end_point dict.
-            end_points = slim.utils.convert_collection_to_dict(end_points_collection)
+            net, end_points = util.evaluate_until(
+                layers, inputs, output_layer,
+                output_kwargs=dict(activation_fn=output_activation_fn),
+                freeze_until_layer=freeze_until_layer)
             return net, end_points
 
 

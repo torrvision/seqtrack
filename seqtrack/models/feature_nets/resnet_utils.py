@@ -238,6 +238,7 @@ def resnet_arg_scope(weight_decay=0.0001,
                      batch_norm_scale=True,
                      activation_fn=tf.nn.relu,
                      use_batch_norm=True,
+                     pool_padding='VALID',
                      variables_collections=None):
     """Defines the default ResNet arg scope.
 
@@ -284,5 +285,5 @@ def resnet_arg_scope(weight_decay=0.0001,
             # code of 'Deep Residual Learning for Image Recognition' uses
             # padding='VALID' for pool1. You can switch to that choice by setting
             # slim.arg_scope([cnnutil.max_pool2d], padding='VALID').
-            with slim.arg_scope([max_pool2d], padding='VALID') as arg_sc:
+            with slim.arg_scope([max_pool2d], padding=pool_padding) as arg_sc:
                 return arg_sc

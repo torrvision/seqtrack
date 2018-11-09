@@ -24,7 +24,7 @@ from tensorflow.contrib.receptive_field.python.util.receptive_field import Recep
 # Not sure how bad this is?
 ReceptiveField.__str__ = (
     lambda self: '[size={:s} stride={:s} padding={:s}]'.format(
-        self.size, self.stride, self.padding))
+        str(self.size), str(self.stride), str(self.padding)))
 
 
 def identity():
@@ -79,7 +79,7 @@ def conv2d(kernel_size, stride, padding):
     if padding == 'SAME':
         assert np.all(kernel_size % 2 == 1), 'kernel size must be odd with SAME convolution'
         half_kernel = (kernel_size - 1) // 2
-        padding_amount = -half_kernel
+        padding_amount = half_kernel
     elif padding == 'VALID':
         padding_amount = np.zeros_like(kernel_size)
     else:
@@ -278,3 +278,8 @@ def assert_center_alignment(input_size, output_size, field):
 #     center_min = rf.rect.int_center()
 #     center_max = center_min + (output_size - 1) * rf.stride
 #     return center_min, center_max
+
+
+def input_size(field, output_size):
+    '''Returns the input size to achieve the desired output size.'''
+    return field.size + field.stride * (output_size - 1) - 2 * field.padding

@@ -118,8 +118,8 @@ def nn_conv2d(input, filter, strides, padding, **kwargs):
     assert strides[3] == 1
     spatial_stride = strides[1:3]
 
-    if padding != 'VALID' and tuple(kernel_size) != (1, 1):
-        raise ValueError('padding must be VALID: {}'.format(padding))
+    # if padding != 'VALID' and tuple(kernel_size) != (1, 1):
+    #     raise ValueError('padding must be VALID: {}'.format(padding))
 
     output = Tensor()
     output.value = tf.nn.conv2d(input.value, filter.value,
@@ -132,40 +132,32 @@ def nn_conv2d(input, filter, strides, padding, **kwargs):
 
 @slim.add_arg_scope
 def slim_conv2d(inputs, num_outputs, kernel_size,
-                stride=1, padding='SAME', **kwargs):
+                stride=1,
+                padding='SAME',
+                data_format=None,
+                rate=1,
+                **kwargs):
     kernel_size = layer_utils.n_positive_integers(2, kernel_size)
-    if padding != 'VALID' and tuple(kernel_size) != (1, 1):
-        raise ValueError('padding must be VALID: {}'.format(padding))
-    return _slim_conv2d_valid(inputs, num_outputs, kernel_size,
-                              stride=stride, **kwargs)
-
-
-def _slim_conv2d_valid(inputs, num_outputs, kernel_size,
-                       stride=1,
-                       data_format=None,
-                       rate=1,
-                       **kwargs):
-    '''
-    Args:
-        inputs: May be either tf.Tensor or cnn.Tensor.
-            The output type will match.
-    '''
+    # if padding != 'VALID' and tuple(kernel_size) != (1, 1):
+    #     raise ValueError('padding must be VALID: {}'.format(padding))
+    # return _slim_conv2d_valid(inputs, num_outputs, kernel_size,
+    #                           stride=stride, **kwargs)
     if rate != 1:
         raise ValueError('dilation rate not supported yet: {}'.format(rate))
     inputs = as_tensor(inputs)
     outputs = Tensor()
     outputs.value = slim.conv2d(inputs.value, num_outputs, kernel_size,
-                                stride=stride, padding='VALID', **kwargs)
+                                stride=stride, padding=padding, **kwargs)
     # Update receptive fields.
-    relative = receptive_field.conv2d(kernel_size, stride, 'VALID')
+    relative = receptive_field.conv2d(kernel_size, stride, padding)
     outputs.fields = {k: receptive_field.compose(v, relative) for k, v in inputs.fields.items()}
     return outputs
 
 
 @slim.add_arg_scope
 def slim_max_pool2d(inputs, kernel_size, stride=2, padding='VALID', **kwargs):
-    if padding != 'VALID':
-        raise ValueError('padding must be VALID: {}'.format(padding))
+    # if padding != 'VALID':
+    #     raise ValueError('padding must be VALID: {}'.format(padding))
     inputs = as_tensor(inputs)
     outputs = Tensor()
     outputs.value = slim.max_pool2d(inputs.value, kernel_size,
@@ -267,13 +259,19 @@ def _assert_is_image(x):
 def _assert_equal_spatial_dim(x, y):
     x = get_value(x)
     y = get_value(y)
-    x_shape = x.shape.as_list()
-    y_shape = y.shape.as_list()
-    if any(dim is None for dim in x_shape[1:3]):
-        raise ValueError('spatial dim of x is not known: {}'.format(x.shape))
-    if any(dim is None for dim in y_shape[1:3]):
-        raise ValueError('spatial dim of y is not known: {}'.format(y.shape))
-    if x_shape[1:3] != y_shape[1:3]:
+    x_size = x.shape[1:3].as_list()
+    y_size = y.shape[1:3].as_list()
+    # Do not permit unknown spatial dimension.
+    # if any(dim is None for dim in x_shape[1:3]):
+    #     raise ValueError('spatial dim of x is not known: {}'.format(x.shape))
+    # if any(dim is None for dim in y_shape[1:3]):
+    #     raise ValueError('spatial dim of y is not known: {}'.format(y.shape))
+    # Protect against broadcasting.
+    if x_size == [1, 1] and y_size != [1, 1]:
+        raise ValueError('broadcasting not supported')
+    if y_size == [1, 1] and x_size != [1, 1]:
+        raise ValueError('broadcasting not supported')
+    if x_size != y_size:
         raise ValueError('spatial dims not equal: {}'.format(x.shape, y.shape))
 
 
@@ -295,3 +293,17 @@ def mlp(net, num_layers, num_hidden, num_outputs,
                           activation_fn=output_activation_fn,
                           scope='fc{}'.format(num_layers))
         return net
+
+
+def upsample(x, rate, method=0):
+    x = as_tensor(x)
+    # Upsampling (with align_corners true) does not modify the size and padding of field.
+    # This is not entirely true e.g. bilinear uses adjacent pixels too.
+    # TODO: Do we want to represent this or not?
+    input_size = np.array(x.value.shape[1:3].as_list())
+    # For example: reshape 11 => 31 with rate 3.
+    output_size = (input_size - 1) * rate + 1
+    x.value = tf.resize_images(x.value, output_size, method=method, align_corners=True)
+    assert np.all(x.field.stride % rate == 0)
+    x.field.stride = x.field.stride // rate
+    return x

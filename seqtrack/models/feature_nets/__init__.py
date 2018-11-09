@@ -23,9 +23,9 @@ from seqtrack import cnn
 from seqtrack import helpers
 
 from . import util
-from . import alexnet as slim_alexnet
-from . import vgg as slim_vgg
-from . import resnet_v1 as slim_resnet_v1
+from . import alexnet as alexnet_pkg
+from . import vgg as vgg_pkg
+from . import resnet_v1 as resnet_v1_pkg
 
 
 # API of a feature function:
@@ -36,7 +36,7 @@ from . import resnet_v1 as slim_resnet_v1
 # TODO: Avoid duplication of default parameters here if possible?
 
 
-def alexnet(x, is_training, trainable, variables_collections,
+def alexnet(x, is_training, trainable=True, variables_collections=None,
             weight_decay=0,
             output_layer='conv5',
             output_act='linear',
@@ -61,7 +61,7 @@ def feature_arg_scope(weight_decay, enable_bnorm, padding):
             return arg_sc
 
 
-def _alexnet_layers(x, is_training, trainable, variables_collections,
+def _alexnet_layers(x, is_training, trainable=True, variables_collections=None,
                     output_layer='conv5',
                     output_activation_fn=None,
                     freeze_until_layer=None):
@@ -89,14 +89,15 @@ def _alexnet_layers(x, is_training, trainable, variables_collections,
                     ('conv4', util.partial(cnn.slim_conv2d, 384, [3, 3])),
                     ('conv5', util.partial(cnn.slim_conv2d, 256, [3, 3])),
                 ]
-                x = util.evaluate_until(layers, x, output_layer,
-                                        output_kwargs=dict(activation_fn=output_activation_fn,
-                                                           normalizer_fn=None),
-                                        freeze_until_layer=freeze_until_layer)
-                return x
+                return util.evaluate_until(
+                    layers, x, output_layer,
+                    output_kwargs=dict(
+                        activation_fn=output_activation_fn,
+                        normalizer_fn=None),
+                    freeze_until_layer=freeze_until_layer)
 
 
-def darknet(x, is_training, trainable, variables_collections,
+def darknet(x, is_training, trainable=True, variables_collections=None,
             weight_decay=0,
             output_layer='conv5',
             output_act='linear',
@@ -111,7 +112,7 @@ def darknet(x, is_training, trainable, variables_collections,
                                freeze_until_layer=freeze_until_layer)
 
 
-def _darknet_layers(x, is_training, trainable, variables_collections,
+def _darknet_layers(x, is_training, trainable=True, variables_collections=None,
                     output_layer='conv5',
                     output_activation_fn=None,
                     freeze_until_layer=None):
@@ -143,16 +144,18 @@ def _darknet_layers(x, is_training, trainable, variables_collections,
                     ('pool4', util.partial(cnn.slim_max_pool2d, [3, 3], 2)),
                     ('conv5', util.partial(cnn.slim_conv2d, 256, [3, 3], 1)),
                 ]
-                x = util.evaluate_until(layers, x, output_layer,
-                                        output_kwargs=dict(activation_fn=output_activation_fn,
-                                                           normalizer_fn=None),
-                                        freeze_until_layer=freeze_until_layer)
-                return x
+                return util.evaluate_until(
+                    layers, x, output_layer,
+                    output_kwargs=dict(
+                        activation_fn=output_activation_fn,
+                        normalizer_fn=None),
+                    freeze_until_layer=freeze_until_layer)
 
 
-def slim_alexnet_v2(x, is_training, trainable, variables_collections,
+def slim_alexnet_v2(x, is_training, trainable=True, variables_collections=None,
                     weight_decay=0.0005,
-                    padding='VALID',
+                    conv_padding='VALID',
+                    pool_padding='VALID',
                     conv1_stride=4,
                     output_layer='conv5',
                     output_act='linear',
@@ -161,23 +164,23 @@ def slim_alexnet_v2(x, is_training, trainable, variables_collections,
         raise NotImplementedError('trainable not supported')
     # TODO: Support variables_collections.
 
-    with slim.arg_scope(slim_alexnet.alexnet_v2_arg_scope(
+    with slim.arg_scope(alexnet_pkg.alexnet_v2_arg_scope(
             weight_decay=weight_decay,
-            conv_padding=padding,
-            pool_padding=padding)):
-        x, end_points = slim_alexnet.alexnet_v2(
+            conv_padding=conv_padding,
+            pool_padding=pool_padding)):
+        return alexnet_pkg.alexnet_v2(
             x,
             is_training=is_training,
             conv1_stride=conv1_stride,
             output_layer=output_layer,
             output_activation_fn=helpers.get_act(output_act),
             freeze_until_layer=freeze_until_layer)
-        return x
 
 
-def slim_vgg_a(x, is_training, trainable, variables_collections,
+def slim_vgg_a(x, is_training, trainable=True, variables_collections=None,
                weight_decay=0.0005,
-               padding='VALID',
+               conv_padding='VALID',
+               pool_padding='VALID',
                output_layer='conv5/conv5_2',
                output_act='linear',
                freeze_until_layer=None):
@@ -185,21 +188,21 @@ def slim_vgg_a(x, is_training, trainable, variables_collections,
         raise NotImplementedError('trainable not supported')
     # TODO: Support variables_collections.
 
-    with slim.arg_scope(slim_vgg.vgg_arg_scope(
+    with slim.arg_scope(vgg_pkg.vgg_arg_scope(
             weight_decay=weight_decay,
-            conv_padding=padding,
-            pool_padding=padding)):
-        x, end_points = slim_vgg.vgg_a(
+            conv_padding=conv_padding,
+            pool_padding=pool_padding)):
+        return vgg_pkg.vgg_a(
             x, is_training=is_training,
             output_layer=output_layer,
             output_activation_fn=helpers.get_act(output_act),
             freeze_until_layer=freeze_until_layer)
-        return x
 
 
-def slim_vgg_16(x, is_training, trainable, variables_collections,
+def slim_vgg_16(x, is_training, trainable=True, variables_collections=None,
                 weight_decay=0.0005,
-                padding='VALID',
+                conv_padding='VALID',
+                pool_padding='VALID',
                 output_layer='conv5/conv5_3',
                 output_act='linear',
                 freeze_until_layer=None):
@@ -207,24 +210,24 @@ def slim_vgg_16(x, is_training, trainable, variables_collections,
         raise NotImplementedError('trainable not supported')
     # TODO: Support variables_collections.
 
-    with slim.arg_scope(slim_vgg.vgg_arg_scope(
+    with slim.arg_scope(vgg_pkg.vgg_arg_scope(
             weight_decay=weight_decay,
-            conv_padding=padding,
-            pool_padding=padding)):
-        x, end_points = slim_vgg.vgg_16(
+            conv_padding=conv_padding,
+            pool_padding=pool_padding)):
+        return vgg_pkg.vgg_16(
             x, is_training=is_training,
             output_layer=output_layer,
             output_activation_fn=helpers.get_act(output_act),
             freeze_until_layer=freeze_until_layer)
-        return x
 
 
-def slim_resnet_v1_50(x, is_training, trainable, variables_collections,
+def slim_resnet_v1_50(x, is_training, trainable=True, variables_collections=None,
                       weight_decay=0.0001,
                       use_batch_norm=True,
                       # reuse=None,
                       # scope='resnet_v1_50',
-                      padding='VALID',
+                      conv_padding='VALID',
+                      pool_padding='VALID',
                       conv1_stride=2,
                       pool1_stride=2,
                       num_blocks=4,
@@ -233,23 +236,23 @@ def slim_resnet_v1_50(x, is_training, trainable, variables_collections,
                       block3_stride=2):
     if not trainable:
         raise NotImplementedError('trainable not supported')
-    with slim.arg_scope(slim_resnet_v1.resnet_arg_scope(
+    with slim.arg_scope(resnet_v1_pkg.resnet_arg_scope(
             weight_decay=weight_decay,
             use_batch_norm=use_batch_norm,
+            pool_padding=pool_padding,
             variables_collections=variables_collections)):
-        x, end_points = slim_resnet_v1.resnet_v1_50(
+        return resnet_v1_pkg.resnet_v1_50(
             x,
             is_training=is_training,
             # reuse=None,
             # scope='resnet_v1_50',
-            padding=padding,
+            conv_padding=conv_padding,
             conv1_stride=conv1_stride,
             pool1_stride=pool1_stride,
             num_blocks=num_blocks,
             block1_stride=block1_stride,
             block2_stride=block2_stride,
             block3_stride=block3_stride)
-        return x
 
 
 NAMES = [
@@ -262,3 +265,13 @@ NAMES = [
 ]
 
 BY_NAME = {name: globals()[name] for name in NAMES}
+
+
+def get_receptive_field(feature_fn):
+    graph = tf.Graph()
+    with graph.as_default():
+        image = tf.placeholder(tf.float32, (None, None, None, 3), name='image')
+        is_training = tf.placeholder(tf.bool, (), name='is_training')
+        image = cnn.as_tensor(image, add_to_set=True)
+        feat, _ = feature_fn(image, is_training)
+        return feat.fields[image.value]

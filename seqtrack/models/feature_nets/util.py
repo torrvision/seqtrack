@@ -32,18 +32,17 @@ def evaluate_until(layers, inputs, output_layer, output_kwargs=None, freeze_unti
                 cnn.slim_conv2d, slim.batch_norm
     '''
     output_kwargs = output_kwargs or {}
-    if output_layer not in [name for name, func in layers]:
+    layer_names = [name for name, func in layers]
+    if output_layer not in layer_names:
         raise ValueError('output layer not found: "{}"'.format(output_layer))
 
-    if freeze_until_layer is not None:
-        # Check that freeze_until_layer exists.
-        if freeze_until_layer not in [name for name, func in layers]:
-            raise ValueError('frozen layer not found: "{}"'.format(freeze_until_layer))
-        frozen = True
-    else:
-        frozen = False
+    if freeze_until_layer and freeze_until_layer not in layer_names:
+        raise ValueError('frozen layer not found: "{}"'.format(freeze_until_layer))
+    # Freeze initial layers if freeze_until_layer is specified.
+    frozen = bool(freeze_until_layer)
 
     net = inputs
+    end_points = {}
     for name, func in layers:
         # Use arg_scope to achieve trainable=False because:
         # 1) It is compatible for max_pool2d layers (no trainable parameter).
@@ -56,7 +55,8 @@ def evaluate_until(layers, inputs, output_layer, output_kwargs=None, freeze_unti
                 break
             else:
                 net = func(net, scope=name)
+                end_points[name] = net
         # If this is the last frozen layer, then un-freeze for next layer.
         if name == freeze_until_layer:
             frozen = False
-    return net
+    return net, end_points
