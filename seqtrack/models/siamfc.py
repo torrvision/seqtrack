@@ -49,8 +49,10 @@ class SiamFC(models_interface.IterModel):
             center_input_range=True,  # Make range [-0.5, 0.5] instead of [0, 1].
             keep_uint8_range=False,  # Use input range of 255 instead of 1.
             feature_params=None,  # Args to _branch_net.
+            join_type='single',  # Either 'single' or 'multi'
             join_arch='conv2d',
             join_params=None,
+            multi_join_layers=None,
             feature_model_file='',
             # feature_act='linear',
             # enable_feature_bnorm=True,
@@ -99,8 +101,10 @@ class SiamFC(models_interface.IterModel):
         self._search_scale = float(search_size) / template_size * template_scale
         self._feature_params = feature_params
         self._feature_model_file = feature_model_file
+        self._join_type = join_type
         self._join_arch = join_arch
         self._join_params = join_params or {}
+        self._multi_join_layers = multi_join_layers or []
         self._freeze_siamese = freeze_siamese
         self._learnable_prior = learnable_prior
         self._train_multiscale = train_multiscale
@@ -158,8 +162,8 @@ class SiamFC(models_interface.IterModel):
             template_input = _preproc(template_im, center_input_range=self._center_input_range,
                                       keep_uint8_range=self._keep_uint8_range)
             template_input = cnn.as_tensor(template_input, add_to_set=True)
-            with tf.variable_scope('embed', reuse=False):
-                template_feat, feature_scope = _branch_net(
+            with tf.variable_scope('features', reuse=False):
+                template_feat, template_layers, feature_scope = _branch_net(
                     template_input, self._is_training,
                     trainable=(not self._freeze_siamese),
                     variables_collections=['siamese'],
@@ -167,7 +171,8 @@ class SiamFC(models_interface.IterModel):
                     **self._feature_params)
                 # Get names relative to this scope for loading pre-trained.
                 self._feature_vars = _global_variables_relative_to_scope(feature_scope)
-
+            self._template_feat = template_feat
+            self._template_layers = template_layers
             rf_template = template_feat.fields[template_input.value]
             template_feat = cnn.get_value(template_feat)
             feat_size = template_feat.shape.as_list()[-3:-1]
@@ -185,7 +190,7 @@ class SiamFC(models_interface.IterModel):
             # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
                 'y': tf.identity(y),
-                'template_feat': tf.identity(template_feat),
+                # 'template_feat': tf.identity(template_feat),
                 'mean_color': tf.identity(mean_color),
             }
             return state
@@ -219,15 +224,16 @@ class SiamFC(models_interface.IterModel):
             search_input = _preproc(search_ims, center_input_range=self._center_input_range,
                                     keep_uint8_range=self._keep_uint8_range)
             search_input, unmerge = merge_dims(search_input, 0, 2)
-
             # Convert to cnn.Tensor to track receptive field.
             search_input = cnn.as_tensor(search_input, add_to_set=True)
-            with tf.variable_scope('embed', reuse=True):
-                search_feat, _ = _branch_net(search_input, self._is_training,
-                                             trainable=(not self._freeze_siamese),
-                                             variables_collections=['siamese'],
-                                             weight_decay=self._wd,
-                                             **self._feature_params)
+
+            with tf.variable_scope('features', reuse=True):
+                search_feat, search_layers, _ = _branch_net(
+                    search_input, self._is_training,
+                    trainable=(not self._freeze_siamese),
+                    variables_collections=['siamese'],
+                    weight_decay=self._wd,
+                    **self._feature_params)
             rf_search = search_feat.fields[search_input.value]
             search_feat_size = search_feat.value.shape.as_list()[-3:-1]
             try:
@@ -235,10 +241,19 @@ class SiamFC(models_interface.IterModel):
             except AssertionError as ex:
                 raise ValueError('search features not centered: {:s}'.format(ex))
 
-            template_feat = prev_state['template_feat']
+            # template_feat = prev_state['template_feat']
             with tf.variable_scope('join', reuse=(self._num_frames >= 1)):
                 join_fn = join_nets.BY_NAME[self._join_arch]
-                response = join_fn(template_feat, search_feat, **self._join_params)
+                if self._join_type == 'single':
+                    response = join_fn(self._template_feat, search_feat, self._is_training,
+                                       **self._join_params)
+                elif self._join_type == 'multi':
+                    response = join_fn(self._template_feat, search_feat, self._is_training,
+                                       self._multi_join_layers,
+                                       self._template_layers, search_layers, search_input,
+                                       **self._join_params)
+                else:
+                    raise ValueError('unknown join type: "{}"'.format(self._join_type))
             rf_response = response.fields[search_input.value]
             response = cnn.get_value(response)
             response_size = response.shape[-3:-1].as_list()
@@ -374,7 +389,7 @@ class SiamFC(models_interface.IterModel):
             #     rfs = [{'search': cnnutil.identity_rf()} for _ in edges]
             #     search_feat = [None for _ in edges]
             #     for i in range(self._global_search_num_scales):
-            #         with tf.variable_scope('embed', reuse=True):
+            #         with tf.variable_scope('features', reuse=True):
             #             search_feat[i], rfs[i] = _branch_net(
             #                 search_input[i], rfs[i], padding=self._feature_padding, arch=self._feature_arch,
             #                 output_act=self._feature_act, enable_bnorm=self._enable_feature_bnorm,
@@ -489,7 +504,7 @@ class SiamFC(models_interface.IterModel):
             outputs = {'y': pred, 'score': score}
             state = {
                 'y': next_prev_rect,
-                'template_feat': prev_state['template_feat'],
+                # 'template_feat': prev_state['template_feat'],
                 'mean_color': prev_state['mean_color'],
             }
             return outputs, state, losses
@@ -517,9 +532,20 @@ class SiamFC(models_interface.IterModel):
             # assert len(sess.run(tf.report_uninitialized_variables())) == 0
 
 
+# When we implement a multi-layer join,
+# we should add a convolution to each intermediate activation.
+# Should this happen in the join or the feature function?
+# Perhaps it makes more sense to put it in the join function,
+# in case different join functions want to do it differently.
+# (For example, if we combine multiple join functions, we need multiple convolutions.)
+
+# Should the extra output convolution be added in the join function or feature function?
+# If we put it in the join function, then we can adapt it to the size of the template.
+
+
 def _branch_net(x, is_training, trainable, variables_collections,
                 weight_decay=0,
-                name='embed',
+                name='features',
                 # Additional arguments:
                 arch='alexnet',
                 arch_params=None,
@@ -542,14 +568,14 @@ def _branch_net(x, is_training, trainable, variables_collections,
 
         x = cnn.as_tensor(x)
         with tf.variable_scope('feature') as feature_vs:
-            x = func(x, is_training, trainable, variables_collections,
-                     weight_decay=weight_decay,
-                     **arch_params)
+            x, end_points = func(x, is_training, trainable, variables_collections,
+                                 weight_decay=weight_decay,
+                                 **arch_params)
         if extra_conv_enable:
             with tf.variable_scope('extra'):
                 x = _extra_conv(x, is_training, trainable, variables_collections,
                                 **extra_conv_params)
-        return x, feature_vs
+        return x, end_points, feature_vs
 
 
 def _extra_conv(x, is_training, trainable, variables_collections,

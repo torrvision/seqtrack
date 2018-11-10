@@ -59,13 +59,13 @@ class Tensor(object):
 def get_value(x):
     if isinstance(x, Tensor):
         x = x.value
-    assert isinstance(x, tf.Tensor)
+    assert isinstance(x, (tf.Tensor, tf.Variable))
     return x
 
 
 def as_tensor(x, add_to_set=False):
     if not isinstance(x, Tensor):
-        assert isinstance(x, tf.Tensor)
+        assert isinstance(x, (tf.Tensor, tf.Variable))
         x = Tensor(x)
     if add_to_set:
         x.add_to_set()
@@ -92,6 +92,8 @@ slim_dropout = partial_pixelwise(slim.dropout)
 
 channel_sum = partial_pixelwise(
     lambda x, **kwargs: tf.reduce_sum(x, axis=3, keepdims=True, **kwargs))
+channel_mean = partial_pixelwise(
+    lambda x, **kwargs: tf.reduce_mean(x, axis=3, keepdims=True, **kwargs))
 
 
 def pixelwise_binary(func, a, b):
@@ -303,7 +305,10 @@ def upsample(x, rate, method=0):
     input_size = np.array(x.value.shape[1:3].as_list())
     # For example: reshape 11 => 31 with rate 3.
     output_size = (input_size - 1) * rate + 1
-    x.value = tf.resize_images(x.value, output_size, method=method, align_corners=True)
-    assert np.all(x.field.stride % rate == 0)
-    x.field.stride = x.field.stride // rate
-    return x
+    output_value = tf.image.resize_images(x.value, output_size, method=method, align_corners=True)
+    output_fields = {}
+    for key, field in x.fields.items():
+        assert np.all(field.stride % rate == 0)
+        output_fields[key] = receptive_field.ReceptiveField(
+            size=field.size, stride=field.stride // rate, padding=field.padding)
+    return Tensor(output_value, output_fields)
