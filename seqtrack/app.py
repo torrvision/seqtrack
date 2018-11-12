@@ -107,7 +107,7 @@ def add_train_args(parser):
 
 
 def add_eval_args(parser):
-    parser.add_argument('--eval_datasets', nargs='+', default=['ilsvrc_val', 'otb_50'],
+    parser.add_argument('--eval_datasets', nargs='+', default=['otb_50', 'vot2018'],
                         help='dataset on which to evaluate tracker')
     # TODO: Only use TRE mode with "full" sampler?
     parser.add_argument('--eval_tre_num', type=int, default=3,
@@ -115,7 +115,7 @@ def add_eval_args(parser):
     # TODO: Maybe remove "train" sampler, and this option?
     # parser.add_argument('--eval_samplers', nargs='+', default=['full'],
     #                     help='frame samplers to use during validation')
-    parser.add_argument('--max_eval_videos', type=int, default=100,
+    parser.add_argument('--max_eval_videos', type=int,
                         help='max number of videos to evaluate')
 
     # parser.add_argument('--seed_global', type=int, default=9, help='random seed')

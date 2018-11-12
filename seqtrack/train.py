@@ -105,7 +105,7 @@ def train(
         data_cache_dir=data_cache_dir)
 
     siamese = SiamFC(**model_params)
-    model_params = siamese.derived_params()
+    model_properties = siamese.derived_properties()
     model = ModelFromIterModel(siamese)
 
     streams, eval_sample_fns = make_samplers(
@@ -121,22 +121,33 @@ def train(
         eval_samplers=eval_samplers,
         max_eval_videos=max_eval_videos)
 
-    train_metrics = train_model_data(
+    train_series, track_series = train_model_data(
         dir, model, streams, eval_sample_fns,
         only_evaluate_existing=only_evaluate_existing,
         ntimesteps=ntimesteps,
         **kwargs)
 
-    # TODO: Combine model_params and train_metric.
-    return train_metrics
+    return make_train_result(
+        model_properties=model_properties,
+        train_series=train_series,
+        track_series=track_series,
+    )
 
 
-def make_train_result(derived_model_params, train_metrics):
+def make_train_result(model_properties, train_series, track_series):
     '''Returns a dictionary that represents the result of a single training procedure.
 
     This includes various metrics as time-series during training.
+
+    Args:
+        model_properties: Derived properties of model.
+        train_series: Time-series of training metrics.
+        track_series: Time-series of tracking metrics.
     '''
     return dict(
+        model_properties=model_properties,
+        train_series=train_series,
+        track_series=track_series,
     )
 
 
@@ -266,6 +277,7 @@ def train_model_data(
         summary_dir=None,
         summary_name=None,
         nosave=False,
+        metrics_resolution=1000,
         period_ckpt=10000,
         period_assess=40000,
         period_skip=0,  # TODO: Change name since not periodic?
@@ -304,19 +316,12 @@ def train_model_data(
             of sequences on which to evaluate the tracker.
 
     Returns:
-        The results obtained using the tracker at different stages of training.
-        This is a dictionary with the same keys as eval_sets:
-            all_results[val_set] = list of (iter_num, results)
-        Note that this is represented as a list of pairs instead of a dictionary
-        to facilitate saving to JSON (does not support integer keys).
+        Tuple of (train_series, track_series).
+        train_series[step][metric]
+        track_series[step][dataset][metric]
 
-    The reason that the model is provided as a *function* is so that
-    the code which uses the model is free to decide how to instantiate it.
-    For example, training code may construct a single instance of the model with input placeholders,
-    or it may construct two instances of the model, each with its own input queue.
-
-    The model should use `tf.get_variable` rather than `tf.Variable` to facilitate variable sharing between multiple instances.
-    The model will be used in the same manner as an input to `tf.make_template`.
+    The method model.instantiate() constructs the model in the tf graph.
+    The model is expected to use variables scopes.
 
     The input dictionary has fields::
 
@@ -376,23 +381,30 @@ def train_model_data(
             ntimesteps, (imheight, imwidth), default=from_queue)
 
     # example = _perform_color_augmentation(example, args)
+    metric_vars = {}
 
     example_input = graph.whiten(example)
     with tf.variable_scope('model'):
         outputs, losses, init_state, final_state = model.instantiate(
             example_input, run_opts, enable_loss=True,
             image_summaries_collections=['IMAGE_SUMMARIES'])
+    metric_vars.update(losses)
     _loss_summary(losses)
     # _image_summary(example, outputs)
     # loss_var = _add_losses(losses, args.loss_coeffs)
     loss_var = _add_losses(losses, {})
 
-    # with tf.name_scope('diagnostic'):
-    #     iou = geom.rect_iou(outputs['y'], example_input['y'])
-    #     tf.summary.scalar('iou', tf.reduce_mean(tf.boolean_mask(iou, example_input['y_is_valid'])))
-    #     dist = tf.norm(geom.rect_center(outputs['y']) - geom.rect_center(example_input['y']), axis=-1)
-    #     dist = dist / tf.reduce_mean(geom.rect_size(example_input['y']), axis=-1)
-    #     tf.summary.scalar('dist', tf.reduce_mean(tf.boolean_mask(dist, example_input['y_is_valid'])))
+    with tf.name_scope('diagnostic'):
+        iou = geom.rect_iou(outputs['y'], example_input['y'])
+        mean_iou = tf.reduce_mean(tf.boolean_mask(iou, example_input['y_is_valid']))
+        metric_vars['iou'] = mean_iou
+        tf.summary.scalar('iou', mean_iou)
+
+        dist = tf.norm(geom.rect_center(outputs['y']) - geom.rect_center(example_input['y']), axis=-1)
+        dist = dist / tf.reduce_mean(geom.rect_size(example_input['y']), axis=-1)
+        mean_dist = tf.reduce_mean(tf.boolean_mask(dist, example_input['y_is_valid']))
+        tf.summary.scalar('dist', mean_dist)
+        metric_vars['dist'] = mean_dist
 
     model_inst = graph.ModelInstance(
         example, run_opts, outputs, init_state, final_state,
@@ -401,6 +413,7 @@ def train_model_data(
 
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     loss_var += r
+    metric_vars['loss'] = loss_var
     tf.summary.scalar('regularization', r)
     tf.summary.scalar('total', loss_var)
 
@@ -441,8 +454,12 @@ def train_model_data(
     #     pprint.pprint(siamese_vars)
     #     saver_siamese = tf.train.Saver(siamese_vars)
 
-    # TODO: With resume mode, load existing from cache.
-    metrics = {}
+    # Training metrics are accumulated over many steps.
+    train_series = {}
+    train_accum = helpers.DictAccumulator()
+    val_accum = helpers.DictAccumulator()
+    # Tracking metrics are obtained periodically.
+    track_series = {}
 
     t_total = time.time()
     with tf.Session(config=make_session_config(**session_config_kwargs)) as sess:
@@ -528,7 +545,11 @@ def train_model_data(
                         path_output=path_output,
                         visualize=visualize,
                         keep_frames=keep_frames)
-                    metrics.setdefault(global_step, {})[eval_id] = result
+                    track_series.setdefault(global_step, {})[eval_id] = result
+
+            if global_step > 0 and global_step % metrics_resolution == 0:
+                train_series[global_step] = combine_dicts(train=train_accum.flush(),
+                                                          val=val_accum.flush())
 
             if global_step >= num_steps:
                 break
@@ -557,13 +578,15 @@ def train_model_data(
                 summary_var = (summary_vars_with_preview['train']
                                if global_step % period_preview == 0
                                else summary_vars['train'])
-                _, loss, summary = sess.run([optimize_op, loss_var, summary_var],
-                                            feed_dict=feed_dict)
+                _, loss, train_metrics, summary = sess.run(
+                    [optimize_op, loss_var, metric_vars, summary_var], feed_dict=feed_dict)
                 dur = time.time() - start
                 writer['train'].add_summary(summary, global_step=global_step)
             else:
-                _, loss = sess.run([optimize_op, loss_var], feed_dict=feed_dict)
+                _, loss, train_metrics = sess.run(
+                    [optimize_op, loss_var, metric_vars], feed_dict=feed_dict)
                 dur = time.time() - start
+            train_accum.add(train_metrics)
 
             # TODO: Avoid copy paste here!
 
@@ -586,11 +609,13 @@ def train_model_data(
                 summary_var = (summary_vars_with_preview['val']
                                if global_step % period_preview == 0
                                else summary_vars['val'])
-                loss_val, summary = sess.run([loss_var, summary_var],
-                                             feed_dict=feed_dict)
+                # For now assume that val_metrics variables are same as train_metrics.
+                loss_val, val_metrics, summary = sess.run(
+                    [loss_var, metric_vars, summary_var], feed_dict=feed_dict)
                 dur_val = time.time() - start
                 writer['val'].add_summary(summary, global_step=global_step)
                 newval = True
+                val_accum.add(val_metrics)
 
             # Print result of one batch update
             if verbose_train:
@@ -604,7 +629,7 @@ def train_model_data(
         print('\ntraining finished! ------------------------------------------')
         print('total time elapsed: {0:.2f}'.format(time.time() - t_total))
 
-        return metrics
+        return train_series, track_series
 
 
 def make_learning_rate(global_step, init,
@@ -984,3 +1009,10 @@ def summarize_trials(trial_metrics, val_dataset, sort_key):
                 pass
 
     return metrics
+
+
+def combine_dicts(delim='/', **kwargs):
+    together = {}
+    for name, d in kwargs.items():
+        together.update({name + delim + k: v for k, v in d.items()})
+    return together

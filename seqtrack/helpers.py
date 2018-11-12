@@ -607,6 +607,51 @@ def assert_key_subset(lhs, rhs):
         raise RuntimeError('extra keys: {}'.format(str(list(extra))))
 
 
+def unique_value(elems):
+    '''Returns the single element which is repeated in elems.
+
+    Raises an exception if elems is empty or contains diverse elements.
+    '''
+    first = None
+    i = 0
+    for x in elems:
+        if i == 0:
+            first = x
+        else:
+            assert x == first, 'element {} not equal: {} != {}'.format(i, x, first)
+        i += 1
+    if i == 0:
+        raise ValueError('empty collection')
+    return first
+
+
 def round_lattice(size, stride, x):
     i = int(round(max(x - size, 0) / stride))
     return i * stride + size
+
+
+class DictAccumulator(object):
+
+    def __init__(self):
+        self._totals = {}
+        self._counts = {}
+
+    def add(self, metrics):
+        for key, value in metrics.items():
+            self._totals[key] = self._totals.get(key, 0) + value
+            self._counts[key] = self._counts.get(key, 0) + 1
+
+    def mean(self):
+        mean = {}
+        for key in self._totals:
+            mean[key] = self._totals[key] / self._counts[key]
+        return mean
+
+    def reset(self):
+        self._totals = {}
+        self._counts = {}
+
+    def flush(self):
+        mean = self.mean()
+        self.reset()
+        return mean

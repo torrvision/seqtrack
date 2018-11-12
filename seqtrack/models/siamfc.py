@@ -97,8 +97,10 @@ class SiamFC(models_interface.IterModel):
 
         if use_desired_size:
             template_size, search_size, template_scale = dimensions(
-                target_size, desired_template_scale, desired_search_radius,
-                feature_arch, feature_arch_params)
+                target_size=target_size,
+                desired_template_scale=desired_template_scale,
+                desired_search_radius=desired_search_radius,
+                arch=feature_arch, arch_params=feature_arch_params)
 
         self._template_size = template_size
         self._search_size = search_size
@@ -151,7 +153,7 @@ class SiamFC(models_interface.IterModel):
 
         self._feature_saver = None
 
-    def derived_params(self):
+    def derived_properties(self):
         return dict(
             template_size=self._template_size,
             search_size=self._search_size,
@@ -554,11 +556,15 @@ class SiamFC(models_interface.IterModel):
 
 
 def dimensions(target_size=64,
-               desired_search_radius=1.0,
                desired_template_scale=2.0,
+               desired_search_radius=1.0,
                # Must be same as constructor:
                arch='alexnet',
                arch_params=None):
+    '''
+    Returns:
+        template_size, search_size, template_scale
+    '''
     arch_params = arch_params or {}
 
     feature_fn = feature_nets.BY_NAME[arch]
@@ -573,8 +579,8 @@ def dimensions(target_size=64,
     # Actual context amount will not be exactly equal to desired after snap.
     template_scale = _unique(template_size) / _unique(target_size)
 
-    logger.debug('template_size %d, search_size %d, template_scale %.3g',
-                 template_size, search_size, template_scale)
+    logger.debug('template_size %d, search_size %d, template_scale %.3g (desired %.3g)',
+                 template_size, search_size, template_scale, desired_template_scale)
     return template_size, search_size, template_scale
 
 
