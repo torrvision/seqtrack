@@ -91,9 +91,9 @@ slim_dropout = partial_pixelwise(slim.dropout)
 # slim_softmax = partial_pixelwise(slim.softmax)
 
 channel_sum = partial_pixelwise(
-    lambda x, **kwargs: tf.reduce_sum(x, axis=3, keepdims=True, **kwargs))
+    lambda x, **kwargs: tf.reduce_sum(x, axis=-1, keepdims=True, **kwargs))
 channel_mean = partial_pixelwise(
-    lambda x, **kwargs: tf.reduce_mean(x, axis=3, keepdims=True, **kwargs))
+    lambda x, **kwargs: tf.reduce_mean(x, axis=-1, keepdims=True, **kwargs))
 
 
 def pixelwise_binary(func, a, b):
@@ -186,11 +186,8 @@ def diag_xcorr(input, filter, stride=1, padding='VALID', name='diag_xcorr'):
     assert all(kernel_size)  # Must not be None or 0.
 
     output = Tensor()
-    stride = layer_utils.n_positive_integers(2, stride)
-    nhwc_strides = [1, stride[0], stride[1], 1]
     output.value = helpers.diag_xcorr(input.value, filter.value,
-                                      strides=nhwc_strides, padding=padding,
-                                      name=name)
+                                      stride=stride, padding=padding, name=name)
     # TODO: Incorporate receptive field of filter (fully-connected).
     field_output_input = receptive_field.conv2d(kernel_size, stride, padding)
     output.fields = {k: receptive_field.compose(v, field_output_input)
@@ -254,7 +251,7 @@ def spatial_trim(x, first, last):
 
 def _assert_is_image(x):
     x = get_value(x)
-    if len(x.shape) != 4:
+    if not len(x.shape) >= 3:
         raise ValueError('tensor is not an image: num dims {}'.format(len(x.shape)))
 
 

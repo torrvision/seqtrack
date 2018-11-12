@@ -18,6 +18,8 @@ import time
 from PIL import Image
 from contextlib import contextmanager
 
+from tensorflow.contrib.layers.python.layers import utils as layer_utils
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -210,32 +212,31 @@ def expand_dims_n(input, axis=None, n=1, name=None):
     return input
 
 
-def diag_xcorr(x, f, strides, padding, name='diag_xcorr', **kwargs):
+def diag_xcorr(x, f, stride=1, padding='VALID', name='diag_xcorr', **kwargs):
     '''
     Args:
         x: [b, ..., hx, wx, c]
         f: [b, hf, wf, c]
 
-    strides: Argument to tf.nn.depthwise_conv_2d
-
     Returns:
         [b, ..., ho, wo, c]
     '''
-    if len(x.shape) == 4:
-        x = tf.expand_dims(x, 1)
-        x = diag_xcorr(x, f, strides, padding, name=name, **kwargs)
-        x = tf.squeeze(x, 1)
-        return x
-    if len(x.shape) > 5:
-        # Merge dims 0, (1, ..., n-4), n-3, n-2, n-1
-        x, restore = merge_dims(x, 0, len(x.shape) - 3)
-        x = diag_xcorr(x, f, strides, padding, name=name, **kwargs)
-        x = restore(x, 1)
-        return x
-
     with tf.name_scope(name) as scope:
-        assert len(x.shape) == 5
         assert len(f.shape) == 4
+        if len(x.shape) == 4:
+            x = tf.expand_dims(x, 1)
+            x = diag_xcorr(x, f, stride, padding, name=name, **kwargs)
+            x = tf.squeeze(x, 1)
+            return x
+        if len(x.shape) > 5:
+            # Merge dims 0, (1, ..., n-4), n-3, n-2, n-1
+            x, restore = merge_dims(x, 0, len(x.shape) - 3)
+            x = diag_xcorr(x, f, stride, padding, name=name, **kwargs)
+            x = restore(x, 1)
+            return x
+        assert len(x.shape) == 5
+        stride = layer_utils.n_positive_integers(2, stride)
+
         # x.shape is [b, n, hx, wx, c]
         # f.shape is [b, hf, wf, c]
         # [b, n, hx, wx, c] -> [n, hx, wx, b, c] -> [n, hx, wx, b*c]
@@ -243,6 +244,7 @@ def diag_xcorr(x, f, strides, padding, name='diag_xcorr', **kwargs):
         # [b, hf, wf, c] -> [hf, wf, b, c] -> [hf, wf, b*c]
         f, _ = merge_dims(tf.transpose(f, [1, 2, 0, 3]), 2, 4)
         f = tf.expand_dims(f, axis=3)  # [hf, wf, b*c, 1]
+        strides = [1, stride[0], stride[1], 1]
         x = tf.nn.depthwise_conv2d(x, f, strides=strides, padding=padding, **kwargs)
         # [n, ho, wo, b*c] -> [n, ho, wo, b, c] -> [b, n, ho, wo, c]
         x = tf.transpose(restore(x, axis=3), [3, 0, 1, 2, 4])
@@ -491,9 +493,19 @@ def default_print_func(i, n, time_elapsed):
     print(progress_str, file=sys.stderr)
 
 
+class MapContext(object):
+
+    def __init__(self, name):
+        self.name = name
+
+    def tmp_dir(self):
+        '''Returns None to mean that a tmp_dir must be created if needed.'''
+        return None
+
+
 def map_dict(func, items):
     for k, v in items:
-        yield k, func(k, v)
+        yield k, func(MapContext(k), v)
 
 
 def map_dict_list(func, items):
@@ -509,6 +521,7 @@ def filter_dict(func, items):
 class CachedDictMapper(object):
 
     def __init__(self, dir, codec_name='json', mapper=None):
+        # Default to simple mapper.
         mapper = mapper or map_dict
         self._dir = dir
         self._codec_name = codec_name
@@ -592,3 +605,8 @@ def assert_key_subset(lhs, rhs):
     extra = set(lhs.keys()).difference(set(rhs.keys()))
     if len(extra) > 0:
         raise RuntimeError('extra keys: {}'.format(str(list(extra))))
+
+
+def round_lattice(size, stride, x):
+    i = int(round(max(x - size, 0) / stride))
+    return i * stride + size

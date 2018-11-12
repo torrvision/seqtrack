@@ -51,6 +51,10 @@ def _xcorr_general(template, search, is_training,
                    scope='xcorr'):
     '''Convolves template with search.
 
+    Args:
+        template: [b,    h, w, c]
+        search:   [b, s, h, w, c]
+
     If use_batch_norm is true, then an output gain will always be incorporated.
     Otherwise, it will only be incorporated if learn_gain is true.
 
@@ -58,14 +62,17 @@ def _xcorr_general(template, search, is_training,
     '''
     with tf.variable_scope(scope, 'xcorr'):
         pre_conv_params = pre_conv_params or {}
-        template_size = template.shape[1:3].as_list()
 
         if enable_pre_conv:
             template = _pre_conv(template, is_training, scope='pre', reuse=False, **pre_conv_params)
             search = _pre_conv(search, is_training, scope='pre', reuse=True, **pre_conv_params)
         # Discard receptive field of template and get underlying tf.Tensor.
         template = cnn.get_value(template)
+        template_size = template.shape[-3:-1].as_list()
 
+        # There are two separate issues here:
+        # 1. Whether to make the initial output equal to the mean?
+        # 2. How to share this between a constant multiplier and initialization?
         spatial_normalizer = (1 / np.prod(template_size)) if use_mean else 1
         if learn_spatial_weight:
             # Initialize with spatial normalizer.
@@ -94,6 +101,7 @@ def _pre_conv(x, is_training,
     Args:
         num_outputs: If num_outputs is None, the input dimension is used.
     '''
+    # TODO: Support multi-scale.
     x = cnn.as_tensor(x)
     if not num_outputs:
         num_outputs = x.value.shape[-1].value
@@ -116,7 +124,7 @@ def cosine(template, search, is_training,
         template = cnn.get_value(template)
 
         num_channels = template.shape[-1].value
-        template_size = template.shape[1:3].as_list()
+        template_size = template.shape[-3:-1].as_list()
         ones = tf.ones(template_size + [num_channels, 1], tf.float32)
 
         dot_xy = cnn.channel_sum(cnn.diag_xcorr(search, template, padding='VALID'))
@@ -142,7 +150,7 @@ def distance(template, search, is_training,
         template = cnn.get_value(template)
 
         num_channels = template.shape[-1].value
-        template_size = template.shape[1:3].as_list()
+        template_size = template.shape[-3:-1].as_list()
         ones = tf.ones(template_size + [num_channels, 1], tf.float32)
 
         dot_xy = cnn.diag_xcorr(search, template)
@@ -157,7 +165,7 @@ def distance(template, search, is_training,
             lambda sq_dist: tf.reduce_sum(sq_dist, axis=-1, keepdims=True), sq_dist)
         if use_mean:
             # Take root-mean-square of difference.
-            num_elems = np.prod(template.shape[1:].as_list())
+            num_elems = np.prod(template.shape[-3:].as_list())
             sq_dist = cnn.pixelwise(lambda sq_dist: (1 / tf.to_float(num_elems)) * sq_dist, sq_dist)
         dist = cnn.pixelwise(tf.sqrt, sq_dist)
         return _calibrate(dist, use_batch_norm, learn_gain, gain_init)
@@ -199,7 +207,7 @@ def all_pixel_pairs(template, search, is_training,
     with tf.variable_scope(scope, 'all_pixel_pairs'):
         template = cnn.as_tensor(template)
         search = cnn.as_tensor(search)
-        template_size = template.value.shape[1:3].as_list()
+        template_size = template.value.shape[-3:-1].as_list()
         num_channels = template.value.shape[-1].value
 
         # Break template into 1x1 patches.
@@ -247,7 +255,7 @@ def abs_diff(template, search, is_training,
     '''
     with tf.variable_scope(scope, 'abs_diff'):
         template = cnn.get_value(template)
-        template_size = template.shape[1:3].as_list()
+        template_size = template.shape[-3:-1].as_list()
         if template_size != [1, 1]:
             raise ValueError('template shape is not [1, 1]: {}'.format(template_size))
         # Use broadcasting to perform element-wise operation.
@@ -351,7 +359,7 @@ def multi_xcorr(template, search, is_training,
                 scores[name] = cnn.upsample(scores[name], relative,
                                             method=tf.image.ResizeMethod.BILINEAR)
 
-        sizes = {name: _unique(score.value.shape[1:3].as_list()) for name, score in scores.items()}
+        sizes = {name: _unique(score.value.shape[-3:-1].as_list()) for name, score in scores.items()}
         min_size = min(sizes.values())
         for name in ['final'] + layer_names:
             size = sizes[name]

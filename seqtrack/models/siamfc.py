@@ -5,6 +5,8 @@ from __future__ import print_function
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import numpy as np
+
+import functools
 import math
 import pprint
 
@@ -12,7 +14,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 from seqtrack import cnn
-from seqtrack import cnnutil
 from seqtrack import geom
 from seqtrack import helpers
 from seqtrack import lossfunc
@@ -37,28 +38,36 @@ class SiamFC(models_interface.IterModel):
 
     def __init__(
             self,
+            use_desired_size=False,
+            # If use_desired_size is False:
             template_size=127,
             search_size=255,
             template_scale=2,
+            # If use_desired_size is True:
+            target_size=64,
+            desired_template_scale=2.0,
+            desired_search_radius=1.0,
+            # End of size args.
             aspect_method='perimeter',  # TODO: Equivalent to SiamFC?
             use_gt=True,
-            curr_as_prev=True,
+            curr_as_prev=True,  # Extract centered examples?
             pad_with_mean=True,  # Use mean of first image for padding.
-            feather=True,
+            feather=False,
             feather_margin=0.1,
             center_input_range=True,  # Make range [-0.5, 0.5] instead of [0, 1].
             keep_uint8_range=False,  # Use input range of 255 instead of 1.
-            feature_params=None,  # Args to _branch_net.
+            feature_arch='alexnet',
+            feature_arch_params=None,
             join_type='single',  # Either 'single' or 'multi'
-            join_arch='conv2d',
+            join_arch='xcorr',
             join_params=None,
             multi_join_layers=None,
             feature_model_file='',
             # feature_act='linear',
             # enable_feature_bnorm=True,
-            template_mask_kind='none',  # none, static, dynamic
-            xcorr_padding='VALID',
-            bnorm_after_xcorr=True,
+            # template_mask_kind='none',  # none, static, dynamic
+            # xcorr_padding='VALID',
+            # bnorm_after_xcorr=True,
             freeze_siamese=False,
             learnable_prior=False,
             train_multiscale=False,
@@ -86,6 +95,11 @@ class SiamFC(models_interface.IterModel):
             margin_cost='iou',
             margin_reduce_method='max'):
 
+        if use_desired_size:
+            template_size, search_size, template_scale = dimensions(
+                target_size, desired_template_scale, desired_search_radius,
+                feature_arch, feature_arch_params)
+
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
@@ -99,7 +113,8 @@ class SiamFC(models_interface.IterModel):
         self._template_scale = template_scale
         # Size of search area relative to object.
         self._search_scale = float(search_size) / template_size * template_scale
-        self._feature_params = feature_params
+        self._feature_arch = feature_arch
+        self._feature_arch_params = feature_arch_params
         self._feature_model_file = feature_model_file
         self._join_type = join_type
         self._join_arch = join_arch
@@ -136,6 +151,13 @@ class SiamFC(models_interface.IterModel):
 
         self._feature_saver = None
 
+    def derived_params(self):
+        return dict(
+            template_size=self._template_size,
+            search_size=self._search_size,
+            template_scale=self._template_scale,
+        )
+
     def start(self, frame, aspect, run_opts, enable_loss,
               image_summaries_collections=None, name='start'):
         with tf.name_scope(name) as scope:
@@ -168,7 +190,8 @@ class SiamFC(models_interface.IterModel):
                     trainable=(not self._freeze_siamese),
                     variables_collections=['siamese'],
                     weight_decay=self._wd,
-                    **self._feature_params)
+                    arch=self._feature_arch,
+                    arch_params=self._feature_arch_params)
                 # Get names relative to this scope for loading pre-trained.
                 self._feature_vars = _global_variables_relative_to_scope(feature_scope)
             self._template_feat = template_feat
@@ -223,7 +246,6 @@ class SiamFC(models_interface.IterModel):
             # Extract features, perform search, get receptive field of response wrt image.
             search_input = _preproc(search_ims, center_input_range=self._center_input_range,
                                     keep_uint8_range=self._keep_uint8_range)
-            search_input, unmerge = merge_dims(search_input, 0, 2)
             # Convert to cnn.Tensor to track receptive field.
             search_input = cnn.as_tensor(search_input, add_to_set=True)
 
@@ -233,7 +255,8 @@ class SiamFC(models_interface.IterModel):
                     trainable=(not self._freeze_siamese),
                     variables_collections=['siamese'],
                     weight_decay=self._wd,
-                    **self._feature_params)
+                    arch=self._feature_arch,
+                    arch_params=self._feature_arch_params)
             rf_search = search_feat.fields[search_input.value]
             search_feat_size = search_feat.value.shape.as_list()[-3:-1]
             try:
@@ -263,8 +286,6 @@ class SiamFC(models_interface.IterModel):
                 raise ValueError('response map not centered: {:s}'.format(ex))
 
             response = tf.verify_tensor_all_finite(response, 'output of xcorr is not finite')
-
-            response = unmerge(response, axis=0)
 
             # with tf.variable_scope('output', reuse=(self._num_frames > 0)):
             #     if self._bnorm_after_xcorr:
@@ -532,6 +553,31 @@ class SiamFC(models_interface.IterModel):
             # assert len(sess.run(tf.report_uninitialized_variables())) == 0
 
 
+def dimensions(target_size=64,
+               desired_search_radius=1.0,
+               desired_template_scale=2.0,
+               # Must be same as constructor:
+               arch='alexnet',
+               arch_params=None):
+    arch_params = arch_params or {}
+
+    feature_fn = feature_nets.BY_NAME[arch]
+    feature_fn = functools.partial(feature_fn, **arch_params)
+    field = feature_nets.get_receptive_field(feature_fn)
+
+    def snap(x):
+        return helpers.round_lattice(_unique(field.size), _unique(field.stride), x)
+
+    template_size = snap(target_size * desired_template_scale)
+    search_size = snap(template_size + 2 * desired_search_radius * target_size)
+    # Actual context amount will not be exactly equal to desired after snap.
+    template_scale = _unique(template_size) / _unique(target_size)
+
+    logger.debug('template_size %d, search_size %d, template_scale %.3g',
+                 template_size, search_size, template_scale)
+    return template_size, search_size, template_scale
+
+
 # When we implement a multi-layer join,
 # we should add a convolution to each intermediate activation.
 # Should this happen in the join or the feature function?
@@ -549,32 +595,42 @@ def _branch_net(x, is_training, trainable, variables_collections,
                 # Additional arguments:
                 arch='alexnet',
                 arch_params=None,
-                # output_act=self._feature_act,
-                # enable_bnorm=self._enable_feature_bnorm,
-                extra_conv_enable=False,
-                extra_conv_params=None):
+                # extra_conv_enable=False,
+                # extra_conv_params=None,
+                ):
     '''
+    Args:
+        x: Image of which to compute features. Shape [..., h, w, c]
+
     Returns:
-        Output of network, variable scope of feature net.
+        Output of network, intermediate layers, variable scope of feature net.
         The variables in the feature scope can be loaded from a pre-trained model.
     '''
     with tf.name_scope(name) as scope:
         arch_params = arch_params or {}
-        extra_conv_params = extra_conv_params or {}
+        # extra_conv_params = extra_conv_params or {}
         try:
             func = feature_nets.BY_NAME[arch]
         except KeyError:
             raise ValueError('unknown architecture: {}'.format(arch))
 
         x = cnn.as_tensor(x)
+        num_dims = len(x.value.shape)
+        if num_dims > 4:
+            merged, unmerge = helpers.merge_dims(x.value, 0, num_dims - 3)
+            x = cnn.Tensor(merged, x.fields)
+
         with tf.variable_scope('feature') as feature_vs:
             x, end_points = func(x, is_training, trainable, variables_collections,
                                  weight_decay=weight_decay,
                                  **arch_params)
-        if extra_conv_enable:
-            with tf.variable_scope('extra'):
-                x = _extra_conv(x, is_training, trainable, variables_collections,
-                                **extra_conv_params)
+        # if extra_conv_enable:
+        #     with tf.variable_scope('extra'):
+        #         x = _extra_conv(x, is_training, trainable, variables_collections,
+        #                         **extra_conv_params)
+
+        if num_dims > 4:
+            x = cnn.Tensor(unmerge(x.value, 0), x.fields)
         return x, end_points, feature_vs
 
 
@@ -1029,3 +1085,12 @@ def _remove_prefix(prefix, x):
     if not x.startswith(prefix):
         raise ValueError('does not have prefix "{}": "{}"'.format(prefix, x))
     return x[len(prefix):]
+
+
+def _unique(elems):
+    if len(np.shape(elems)) == 0:
+        return elems
+    assert len(elems) > 0
+    value = elems[0]
+    assert all(x == value for x in elems)
+    return value

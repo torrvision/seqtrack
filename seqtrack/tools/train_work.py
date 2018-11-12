@@ -2,42 +2,25 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import argparse
-import functools
-import itertools
-import json
-import numpy as np
 import os
-import tempfile
 
-import logging
-logger = logging.getLogger(__name__)
-
-from seqtrack import app
-from seqtrack import cnnutil
-from seqtrack import helpers
-from seqtrack import search
-from seqtrack import slurm
 from seqtrack import train
-from seqtrack.models import util
 
 
-def _train(args, name, seed):
-    if args.slurm:
-        # Python will invoke slurm to run jobs.
-        # Use different tmp dir for each job.
-        tmp_data_dir = os.path.join(_get_tmp_dir(), 'data')
-    else:
-        # Jobs will be run in for loop.
-        # Use specified tmp dir.
+def work(args, context, seed):
+    tmp_dir = context.tmp_dir()
+    if tmp_dir is None:
         tmp_data_dir = args.tmp_data_dir
+    else:
+        tmp_data_dir = os.path.join(tmp_dir, 'data')
 
-    metrics = train.train(
-        dir=os.path.join('trials', name),
+    return train.train(
+        dir=os.path.join('trials', context.name),
         model_params=args.model_params,
         seed=seed,
         resume=args.resume,
-        summary_dir='summary', summary_name=name,
+        summary_dir='summary',
+        summary_name=context.name,
         verbose_train=args.verbose_train,
         # Args from app.add_tracker_config_args()
         use_queues=args.use_queues,
@@ -50,10 +33,10 @@ def _train(args, name, seed):
         visualize=args.visualize,
         keep_frames=args.keep_frames,
         session_config_kwargs=dict(
-            gpu_manctrl=args.gpu_manctrl, gpu_frac=args.gpu_frac,
+            gpu_manctrl=args.gpu_manctrl,
+            gpu_frac=args.gpu_frac,
             log_device_placement=args.log_device_placement),
         # Arguments required for setting up data.
-        # TODO: How to make this a parameter?
         train_dataset=args.train_dataset,
         val_dataset=args.val_dataset,
         eval_datasets=args.eval_datasets,
@@ -67,11 +50,11 @@ def _train(args, name, seed):
         data_cache_dir=args.data_cache_dir,
         # Sampling:
         sampler_params=args.sampler_params,
-        augment_motion=False,
-        motion_params=None,
+        augment_motion=args.augment_motion,
+        motion_params=args.motion_params,
         # Args from app.add_eval_args()
         eval_tre_num=args.eval_tre_num,
-        eval_samplers=args.eval_samplers,
+        # eval_samplers=args.eval_samplers,
         max_eval_videos=args.max_eval_videos,
         # Training process:
         ntimesteps=args.ntimesteps,
@@ -79,35 +62,14 @@ def _train(args, name, seed):
         imwidth=args.imwidth,
         imheight=args.imheight,
         lr_init=args.lr_init,
-        lr_decay_steps=args.lr_decay_steps,
-        lr_decay_rate=args.lr_decay_rate,
+        lr_params=args.lr_params,
         optimizer=args.optimizer,
-        # TODO: Take from args.__dict__?
-        momentum=args.momentum,
-        use_nesterov=args.use_nesterov,
-        adam_beta1=args.adam_beta1,
-        adam_beta2=args.adam_beta2,
-        adam_epsilon=args.adam_epsilon,
-        # weight_decay=args.weight_decay,
+        optimizer_params=args.optimizer_params,
         grad_clip=args.grad_clip,
-        max_grad_norm=args.max_grad_norm,
+        grad_clip_params=args.grad_clip_params,
         # siamese_pretrain=None,
         # siamese_model_file=None,
         num_steps=args.num_steps,
         use_gt_train=args.use_gt_train,
         gt_decay_rate=args.gt_decay_rate,
         min_gt_ratio=args.min_gt_ratio)
-
-    return metrics
-
-
-def _get_tmp_dir():
-    if _is_slurm_job():
-        return '/raid/local_scratch/{}-{}'.format(
-            os.environ['SLURM_JOB_USER'], os.environ['SLURM_JOB_ID'])
-    else:
-        return tempfile.mkdtemp()
-
-
-def _is_slurm_job():
-    return 'SLURM_JOB_ID' in os.environ

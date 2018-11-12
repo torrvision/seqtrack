@@ -14,15 +14,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 from seqtrack import app
-from seqtrack import cnnutil
 from seqtrack import helpers
-from seqtrack import search
 from seqtrack import slurm
 from seqtrack import train
-from seqtrack.models import util
 
 # The pickled object must be imported to unpickle in a different package (slurmproc.worker).
-from seqtrack.tools import train_work as work
+from seqtrack.tools.train_work import work
 
 
 def main():
@@ -38,7 +35,7 @@ def main():
     # Cache the results and use SLURM mapper to evaluate those without cache.
     mapper = helpers.CachedDictMapper(dir=os.path.join('cache', 'trials'),
                                       codec_name='msgpack', mapper=mapper)
-    result_stream = mapper(functools.partial(work._train, args), seeds.items())
+    result_stream = mapper(functools.partial(work, args), seeds.items())
     # Construct dictionary from stream.
     results = dict(result_stream)
 

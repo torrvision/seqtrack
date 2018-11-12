@@ -37,6 +37,13 @@ from seqtrack.models.itermodel import ModelFromIterModel
 from seqtrack.models.siamfc import SiamFC
 
 
+# Pickling a function in one module to load in another module does not work if
+# the function is defined in the same module.
+# Therefore provide a worker function here that takes tmp_dir from the mapper.
+def train_worker(context, tmp_data_dir=None, *args, **kwargs):
+    return train(*args, tmp_data_dir=context.tmp_dir(), **kwargs)
+
+
 def train(
         dir,
         model_params,
@@ -67,6 +74,9 @@ def train(
     '''
     Args:
         kwargs: For train_model_data.
+
+    Side effects:
+        Resets global random seed.
     '''
     tf.reset_default_graph()
     _set_global_seed(seed)  # Caution: Global side effects!
@@ -74,6 +84,9 @@ def train(
     if only_evaluate_existing:
         train_dataset = None
         val_dataset = None
+
+    if eval_samplers is None:
+        eval_samplers = ['full']
 
     # TODO: How to get datasets from train_dataset and eval_datasets?
     dataset_names = list(set(chain(_datasets_in_sampler(train_dataset),
@@ -91,7 +104,10 @@ def train(
         preproc_id=preproc_id,
         data_cache_dir=data_cache_dir)
 
-    model = ModelFromIterModel(SiamFC(**model_params))
+    siamese = SiamFC(**model_params)
+    model = ModelFromIterModel(siamese)
+    model_params = model.derived_params()
+
     streams, eval_sample_fns = make_samplers(
         datasets,
         seed=seed,
@@ -105,11 +121,23 @@ def train(
         eval_samplers=eval_samplers,
         max_eval_videos=max_eval_videos)
 
-    return train_model_data(
+    train_metrics = train_model_data(
         dir, model, streams, eval_sample_fns,
         only_evaluate_existing=only_evaluate_existing,
         ntimesteps=ntimesteps,
         **kwargs)
+
+    # TODO: Combine model_params and train_metric.
+    return train_metrics
+
+
+def make_train_result(derived_model_params, train_metrics):
+    '''Returns a dictionary that represents the result of a single training procedure.
+
+    This includes various metrics as time-series during training.
+    '''
+    return dict(
+    )
 
 
 def setup_data(dataset_names, pool_datasets, pool_split,
@@ -252,27 +280,19 @@ def train_model_data(
         batchsz=None,
         imwidth=None,
         imheight=None,
-        lr_init=None,
-        lr_decay_steps=None,
-        lr_decay_rate=None,
+        lr_init=1e-3,
+        lr_params=None,
         optimizer=None,
-        # optimizer_params=None,
-        momentum=None,
-        use_nesterov=None,
-        adam_beta1=None,
-        adam_beta2=None,
-        adam_epsilon=None,
-        weight_decay=None,
-        grad_clip=None,
-        max_grad_norm=None,
+        optimizer_params=None,
+        grad_clip=False,
+        grad_clip_params=None,
         siamese_pretrain=None,
         siamese_model_file=None,
         num_steps=None,
-        use_gt_train=None,
-        gt_decay_rate=None,
-        min_gt_ratio=None,
+        use_gt_train=True,
+        gt_decay_rate=1,
+        min_gt_ratio=0,
         # Evaluation args:
-        use_gt_eval=False,
         eval_tre_num=None):
     '''Trains a network.
 
@@ -317,6 +337,9 @@ def train_model_data(
     returns a collection of sequences or is a finite generator of sequences.
     '''
     session_config_kwargs = session_config_kwargs or {}
+    lr_params = lr_params or {}
+    optimizer_params = optimizer_params or {}
+    grad_clip_params = grad_clip_params or {}
 
     if not os.path.exists(dir):
         os.makedirs(dir, 0o755)
@@ -382,31 +405,16 @@ def train_model_data(
     tf.summary.scalar('total', loss_var)
 
     global_step_var = tf.Variable(0, name='global_step', trainable=False)
-    # lr = init * decay^(step)
-    #    = init * decay^(step / period * period / decay_steps)
-    #    = init * [decay^(period / decay_steps)]^(step / period)
-    if lr_decay_rate is None or lr_decay_rate == 1:
-        lr = tf.constant(lr_init)
-    else:
-        lr = tf.train.exponential_decay(lr_init, global_step_var,
-                                        decay_steps=lr_decay_steps,
-                                        decay_rate=lr_decay_rate,
-                                        staircase=True)
+
+    lr = make_learning_rate(global_step_var, lr_init, **lr_params)
     tf.summary.scalar('lr', lr, collections=['summaries_train'])
-    # TODO: Ugly to use same variable!
-    optimizer = _make_optimizer(
-        optimizer, lr, momentum=momentum, use_nesterov=use_nesterov,
-        adam_beta1=adam_beta1, adam_beta2=adam_beta2, adam_epsilon=adam_epsilon)
+    optimizer_obj = make_optimizer(lr, optimizer, **optimizer_params)
+    grads_and_vars = optimizer_obj.compute_gradients(loss_var)
+    if grad_clip:
+        grads_and_vars = clip_gradients(grads_and_vars, **(grad_clip_params or {}))
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
-        if not grad_clip:
-            optimize_op = optimizer.minimize(loss_var, global_step=global_step_var)
-        else:  # Gradient clipping by norm; NOTE: `global graident clipping` may be another correct way.
-            gradients, variables = zip(*optimizer.compute_gradients(loss_var))
-            gradients = [None if gradient is None else tf.clip_by_norm(gradient, max_grad_norm)
-                         for gradient in gradients]
-            optimize_op = optimizer.apply_gradients(zip(gradients, variables),
-                                                    global_step=global_step_var)
+        optimize_op = optimizer_obj.apply_gradients(grads_and_vars, global_step=global_step_var)
 
     summary_vars = {}
     summary_vars_with_preview = {}
@@ -437,7 +445,7 @@ def train_model_data(
     metrics = {}
 
     t_total = time.time()
-    with tf.Session(config=_make_session_config(**session_config_kwargs)) as sess:
+    with tf.Session(config=make_session_config(**session_config_kwargs)) as sess:
         print('\ntraining starts! --------------------------------------------')
         sys.stdout.flush()
 
@@ -448,7 +456,6 @@ def train_model_data(
                 period_skip=period_skip,
                 period_assess=period_assess,
                 # For _evaluate():
-                use_gt_eval=use_gt_eval,
                 eval_tre_num=eval_tre_num,
                 path_output=path_output,
                 visualize=visualize,
@@ -517,7 +524,6 @@ def train_model_data(
                     eval_sequences = sampler()
                     result = _evaluate(
                         global_step, eval_id, sess, model_inst, eval_sequences,
-                        use_gt_eval=use_gt_eval,
                         eval_tre_num=eval_tre_num,
                         path_output=path_output,
                         visualize=visualize,
@@ -601,39 +607,42 @@ def train_model_data(
         return metrics
 
 
-def _make_optimizer(name, learning_rate,
-                    momentum=None,
-                    use_nesterov=None,
-                    adam_beta1=None,
-                    adam_beta2=None,
-                    adam_epsilon=None):
-    def _set_if_not_none(target, key, value):
-        if value is not None:
-            target[key] = value
-
-    # TODO: Use other parameters.
-    if name == 'sgd':
-        optimizer = tf.train.GradientDescentOptimizer(learning_rate)
-    elif name == 'momentum':
-        assert momentum is not None
-        kwargs = {}
-        _set_if_not_none(kwargs, 'use_nesterov', use_nesterov)
-        optimizer = tf.train.MomentumOptimizer(learning_rate, momentum, **kwargs)
-    # elif name == 'rmsprop':
-    #     kwargs = {}
-    #     optimizer = tf.train.RMSPropOptimizer(learning_rate, **kwargs)
-    elif name == 'adam':
-        kwargs = {}
-        _set_if_not_none(kwargs, 'beta1', adam_beta1)
-        _set_if_not_none(kwargs, 'beta2', adam_beta2)
-        _set_if_not_none(kwargs, 'epsilon', adam_epsilon)
-        optimizer = tf.train.AdamOptimizer(learning_rate, **kwargs)
+def make_learning_rate(global_step, init,
+                       decay_rate=None,
+                       decay_steps=None):
+    # lr = init * decay^(step)
+    #    = init * decay^(step / period * period / decay_steps)
+    #    = init * [decay^(period / decay_steps)]^(step / period)
+    if decay_rate is None or decay_rate == 1:
+        lr = tf.constant(init)
     else:
-        raise ValueError('unknown optimizer: {}', helpers.quote(name))
-    return optimizer
+        lr = tf.train.exponential_decay(init, global_step,
+                                        decay_steps=decay_steps,
+                                        decay_rate=decay_rate,
+                                        staircase=True)
+    return lr
 
 
-def _make_session_config(gpu_manctrl=False, gpu_frac=1.0, log_device_placement=False):
+def make_optimizer(learning_rate, name, **kwargs):
+    try:
+        optimizer_fn = {
+            'sgd': tf.train.GradientDescentOptimizer,
+            'momentum': tf.train.MomentumOptimizer,
+            'adam': tf.train.AdamOptimizer,
+        }[name]
+    except KeyError as ex:
+        raise ValueError('unknown optimizer: {}'.format(ex))
+
+    return optimizer_fn(learning_rate, **kwargs)
+
+
+def clip_gradients(grads_and_vars, max_grad_norm):
+    def clip(x):
+        return None if x is None else tf.clip_by_norm(x, max_grad_norm)
+    return [(clip(g), v) for g, v in grad_and_vars.items()]
+
+
+def make_session_config(gpu_manctrl=False, gpu_frac=1.0, log_device_placement=False):
     config = tf.ConfigProto(log_device_placement=log_device_placement)
     # TODO: not sure if this should be always true.
     config.allow_soft_placement = True
@@ -891,7 +900,6 @@ def _index_from_checkpoint(s):
 def _evaluate(
         global_step, eval_id, sess, model_inst, eval_sequences,
         # Evaluation args:
-        use_gt_eval,
         eval_tre_num,
         # Args that do not affect result:
         path_output,
@@ -910,7 +918,7 @@ def _evaluate(
         lambda: evaluate.evaluate_model(
             sess, model_inst, eval_sequences,
             visualize=visualize, vis_dir=vis_dir, keep_frames=keep_frames,
-            use_gt=use_gt_eval, tre_num=eval_tre_num),
+            tre_num=eval_tre_num),
         makedir=True)
 
     modes = ['OPE', 'TRE_{}'.format(eval_tre_num)]

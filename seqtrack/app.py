@@ -74,38 +74,22 @@ def add_train_args(parser):
     parser.add_argument('--num_steps', type=int, default=200000,
                         help='number of gradient steps')
 
-    parser.add_argument('--optimizer', default='momentum', help='optimizer to train the model')
-    parser.add_argument('--momentum', type=float, default=0.9)
-    parser.add_argument('--use_nesterov', action='store_true', help='for momentum optimizer')
-    parser.add_argument('--adam_beta1', type=float, default=0.9)
-    parser.add_argument('--adam_beta2', type=float, default=0.999)
-    parser.add_argument('--adam_epsilon', type=float, default=1e-8)
-
     parser.add_argument('--lr_init', type=float, default=1e-4, help='initial learning rate')
-    parser.add_argument('--lr_decay_rate', type=float, default=1,
-                        help='geometric step for learning rate decay')
-    parser.add_argument('--lr_decay_steps', type=int, default=10000,
-                        help='period for decaying learning rate')
-
-    # parser.add_argument('--wd', type=float, default=0.0, help='weight decay')
-
+    parser.add_argument('--lr_params', type=json.loads, help='kwargs for learning rate')
+    parser.add_argument('--optimizer', default='sgd', help='optimizer to train the model')
+    parser.add_argument('--optimizer_params', type=json.loads,
+                        help='kwargs for the optimizer constructor')
     parser.add_argument('--grad_clip', action='store_true', help='gradient clipping flag')
-    parser.add_argument('--max_grad_norm', type=float, default=5.0,
+    parser.add_argument('--grad_clip_params', type=json.loads,
+                        default='{"max_grad_norm": 5.0}',
                         help='threshold for gradient clipping')
 
     parser.add_argument('--use_gt_train', action='store_true',
                         help='use ground-truth during training')
-    parser.add_argument('--use_gt_eval', action='store_true',
-                        help='use ground-truth during evaluation')
     parser.add_argument('--gt_decay_rate', type=float, default=1e-6,
                         help='decay rate for gt_ratio')
     parser.add_argument('--min_gt_ratio', type=float, default=0.75,
                         help='lower bound for gt_ratio')
-
-    # parser.add_argument('--curriculum_learning', action='store_true',
-    #                     help='restore variables from a pre-trained model (on short sequences)')
-    # parser.add_argument('--pretrained_cl', default=None,
-    #                     help='pretrained model to be used for curriculum_learning')
 
     parser.add_argument('--sampler_params', type=json.loads,
                         default={'kind': 'regular', 'freq': 10},
@@ -129,8 +113,8 @@ def add_eval_args(parser):
     parser.add_argument('--eval_tre_num', type=int, default=3,
                         help='number of starting points for TRE mode')
     # TODO: Maybe remove "train" sampler, and this option?
-    parser.add_argument('--eval_samplers', nargs='+', default=['full'],
-                        help='frame samplers to use during validation')
+    # parser.add_argument('--eval_samplers', nargs='+', default=['full'],
+    #                     help='frame samplers to use during validation')
     parser.add_argument('--max_eval_videos', type=int, default=100,
                         help='max number of videos to evaluate')
 

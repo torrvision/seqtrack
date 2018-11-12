@@ -95,7 +95,7 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
 
         has_label = tf.ones(label_shape, tf.bool)  # [b, h, w]
         if shape == 'gaussian':
-            labels = tf.exp(-0.5 * sqr_dist / tf.square(sigma))
+            labels = tf.exp(-0.5 * sqr_dist / tf.square(float(sigma)))
         elif shape == 'threshold':
             is_pos = dist <= radius_pos
             is_neg = radius_neg <= dist
