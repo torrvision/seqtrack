@@ -105,8 +105,8 @@ def train(
         data_cache_dir=data_cache_dir)
 
     siamese = SiamFC(**model_params)
+    model_params = siamese.derived_params()
     model = ModelFromIterModel(siamese)
-    model_params = model.derived_params()
 
     streams, eval_sample_fns = make_samplers(
         datasets,
