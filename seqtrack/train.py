@@ -957,7 +957,7 @@ def _evaluate(
                 if var_key in result:
                     value += ' (1.96 sigma = {:.3g})'.format(1.96 * math.sqrt(result[var_key]))
             else:
-                value += '--'
+                value = '--'
             print('{} {}: {}'.format(mode, metric_key, value))
         # print 'mode {}: IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
         #     mode, result[mode]['iou_mean'], result[mode]['auc'],

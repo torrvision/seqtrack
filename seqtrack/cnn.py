@@ -319,20 +319,20 @@ def upsample(x, rate, method=0):
 
 
 def merge_batch_dims(x):
+    '''Merges all dimensions except the last three.
+
+    Returns:
+        (merged, restore_fn)
+    '''
     x = as_tensor(x)
     ndim = len(x.value.shape)
     assert ndim >= 4
     if ndim == 4:
         return x, _identity
     # Merge all dimensions except last three.
-    value, restore_fn = helpers.merge_dims(x.value, 0, ndim - 3)
+    value, restore_fn = helpers.merge_dims(x.value, None, -3)
     y = Tensor(value, x.fields)
     return y, partial_pixelwise(restore_fn, axis=0)
-
-
-def _restore(y, restore_fn):
-    y = as_tensor(y)
-    return Tensor(restore_fn(y.value), y.fields)
 
 
 def _identity(x):

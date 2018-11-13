@@ -80,8 +80,8 @@ class SiamFC(models_interface.IterModel):
             scale_step=1.03,
             scale_update_rate=0.6,
             report_square=False,
-            hann_method='none',  # none, mul_prob, add_logit
-            hann_coeff=1.0,
+            window_params=None,
+            window_radius=1.0,
             arg_max_eps_rel=0.05,
             # Loss parameters:
             wd=0.0,
@@ -101,7 +101,11 @@ class SiamFC(models_interface.IterModel):
                 desired_template_scale=desired_template_scale,
                 desired_search_radius=desired_search_radius,
                 arch=feature_arch, arch_params=feature_arch_params)
+        else:
+            # template_size = template_scale * target_size
+            target_size = template_size / template_scale
 
+        self._target_size = target_size
         self._template_size = template_size
         self._search_size = search_size
         self._aspect_method = aspect_method
@@ -133,8 +137,8 @@ class SiamFC(models_interface.IterModel):
         self._scale_step = scale_step
         self._scale_update_rate = scale_update_rate
         self._report_square = report_square
-        self._hann_method = hann_method
-        self._hann_coeff = hann_coeff
+        self._window_params = window_params or {}
+        self._window_radius = window_radius
         self._arg_max_eps_rel = arg_max_eps_rel
         self._wd = wd
         self._enable_ce_loss = enable_ce_loss
@@ -155,6 +159,7 @@ class SiamFC(models_interface.IterModel):
 
     def derived_properties(self):
         return dict(
+            target_size=self._target_size,
             template_size=self._template_size,
             search_size=self._search_size,
             template_scale=self._template_scale,
@@ -331,7 +336,12 @@ class SiamFC(models_interface.IterModel):
                 # Get relative translation and scale from response.
 
                 response_resize = _upsample_scores(response, rf_response.stride)
-                response_final = _finalize_scores(response_resize, self._hann_method, self._hann_coeff)
+                # TODO: Could have target size be dynamic based on object? Probably overkill.
+                response_final = apply_motion_penalty(
+                    response_resize,
+                    radius=self._window_radius * self._target_size,
+                    **self._window_params)
+
                 # upsample_response_size = response_final.shape.as_list()[-3:-1]
                 # assert np.all(upsample_response_size <= self._search_size)
                 # TODO: Use is_max?
@@ -658,6 +668,97 @@ def _extra_conv(x, is_training, trainable, variables_collections,
                                    activation_fn=helpers.get_act(activation))
 
 
+def apply_motion_penalty(scores, radius,
+                         normalize_method='mean',
+                         window_profile='hann',
+                         window_mode='radial',
+                         combine_method='mul',
+                         combine_lambda=1.0):
+    '''
+    Args:
+        scores: [n, s, h, w, c]
+    '''
+    assert len(scores.shape) == 5
+    scores = _normalize_scores(scores, normalize_method)
+
+    score_size = scores.shape[-3:-1].as_list()
+    window = _make_window(score_size, window_profile, radius=radius, mode=window_mode)
+    window = tf.expand_dims(window, -1)
+
+    if combine_method == 'mul':
+        scores = scores * window
+    elif combine_method == 'add':
+        scores = scores + combine_lambda * window
+    else:
+        raise ValueError('unknown combine method "{}"'.format(combine_method))
+    return scores
+
+
+def _normalize_scores(scores, method):
+    '''
+    Args:
+        method: 'none', 'mean', 'sigmoid'
+    '''
+    assert len(scores.shape) == 5
+    if method == 'none':
+        pass
+    elif method == 'mean':
+        min_val = tf.reduce_min(scores, axis=(-4, -3, -2, -1), keepdims=True)
+        mean_val = tf.reduce_mean(scores, axis=(-4, -3, -2, -1), keepdims=True)
+        scores = (1 / (mean_val - min_val)) * (scores - min_val)
+    elif method == 'sigmoid':
+        scores = tf.sigmoid(scores)
+    else:
+        raise ValueError('unknown normalize method "{}"'.format(method))
+    return scores
+
+
+def _make_window(size, profile, radius, mode='radial', name='make_window'):
+    '''
+    Args:
+        size: Spatial dimension of response map.
+        radius: Float. Scalar or two-element array.
+
+    Returns:
+        Tensor with specified size.
+    '''
+    with tf.name_scope(name) as scope:
+        window_fn = _window_func(profile)
+
+        size = np.array(n_positive_integers(2, size))
+        # Center of pixels 0, ..., size - 1 is (size - 1) / 2.
+
+        u0, u1 = tf.meshgrid(tf.range(size[0]), tf.range(size[1]), indexing='ij')
+        u = tf.stack((u0, u1), axis=-1)
+        u = (tf.to_float(u) - tf.to_float(tf.constant(size) - 1) / 2) / tf.constant(radius)
+
+        if mode == 'radial':
+            w = window_fn(tf.sqrt(tf.reduce_sum(tf.square(u), axis=-1)))
+        elif mode == 'cartesian':
+            w = tf.reduce_prod(window_fn(u), axis=-1)
+        else:
+            raise ValueError('unknown mode: "{}"'.format(mode))
+        return w
+
+
+def _window_func(profile):
+    try:
+        # TODO: Nicer way to apply mask to all?
+        fn = {
+            'linear': lambda x: _mask(x, 1 - tf.abs(x)),
+            'quadratic': lambda x: _mask(x, 1 - tf.square(x)),
+            'hann': lambda x: _mask(x, 0.5 * (1 + tf.cos(math.pi * x))),
+            'cosine': lambda x: _mask(x, tf.cos(math.pi / 2 * x)),
+        }[profile]
+    except KeyError:
+        raise ValueError('unknown window profile: "{}"'.format(profile))
+    return fn
+
+
+def _mask(x, y):
+    return tf.where(tf.abs(x) <= 1, y, tf.zeros_like(y))
+
+
 def hann(n, name='hann'):
     with tf.name_scope(name) as scope:
         n = tf.convert_to_tensor(n)
@@ -926,35 +1027,6 @@ def _upsample_scores(response, stride, method=tf.image.ResizeMethod.BICUBIC, ali
         response = tf.image.resize_images(response, upsample_size, method=method,
                                           align_corners=align_corners)
         response = restore_fn(response, 0)
-        return response
-
-
-def _finalize_scores(response, hann_method, hann_coeff, name='finalize_scores'):
-    '''Modify scores before finding arg max.
-
-    Includes sigmoid and Hann window.
-
-    Args:
-        response: [b, s, h, w, 1]
-
-    Returns:
-        [b, s, h', w', 1]
-
-    stride is (y, x) integer
-    '''
-    with tf.name_scope(name) as scope:
-        response_size = response.shape.as_list()[-3:-1]
-        # Apply motion penalty at all scales.
-        if hann_method == 'add_logit':
-            response += hann_coeff * tf.expand_dims(hann_2d(response_size), -1)
-            response = tf.sigmoid(response)
-        elif hann_method == 'mul_prob':
-            response = tf.sigmoid(response)
-            response *= tf.expand_dims(hann_2d(response_size), -1)
-        elif hann_method == 'none' or not hann_method:
-            response = tf.sigmoid(response)
-        else:
-            raise ValueError('unknown hann method: {}'.format(hann_method))
         return response
 
 

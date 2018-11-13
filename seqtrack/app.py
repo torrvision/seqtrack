@@ -124,7 +124,7 @@ def add_eval_args(parser):
     # parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
 
 
-def add_slurm_flags(parser):
+def add_slurm_args(parser):
     # TODO: Add prefix to enable multiple slurm jobs with different settings?
     parser.add_argument('--slurm', action='store_true',
                         help='Submit jobs to slurm or run directly?')

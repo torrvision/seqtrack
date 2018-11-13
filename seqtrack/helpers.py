@@ -654,6 +654,7 @@ class DictAccumulator(object):
         self._counts = {}
 
     def flush(self):
+        '''Return mean and then reset.'''
         mean = self.mean()
         self.reset()
         return mean

@@ -110,7 +110,7 @@ def parse_arguments():
     app.add_train_args(parser)
     app.add_tracker_config_args(parser)
     app.add_eval_args(parser)
-    app.add_slurm_flags(parser)
+    app.add_slurm_args(parser)
 
     parser.add_argument('--loglevel', default='info', help='debug, info, warning')
     parser.add_argument('--verbose_train', action='store_true')
@@ -155,8 +155,12 @@ def make_kwargs(args, feat, feat_config, weight, context, seed):
                 learn_spatial_weight=weight,
                 use_batch_norm=True,
             ),
-            hann_method='add_logit',
-            hann_coeff=1.0,
+            window_radius=1.0,
+            window_params=dict(
+                normalize_method='mean',
+                window_profile='hann',
+                combine_method='mul',
+            ),
             # TODO: Study weight decay and loss config.
             wd=1e-4,
             balance_classes=True,
