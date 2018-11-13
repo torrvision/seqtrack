@@ -82,7 +82,7 @@ class SiamFC(models_interface.IterModel):
             report_square=False,
             window_params=None,
             window_radius=1.0,
-            arg_max_eps_rel=0.05,
+            arg_max_eps=0.0,
             # Loss parameters:
             wd=0.0,
             enable_ce_loss=True,
@@ -139,7 +139,7 @@ class SiamFC(models_interface.IterModel):
         self._report_square = report_square
         self._window_params = window_params or {}
         self._window_radius = window_radius
-        self._arg_max_eps_rel = arg_max_eps_rel
+        self._arg_max_eps = arg_max_eps
         self._wd = wd
         self._enable_ce_loss = enable_ce_loss
         self._ce_label = ce_label
@@ -345,8 +345,8 @@ class SiamFC(models_interface.IterModel):
                 # upsample_response_size = response_final.shape.as_list()[-3:-1]
                 # assert np.all(upsample_response_size <= self._search_size)
                 # TODO: Use is_max?
-                translation, scale = util.find_peak_pyr(response_final, scales,
-                                                        eps_rel=self._arg_max_eps_rel)
+                translation, scale = util.find_peak_pyr(
+                    response_final, scales, eps_abs=self._arg_max_eps)
                 translation = translation / self._search_size
 
                 # vis = _visualize_response(
@@ -365,8 +365,8 @@ class SiamFC(models_interface.IterModel):
                 pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
 
                 # TODO: Unify with find_peak_pyr above!
-                is_max = tf.to_float(util.is_peak(response_final, axis=(-4, -3, -2),
-                                                  eps_rel=self._arg_max_eps_rel))
+                is_max = tf.to_float(util.is_peak(
+                    response_final, axis=(-4, -3, -2), eps_abs=self._arg_max_eps))
                 score = weighted_mean(response_resize, is_max, axis=(-4, -3, -2))
 
             # elif self._search_method == 'global':
