@@ -124,6 +124,15 @@ def add_eval_args(parser):
     # parser.add_argument('--resize-online', dest='useresizedimg', action='store_false')
 
 
+def add_slurm_flags(parser):
+    # TODO: Add prefix to enable multiple slurm jobs with different settings?
+    parser.add_argument('--slurm', action='store_true',
+                        help='Submit jobs to slurm or run directly?')
+    parser.add_argument('--slurm_flags', nargs='+', help='flags for sbatch (without "--")')
+    parser.add_argument('--slurm_max_submit', type=int,
+                        help='Limit for number of jobs to put in queue')
+
+
 # def add_model_args(parser):
 #     '''Args whose value is dependent on model.'''
 #     # parser.add_argument('--loss_coeffs', type=json.loads, default='{}',

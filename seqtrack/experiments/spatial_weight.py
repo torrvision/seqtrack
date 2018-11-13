@@ -110,13 +110,10 @@ def parse_arguments():
     app.add_train_args(parser)
     app.add_tracker_config_args(parser)
     app.add_eval_args(parser)
+    app.add_slurm_flags(parser)
 
     parser.add_argument('--loglevel', default='info', help='debug, info, warning')
     parser.add_argument('--verbose_train', action='store_true')
-
-    parser.add_argument('--slurm', action='store_true',
-                        help='Submit jobs to slurm or run directly?')
-    parser.add_argument('--slurm_flags', nargs='+', help='flags for sbatch (without "--")')
 
     parser.add_argument('-n', '--num_trials', type=int, default=1,
                         help='number of repetitions')
@@ -130,7 +127,9 @@ def parse_arguments():
 
 def make_mapper(args):
     if args.slurm:
-        mapper = slurm.SlurmDictMapper(tempdir='tmp', opts=['--' + x for x in args.slurm_flags])
+        mapper = slurm.SlurmDictMapper(tempdir='tmp',
+                                       max_submit=args.slurm_max_submit,
+                                       opts=['--' + x for x in args.slurm_flags])
     else:
         mapper = helpers.map_dict
     # Cache the results and use SLURM mapper to evaluate those without cache.

@@ -18,7 +18,7 @@ import slurmproc
 
 class SlurmDictMapper(object):
 
-    def __init__(self, poll_period=1, dir=None, tempdir=None, **kwargs):
+    def __init__(self, poll_period=1, dir=None, tempdir=None, max_submit=None, **kwargs):
         '''
         Args:
             dir: If none, then create a new directory under tempdir.
@@ -26,11 +26,12 @@ class SlurmDictMapper(object):
             kwargs: For slurmproc.Process.
         '''
         self._poll_period = poll_period
+        self._max_submit = max_submit
         self._kwargs = kwargs
 
-        self._procs = {}  # Incomplete jobs. Dict that maps key to Process.
+        self._procs = {}  # Submitted and incomplete jobs. Dict that maps key to Process.
         self._errors = {}  # Dict that maps key to Exception.
-        self._num = 0
+        self._num = 0  # Number of elements read from input stream.
 
         if not dir:
             assert tempdir
@@ -46,46 +47,23 @@ class SlurmDictMapper(object):
         self._dir = dir
 
     def __call__(self, func, items):
-        # TODO: Only submit some at once? (to support infinite stream)
         try:
-            for k, v in items:
-                try:
-                    proc = slurmproc.Process(functools.partial(func, MapContext(k), v),
-                                             dir=os.path.join(self._dir, k), **self._kwargs)
-                except subprocess.CalledProcessError as ex:
-                    logger.warning('could not submit process %s: %s', str(k), str(ex))
-                    self._errors[k] = ex
-                else:
-                    logger.info('submitted slurm job %s for element "%s"', proc.job_id(), k)
-                    self._procs[k] = proc
-                self._num += 1
-
-            while True:
-                # Obtain remaining keys by job ID.
-                remaining = {proc.job_id(): key for key, proc in self._procs.items()}
-                if len(remaining) == 0:
-                    break
-                completed = slurmproc.wait_any(set(remaining.keys()), period=self._poll_period)
-                for job_id in completed:
-                    key = remaining[job_id]
-                    logger.debug('slurm job has terminated: %s', str(self._procs[key]))
-                    # Job may have failed or succeeded.
-                    # It might have written a result, which could contain an error,
-                    # or terminated without writing result.
+            item_stream = iter(items)
+            items_remaining = True
+            while items_remaining or self._procs:
+                if items_remaining and _below_limit(len(self._procs), self._max_submit):
+                    # We can submit another job.
                     try:
-                        output = self._procs[key].output()
-                    except IOError as ex:
-                        logger.warning('unable to read result for process %s: %s',
-                                       str(self._procs[key]), str(ex))
-                        self._errors[key] = ex
-                    except slurmproc.RemoteException as ex:
-                        logger.warning('exception raised in process %s: %s',
-                                       str(self._procs[key]), str(ex))
-                        self._errors[key] = ex
+                        key_value = next(item_stream)
+                    except StopIteration:
+                        items_remaining = False
                     else:
+                        k, v = key_value
+                        self._submit(func, k, v)
+                        self._num += 1
+                else:
+                    for key, output in self._wait_any():
                         yield key, output
-                    finally:
-                        del self._procs[key]
         finally:
             self.terminate()
 
@@ -93,6 +71,43 @@ class SlurmDictMapper(object):
             raise RuntimeError('errors in {} of {} jobs: {}'.format(
                 len(self._errors), self._num,
                 ', '.join(map(_quote, sorted(self._errors.keys())))))
+
+    def _submit(self, func, key, value):
+        try:
+            proc = slurmproc.Process(functools.partial(func, MapContext(key), value),
+                                     dir=os.path.join(self._dir, key), **self._kwargs)
+        except subprocess.CalledProcessError as ex:
+            logger.warning('could not submit process %s: %s', str(key), str(ex))
+            self._errors[key] = ex
+        else:
+            logger.info('submitted slurm job %s for element "%s"', proc.job_id(), key)
+            self._procs[key] = proc
+
+    def _wait_any(self):
+        '''Returns iterator for results of completed jobs.'''
+        # Wait for a job to finish.
+        by_job_id = {proc.job_id(): key for key, proc in self._procs.items()}
+        completed = slurmproc.wait_any(set(by_job_id.keys()), period=self._poll_period)
+        for job_id in completed:
+            key = by_job_id[job_id]
+            logger.debug('slurm job has terminated: %s', str(self._procs[key]))
+            # Job may have failed or succeeded.
+            # It might have written a result, which could contain an error,
+            # or terminated without writing result.
+            try:
+                output = self._procs[key].output()
+            except IOError as ex:
+                logger.warning('unable to read result for process %s: %s',
+                               str(self._procs[key]), str(ex))
+                self._errors[key] = ex
+            except slurmproc.RemoteException as ex:
+                logger.warning('exception raised in process %s: %s',
+                               str(self._procs[key]), str(ex))
+                self._errors[key] = ex
+            else:
+                yield key, output
+            finally:
+                del self._procs[key]
 
     def terminate(self):
         for key, proc in self._procs.items():
@@ -223,3 +238,7 @@ def get_tmp_dir():
 
 def _is_slurm_job():
     return 'SLURM_JOB_ID' in os.environ
+
+
+def _below_limit(a, b):
+    return b is None or b <= 0 or a < b
