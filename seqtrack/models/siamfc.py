@@ -658,17 +658,6 @@ def _extra_conv(x, is_training, trainable, variables_collections,
                                    activation_fn=helpers.get_act(activation))
 
 
-def _join_net(template_feat, search_feat):
-    '''
-    Args:
-        template_feat: Tensor
-        search_feat: Tensor
-
-    Assumes that both template and search have center-aligned receptive fields.
-    '''
-    pass
-
-
 def hann(n, name='hann'):
     with tf.name_scope(name) as scope:
         n = tf.convert_to_tensor(n)

@@ -172,6 +172,9 @@ def merge_dims(x, a, b, name='merge_dims'):
     Returns:
         Reshaped tensor and a function to restore the shape.
     '''
+    n = len(x.shape)
+    a, b = _array_interval(a, b, n)
+
     def restore(v, axis, x_static, x_dynamic, name='restore'):
         with tf.name_scope(name) as scope:
             '''Restores dimensions [axis] to dimensions [a, ..., b-1].'''
@@ -193,7 +196,6 @@ def merge_dims(x, a, b, name='merge_dims'):
         # giving a total length of m = n-b+a+1.
         x_dynamic = tf.unstack(tf.shape(x))
         x_static = x.shape.as_list()
-        n = len(x_static)
 
         def prod(xs):
             return functools.reduce(lambda x, y: x * y, xs)
@@ -655,3 +657,15 @@ class DictAccumulator(object):
         mean = self.mean()
         self.reset()
         return mean
+
+
+def _array_interval(a, b, n):
+    if a is None:
+        a = 0
+    elif a < 0:
+        a += n
+    if b is None:
+        b = n
+    elif b < 0:
+        b += n
+    return a, b

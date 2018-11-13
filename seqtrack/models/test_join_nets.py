@@ -21,9 +21,9 @@ class TestFeatureNets(tf.test.TestCase):
     def test_instantiate(self):
         '''Instantiates the join functions.'''
         for join_arch in join_nets.SINGLE_JOIN_FNS:
-            for num_extra_dims in [0]: # [0, 1]
+            for num_batch_dims in [1, 2]:
                 # TODO: How to use unittest2 with tf.test.TestCase?
-                sub_test = try_sub_test(self, join_arch=join_arch, num_extra_dims=num_extra_dims)
+                sub_test = try_sub_test(self, join_arch=join_arch, num_batch_dims=num_batch_dims)
                 with sub_test, tf.Graph().as_default():
                     join_fn = join_nets.BY_NAME[join_arch]
                     if join_arch in join_nets.FULLY_CONNECTED_FNS:
@@ -32,7 +32,7 @@ class TestFeatureNets(tf.test.TestCase):
                         template_size = np.array([4, 4])
                     search_size = np.array([10, 10])
                     template_shape = [None] + list(template_size) + [16]
-                    search_shape = [None] + [None] * num_extra_dims + list(search_size) + [16]
+                    search_shape = [None] * num_batch_dims + list(search_size) + [16]
                     template = tf.placeholder(tf.float32, template_shape, name='template')
                     search = tf.placeholder(tf.float32, search_shape, name='search')
                     is_training = tf.placeholder(tf.bool, (), name='is_training')

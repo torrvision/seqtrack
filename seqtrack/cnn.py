@@ -73,13 +73,20 @@ def as_tensor(x, add_to_set=False):
 
 
 def pixelwise(func, x, *args, **kwargs):
-    '''Calls a function that operates on each spatial location independently.'''
+    '''Calls a unary function that operates on each spatial location independently.
+
+    This does not affect the receptive fields.
+    '''
     x = as_tensor(x)
     return Tensor(func(x.value, *args, **kwargs), x.fields)
 
 
-def partial_pixelwise(func):
-    return functools.partial(pixelwise, func)
+def partial_pixelwise(func, **kwargs):
+    '''Partial evaluation of pixelwise().
+
+    Useful for defining pixelwise functions.
+    '''
+    return functools.partial(pixelwise, func, **kwargs)
 
 
 nn_relu = partial_pixelwise(tf.nn.relu)
@@ -309,3 +316,24 @@ def upsample(x, rate, method=0):
         output_fields[key] = receptive_field.ReceptiveField(
             size=field.size, stride=field.stride // rate, padding=field.padding)
     return Tensor(output_value, output_fields)
+
+
+def merge_batch_dims(x):
+    x = as_tensor(x)
+    ndim = len(x.value.shape)
+    assert ndim >= 4
+    if ndim == 4:
+        return x, _identity
+    # Merge all dimensions except last three.
+    value, restore_fn = helpers.merge_dims(x.value, 0, ndim - 3)
+    y = Tensor(value, x.fields)
+    return y, partial_pixelwise(restore_fn, axis=0)
+
+
+def _restore(y, restore_fn):
+    y = as_tensor(y)
+    return Tensor(restore_fn(y.value), y.fields)
+
+
+def _identity(x):
+    return x

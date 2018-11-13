@@ -129,8 +129,10 @@ def cosine(template, search, is_training,
 
         dot_xy = cnn.channel_sum(cnn.diag_xcorr(search, template, padding='VALID'))
         dot_xx = tf.reduce_sum(tf.square(template), axis=(-3, -2, -1), keepdims=True)
-        dot_yy = cnn.nn_conv2d(cnn.pixelwise(tf.square, search), ones,
-                               strides=[1, 1, 1, 1], padding='VALID')
+        sq_search = cnn.pixelwise(tf.square, search)
+        sq_search, restore = cnn.merge_batch_dims(sq_search)
+        dot_yy = cnn.nn_conv2d(sq_search, ones, strides=[1, 1, 1, 1], padding='VALID')
+        dot_yy = restore(dot_yy)
 
         denom = cnn.pixelwise(lambda dot_yy: tf.sqrt(dot_xx * dot_yy), dot_yy)
         similarity = cnn.pixelwise_binary(
@@ -155,8 +157,10 @@ def distance(template, search, is_training,
 
         dot_xy = cnn.diag_xcorr(search, template)
         dot_xx = tf.reduce_sum(tf.square(template), axis=(-3, -2, -1), keepdims=True)
-        dot_yy = cnn.nn_conv2d(cnn.pixelwise(tf.square, search), ones,
-                               strides=[1, 1, 1, 1], padding='VALID')
+        sq_search = cnn.pixelwise(tf.square, search)
+        sq_search, restore = cnn.merge_batch_dims(sq_search)
+        dot_yy = cnn.nn_conv2d(sq_search, ones, strides=[1, 1, 1, 1], padding='VALID')
+        dot_yy = restore(dot_yy)
         # (x - y)**2 = x**2 - 2 x y + y**2
         # sq_dist = dot_xx - 2 * dot_xy + dot_yy
         sq_dist = cnn.pixelwise_binary(
@@ -214,10 +218,10 @@ def all_pixel_pairs(template, search, is_training,
         # Then "convolve" (multiply) each with the search image.
         t = template.value
         s = search.value
-        # template becomes: [n,   1,   1, h_t, w_t, c]
-        # search becomes:   [n, h_s, w_s,   1,   1, c]
-        t = helpers.expand_dims_n(t, 1, 2)
-        s = helpers.expand_dims_n(s, 3, 2)
+        # template becomes: [n, ...,   1,   1, h_t, w_t, c]
+        # search becomes:   [n, ..., h_s, w_s,   1,   1, c]
+        t = helpers.expand_dims_n(t, -4, 2)
+        s = helpers.expand_dims_n(s, -2, 2)
         if operation == 'mul':
             p = t * s
         elif operation == 'abs_diff':
@@ -231,8 +235,8 @@ def all_pixel_pairs(template, search, is_training,
         #     else:
         #         p = tf.reduce_sum(p, axis=-1, keepdims=True)
         # Merge the spatial dimensions of the template into features.
-        # response becomes: [n, h_s, w_s, h_t * w_t * c]
-        p, _ = helpers.merge_dims(p, 3, 6)
+        # response becomes: [n, ..., h_s, w_s, h_t * w_t * c]
+        p, _ = helpers.merge_dims(p, -3, None)
         pairs = cnn.Tensor(p, search.fields)
 
         # TODO: This initialization could be too small?
@@ -241,7 +245,9 @@ def all_pixel_pairs(template, search, is_training,
         weights = tf.get_variable('weights', weights_shape, tf.float32,
                                   initializer=tf.constant_initializer(normalizer))
         # TODO: Support depthwise_conv2d (keep channels).
+        pairs, restore = cnn.merge_batch_dims(pairs)
         response = cnn.nn_conv2d(pairs, weights, strides=[1, 1, 1, 1], padding='VALID')
+        response = restore(response)
         return response
 
 
