@@ -779,7 +779,7 @@ def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_p
     distance = tf.norm(disp, axis=-1, keepdims=True)
 
     cost_name, costs = cost_fn(distance, **cost_params)
-    is_center = tf.reduce_all(pixel_disp <= 0, axis=-1, keepdims=True)
+    is_center = tf.reduce_all(tf.abs(pixel_disp) <= 0, axis=-1, keepdims=True)
     correct_score = weighted_mean(scores, is_center, axis=(-3, -2), keepdims=False)
     # We want to achieve a margin:
     #   correct_score >= scores + costs
