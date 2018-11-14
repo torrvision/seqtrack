@@ -757,6 +757,9 @@ def _window_func(profile):
 
 
 def _mask(x, y):
+    '''Sets window to 0 outside [-1, 1].'''
+    # Ensure that y is >= 0 (protect against numerical error).
+    y = tf.maximum(0, y)
     return tf.where(tf.abs(x) <= 1, y, tf.zeros_like(y))
 
 
