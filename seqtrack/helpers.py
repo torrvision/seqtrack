@@ -339,13 +339,13 @@ def modify_aspect_ratio(rect, method='stretch', name='modify_aspect_ratio'):
             size = tf.identity(size)
         if method == 'perimeter':
             # Average of dimensions.
-            width = tf.reduce_mean(size, axis=-1, keep_dims=True)
+            width = tf.reduce_mean(size, axis=-1, keepdims=True)
             return geom.make_rect(center - 0.5 * width, center + 0.5 * width)
         if method == 'area':
             # Geometric average of dimensions.
             width = tf.exp(tf.reduce_mean(tf.log(tf.maximum(size, EPSILON)),
                                           axis=-1,
-                                          keep_dims=True))
+                                          keepdims=True))
             return geom.make_rect(center - 0.5 * width, center + 0.5 * width)
         raise ValueError('unknown method: {}'.format(method))
 
@@ -368,18 +368,18 @@ def leaky_relu(x, name='leaky_relu'):
         return tf.maximum(0.1 * x, x, name=scope)
 
 
-def weighted_mean(x, w, axis=None, keep_dims=False, name='weighted_mean'):
+def weighted_mean(x, w, axis=None, keepdims=False, name='weighted_mean'):
     with tf.name_scope(name) as scope:
         w = tf.to_float(w)
         p = normalize_prob(w * tf.ones_like(x), axis=axis)
-        return tf.reduce_sum(p * x, axis=axis, keep_dims=keep_dims)
+        return tf.reduce_sum(p * x, axis=axis, keepdims=keepdims)
 
 
 def normalize_prob(x, axis=None, name='normalize'):
     with tf.name_scope(name) as scope:
         with tf.control_dependencies([tf.assert_non_negative(x)]):
             x = tf.identity(x)
-        z = tf.reduce_sum(x, axis=axis, keep_dims=True)
+        z = tf.reduce_sum(x, axis=axis, keepdims=True)
         with tf.control_dependencies([tf.assert_positive(z)]):
             p = (1. / z) * x
         return p

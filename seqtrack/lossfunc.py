@@ -112,7 +112,11 @@ def translation_labels(position, rect, shape, radius_pos=0.3, radius_neg=0.3, si
 def normalized_sigmoid_cross_entropy_with_logits(
         targets, logits, weights, pos_weight=1.0, balanced=False, axis=None,
         name='normalized_sigmoid_cross_entropy_with_logits'):
+    '''
+    Supports broadcasting for `weights` but not `targets` and `logits`.
+    '''
     with tf.name_scope(name) as scope:
+        weights = tf.to_float(weights)
         sum_p = tf.reduce_sum(weights * targets, axis=axis, keepdims=True)
         sum_not_p = tf.reduce_sum(weights * (1 - targets), axis=axis, keepdims=True)
         if balanced:

@@ -85,15 +85,8 @@ class SiamFC(models_interface.IterModel):
             arg_max_eps=0.0,
             # Loss parameters:
             wd=0.0,
-            enable_ce_loss=True,
-            ce_label='gaussian_distance',
-            ce_pos_weight=1.0,
-            ce_label_structure='independent',
-            sigma=0.2,
-            balance_classes=True,
-            enable_margin_loss=False,
-            margin_cost='iou',
-            margin_reduce_method='max'):
+            loss_params=None,
+            ):
 
         if use_desired_size:
             template_size, search_size, template_scale = dimensions(
@@ -141,15 +134,7 @@ class SiamFC(models_interface.IterModel):
         self._window_radius = window_radius
         self._arg_max_eps = arg_max_eps
         self._wd = wd
-        self._enable_ce_loss = enable_ce_loss
-        self._ce_label = ce_label
-        self._ce_label_structure = ce_label_structure
-        self._ce_pos_weight = ce_pos_weight
-        self._sigma = sigma
-        self._balance_classes = balance_classes
-        self._enable_margin_loss = enable_margin_loss
-        self._margin_cost = margin_cost
-        self._margin_reduce_method = margin_reduce_method
+        self._loss_params = loss_params or {}
 
         self._num_frames = 0
         # For summaries in end():
@@ -175,7 +160,7 @@ class SiamFC(models_interface.IterModel):
             self._image_summaries_collections = image_summaries_collections
 
             y = frame['y']
-            mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keep_dims=True)
+            mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keepdims=True)
             # TODO: frame['image'] and template_im have a viewport
             template_rect, y_square = _get_context_rect(
                 y, context_amount=self._template_scale, aspect=self._aspect,
@@ -313,23 +298,9 @@ class SiamFC(models_interface.IterModel):
 
             losses = {}
             if self._enable_loss:
-                if self._enable_ce_loss:
-                    losses['ce'], labels = _cross_entropy_loss(
-                        response, rf_response, prev_rect, gt_rect, frame['y_is_valid'],
-                        search_rect, scales, search_size=self._search_size,
-                        search_scale=self._search_scale, label_method=self._ce_label,
-                        label_structure=self._ce_label_structure, sigma=self._sigma,
-                        balance_classes=self._balance_classes, pos_weight=self._ce_pos_weight)
-                    self._info.setdefault('ce_labels', []).append(_to_uint8(
-                        util.colormap(tf.expand_dims(labels[:, mid_scale], -1), _COLORMAP)))
-                if self._enable_margin_loss:
-                    losses['margin'], cost = _max_margin_loss(
-                        response, rf_response, prev_rect, gt_rect, frame['y_is_valid'],
-                        search_rect, scales, search_size=self._search_size,
-                        search_scale=self._search_scale, cost_method=self._margin_cost,
-                        reduce_method=self._margin_reduce_method)
-                    self._info.setdefault('margin_cost', []).append(_to_uint8(
-                        util.colormap(tf.expand_dims(cost[:, mid_scale], -1), _COLORMAP)))
+                loss_name, loss = compute_loss(response, self._target_size / rf_response.stride,
+                                               **self._loss_params)
+                losses[loss_name] = loss
 
             if self._search_method == 'local':
                 # Use pyramid from loss function to obtain position.
@@ -572,7 +543,7 @@ def _make_window(size, profile, radius, mode='radial', name='make_window'):
 
         u0, u1 = tf.meshgrid(tf.range(size[0]), tf.range(size[1]), indexing='ij')
         u = tf.stack((u0, u1), axis=-1)
-        u = (tf.to_float(u) - tf.to_float(tf.constant(size) - 1) / 2) / tf.constant(radius)
+        u = (tf.to_float(u) - tf.to_float(tf.constant(size) - 1) / 2) / tf.to_float(radius)
 
         if mode == 'radial':
             w = window_fn(tf.sqrt(tf.reduce_sum(tf.square(u), axis=-1)))
@@ -699,146 +670,140 @@ def _add_learnable_motion_prior(response, name='motion_prior'):
         return response + prior
 
 
-def _cross_entropy_loss(
-        response, response_rf, prev_rect, gt_rect, gt_is_valid, search_rect, scales,
-        search_size, sigma, search_scale, balance_classes, pos_weight=1.0,
-        label_method='gaussian_distance', label_structure='independent',
-        name='cross_entropy_translation'):
-    '''Computes the loss for a 2D map of logits.
+def compute_loss(scores, target_size, method='sigmoid', params=None):
+    params = params or {}
+    try:
+        loss_fn = {
+            'sigmoid': _sigmoid_cross_entropy_loss,
+            'max_margin': _max_margin_loss,
+        }[method]
+    except KeyError as ex:
+        raise ValueError('unknown loss method: "{}"'.format(method))
+    name, loss = loss_fn(scores, target_size, **params)
+    return name, loss
 
-    Args:
-        response -- 2D map of logits.
-        response_rf -- Receptive field of response BEFORE upsampling.
-        gt_rect -- Ground-truth rectangle in original image frame.
-        gt_is_valid -- Whether ground-truth label is present (valid).
-        search_rect -- Rectangle that describes search area in original image.
-        search_size -- Size of search image cropped from original image.
-        sigma -- Size of ground-truth labels relative to object size.
-        search_scale -- Size of search region relative to object size.
-        balance_classes -- Should classes be balanced?
+
+def _sigmoid_cross_entropy_loss(scores, target_size,
+                                balanced=False,
+                                pos_weight=1,
+                                label_method='hard',
+                                label_params=None):
     '''
-    with tf.name_scope(name) as scope:
-        # [b, s, h, w, 1] -> [b, h, w]
-        # # Note: This squeeze will fail if there is an image pyramid (is_tracking=True).
-        # response = tf.squeeze(response, 1) # Remove the scales dimension.
-        response = tf.squeeze(response, -1)  # Remove the trailing dimension.
-        response_size = response.shape.as_list()[-2:]
-
-        # Obtain displacement from center of search image.
-        disp = util.displacement_from_center(response_size)
-        disp = tf.to_float(disp) * response_rf.stride / search_size
-        # Get centers of receptive field of each pixel.
-        centers = 0.5 + disp
-
-        gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
-        prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
-        rect_grid = util.rect_grid_pyr(response_size, response_rf, search_size,
-                                       geom.rect_size(prev_rect_in_search), scales)
-
-        if label_method == 'gaussian_distance':
-            labels, has_label = lossfunc.translation_labels(
-                centers, gt_rect_in_search, shape='gaussian', sigma=sigma / search_scale)
-            labels = tf.expand_dims(labels, 1)
-            has_label = tf.expand_dims(has_label, 1)
-        elif label_method == 'best_iou':
-            gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 3)  # [b, 1, 1, 1, 2]
-            iou = geom.rect_iou(rect_grid, gt_rect_in_search)
-            is_pos = (iou >= tf.reduce_max(iou, axis=(-3, -2, -1), keep_dims=True))
-            labels = tf.to_float(is_pos)
-            has_label = tf.ones_like(labels, dtype=tf.bool)
-        else:
-            raise ValueError('unknown label method: {}'.format(label_method))
-
-        if label_structure == 'independent':
-            loss = lossfunc.normalized_sigmoid_cross_entropy_with_logits(
-                targets=labels, logits=response, weights=tf.to_float(has_label),
-                pos_weight=pos_weight, balanced=balance_classes, axis=(-3, -2, -1))
-        elif label_structure == 'joint':
-            labels = normalize_prob(labels, axis=(1, 2, 3))
-            labels_flat, _ = merge_dims(labels, 1, 4)
-            response_flat, _ = merge_dims(response, 1, 4)
-            loss = tf.nn.weighted_cross_entropy_with_logits(
-                targets=labels_flat, logits=response_flat, pos_weight=pos_weight)
-        else:
-            raise ValueError('unknown label structure: {}'.format(label_structure))
-
-        # TODO: Is this the best way to handle gt_is_valid?
-        # (set loss to zero and include in mean)
-        loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
-        loss = tf.reduce_mean(loss)
-        return loss, labels
-
-
-def _max_margin_loss(
-        score, score_rf, prev_rect, gt_rect, gt_is_valid, search_rect, scales,
-        search_size, search_scale, cost_method='iou', reduce_method='max',
-        name='max_margin_loss'):
-    '''Computes the loss for a 2D map of logits.
-
     Args:
-        score -- 2D map of logits.
-        score_rf -- Receptive field of score BEFORE upsampling.
-        prev_rect -- Rectangle in previous frame (used to set size of predicted rectangle).
-        gt_rect -- Ground-truth rectangle in original image frame.
-        gt_is_valid -- Whether ground-truth label is present (valid).
-        search_rect -- Rectangle that describes search area in original image.
-        search_size -- Size of search image cropped from original image.
+        scores: Tensor with shape [b, 1, h, w, 1]
+        target_size: Size of target in `scores` (float).
+
+    Returns:
+        Loss name, loss tensor with shape [b].
     '''
-    with tf.name_scope(name) as scope:
-        # [b, s, h, w, 1] -> [b, s, h, w]
-        score = tf.squeeze(score, -1)  # Remove the trailing dimension.
-        score_size = score.shape.as_list()[-2:]
-        gt_rect_in_search = geom.crop_rect(gt_rect, search_rect)
-        prev_rect_in_search = geom.crop_rect(prev_rect, search_rect)
-        rect_grid = util.rect_grid_pyr(score_size, score_rf, search_size,
-                                       geom.rect_size(prev_rect_in_search), scales)
-        # rect_grid -- [b, s, h, w, 4]
-        # gt_rect_in_search -- [b, 4]
-        gt_rect_in_search = expand_dims_n(gt_rect_in_search, -2, 3)
-        if cost_method == 'iou':
-            iou = geom.rect_iou(rect_grid, gt_rect_in_search)
-            cost = 1. - iou
-        elif cost_method == 'iou_correct':
-            iou = geom.rect_iou(rect_grid, gt_rect_in_search)
-            max_iou = tf.reduce_max(iou, axis=(-3, -2, -1), keep_dims=True)
-            cost = tf.to_float(tf.logical_not(iou >= max_iou))
-        elif cost_method == 'distance':
-            delta = geom.rect_center(rect_grid) - geom.rect_center(gt_rect_in_search)
-            # Distance in "object" units.
-            cost = tf.norm(delta, axis=-1) * search_scale
-        else:
-            raise ValueError('unknown cost method: {}'.format(cost_method))
-        loss = _max_margin(score, cost, axis=(-3, -2, -1), reduce_method=reduce_method)
-        # TODO: Is this the best way to handle gt_is_valid?
-        # (set loss to zero and include in mean)
-        loss = tf.where(gt_is_valid, loss, tf.zeros_like(loss))
-        loss = tf.reduce_mean(loss)
-        return loss, cost
+    label_params = label_params or {}
+    try:
+        label_fn = {
+            'hard': _hard_labels,
+            'gaussian': _gaussian_labels,
+        }[label_method]
+    except KeyError as ex:
+        raise ValueError('unknown label shape: "{}"'.format(label_method))
+
+    # Remove the scales dimension.
+    # Note: This squeeze will fail if there is an image pyramid (is_tracking is true).
+    scores = tf.squeeze(scores, 1)
+    score_size = helpers.known_spatial_dim(scores)
+    # Obtain displacement from center of search image.
+    # Center pixel has zero displacement.
+    disp = util.displacement_from_center(score_size)
+    disp = (1 / tf.to_float(target_size)) * tf.to_float(disp)
+    distance = tf.norm(disp, axis=-1, keepdims=True)
+
+    label_name, labels, weights = label_fn(distance, **label_params)
+    loss = lossfunc.normalized_sigmoid_cross_entropy_with_logits(
+        logits=scores, targets=tf.broadcast_to(labels, tf.shape(scores)), weights=weights,
+        pos_weight=pos_weight, balanced=balanced,
+        axis=(-3, -2))
+    # Remove singleton channels dimension.
+    loss = tf.squeeze(loss, -1)
+
+    # Reflect all parameters that affect magnitude of loss.
+    # (Losses with same name are comparable.)
+    loss_name = 'sigmoid(labels_{}_balanced_{}_pos_weight_{})'.format(
+        label_name, balanced, pos_weight)
+    return loss_name, loss
 
 
-def _max_margin(score, cost, axis=None, reduce_method='max', name='max_margin'):
-    '''Computes the max-margin loss.'''
-    with tf.name_scope(name) as scope:
-        is_best = tf.to_float(cost <= tf.reduce_min(cost, axis=axis, keep_dims=True))
-        cost_best = weighted_mean(cost, is_best, axis=axis, keep_dims=True)
-        score_best = weighted_mean(score, is_best, axis=axis, keep_dims=True)
-        # We want the rectangle with the minimum cost to have the highest score.
-        # => Ensure that the gap in score is at least the difference in cost.
-        # i.e. score_best - score >= cost - cost_best
-        # i.e. (cost - cost_best) - (score_best - score) <= 0
-        # Therefore penalize max(0, above expr).
-        violation = tf.maximum(0., (cost - cost_best) - (score_best - score))
-        if reduce_method == 'max':
-            # Structured output loss.
-            loss = tf.reduce_max(violation, axis=axis)
-        elif reduce_method == 'mean':
-            # Mean over all hinges; like triplet loss.
-            loss = tf.reduce_mean(violation, axis=axis)
-        elif reduce_method == 'sum':
-            loss = tf.reduce_sum(violation, axis=axis)
-        else:
-            raise ValueError('unknown reduce method: {}'.format(reduce_method))
-        return loss
+def _hard_labels(r, positive_radius, negative_radius):
+    is_pos = (r <= positive_radius)
+    # TODO: Could force the minimum distance to be a positive?
+    is_neg = (r >= negative_radius)
+    # Ensure exclusivity and give priority to positive labels.
+    # (Not strictly necessary but just to be explicit.)
+    is_neg = tf.logical_and(tf.logical_not(is_pos), is_neg)
+    label = tf.to_float(is_pos)
+    spatial_weight = tf.to_float(tf.logical_or(is_pos, is_neg))
+    name = 'hard(pos_radius_{}_neg_radius_{})'.format(positive_radius, negative_radius)
+    return name, label, spatial_weight
+
+
+def _gaussian_labels(r, sigma):
+    label = tf.exp(-tf.square(r) / (2 * tf.square(tf.to_float(sigma))))
+    spatial_weight = tf.ones_like(r)
+    name = 'gaussian(sigma_{})'.format(str(sigma))
+    return name, label, spatial_weight
+
+
+def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_params=None):
+    '''
+    Args:
+        scores: Tensor with shape [b, 1, h, w, 1]
+        target_size: Size of target in `scores` (float).
+
+    Returns:
+        Loss name, loss tensor with shape [b].
+    '''
+    cost_params = cost_params or {}
+    try:
+        cost_fn = {
+            'distance_greater': _cost_distance_threshold,
+        }[cost_method]
+    except KeyError as ex:
+        raise ValueError('unknown cost method: "{}"'.format(cost_method))
+
+    # TODO: Avoid copying this block?
+    # Remove the scales dimension.
+    # Note: This squeeze will fail if there is an image pyramid (is_tracking is true).
+    scores = tf.squeeze(scores, 1)
+    score_size = helpers.known_spatial_dim(scores)
+    # Obtain displacement from center of search image.
+    # Center pixel has zero displacement.
+    pixel_disp = util.displacement_from_center(score_size)
+    disp = (1 / tf.to_float(target_size)) * tf.to_float(pixel_disp)
+    distance = tf.norm(disp, axis=-1, keepdims=True)
+
+    cost_name, costs = cost_fn(distance, **cost_params)
+    is_center = tf.reduce_all(pixel_disp <= 0, axis=-1, keepdims=True)
+    correct_score = weighted_mean(scores, is_center, axis=(-3, -2), keepdims=False)
+    # We want to achieve a margin:
+    #   correct_score >= scores + costs
+    #   costs + scores - correct_score <= 0
+    #   costs - (correct_score - scores) <= 0
+    # Therefore penalize max(0, this expr).
+    # max_u (costs[u] + scores[u]) - correct_score
+    loss = tf.reduce_max(costs + scores, axis=(-3, -2), keepdims=False) - correct_score
+    loss = tf.maximum(float(0), loss)
+    # If we instead use cost to get `correct_score`:
+    # is_best = tf.to_float(cost <= tf.reduce_min(cost, axis=axis, keepdims=True))
+    # cost_best = weighted_mean(cost, is_best, axis=axis, keepdims=True)
+    # score_best = weighted_mean(score, is_best, axis=axis, keepdims=True)
+    # violation = tf.maximum(0., (cost - cost_best) - (score_best - score))
+    loss = tf.squeeze(loss, -1)
+
+    loss_name = 'max_margin(cost_{})'.format(cost_name)
+    return loss_name, loss
+
+
+def _cost_distance_threshold(r, threshold):
+    is_neg = (r >= threshold)
+    cost_name = 'distance_greater(threshold_{})'.format(str(threshold))
+    return cost_name, tf.to_float(is_neg)
 
 
 def _visualize_response(
@@ -1043,7 +1008,7 @@ def _global_search():
         response[i], rfs[i] = util.diag_xcorr_rf(
             input=search_feat[i], filter=prev_state['template_feat'], input_rfs=rfs[i],
             padding=self._xcorr_padding)
-        response[i] = tf.reduce_sum(response[i], axis=-1, keep_dims=True)
+        response[i] = tf.reduce_sum(response[i], axis=-1, keepdims=True)
         cnnutil.assert_center_alignment(n_positive_integers(2, edges[i]),
                                         response[i].shape.as_list()[-3:-1],
                                         rfs[i]['search'])

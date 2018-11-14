@@ -264,7 +264,7 @@ def resnet_v1(inputs,
 
                 # if global_pool:
                 #     # Global average pooling.
-                #     net = tf.reduce_mean(net, [1, 2], name='pool5', keep_dims=True)
+                #     net = tf.reduce_mean(net, [1, 2], name='pool5', keepdims=True)
                 #     end_points['global_pool'] = net
                 if num_classes:
                     net = conv2d(net, num_classes, [1, 1], activation_fn=None,

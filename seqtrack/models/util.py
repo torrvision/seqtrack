@@ -318,8 +318,9 @@ def displacement_from_center(im_size, name='displacement_grid'):
         im_size = np.asarray(im_size)
         # assert all(im_size % 2 == 1), 'image size not odd: {}'.format(str(im_size))
         if not all(im_size % 2 == 1):
-            logger.warning('use center of image with non-odd size %s', str(im_size))
-        center = (im_size - 1) / 2
+            # logger.warning('use center of image with non-odd size %s', str(im_size))
+            raise ValueError('image size is not odd: {}'.format(str(im_size)))
+        center = (im_size - 1) // 2
         size_y, size_x = im_size
         center_y, center_x = center
         grid_y = tf.range(size_y) - center_y
