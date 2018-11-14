@@ -370,6 +370,7 @@ def leaky_relu(x, name='leaky_relu'):
 
 def weighted_mean(x, w, axis=None, keep_dims=False, name='weighted_mean'):
     with tf.name_scope(name) as scope:
+        w = tf.to_float(w)
         p = normalize_prob(w * tf.ones_like(x), axis=axis)
         return tf.reduce_sum(p * x, axis=axis, keep_dims=keep_dims)
 
@@ -670,3 +671,9 @@ def _array_interval(a, b, n):
     elif b < 0:
         b += n
     return a, b
+
+
+def known_spatial_dim(x):
+    size = x.shape[-3:-1].as_list()
+    assert all(n is not None for n in size), 'unknown spatial dim: {:s}'.format(x.shape.as_list())
+    return size

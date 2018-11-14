@@ -301,6 +301,42 @@ def mlp(net, num_layers, num_hidden, num_outputs,
         return net
 
 
+def merge_batch_dims(x):
+    '''Merges all dimensions except the last three.
+
+    Returns:
+        (merged, restore_fn)
+    '''
+    x = as_tensor(x)
+    ndim = len(x.value.shape)
+    assert ndim > 4
+    # Merge all dimensions except last three.
+    value, restore_fn = helpers.merge_dims(x.value, None, -3)
+    y = Tensor(value, x.fields)
+    return y, partial_pixelwise(restore_fn, axis=0)
+
+
+def call_with_merge(fn, x, *args, **kwargs):
+    '''
+    Args:
+        fn: Function that maps Tensor x (and other args) to a single Tensor.
+    '''
+    # TODO: Put in name scope? Would be better to be in internal name scope?
+    x = as_tensor(x)
+    ndim = len(x.value.shape)
+    if ndim > 4:
+        x, restore_fn = merge_batch_dims(x)
+    y = fn(x, *args, **kwargs)
+    if ndim > 4:
+        y = restore_fn(y)
+    return y
+
+
+def wrap_with_merge(fn):
+    return functools.partial(call_with_merge, fn)
+
+
+@wrap_with_merge
 def upsample(x, rate, method=0):
     x = as_tensor(x)
     # Upsampling (with align_corners true) does not modify the size and padding of field.
@@ -316,24 +352,3 @@ def upsample(x, rate, method=0):
         output_fields[key] = receptive_field.ReceptiveField(
             size=field.size, stride=field.stride // rate, padding=field.padding)
     return Tensor(output_value, output_fields)
-
-
-def merge_batch_dims(x):
-    '''Merges all dimensions except the last three.
-
-    Returns:
-        (merged, restore_fn)
-    '''
-    x = as_tensor(x)
-    ndim = len(x.value.shape)
-    assert ndim >= 4
-    if ndim == 4:
-        return x, _identity
-    # Merge all dimensions except last three.
-    value, restore_fn = helpers.merge_dims(x.value, None, -3)
-    y = Tensor(value, x.fields)
-    return y, partial_pixelwise(restore_fn, axis=0)
-
-
-def _identity(x):
-    return x

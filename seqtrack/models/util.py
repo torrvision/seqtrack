@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 from seqtrack import geom
 from seqtrack import lossfunc
 from seqtrack import receptive_field
+from seqtrack import helpers
 
 from seqtrack.helpers import merge_dims
 from seqtrack.helpers import modify_aspect_ratio
@@ -122,7 +123,7 @@ def feather_mask(im_size, margin, name='feather_mask'):
         below_lower = tf.clip_by_value((lower - grid) / margin, 0., 1.)
         above_upper = tf.clip_by_value((grid - upper) / margin, 0., 1.)
         delta = tf.maximum(below_lower, above_upper)
-        dist = tf.clip_by_value(tf.norm(delta, axis=-1, keep_dims=True), 0., 1.)
+        dist = tf.clip_by_value(tf.norm(delta, axis=-1, keepdims=True), 0., 1.)
         mask = 1. - dist
         return mask
 
@@ -239,7 +240,7 @@ def coerce_aspect(target, im_aspect, aspect_method='stretch', name='coerce_aspec
 def find_center_in_scoremap(scoremap, threshold=0.95):
     assert len(scoremap.shape.as_list()) == 4
 
-    max_val = tf.reduce_max(scoremap, axis=(1, 2), keep_dims=True)
+    max_val = tf.reduce_max(scoremap, axis=(1, 2), keepdims=True)
     with tf.control_dependencies([tf.assert_greater_equal(scoremap, 0.0)]):
         max_loc = tf.greater_equal(scoremap, max_val * threshold)  # values over 95% of max.
 
@@ -271,11 +272,10 @@ def is_peak(response, axis=None, eps_rel=0.0, eps_abs=0.0, name='is_peak'):
     with tf.name_scope(name) as scope:
         # Find arg max over all scales.
         response = tf.verify_tensor_all_finite(response, 'response is not finite')
-        max_val = tf.reduce_max(response, axis=axis, keep_dims=True)
-        is_max = tf.logical_or(
+        max_val = tf.reduce_max(response, axis=axis, keepdims=True)
+        return tf.logical_or(
             tf.greater_equal(response, max_val - eps_rel*tf.abs(max_val)),
             tf.greater_equal(response, max_val - eps_abs))
-        return is_max
 
 
 def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_pyr'):
@@ -287,33 +287,22 @@ def find_peak_pyr(response, scales, eps_rel=0.0, eps_abs=0.0, name='find_peak_py
     Assumes that response is centered and at same stride as search image.
     '''
     with tf.name_scope(name) as scope:
-        response = tf.squeeze(response, axis=-1)
-        upsample_size = response.shape.as_list()[-2:]
-        assert all(upsample_size)
-        upsample_size = np.array(upsample_size)
-        # Find arg max over all scales.
-        response = tf.verify_tensor_all_finite(response, 'response is not finite')
-        max_val = tf.reduce_max(response, axis=(-3, -2, -1), keep_dims=True)
-        with tf.control_dependencies([tf.assert_non_negative(response)]):
-            # is_max = tf.to_float(response >= (1.0 - eps_rel) * max_val)
-            is_max = tf.logical_or(tf.greater_equal(response, max_val - eps_rel * tf.abs(max_val)),
-                                   tf.greater_equal(response, max_val - eps_abs))
-        is_max = tf.to_float(is_max)
-
-        grid = tf.to_float(displacement_from_center(upsample_size))
-
-        # Grid now has translation from center in search image co-ords.
-        # Transform into co-ordinate frame of each scale.
-        grid = tf.multiply(grid,                           # [h, w, 2]
-                           expand_dims_n(scales, -1, n=3))  # [s, 1, 1, 1]
-
-        translation = weighted_mean(grid,                       # [s, h, w, 2]
-                                    tf.expand_dims(is_max, -1),  # [b, s, h, w] -> [b, s, h, w, 1]
-                                    axis=(-4, -3, -2))          # [b, s, h, w, 2] -> [b, 2]
-        scale = weighted_mean(expand_dims_n(scales, -1, n=2),  # [b, s] -> [b, s, 1, 1]
-                              is_max,                         # [b, s, h, w]
-                              axis=(-3, -2, -1))              # [b, s, h, w] -> [b]
-        return translation, scale
+        # TODO: Assert that last dimension is one?
+        response_size = helpers.known_spatial_dim(response)
+        in_arg_max = is_peak(response, axis=(-4, -3, -2), eps_rel=eps_rel, eps_abs=eps_abs)
+        translation_grid = tf.to_float(displacement_from_center(response_size))
+        # Multiply translation by scale.
+        translation_grid = tf.multiply(translation_grid,                #    [h, w, 2]
+                                       expand_dims_n(scales, -1, n=3))  # [s, 1, 1, 1]
+        translation = weighted_mean(translation_grid,   #    [s, h, w, 2]
+                                    in_arg_max,         # [b, s, h, w, 1]
+                                    axis=(-4, -3, -2))  # [b,          2]
+        scales = tf.log(scales)
+        scale = weighted_mean(expand_dims_n(scales, -1, n=3),  # [b, s, 1, 1, 1]
+                              in_arg_max,                      # [b, s, h, w, 1]
+                              axis=(-4, -3, -2, -1))           # [b]
+        scale = tf.exp(scale)
+        return translation, scale, in_arg_max
 
 
 def displacement_from_center(im_size, name='displacement_grid'):
