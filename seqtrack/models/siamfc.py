@@ -745,6 +745,7 @@ def _window_func(profile):
     try:
         # TODO: Nicer way to apply mask to all?
         fn = {
+            'rect': lambda x: _mask(x, tf.ones_like(x)),
             'linear': lambda x: _mask(x, 1 - tf.abs(x)),
             'quadratic': lambda x: _mask(x, 1 - tf.square(x)),
             'hann': lambda x: _mask(x, 0.5 * (1 + tf.cos(math.pi * x))),
