@@ -293,6 +293,7 @@ def train_model_data(
         batchsz=None,
         imwidth=None,
         imheight=None,
+        lr_schedule='constant',
         lr_init=1e-3,
         lr_params=None,
         optimizer=None,
@@ -344,7 +345,6 @@ def train_model_data(
     '''
     extra_assess = extra_assess or []
     session_config_kwargs = session_config_kwargs or {}
-    lr_params = lr_params or {}
     optimizer_params = optimizer_params or {}
     grad_clip_params = grad_clip_params or {}
 
@@ -421,7 +421,8 @@ def train_model_data(
 
     global_step_var = tf.Variable(0, name='global_step', trainable=False)
 
-    lr = make_learning_rate(global_step_var, lr_init, **lr_params)
+    lr = make_learning_rate(global_step_var, num_steps, lr_init,
+                            schedule=lr_schedule, schedule_params=lr_params)
     tf.summary.scalar('lr', lr, collections=['summaries_train'])
     optimizer_obj = make_optimizer(lr, optimizer, **optimizer_params)
     grads_and_vars = optimizer_obj.compute_gradients(loss_var)
@@ -634,20 +635,40 @@ def train_model_data(
         return train_series, track_series
 
 
-def make_learning_rate(global_step, init,
-                       decay_rate=None,
-                       decay_steps=None):
+def make_learning_rate(global_step, num_steps, init,
+                       schedule='constant', schedule_params=None,
+                       name='learning_rate'):
+    schedule_params = schedule_params or {}
     # lr = init * decay^(step)
     #    = init * decay^(step / period * period / decay_steps)
     #    = init * [decay^(period / decay_steps)]^(step / period)
-    if decay_rate is None or decay_rate == 1:
-        lr = tf.constant(init)
-    else:
-        lr = tf.train.exponential_decay(init, global_step,
-                                        decay_steps=decay_steps,
-                                        decay_rate=decay_rate,
-                                        staircase=True)
-    return lr
+    try:
+        fn = {
+            'constant': _learning_rate_constant,
+            'exponential': _learning_rate_exponential,
+            'remain': _learning_rate_remain,
+        }[schedule]
+    except KeyError as ex:
+        raise ValueError('unknown schedule: "{}"'.format(schedule))
+
+    with tf.name_scope(name) as scope:
+        return fn(global_step, num_steps, init, **schedule_params)
+
+
+def _learning_rate_constant(t, n, init):
+    return tf.constant(init)
+
+
+def _learning_rate_exponential(t, n, init, **kwargs):
+    return tf.train.exponential_decay(init, t, **kwargs)
+
+
+def _learning_rate_remain(t, n, init, decay_rate=0.1, remain_rate=0.5, max_power=None):
+    frac_rem = tf.to_float(n - t) / n
+    k = tf.floor(tf.log(frac_rem) / tf.log(remain_rate))
+    if max_power is not None:
+        k = tf.minimum(k, float(max_power))
+    return init * tf.pow(float(decay_rate), k)
 
 
 def make_optimizer(learning_rate, name, **kwargs):

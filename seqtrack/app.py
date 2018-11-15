@@ -77,6 +77,7 @@ def add_train_args(parser):
     parser.add_argument('--num_steps', type=int, default=200000,
                         help='number of gradient steps')
 
+    parser.add_argument('--lr_schedule', default='constant', help='learning rate schedule')
     parser.add_argument('--lr_init', type=float, default=1e-4, help='initial learning rate')
     parser.add_argument('--lr_params', type=json.loads, help='kwargs for learning rate')
     parser.add_argument('--optimizer', default='sgd', help='optimizer to train the model')
@@ -170,6 +171,7 @@ def train_kwargs(args, name):
         train_dataset=args.train_dataset,
         val_dataset=args.val_dataset,
         num_steps=args.num_steps,
+        lr_schedule=args.lr_schedule,
         lr_init=args.lr_init,
         lr_params=args.lr_params,
         optimizer=args.optimizer,

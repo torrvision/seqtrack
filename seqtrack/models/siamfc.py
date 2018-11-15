@@ -298,8 +298,8 @@ class SiamFC(models_interface.IterModel):
 
             losses = {}
             if self._enable_loss:
-                loss_name, loss = compute_loss(response, self._target_size / rf_response.stride,
-                                               **self._loss_params)
+                loss_name, loss = compute_loss(
+                    response, self._target_size / rf_response.stride, **self._loss_params)
                 losses[loss_name] = loss
 
             if self._search_method == 'local':
@@ -537,13 +537,12 @@ def _make_window(size, profile, radius, mode='radial', name='make_window'):
     '''
     with tf.name_scope(name) as scope:
         window_fn = _window_func(profile)
-
         size = np.array(n_positive_integers(2, size))
-        # Center of pixels 0, ..., size - 1 is (size - 1) / 2.
-
         u0, u1 = tf.meshgrid(tf.range(size[0]), tf.range(size[1]), indexing='ij')
         u = tf.stack((u0, u1), axis=-1)
-        u = (tf.to_float(u) - tf.to_float(tf.constant(size) - 1) / 2) / tf.to_float(radius)
+        # Center of pixels 0, ..., size - 1 is (size - 1) / 2.
+        center = tf.to_float(tf.constant(size) - 1) / 2
+        u = (tf.to_float(u) - center) / tf.to_float(radius)
 
         if mode == 'radial':
             w = window_fn(tf.sqrt(tf.reduce_sum(tf.square(u), axis=-1)))
@@ -556,13 +555,18 @@ def _make_window(size, profile, radius, mode='radial', name='make_window'):
 
 def _window_func(profile):
     try:
-        # TODO: Nicer way to apply mask to all?
         fn = {
             'rect': lambda x: _mask(x, tf.ones_like(x)),
             'linear': lambda x: _mask(x, 1 - tf.abs(x)),
             'quadratic': lambda x: _mask(x, 1 - tf.square(x)),
-            'hann': lambda x: _mask(x, 0.5 * (1 + tf.cos(math.pi * x))),
             'cosine': lambda x: _mask(x, tf.cos(math.pi / 2 * x)),
+            # 'hann': lambda x: _mask(x, 0.5 * (1 + tf.cos(math.pi * x))),
+            'hann': lambda x: _mask(x, 1 - tf.square(tf.sin(math.pi / 2 * x))),
+            # The gaussian window is approximately equal to hann near zero:
+            # The linear approximation of sin(x) at 0 is x.
+            # The linear approximation of exp(x) at 0 is 1 + x.
+            # Hence exp(-x^2) should be similar to 1 - sin(x)^2 at 0.
+            'gaussian': lambda x: tf.exp(-tf.square(math.pi / 2 * x)),
         }[profile]
     except KeyError:
         raise ValueError('unknown window profile: "{}"'.format(profile))
@@ -676,6 +680,7 @@ def compute_loss(scores, target_size, method='sigmoid', params=None):
         loss_fn = {
             'sigmoid': _sigmoid_cross_entropy_loss,
             'max_margin': _max_margin_loss,
+            'softmax': _softmax_cross_entropy_loss,
         }[method]
     except KeyError as ex:
         raise ValueError('unknown loss method: "{}"'.format(method))
@@ -700,7 +705,8 @@ def _sigmoid_cross_entropy_loss(scores, target_size,
     try:
         label_fn = {
             'hard': _hard_labels,
-            'gaussian': _gaussian_labels,
+            'gaussian': _wrap_with_spatial_weight(_gaussian_labels),
+            'hard_binary': _wrap_with_spatial_weight(_hard_binary_labels),
         }[label_method]
     except KeyError as ex:
         raise ValueError('unknown label shape: "{}"'.format(label_method))
@@ -725,7 +731,7 @@ def _sigmoid_cross_entropy_loss(scores, target_size,
 
     # Reflect all parameters that affect magnitude of loss.
     # (Losses with same name are comparable.)
-    loss_name = 'sigmoid(labels_{}_balanced_{}_pos_weight_{})'.format(
+    loss_name = 'sigmoid_labels_{}_balanced_{}_pos_weight_{}'.format(
         label_name, balanced, pos_weight)
     return loss_name, loss
 
@@ -739,15 +745,35 @@ def _hard_labels(r, positive_radius, negative_radius):
     is_neg = tf.logical_and(tf.logical_not(is_pos), is_neg)
     label = tf.to_float(is_pos)
     spatial_weight = tf.to_float(tf.logical_or(is_pos, is_neg))
-    name = 'hard(pos_radius_{}_neg_radius_{})'.format(positive_radius, negative_radius)
+    name = 'hard_pos_radius_{}_neg_radius_{}'.format(positive_radius, negative_radius)
     return name, label, spatial_weight
+
+
+def _wrap_with_spatial_weight(fn):
+    return functools.partial(_add_spatial_weight, fn)
+
+
+def _add_spatial_weight(fn, *args, **kwargs):
+    '''Calls fn() and additionally returns uniform spatial weights.'''
+    name, label = fn(*args, **kwargs)
+    return name, label, tf.ones_like(label)
+
+
+def _hard_binary_labels(r, radius):
+    '''
+    Does not support un-labelled examples.
+    More suitable for use with softmax.
+    '''
+    is_pos = (r <= radius)
+    label = tf.to_float(is_pos)
+    name = 'hard_binary_radius{}'.format(radius)
+    return name, label
 
 
 def _gaussian_labels(r, sigma):
     label = tf.exp(-tf.square(r) / (2 * tf.square(tf.to_float(sigma))))
-    spatial_weight = tf.ones_like(r)
-    name = 'gaussian(sigma_{})'.format(str(sigma))
-    return name, label, spatial_weight
+    name = 'gaussian_sigma_{}'.format(str(sigma))
+    return name, label
 
 
 def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_params=None):
@@ -796,14 +822,62 @@ def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_p
     # violation = tf.maximum(0., (cost - cost_best) - (score_best - score))
     loss = tf.squeeze(loss, -1)
 
-    loss_name = 'max_margin(cost_{})'.format(cost_name)
+    loss_name = 'max_margin_cost_{}'.format(cost_name)
     return loss_name, loss
 
 
 def _cost_distance_threshold(r, threshold):
     is_neg = (r >= threshold)
-    cost_name = 'distance_greater(threshold_{})'.format(str(threshold))
+    cost_name = 'distance_greater_threshold_{}'.format(str(threshold))
     return cost_name, tf.to_float(is_neg)
+
+
+def _softmax_cross_entropy_loss(scores, target_size,
+                                label_method='gaussian',
+                                label_params=None):
+    '''
+    Args:
+        scores: Tensor with shape [b, 1, h, w, 1]
+        target_size: Size of target in `scores` (float).
+
+    Returns:
+        Loss name, loss tensor with shape [b].
+    '''
+    label_params = label_params or {}
+    try:
+        label_fn = {
+            'hard_binary': _hard_binary_labels,
+            'gaussian': _gaussian_labels,
+        }[label_method]
+    except KeyError as ex:
+        raise ValueError('unknown label shape: "{}"'.format(label_method))
+
+    # Remove the scales dimension.
+    # Note: This squeeze will fail if there is an image pyramid (is_tracking is true).
+    scores = tf.squeeze(scores, 1)
+    score_size = helpers.known_spatial_dim(scores)
+    # Obtain displacement from center of search image.
+    # Center pixel has zero displacement.
+    disp = util.displacement_from_center(score_size)
+    disp = (1 / tf.to_float(target_size)) * tf.to_float(disp)
+    distance = tf.norm(disp, axis=-1, keepdims=True)
+
+    label_name, labels = label_fn(distance, **label_params)
+    labels = helpers.normalize_prob(labels, axis=(-3, -2))
+
+    # Flatten spatial dimensions.
+    scores, _ = helpers.merge_dims(scores, -3, -1)
+    labels, _ = helpers.merge_dims(labels, -3, -1)
+    # Remove singleton channel dimension.
+    scores = tf.squeeze(scores, -1)
+    labels = tf.squeeze(labels, -1)
+    loss = tf.nn.softmax_cross_entropy_with_logits_v2(
+        logits=scores, labels=tf.broadcast_to(labels, tf.shape(scores)), dim=-1)
+
+    # Reflect all parameters that affect magnitude of loss.
+    # (Losses with same name are comparable.)
+    loss_name = 'softmax_labels_{}'.format(label_name)
+    return loss_name, loss
 
 
 def _visualize_response(
