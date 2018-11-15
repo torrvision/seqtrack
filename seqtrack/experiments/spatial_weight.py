@@ -24,6 +24,8 @@ from seqtrack import helpers
 from seqtrack import slurm
 from seqtrack import train
 
+ERRORBAR_SIZE = 1.64485
+
 
 def main():
     args = parse_arguments()
@@ -45,7 +47,7 @@ def main():
                 output_layer='conv5'))),
     ]
     use_spatial_weights = [False, True]
-    desired_context_amounts = [1.5, 2.0, 3.0]
+    desired_context_amounts = [1.0, 1.5, 2.0, 3.0, 4.0]
 
     # Map stream of named vectors to stream of named results (order may be different).
     kwargs = dict([
@@ -87,34 +89,36 @@ def main():
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    plt.figure(figsize=(4, 3))
-    fig, ax = plt.subplots()
-    plt.xlabel('Template context')
-    plt.ylabel('Mean IOU')
+    quality_metric = args.optimize_dataset + '_' + args.optimize_metric
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-    for feat_ind, (feat, feat_config) in enumerate(feature_configs):
-        for weight in use_spatial_weights:
+    # https://matplotlib.org/api/markers_api.html
+    markers = ['o', 'v', '^', '<', '>', '8', 's', 'p', 'P', '*', 'h', 'H', '+', 'x', 'X', 'D', 'd']
+
+    # Make one plot with weight and one plot without.
+    for weight in use_spatial_weights:
+        plt.figure(figsize=(4, 3))
+        fig, ax = plt.subplots()
+        plt.xlabel('desired_template_scale')
+        plt.ylabel(quality_metric)
+        plt.title('learn_spatial_weight={}'.format(weight))
+
+        for feat_ind, (feat, feat_config) in enumerate(feature_configs):
             name_fn = lambda context: make_name(feat=feat, weight=weight, context=context)
             contexts = [summaries[name_fn(context)]['model/template_scale']
                         for context in desired_context_amounts]
-            quality_metric = args.optimize_dataset + '_' + args.optimize_metric
             quality = [summaries[name_fn(context)][quality_metric]
                        for context in desired_context_amounts]
-            try:
-                variance = [summaries[name_fn(context)][quality_metric + '_var']
-                            for context in desired_context_amounts]
-                error = 1.64485 * np.sqrt(variance)
-            except KeyError:
-                error = None
-            if not weight:
-                plt.fill_between(x=contexts, y1=quality - error, y2=quality + error,
-                                 color=colors[feat_ind], label=None, alpha=0.2)
-            plt.errorbar(x=contexts, y=quality, yerr=None,
-                         color=colors[feat_ind],
-                         label=feat if not weight else None,
-                         linestyle='dashed' if weight else 'solid')
-    ax.legend()
-    plt.savefig('plot.pdf')
+            variance = [summaries[name_fn(context)].get(quality_metric + '_var', np.nan)
+                        for context in desired_context_amounts]
+            error = ERRORBAR_SIZE * np.sqrt(variance)
+            # TODO: Plot all fill_betweens then all lines?
+            plt.fill_between(x=contexts, y1=quality - error, y2=quality + error,
+                             color=colors[feat_ind], alpha=0.2, label=None)
+            plt.plot(contexts, quality, label=feat,
+                     color=colors[feat_ind], marker=markers[feat_ind])
+
+        ax.legend()
+        plt.savefig('plot_weight_{}.pdf'.format(weight))
 
 
 def parse_arguments():
