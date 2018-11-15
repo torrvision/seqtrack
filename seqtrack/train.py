@@ -280,6 +280,7 @@ def train_model_data(
         metrics_resolution=1000,
         period_ckpt=10000,
         period_assess=40000,
+        extra_assess=None,
         period_skip=0,  # TODO: Change name since not periodic?
         period_summary=10,
         period_preview=100,
@@ -341,6 +342,7 @@ def train_model_data(
     Each sampler in the eval_sets dictionary is a function that
     returns a collection of sequences or is a finite generator of sequences.
     '''
+    extra_assess = extra_assess or []
     session_config_kwargs = session_config_kwargs or {}
     lr_params = lr_params or {}
     optimizer_params = optimizer_params or {}
@@ -472,6 +474,7 @@ def train_model_data(
                 path_ckpt=path_ckpt,
                 period_skip=period_skip,
                 period_assess=period_assess,
+                extra_assess=extra_assess,
                 # For _evaluate():
                 eval_tre_num=eval_tre_num,
                 path_output=path_output,
@@ -524,9 +527,9 @@ def train_model_data(
 
         while True:
             global_step = np.asscalar(global_step_var.eval())
+            assess_step = _to_assess_step(global_step, period_assess, period_skip, extra_assess)
             if not nosave:
-                # period_ckpt = args.period_ckpt if not args.debugmode else 40
-                if global_step % period_ckpt == 0 and global_step > prev_ckpt:
+                if global_step > prev_ckpt and (global_step % period_ckpt == 0 or assess_step):
                     if not os.path.isdir(path_ckpt):
                         os.makedirs(path_ckpt)
                     print('save model')
@@ -535,8 +538,7 @@ def train_model_data(
                     sys.stdout.flush()
                     prev_ckpt = global_step
             # intermediate evaluation of model
-            # period_assess = args.period_assess if not args.debugmode else 20
-            if global_step > 0 and global_step > period_skip and global_step % period_assess == 0:
+            if assess_step:
                 for eval_id, sampler in eval_sets.items():
                     eval_sequences = sampler()
                     result = _evaluate(
@@ -889,7 +891,8 @@ def _draw_rectangles(im, gt, gt_is_valid=None, pred=None):
 
 
 def _evaluate_at_existing_checkpoints(saver, eval_sets, sess, model_inst,
-                                      path_ckpt, period_skip, period_assess, **kwargs):
+                                      path_ckpt, period_skip, period_assess, extra_assess,
+                                      **kwargs):
     '''
     Args:
         kwargs: For _evaluate()
@@ -903,8 +906,9 @@ def _evaluate_at_existing_checkpoints(saver, eval_sets, sess, model_inst,
     model_files = {_index_from_checkpoint(os.path.basename(s)): s
                    for s in state.all_model_checkpoint_paths}
     # Identify which of these satisfy conditions.
-    subset = sorted([index for index in model_files if index >= period_skip and
-                     index % period_assess == 0])
+    subset = sorted([index for index in model_files
+                     if (index in extra_assess or
+                         (index >= period_skip and index % period_assess == 0))])
     logger.debug('global steps to assess: %s', subset)
     # Evaluate each (with cache).
     for global_step in subset:
@@ -1016,3 +1020,8 @@ def combine_dicts(delim='/', **kwargs):
     for name, d in kwargs.items():
         together.update({name + delim + k: v for k, v in d.items()})
     return together
+
+
+def _to_assess_step(step, period_assess, period_skip, extra_assess):
+    return (step in extra_assess or
+            (step > 0 and step >= period_skip and step % period_assess == 0))

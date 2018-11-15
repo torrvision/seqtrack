@@ -18,22 +18,18 @@ from seqtrack import helpers
 from seqtrack import slurm
 from seqtrack import train
 
-# The pickled object must be imported to unpickle in a different package (slurmproc.worker).
-from seqtrack.tools.train_work import work
-
 
 def main():
     args = parse_arguments()
     logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
 
     # Map stream of named vectors to stream of named results (order may be different).
-    seeds = {'seed_{}'.format(seed): seed for seed in range(args.num_trials)}
+    kwargs = dict(make_kwargs(args, seed) for seed in range(args.num_trials))
     mapper = make_mapper(args)
-    result_stream = mapper(functools.partial(work, args), seeds.items())
-    # Construct dictionary from stream.
+    result_stream = mapper(slurm.partial_apply_kwargs(train.train_worker), kwargs.items())
     results = dict(result_stream)
 
-    names = sorted(seeds.keys())
+    names = sorted(kwargs.keys())
     for name in names:
         print('-' * 40)
         print('name:', name)
@@ -61,14 +57,15 @@ def parse_arguments():
     parser.add_argument('--loglevel', default='info', help='debug, info, warning')
     parser.add_argument('--verbose_train', action='store_true')
 
-    parser.add_argument('--model_params', type=json.loads, default={},
-                        help='JSON string specifying model')
     parser.add_argument('-n', '--num_trials', type=int, default=1,
                         help='number of repetitions')
     parser.add_argument('--optimize_dataset', default='pool_val-full',
                         help='eval_dataset to use to choose model')
     parser.add_argument('--optimize_metric', default='TRE_3_iou_seq_mean',
                         help='metric to optimize for')
+
+    parser.add_argument('--model_params', type=json.loads, default={},
+                        help='JSON string specifying model')
     parser.add_argument('--resume', action='store_true')
 
     return parser.parse_args()
@@ -85,6 +82,17 @@ def make_mapper(args):
     mapper = helpers.CachedDictMapper(dir=os.path.join('cache', 'train'),
                                       codec_name='msgpack', mapper=mapper)
     return mapper
+
+
+def make_kwargs(args, seed):
+    name = 'seed_{}'.format(seed)
+    kwargs = app.train_kwargs(args, name)
+    kwargs.update(
+        seed=seed,
+        model_params=args.model_params,
+        resume=args.resume,
+    )
+    return name, kwargs
 
 
 if __name__ == '__main__':

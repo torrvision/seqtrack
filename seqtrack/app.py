@@ -3,6 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 import json
+import os
 
 
 def add_instance_arguments(parser):
@@ -48,6 +49,8 @@ def add_tracker_config_args(parser):
                         help='period for saving checkpoints (number of steps)')
     parser.add_argument('--period_assess', type=int, default=10000,
                         help='period for running evaluation (number of steps)')
+    parser.add_argument('--extra_assess', type=int, nargs='+',
+                        help='Additional iterations at which to assess the model')
     parser.add_argument('--period_skip', type=int, default=0,
                         help='until this period skip evaluation (number of steps)')
     parser.add_argument('--period_summary', type=int, default=10,
@@ -143,3 +146,63 @@ def add_slurm_args(parser):
 #     # parser.add_argument('--siamese_pretrain', action='store_true',
 #     #                     help='specify if using pretrained model')
 #     # parser.add_argument('--siamese_model_file', help='specify if using pretrained model')
+
+
+def train_kwargs(args, name):
+    '''Constructs kwargs for train.train() from command-line args.'''
+    return dict(
+        dir=os.path.join('train', name),
+        # From app.add_setup_data_args():
+        untar=args.untar,
+        data_dir=args.data_dir,
+        tar_dir=args.tar_dir,
+        tmp_data_dir=args.tmp_data_dir,
+        preproc_id=args.preproc,
+        data_cache_dir=args.data_cache_dir,
+        pool_datasets=args.pool_datasets,
+        pool_split=args.pool_split,
+        # From app.add_instance_arguments():
+        ntimesteps=args.ntimesteps,
+        batchsz=args.batchsz,
+        imwidth=args.imwidth,
+        imheight=args.imheight,
+        # From app.add_train_args():
+        train_dataset=args.train_dataset,
+        val_dataset=args.val_dataset,
+        num_steps=args.num_steps,
+        lr_init=args.lr_init,
+        lr_params=args.lr_params,
+        optimizer=args.optimizer,
+        optimizer_params=args.optimizer_params,
+        grad_clip=args.grad_clip,
+        grad_clip_params=args.grad_clip_params,
+        use_gt_train=args.use_gt_train,
+        gt_decay_rate=args.gt_decay_rate,
+        min_gt_ratio=args.min_gt_ratio,
+        sampler_params=args.sampler_params,
+        augment_motion=args.augment_motion,
+        motion_params=args.motion_params,
+        # From app.add_eval_args():
+        eval_datasets=args.eval_datasets,
+        eval_tre_num=args.eval_tre_num,
+        max_eval_videos=args.max_eval_videos,
+        # From add_tracker_config_args(parser)
+        use_queues=args.use_queues,
+        nosave=args.nosave,
+        period_ckpt=args.period_ckpt,
+        period_assess=args.period_assess,
+        extra_assess=args.extra_assess,
+        period_skip=args.period_skip,
+        period_summary=args.period_summary,
+        period_preview=args.period_preview,
+        visualize=args.visualize,
+        keep_frames=args.keep_frames,
+        session_config_kwargs=dict(
+            gpu_manctrl=args.gpu_manctrl,
+            gpu_frac=args.gpu_frac,
+            log_device_placement=args.log_device_placement),
+        # Other arguments:
+        verbose_train=args.verbose_train,
+        summary_dir='summary',
+        summary_name=name,
+    )
