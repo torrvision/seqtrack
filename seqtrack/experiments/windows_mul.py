@@ -12,6 +12,10 @@ import json
 import numpy as np
 import os
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -28,8 +32,8 @@ def main():
     logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
 
     # TODO: Avoid re-training!!
-    profiles = ['rect', 'linear', 'quadratic', 'hann', 'cosine']
-    radii = [0.5, 1.0, 2.0]
+    profiles = ['rect', 'linear', 'quadratic', 'cosine', 'hann']
+    radii = [0.5, 1.0, 2.0, 4.0]
 
     # Map stream of named vectors to stream of named results (order may be different).
     kwargs = dict([
@@ -54,21 +58,19 @@ def main():
                 val_dataset=args.optimize_dataset,
                 sort_key=lambda metrics: metrics[args.optimize_metric])
 
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    plt.figure(figsize=(4, 3))
-    fig, ax = plt.subplots()
-    plt.xlabel('Penalty radius')
-    plt.ylabel('Mean IOU')
+    quality_metric = args.optimize_dataset + '_' + args.optimize_metric
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     # https://matplotlib.org/api/markers_api.html
     markers = ['o', 'v', '^', '<', '>', '8', 's', 'p', 'P', '*', 'h', 'H', '+', 'x', 'X', 'D', 'd']
-    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+    # plt.figure(figsize=(4, 3))
+    fig, ax = plt.subplots()
+    plt.xlabel('window_radius')
+    plt.ylabel(quality_metric)
+    _set_xscale_log(ax)
 
     for profile_ind, profile in enumerate(profiles):
         name_fn = lambda radius: make_name(profile=profile, radius=radius)
-        quality_metric = args.optimize_dataset + '_' + args.optimize_metric
         quality = [summaries[name_fn(radius)][quality_metric] for radius in radii]
         variance = [summaries[name_fn(radius)].get(quality_metric + '_var', np.nan)
                     for radius in radii]
@@ -207,6 +209,18 @@ def make_name(seed=None, **kwargs):
     if seed is not None:
         parts.append('seed_' + str(seed))
     return '_'.join(parts)
+
+
+def _set_xscale_log(ax):
+    ax.set_xscale('log')
+    major_subs = np.array([1, 2, 5])
+    minor_subs = np.array(sorted(set(range(1, 10)) - set(major_subs)))
+    ax.xaxis.set_major_locator(
+        matplotlib.ticker.LogLocator(base=10.0, subs=major_subs, numticks=12))
+    ax.xaxis.set_minor_locator(
+        matplotlib.ticker.LogLocator(base=10.0, subs=minor_subs, numticks=12))
+    ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%g'))
+    ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
 
 
 if __name__ == '__main__':
