@@ -9,6 +9,7 @@ from __future__ import print_function
 import argparse
 import collections
 import json
+import numpy as np
 import os
 
 import logging
@@ -18,6 +19,8 @@ from seqtrack import app
 from seqtrack import helpers
 from seqtrack import slurm
 from seqtrack import train
+
+ERRORBAR_SIZE = 1.64485
 
 
 def main():
@@ -39,46 +42,42 @@ def main():
     result_stream = mapper(slurm.partial_apply_kwargs(train.train_worker), kwargs.items())
     results = dict(result_stream)
 
-    import pdb; pdb.set_trace()
+    # To obtain one number per training process, we use one dataset as validation.
+    summaries = {}
+    for profile in profiles:
+        for radius in radii:
+            summary_name = make_name(profile=profile, radius=radius)
+            trial_names = [make_name(profile=profile, radius=radius, seed=seed)
+                           for seed in range(args.num_trials)]
+            summaries[summary_name] = train.summarize_trials(
+                [results[name]['track_series'] for name in trial_names],
+                val_dataset=args.optimize_dataset,
+                sort_key=lambda metrics: metrics[args.optimize_metric])
 
-    # # To obtain one number per training process, we use one dataset as validation.
-    # summaries = {}
-    # for feat, feat_config in feature_configs.items():
-    #     for weight in use_spatial_weights:
-    #         for context in desired_context_amounts:
-    #             summary_name = make_name(feat=feat, weight=weight, context=context)
-    #             trial_names = [make_name(feat=feat, weight=weight, context=context, seed=seed)
-    #                            for seed in range(args.num_trials)]
-    #             summary = train.summarize_trials(
-    #                 [results[name]['track_series'] for name in trial_names],
-    #                 val_dataset=args.optimize_dataset,
-    #                 sort_key=lambda metrics: metrics[args.optimize_metric])
-    #             # Add model parameters.
-    #             # TODO: Move into summarize_trials?
-    #             model_properties = helpers.unique_value(
-    #                 [results[name]['model_properties'] for name in trial_names])
-    #             summary.update({'model/' + k: v for k, v in model_properties.items()})
-    #             summaries[summary_name] = summary
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
 
-    # import matplotlib
-    # matplotlib.use('Agg')
-    # import matplotlib.pyplot as plt
+    plt.figure(figsize=(4, 3))
+    fig, ax = plt.subplots()
+    plt.xlabel('Penalty radius')
+    plt.ylabel('Mean IOU')
+    # https://matplotlib.org/api/markers_api.html
+    markers = ['o', 'v', '^', '<', '>', '8', 's', 'p', 'P', '*', 'h', 'H', '+', 'x', 'X', 'D', 'd']
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
-    # plt.figure(figsize=(4, 3))
-    # fig, ax = plt.subplots()
-    # plt.xlabel('Template context')
-    # plt.ylabel('Mean IOU')
-    # for feat, feat_config in feature_configs.items():
-    #     for weight in use_spatial_weights:
-    #         name_fn = lambda context: make_name(feat=feat, weight=weight, context=context)
-    #         contexts = [summaries[name_fn(context)]['model/template_scale']
-    #                     for context in desired_context_amounts]
-    #         quality_metric = args.optimize_dataset + '_' + args.optimize_metric
-    #         quality = [summaries[name_fn(context)][quality_metric]
-    #                    for context in desired_context_amounts]
-    #         plt.scatter(contexts, quality, label=feat + (' (weight)' if weight else ''))
-    # ax.legend()
-    # plt.savefig('plot.pdf')
+    for profile_ind, profile in enumerate(profiles):
+        name_fn = lambda radius: make_name(profile=profile, radius=radius)
+        quality_metric = args.optimize_dataset + '_' + args.optimize_metric
+        quality = [summaries[name_fn(radius)][quality_metric] for radius in radii]
+        variance = [summaries[name_fn(radius)].get(quality_metric + '_var', np.nan)
+                    for radius in radii]
+        error = ERRORBAR_SIZE * np.sqrt(variance)
+        plt.fill_between(x=radii, y1=quality - error, y2=quality + error,
+                         color=colors[profile_ind], label=None, alpha=0.2)
+        plt.plot(radii, quality, label=profile, marker=markers[profile_ind])
+    ax.legend()
+    plt.savefig('plot.pdf')
 
 
 def parse_arguments():
