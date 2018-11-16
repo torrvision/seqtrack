@@ -23,7 +23,6 @@ from tensorflow.contrib.layers.python.layers import utils as layer_utils
 import matplotlib
 # Assume that user will use('Agg') before importing this module if necessary.
 # matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
 import logging
 logger = logging.getLogger(__name__)
@@ -58,6 +57,8 @@ def getColormap(N, cmapname):
 
 
 def createScalarMap(name='hot', vmin=-10, vmax=10):
+    # Import pyplot here to avoid need to call matplotlib.use().
+    import matplotlib.pyplot as plt
     cm = plt.get_cmap(name)
     cNorm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
     return matplotlib.cmx.ScalarMappable(norm=cNorm, cmap=cm)
