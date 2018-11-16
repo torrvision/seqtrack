@@ -58,6 +58,8 @@ class SiamFC(models_interface.IterModel):
             keep_uint8_range=False,  # Use input range of 255 instead of 1.
             feature_arch='alexnet',
             feature_arch_params=None,
+            feature_extra_conv_enable=False,
+            feature_extra_conv_params=None,
             join_type='single',  # Either 'single' or 'multi'
             join_arch='xcorr',
             join_params=None,
@@ -114,6 +116,8 @@ class SiamFC(models_interface.IterModel):
         self._search_scale = float(search_size) / template_size * template_scale
         self._feature_arch = feature_arch
         self._feature_arch_params = feature_arch_params
+        self._feature_extra_conv_enable = feature_extra_conv_enable
+        self._feature_extra_conv_params = feature_extra_conv_params
         self._feature_model_file = feature_model_file
         self._join_type = join_type
         self._join_arch = join_arch
@@ -183,7 +187,9 @@ class SiamFC(models_interface.IterModel):
                     variables_collections=['siamese'],
                     weight_decay=self._wd,
                     arch=self._feature_arch,
-                    arch_params=self._feature_arch_params)
+                    arch_params=self._feature_arch_params,
+                    extra_conv_enable=self._feature_extra_conv_enable,
+                    extra_conv_params=self._feature_extra_conv_params)
                 # Get names relative to this scope for loading pre-trained.
                 self._feature_vars = _global_variables_relative_to_scope(feature_scope)
             self._template_feat = template_feat
@@ -248,7 +254,9 @@ class SiamFC(models_interface.IterModel):
                     variables_collections=['siamese'],
                     weight_decay=self._wd,
                     arch=self._feature_arch,
-                    arch_params=self._feature_arch_params)
+                    arch_params=self._feature_arch_params,
+                    extra_conv_enable=self._feature_extra_conv_enable,
+                    extra_conv_params=self._feature_extra_conv_params)
             rf_search = search_feat.fields[search_input.value]
             search_feat_size = search_feat.value.shape.as_list()[-3:-1]
             try:
@@ -424,9 +432,8 @@ def _branch_net(x, is_training, trainable, variables_collections,
                 # Additional arguments:
                 arch='alexnet',
                 arch_params=None,
-                # extra_conv_enable=False,
-                # extra_conv_params=None,
-                ):
+                extra_conv_enable=False,
+                extra_conv_params=None):
     '''
     Args:
         x: Image of which to compute features. Shape [..., h, w, c]
@@ -437,7 +444,7 @@ def _branch_net(x, is_training, trainable, variables_collections,
     '''
     with tf.name_scope(name) as scope:
         arch_params = arch_params or {}
-        # extra_conv_params = extra_conv_params or {}
+        extra_conv_params = extra_conv_params or {}
         try:
             func = feature_nets.BY_NAME[arch]
         except KeyError:
@@ -453,25 +460,28 @@ def _branch_net(x, is_training, trainable, variables_collections,
             x, end_points = func(x, is_training, trainable, variables_collections,
                                  weight_decay=weight_decay,
                                  **arch_params)
-        # if extra_conv_enable:
-        #     with tf.variable_scope('extra'):
-        #         x = _extra_conv(x, is_training, trainable, variables_collections,
-        #                         **extra_conv_params)
 
+        if extra_conv_enable:
+            with tf.variable_scope('extra'):
+                x = _extra_conv(x, is_training, trainable, variables_collections,
+                                **extra_conv_params)
         if num_dims > 4:
             x = cnn.Tensor(unmerge(x.value, 0), x.fields)
         return x, end_points, feature_vs
 
 
 def _extra_conv(x, is_training, trainable, variables_collections,
-                num_outputs=32,
-                kernel_size=3,
+                num_outputs=None,
+                kernel_size=1,
                 stride=1,
                 padding='VALID',
                 activation='linear'):
     if not trainable:
         raise NotImplementedError('trainable not supported')
 
+    x = cnn.as_tensor(x)
+    if num_outputs is None:
+        num_outputs = x.value.shape[-1].value
     with slim.arg_scope([slim.batch_norm], is_training=is_training):
         with slim.arg_scope([cnn.slim_conv2d],
                             variables_collections=variables_collections):
