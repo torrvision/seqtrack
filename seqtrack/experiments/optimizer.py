@@ -18,6 +18,10 @@ import collections
 import json
 import os
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -26,32 +30,34 @@ from seqtrack import helpers
 from seqtrack import slurm
 from seqtrack import train
 
+COLORS = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
 
 def main():
     args = parse_arguments()
     logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
 
     opt_configs = [
-        # ('sgd', dict(optimizer='sgd', optimizer_params=None)),
+        ('sgd', dict(optimizer='sgd', optimizer_params=None)),
         ('momentum_0.9', dict(
             optimizer='momentum',
             optimizer_params=dict(momentum=0.9))),
-        # ('momentum_0.9_nesterov', dict(
-        #     optimizer='momentum',
-        #     optimizer_params=dict(momentum=0.9, use_nesterov=True))),
-        # ('rmsprop', dict(optimizer='rmsprop', optimizer_params=None)),
+        ('momentum_0.9_nesterov', dict(
+            optimizer='momentum',
+            optimizer_params=dict(momentum=0.9, use_nesterov=True))),
+        ('rmsprop', dict(optimizer='rmsprop', optimizer_params=None)),
         ('adam', dict(optimizer='adam', optimizer_params=None)),
-        # ('adam_eps_1e-4', dict(
-        #     optimizer='adam',
-        #     optimizer_params=dict(epsilon=1e-4))),
+        ('adam_eps_1e-4', dict(
+            optimizer='adam',
+            optimizer_params=dict(epsilon=1e-4))),
     ]
     schedule_configs = [
-        # ('constant', dict(lr_schedule='constant', lr_params=None)),
+        ('constant', dict(lr_schedule='constant', lr_params=None)),
         ('decay_0.1_remain_0.5', dict(
             lr_schedule='remain',
             lr_params=dict(decay_rate=0.1, remain_rate=0.5, max_power=3))),
     ]
-    inits = [1e-3]  # [1e-2, 1e-3]
+    inits = [1e-2, 1e-3, 1e-4]
 
     # Map stream of named vectors to stream of named results (order may be different).
     kwargs = dict([
@@ -68,7 +74,62 @@ def main():
     result_stream = mapper(slurm.partial_apply_kwargs(train.train_worker), kwargs.items())
     results = dict(result_stream)
 
-    import pdb; pdb.set_trace()
+    def configs():
+        return ((opt, schedule, init)
+                for opt, opt_config in opt_configs
+                for schedule, schedule_config in schedule_configs
+                for init in inits)
+
+    for metric_name in args.train_metrics:
+        fig, ax = plt.subplots()
+        plt.xlabel('Gradient steps (k)')
+        plt.ylabel(metric_name)
+        for i, (opt, schedule, init) in enumerate(configs()):
+            name_fn = lambda seed: make_name(seed=seed, opt=opt, schedule=schedule, init=init)
+            steps = sorted(results[name_fn(seed=0)]['train_series'].keys())
+            for subset in ['train', 'val']:
+                # Take mean across trials.
+                quality = np.mean([[
+                    results[name_fn(seed)]['train_series'][t][subset + '/' + metric_name]
+                    for t in steps] for seed in range(args.num_trials)], axis=0)
+                # TODO: Shade colors by learning rate?
+                label = '{} {} {}'.format(opt, init, schedule)
+                # TODO: Add variance across trials?
+                plt.plot(np.asfarray(steps) / 1000, quality, color=COLORS[i],
+                         linestyle=('solid' if subset == 'train' else 'dashed'),
+                         label=(label if subset == 'train' else None))
+        ax.legend()
+        plt.savefig('plot_train_{}.pdf'.format(metric_name))
+
+    for dataset in args.eval_datasets:
+        for metric_name in args.track_metrics:
+            fig, ax = plt.subplots()
+            plt.xlabel('Gradient steps (k)')
+            plt.ylabel(metric_name)
+            for i, (opt, schedule, init) in enumerate(configs()):
+                name_fn = lambda seed: make_name(seed=seed, opt=opt, schedule=schedule, init=init)
+                steps = sorted(results[name_fn(seed=0)]['track_series'].keys())
+                steps_k = np.asfarray(steps) / 1000
+                quality = np.mean([[
+                    results[name_fn(seed)]['track_series'][t][dataset + '-full'][metric_name]
+                    for t in steps] for seed in range(args.num_trials)], axis=0)
+                variance_name = metric_name + '_var'
+                variance_test = np.mean([[
+                    results[name_fn(seed)]['track_series'][t][dataset + '-full'][variance_name]
+                    for t in steps] for seed in range(args.num_trials)], axis=0)
+                variance_train = np.var([[
+                    results[name_fn(seed)]['track_series'][t][dataset + '-full'][metric_name]
+                    for t in steps] for seed in range(args.num_trials)], axis=0)
+                variance = variance_train + variance_test
+                error = np.sqrt(variance)
+                # TODO: Shade colors by learning rate?
+                label = '{} {} {}'.format(opt, init, schedule)
+                # TODO: Add variance across trials?
+                plt.fill_between(steps_k, quality - error, quality + error,
+                                 color=COLORS[i], label=None, alpha=0.2)
+                plt.plot(steps_k, quality, color=COLORS[i], label=label)
+            ax.legend()
+            plt.savefig('plot_track_{}_{}.pdf'.format(dataset, metric_name))
 
     # # To obtain one number per training process, we use one dataset as validation.
     # summaries = {}
@@ -88,11 +149,6 @@ def main():
     #         summary.update({'model/' + k: v for k, v in model_properties.items()})
     #         summaries[summary_name] = summary
 
-    # import matplotlib
-    # matplotlib.use('Agg')
-    # import matplotlib.pyplot as plt
-
-    # plt.figure(figsize=(4, 3))
     # fig, ax = plt.subplots()
     # plt.xlabel('Template context')
     # plt.ylabel('Mean IOU')
@@ -113,8 +169,6 @@ def main():
     #     plt.errorbar(x=contexts, y=quality, yerr=None,
     #                  color=colors[opt_ind],
     #                  label=opt)
-    # ax.legend()
-    # plt.savefig('plot.pdf')
 
 
 def parse_arguments():
@@ -132,10 +186,8 @@ def parse_arguments():
 
     parser.add_argument('-n', '--num_trials', type=int, default=1,
                         help='number of repetitions')
-    parser.add_argument('--optimize_dataset', default='pool_val-full',
-                        help='eval_dataset to use to choose model')
-    parser.add_argument('--optimize_metric', default='TRE_3_iou_seq_mean',
-                        help='metric to optimize for')
+    parser.add_argument('--track_metrics', nargs='+', default=['TRE_3_iou_seq_mean'])
+    parser.add_argument('--train_metrics', nargs='+', default=['loss', 'dist', 'iou'])
 
     return parser.parse_args()
 
