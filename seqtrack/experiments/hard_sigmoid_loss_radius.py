@@ -7,12 +7,15 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import numpy as np
-
 import argparse
 import collections
 import json
+import numpy as np
 import os
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 import logging
 logger = logging.getLogger(__name__)
@@ -50,57 +53,63 @@ def main():
     result_stream = mapper(slurm.partial_apply_kwargs(train.train_worker), kwargs.items())
     results = dict(result_stream)
 
-    # # To obtain one number per training process, we use one dataset as validation.
-    # summaries = {}
-    # for feat, feat_config in loss_configs:
-    #     for weight in use_spatial_weights:
-    #         for context in desired_context_amounts:
-    #             summary_name = make_name(feat=feat, weight=weight, context=context)
-    #             trial_names = [make_name(feat=feat, weight=weight, context=context, seed=seed)
-    #                            for seed in range(args.num_trials)]
-    #             summary = train.summarize_trials(
-    #                 [results[name]['track_series'] for name in trial_names],
-    #                 val_dataset=args.optimize_dataset,
-    #                 sort_key=lambda metrics: metrics[args.optimize_metric])
-    #             # Add model parameters.
-    #             # TODO: Move into summarize_trials?
-    #             model_properties = helpers.unique_value(
-    #                 [results[name]['model_properties'] for name in trial_names])
-    #             summary.update({'model/' + k: v for k, v in model_properties.items()})
-    #             summaries[summary_name] = summary
+    # To obtain one number per configuration, we use one dataset as validation.
+    summaries = {}
+    for balanced in balanced_range:
+        for pos_weight in pos_weight_range:
+            for pos_radius, neg_radius in pos_neg_radius_range:
+                summary_name = make_name(balanced=balanced, pos_weight=pos_weight,
+                                         pos_radius=pos_radius, neg_radius=neg_radius)
+                trial_names = [make_name(balanced=balanced, pos_weight=pos_weight,
+                                         pos_radius=pos_radius, neg_radius=neg_radius, seed=seed)
+                               for seed in range(args.num_trials)]
+                summaries[summary_name] = train.summarize_trials(
+                    [results[name]['track_series'] for name in trial_names],
+                    val_dataset=args.optimize_dataset,
+                    sort_key=lambda metrics: metrics[args.optimize_metric])
 
-    # import matplotlib
-    # matplotlib.use('Agg')
-    # import matplotlib.pyplot as plt
+    quality_metric = args.optimize_dataset + '_' + args.optimize_metric
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    # https://matplotlib.org/api/markers_api.html
+    markers = ['o', 'v', '^', '<', '>', '8', 's', 'p', 'P', '*', 'h', 'H', '+', 'x', 'X', 'D', 'd']
 
-    # plt.figure(figsize=(4, 3))
-    # fig, ax = plt.subplots()
-    # plt.xlabel('Template context')
-    # plt.ylabel('Mean IOU')
-    # colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-    # for feat_ind, (feat, feat_config) in enumerate(loss_configs):
-    #     for weight in use_spatial_weights:
-    #         name_fn = lambda context: make_name(feat=feat, weight=weight, context=context)
-    #         contexts = [summaries[name_fn(context)]['model/template_scale']
-    #                     for context in desired_context_amounts]
-    #         quality_metric = args.optimize_dataset + '_' + args.optimize_metric
-    #         quality = [summaries[name_fn(context)][quality_metric]
-    #                    for context in desired_context_amounts]
-    #         try:
-    #             variance = [summaries[name_fn(context)][quality_metric + '_var']
-    #                         for context in desired_context_amounts]
-    #             error = 1.64485 * np.sqrt(variance)
-    #         except KeyError:
-    #             error = None
-    #         if not weight:
-    #             plt.fill_between(x=contexts, y1=quality - error, y2=quality + error,
-    #                              color=colors[feat_ind], label=None, alpha=0.2)
-    #         plt.errorbar(x=contexts, y=quality, yerr=None,
-    #                      color=colors[feat_ind],
-    #                      label=feat if not weight else None,
-    #                      linestyle='dashed' if weight else 'solid')
-    # ax.legend()
-    # plt.savefig('plot.pdf')
+    for balanced in balanced_range:
+        fig, ax = plt.subplots()
+        _set_xscale_log(ax)
+        plt.xlabel('negative_radius')
+        plt.ylabel(quality_metric)
+
+        # Join points of equal positive and negative radius.
+        for j, pos_weight in enumerate(pos_weight_range):
+            name_fn = lambda pos_radius, neg_radius: make_name(
+                balanced=balanced, pos_weight=pos_weight,
+                pos_radius=pos_radius, neg_radius=neg_radius)
+            quality = [summaries[name_fn(radius, radius)][quality_metric]
+                       for radius in radius_range]
+            plt.plot(radius_range, quality, label=None, color='black', linestyle='dotted')
+
+        for i, pos_radius in enumerate(radius_range):
+            for j, pos_weight in enumerate(pos_weight_range):
+                name_fn = lambda neg_radius: make_name(
+                    balanced=balanced, pos_weight=pos_weight,
+                    pos_radius=pos_radius, neg_radius=neg_radius)
+                # Consider negative radius >= positive radius.
+                neg_radii = radius_range[i:]
+                quality = [summaries[name_fn(neg_radius)][quality_metric]
+                           for neg_radius in neg_radii]
+                variance = [summaries[name_fn(neg_radius)].get(quality_metric + '_var', np.nan)
+                            for neg_radius in neg_radii]
+                error = 1.64485 * np.sqrt(variance)
+                plt.fill_between(x=neg_radii, y1=quality - error, y2=quality + error,
+                                 color=colors[i], label=None, alpha=0.2)
+                plt.plot(neg_radii, quality,
+                         label='pos_radius {}, pos_weight {}'.format(pos_radius, pos_weight),
+                         color=colors[i], marker=markers[j])
+
+        box = ax.get_position()
+        ax.set_position([box.x0, box.y0, 0.55 * box.width, box.height])
+        ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
+        plt.savefig('plot_balanced_{}.pdf'.format(balanced))
 
 
 def parse_arguments():
@@ -230,6 +239,18 @@ def make_name(seed=None, **kwargs):
     if seed is not None:
         parts.append('seed_' + str(seed))
     return '_'.join(parts)
+
+
+def _set_xscale_log(ax):
+    ax.set_xscale('log')
+    major_subs = np.array([1, 2, 5])
+    minor_subs = np.array(sorted(set(range(1, 10)) - set(major_subs)))
+    ax.xaxis.set_major_locator(
+        matplotlib.ticker.LogLocator(base=10.0, subs=major_subs, numticks=12))
+    ax.xaxis.set_minor_locator(
+        matplotlib.ticker.LogLocator(base=10.0, subs=minor_subs, numticks=12))
+    ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%g'))
+    ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
 
 
 if __name__ == '__main__':
