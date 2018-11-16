@@ -75,7 +75,8 @@ class SlurmDictMapper(object):
     def _submit(self, func, key, value):
         try:
             proc = slurmproc.Process(functools.partial(func, MapContext(key), value),
-                                     dir=os.path.join(self._dir, key), **self._kwargs)
+                                     dir=os.path.join(self._dir, key), job_name=str(key),
+                                     **self._kwargs)
         except subprocess.CalledProcessError as ex:
             logger.warning('could not submit process %s: %s', str(key), str(ex))
             self._errors[key] = ex
