@@ -517,7 +517,7 @@ def apply_motion_penalty(scores, radius,
     return scores
 
 
-def _normalize_scores(scores, method):
+def _normalize_scores(scores, method, eps=1e-3):
     '''
     Args:
         method: 'none', 'mean', 'sigmoid'
@@ -528,7 +528,7 @@ def _normalize_scores(scores, method):
     elif method == 'mean':
         min_val = tf.reduce_min(scores, axis=(-4, -3, -2, -1), keepdims=True)
         mean_val = tf.reduce_mean(scores, axis=(-4, -3, -2, -1), keepdims=True)
-        scores = (1 / (mean_val - min_val)) * (scores - min_val)
+        scores = (1 / tf.maximum(float(eps), mean_val - min_val)) * (scores - min_val)
     elif method == 'sigmoid':
         scores = tf.sigmoid(scores)
     else:
