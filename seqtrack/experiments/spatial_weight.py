@@ -31,23 +31,38 @@ def main():
     args = parse_arguments()
     logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
 
-    FeatureConfig = collections.namedtuple('FeatureConfig', ['arch', 'arch_params'])
+    FeatureConfig = collections.namedtuple(
+        'FeatureConfig',
+        ['arch', 'arch_params', 'extra_conv_enable', 'extra_conv_params'])
     feature_configs = [
         ('alexnet_conv2', FeatureConfig(
             arch='alexnet',
-            arch_params=dict(
-                output_layer='conv2'))),
+            arch_params=dict(output_layer='conv2'),
+            extra_conv_enable=False,
+            extra_conv_params=None)),
         ('alexnet_conv3', FeatureConfig(
             arch='alexnet',
-            arch_params=dict(
-                output_layer='conv3'))),
+            arch_params=dict(output_layer='conv3'),
+            extra_conv_enable=False,
+            extra_conv_params=None)),
         ('alexnet_conv5', FeatureConfig(
             arch='alexnet',
-            arch_params=dict(
-                output_layer='conv5'))),
+            arch_params=dict(output_layer='conv5'),
+            extra_conv_enable=False,
+            extra_conv_params=None)),
+        ('resnet_block1', FeatureConfig(
+            arch='slim_resnet_v1_50',
+            arch_params=dict(num_blocks=1),
+            extra_conv_enable=True,
+            extra_conv_params=None)),
+        ('resnet_block2', FeatureConfig(
+            arch='slim_resnet_v1_50',
+            arch_params=dict(num_blocks=2),
+            extra_conv_enable=True,
+            extra_conv_params=None)),
     ]
     use_spatial_weights = [False, True]
-    desired_context_amounts = [1.0, 1.5, 2.0, 3.0, 4.0]
+    desired_context_amounts = [1.0, 2.0]  # [1.0, 1.5, 2.0, 3.0, 4.0]
 
     # Map stream of named vectors to stream of named results (order may be different).
     kwargs = dict([
@@ -168,6 +183,8 @@ def make_kwargs(args, feat, feat_config, weight, context, seed):
             desired_search_radius=1.0,
             feature_arch=feat_config.arch,
             feature_arch_params=feat_config.arch_params,
+            feature_extra_conv_enable=feat_config.extra_conv_enable,
+            feature_extra_conv_params=feat_config.extra_conv_params,
             join_type='single',
             join_arch='xcorr',
             join_params=dict(
