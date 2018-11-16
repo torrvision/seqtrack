@@ -184,6 +184,16 @@ def parse_arguments():
     parser.add_argument('--loglevel', default='info', help='debug, info, warning')
     parser.add_argument('--verbose_train', action='store_true')
 
+    default_loss_params = dict(
+        method='sigmoid',
+        params=dict(
+            balanced=True,
+            pos_weight=1,
+            label_method='hard',
+            label_params=dict(positive_radius=0.3, negative_radius=0.3)))
+    parser.add_argument('--loss_params', type=json.loads, help='Loss function',
+                        default=json.dumps(default_loss_params))
+
     parser.add_argument('-n', '--num_trials', type=int, default=1,
                         help='number of repetitions')
     parser.add_argument('--track_metrics', nargs='+', default=['TRE_3_iou_seq_mean'])
@@ -232,13 +242,7 @@ def make_kwargs(args, seed, opt, opt_config, schedule, schedule_config, init):
             arg_max_eps=0.01,
             # TODO: Study weight decay and loss config.
             wd=1e-4,
-            loss_params=dict(
-                method='sigmoid',
-                params=dict(
-                    balanced=True,
-                    pos_weight=1,
-                    label_method='hard',
-                    label_params=dict(positive_radius=0.3, negative_radius=0.3))),
+            loss_params=args.loss_params,
         ),
     )
     return name, kwargs
