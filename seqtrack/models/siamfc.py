@@ -798,7 +798,7 @@ def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_p
     cost_params = cost_params or {}
     try:
         cost_fn = {
-            'distance_greater': _cost_distance_threshold,
+            'distance_greater': _cost_distance_greater,
         }[cost_method]
     except KeyError as ex:
         raise ValueError('unknown cost method: "{}"'.format(cost_method))
@@ -816,6 +816,8 @@ def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_p
 
     cost_name, costs = cost_fn(distance, **cost_params)
     is_center = tf.reduce_all(tf.abs(pixel_disp) <= 0, axis=-1, keepdims=True)
+    # Force cost of center label to be zero.
+    costs = tf.where(is_center, tf.zeros_like(costs), costs)
     correct_score = weighted_mean(scores, is_center, axis=(-3, -2), keepdims=False)
     # We want to achieve a margin:
     #   correct_score >= scores + costs
@@ -836,9 +838,9 @@ def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_p
     return loss_name, loss
 
 
-def _cost_distance_threshold(r, threshold):
+def _cost_distance_greater(r, threshold):
     is_neg = (r >= threshold)
-    cost_name = 'distance_greater_threshold_{}'.format(str(threshold))
+    cost_name = 'distance_greater_{}'.format(str(threshold))
     return cost_name, tf.to_float(is_neg)
 
 

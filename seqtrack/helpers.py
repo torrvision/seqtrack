@@ -20,6 +20,11 @@ from contextlib import contextmanager
 
 from tensorflow.contrib.layers.python.layers import utils as layer_utils
 
+import matplotlib
+# Assume that user will use('Agg') before importing this module if necessary.
+# matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -42,17 +47,10 @@ def get_time():
     return time
 
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.cm as cmx
-import matplotlib.colors as colors
-
-
 def getColormap(N, cmapname):
     '''Returns a function that maps each index in 0, 1, ..., N-1 to a distinct RGB color.'''
-    colornorm = colors.Normalize(vmin=0, vmax=N - 1)
-    scalarmap = cmx.ScalarMappable(norm=colornorm, cmap=cmapname)
+    colornorm = matplotlib.colors.Normalize(vmin=0, vmax=N - 1)
+    scalarmap = matplotlib.cmx.ScalarMappable(norm=colornorm, cmap=cmapname)
 
     def mapIndexToRgbColor(index):
         return scalarmap.to_rgba(index)
@@ -61,8 +59,8 @@ def getColormap(N, cmapname):
 
 def createScalarMap(name='hot', vmin=-10, vmax=10):
     cm = plt.get_cmap(name)
-    cNorm = colors.Normalize(vmin=vmin, vmax=vmax)
-    return cmx.ScalarMappable(norm=cNorm, cmap=cm)
+    cNorm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
+    return matplotlib.cmx.ScalarMappable(norm=cNorm, cmap=cm)
 
 
 def load_image(fname, size_hw=None, resize=False):
@@ -677,3 +675,15 @@ def known_spatial_dim(x):
     size = x.shape[-3:-1].as_list()
     assert all(n is not None for n in size), 'unknown spatial dim: {:s}'.format(x.shape.as_list())
     return size
+
+
+def set_xscale_log(ax):
+    ax.set_xscale('log')
+    major_subs = np.array([1, 2, 5])
+    minor_subs = np.array(sorted(set(range(1, 10)) - set(major_subs)))
+    ax.xaxis.set_major_locator(
+        matplotlib.ticker.LogLocator(base=10.0, subs=major_subs, numticks=12))
+    ax.xaxis.set_minor_locator(
+        matplotlib.ticker.LogLocator(base=10.0, subs=minor_subs, numticks=12))
+    ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%g'))
+    ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
