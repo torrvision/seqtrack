@@ -14,6 +14,7 @@ def xcorr(template, search, is_training,
           enable_pre_conv=False,
           pre_conv_params=None,
           learn_spatial_weight=False,
+          weight_init_method='ones',
           reduce_channels=True,
           use_mean=False,
           use_batch_norm=False,
@@ -31,6 +32,7 @@ def xcorr(template, search, is_training,
         enable_pre_conv=enable_pre_conv,
         pre_conv_params=pre_conv_params,
         learn_spatial_weight=learn_spatial_weight,
+        weight_init_method=weight_init_method,
         reduce_channels=reduce_channels,
         use_mean=use_mean,
         use_batch_norm=use_batch_norm,
@@ -43,6 +45,7 @@ def _xcorr_general(template, search, is_training,
                    enable_pre_conv=False,
                    pre_conv_params=None,
                    learn_spatial_weight=False,
+                   weight_init_method='ones',
                    reduce_channels=True,
                    use_mean=False,
                    use_batch_norm=False,
@@ -77,17 +80,31 @@ def _xcorr_general(template, search, is_training,
         # There are two separate issues here:
         # 1. Whether to make the initial output equal to the mean?
         # 2. How to share this between a constant multiplier and initialization?
-        spatial_normalizer = (1 / np.prod(template_size)) if use_mean else 1
+        spatial_normalizer = 1 / np.prod(template_size)
+        if learn_spatial_weight:
+            if weight_init_method == 'mean':
+                weight_init = spatial_normalizer
+            elif weight_init_method == 'ones':
+                weight_init = 1
+            else:
+                raise ValueError('unknown weight init method: "{}"'.format(weight_init_method))
+        else:
+            weight_init = 1
+        if use_mean:
+            # Maintain property:
+            # normalize_factor * weight_init = spatial_normalizer
+            normalize_factor = spatial_normalizer / weight_init
+        else:
+            normalize_factor = 1
+
         if learn_spatial_weight:
             # Initialize with spatial normalizer.
             spatial_weight = tf.get_variable(
                 'spatial_weight', template_size, tf.float32,
-                initializer=tf.constant_initializer(spatial_normalizer))
+                initializer=tf.constant_initializer(weight_init))
             template *= tf.expand_dims(spatial_weight, -1)
         dot = cnn.diag_xcorr(search, template)
-        if not learn_spatial_weight:
-            dot = cnn.pixelwise(lambda dot: spatial_normalizer * dot, dot)
-
+        dot = cnn.pixelwise(lambda dot: normalize_factor * dot, dot)
         if reduce_channels:
             dot = cnn.channel_mean(dot) if use_mean else cnn.channel_sum(dot)
         return _calibrate(dot, use_batch_norm, learn_gain, gain_init)
