@@ -58,7 +58,11 @@ def _xcorr_general(template, search, is_training,
     If use_batch_norm is true, then an output gain will always be incorporated.
     Otherwise, it will only be incorporated if learn_gain is true.
 
-    It is not necessary to use the mean if using batch norm.
+    When `learn_spatial_weight` is false:
+    If `use_batch_norm` is true, `use_mean` should have no effect.
+    When `learn_spatial_weight` is true:
+    The `use_mean` parameter also controls the initialization of the spatial weights.
+    This may have an effect on gradient descent, even if `use_batch_norm` is true.
     '''
     with tf.variable_scope(scope, 'xcorr'):
         pre_conv_params = pre_conv_params or {}

@@ -131,45 +131,6 @@ def main():
             ax.legend()
             plt.savefig('plot_track_{}_{}.pdf'.format(dataset, metric_name))
 
-    # # To obtain one number per training process, we use one dataset as validation.
-    # summaries = {}
-    # for opt, opt_config in opt_configs:
-    #     # for iteration number...
-    #         summary_name = make_name(opt=opt)
-    #         trial_names = [make_name(opt=opt, seed=seed)
-    #                        for seed in range(args.num_trials)]
-    #         summary = train.summarize_trials(
-    #             [results[name]['track_series'] for name in trial_names],
-    #             val_dataset=args.optimize_dataset,
-    #             sort_key=lambda metrics: metrics[args.optimize_metric])
-    #         # Add model parameters.
-    #         # TODO: Move into summarize_trials?
-    #         model_properties = helpers.unique_value(
-    #             [results[name]['model_properties'] for name in trial_names])
-    #         summary.update({'model/' + k: v for k, v in model_properties.items()})
-    #         summaries[summary_name] = summary
-
-    # fig, ax = plt.subplots()
-    # plt.xlabel('Template context')
-    # plt.ylabel('Mean IOU')
-    # colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-    # for opt_ind, (opt, opt_config) in enumerate(opt_configs):
-    #     name_fn = lambda context: make_name(opt=opt, context=context)
-    #     contexts = [summaries[name_fn(context)]['model/template_scale']
-    #                 for context in desired_context_amounts]
-    #     quality_metric = args.optimize_dataset + '_' + args.optimize_metric
-    #     quality = [summaries[name_fn(context)][quality_metric]
-    #                for context in desired_context_amounts]
-    #     try:
-    #         variance = [summaries[name_fn(context)][quality_metric + '_var']
-    #                     for context in desired_context_amounts]
-    #         error = 1.64485 * np.sqrt(variance)
-    #     except KeyError:
-    #         error = None
-    #     plt.errorbar(x=contexts, y=quality, yerr=None,
-    #                  color=colors[opt_ind],
-    #                  label=opt)
-
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
