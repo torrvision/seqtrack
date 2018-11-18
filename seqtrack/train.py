@@ -677,6 +677,7 @@ def make_optimizer(learning_rate, name, **kwargs):
             'sgd': tf.train.GradientDescentOptimizer,
             'momentum': tf.train.MomentumOptimizer,
             'adam': tf.train.AdamOptimizer,
+            'rmsprop': tf.train.RMSPropOptimizer,
         }[name]
     except KeyError as ex:
         raise ValueError('unknown optimizer: {}'.format(ex))
