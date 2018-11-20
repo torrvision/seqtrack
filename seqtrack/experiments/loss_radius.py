@@ -26,18 +26,25 @@ from seqtrack import helpers
 from seqtrack import slurm
 from seqtrack import train
 
+ERRORBAR_SIZE = 1.64485
+COLORS = plt.rcParams['axes.prop_cycle'].by_key()['color']
+# https://matplotlib.org/api/markers_api.html
+MARKERS = ['o', 'v', '^', '<', '>', '8', 's', 'p', 'P', '*', 'h', 'H', '+', 'x', 'X', 'D', 'd']
+
 
 def main():
     args = parse_arguments()
     logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
 
-    radii = [0.1, 0.3]  # [0.05, 0.1, 0.2, 0.3, 0.5]
+    radii = [0.05, 0.1, 0.2, 0.3, 0.5]
 
     # Parameterize losses.
     sigmoid_pos_weights = [1.0]  # [0.1, 1.0, 10.0]
     # Given radius, return label_params dict.
-    labels = [('hard_binary', lambda r: dict(radius=r)),
-              ('gaussian', lambda r: dict(sigma=r))]
+    labels = [
+        ('hard_binary', lambda r: dict(radius=r)),
+        ('gaussian', lambda r: dict(sigma=r)),
+    ]
     # Given radius return `params` dict for siamfc.compute_loss.
     losses = list(itertools.chain(
         [('sigmoid_{}_{}'.format(pos_weight, label_name), functools.partial(
@@ -72,63 +79,34 @@ def main():
     result_stream = mapper(slurm.partial_apply_kwargs(train.train_worker), kwargs.items())
     results = dict(result_stream)
 
-    # # To obtain one number per configuration, we use one dataset as validation.
-    # summaries = {}
-    # for balanced in balanced_range:
-    #     for pos_weight in pos_weight_range:
-    #         for pos_radius, neg_radius in pos_neg_radius_range:
-    #             summary_name = make_name(balanced=balanced, pos_weight=pos_weight,
-    #                                      pos_radius=pos_radius, neg_radius=neg_radius)
-    #             trial_names = [make_name(balanced=balanced, pos_weight=pos_weight,
-    #                                      pos_radius=pos_radius, neg_radius=neg_radius, seed=seed)
-    #                            for seed in range(args.num_trials)]
-    #             summaries[summary_name] = train.summarize_trials(
-    #                 [results[name]['track_series'] for name in trial_names],
-    #                 val_dataset=args.optimize_dataset,
-    #                 sort_key=lambda metrics: metrics[args.optimize_metric])
+    # To obtain one number per training process, we use one dataset as validation.
+    summaries = {}
+    for loss, _ in losses:
+        for radius in radii:
+            summary_name = make_name(loss=loss, radius=radius)
+            trial_names = [make_name(loss=loss, radius=radius, seed=seed)
+                           for seed in range(args.num_trials)]
+            summaries[summary_name] = train.summarize_trials(
+                [results[name]['track_series'] for name in trial_names],
+                val_dataset=args.optimize_dataset,
+                sort_key=lambda metrics: metrics[args.optimize_metric])
 
-    # quality_metric = args.optimize_dataset + '_' + args.optimize_metric
-    # colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-    # # https://matplotlib.org/api/markers_api.html
-    # markers = ['o', 'v', '^', '<', '>', '8', 's', 'p', 'P', '*', 'h', 'H', '+', 'x', 'X', 'D', 'd']
+    quality_metric = args.optimize_dataset + '_' + args.optimize_metric
 
-    # for balanced in balanced_range:
-    #     fig, ax = plt.subplots()
-    #     helpers.set_xscale_log(ax)
-    #     plt.xlabel('negative_radius')
-    #     plt.ylabel(quality_metric)
-
-    #     # Join points of equal positive and negative radius.
-    #     for j, pos_weight in enumerate(pos_weight_range):
-    #         name_fn = lambda pos_radius, neg_radius: make_name(
-    #             balanced=balanced, pos_weight=pos_weight,
-    #             pos_radius=pos_radius, neg_radius=neg_radius)
-    #         quality = [summaries[name_fn(radius, radius)][quality_metric]
-    #                    for radius in radius_range]
-    #         plt.plot(radius_range, quality, label=None, color='black', linestyle='dotted')
-
-    #     for i, pos_radius in enumerate(radius_range):
-    #         for j, pos_weight in enumerate(pos_weight_range):
-    #             name_fn = lambda neg_radius: make_name(
-    #                 balanced=balanced, pos_weight=pos_weight,
-    #                 pos_radius=pos_radius, neg_radius=neg_radius)
-    #             # Consider negative radius >= positive radius.
-    #             neg_radii = radius_range[i:]
-    #             quality = [summaries[name_fn(neg_radius)][quality_metric]
-    #                        for neg_radius in neg_radii]
-    #             variance = [summaries[name_fn(neg_radius)].get(quality_metric + '_var', np.nan)
-    #                         for neg_radius in neg_radii]
-    #             error = 1.64485 * np.sqrt(variance)
-    #             plt.fill_between(x=neg_radii, y1=quality - error, y2=quality + error,
-    #                              color=colors[i], label=None, alpha=0.2)
-    #             plt.plot(neg_radii, quality,
-    #                      label='pos_radius {}, pos_weight {}'.format(pos_radius, pos_weight),
-    #                      color=colors[i], marker=markers[j])
-
-    #     box = ax.get_position()
-    #     ax.set_position([box.x0, box.y0, 0.55 * box.width, box.height])
-    #     ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
-    #     plt.savefig('plot_balanced_{}.pdf'.format(balanced))
+    fig, ax = plt.subplots()
+    plt.xlabel('Radius (relative to object size)')
+    plt.ylabel(quality_metric)
+    for loss_ind, (loss, _) in enumerate(losses):
+        name_fn = lambda radius: make_name(loss=loss, radius=radius)
+        quality = [summaries[name_fn(radius)][quality_metric] for radius in radii]
+        variance = [summaries[name_fn(radius)][quality_metric + '_var'] for radius in radii]
+        error = ERRORBAR_SIZE * np.sqrt(variance)
+        plt.fill_between(x=radii, y1=quality - error, y2=quality + error,
+                         color=COLORS[loss_ind], alpha=0.2, label=None)
+        plt.plot(radii, quality, label=loss,
+                 color=COLORS[loss_ind], marker=MARKERS[loss_ind])
+    ax.legend()
+    plt.savefig('plot.pdf')
 
 
 def parse_arguments():
