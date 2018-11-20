@@ -52,6 +52,8 @@ def main():
             optimizer='adam',
             optimizer_params=dict(epsilon=1e-4))),
     ]
+    opt_configs = [(name, config) for name, config in opt_configs if name in args.optimizers]
+
     schedule_configs = [
         ('constant', dict(lr_schedule='constant', lr_params=None)),
         ('decay_0.1_remain_0.5', dict(
@@ -187,8 +189,11 @@ def parse_arguments():
             pos_weight=1,
             label_method='hard',
             label_params=dict(positive_radius=0.3, negative_radius=0.3)))
-    parser.add_argument('--loss_params', type=json.loads, help='Loss function',
-                        default=json.dumps(default_loss_params))
+    parser.add_argument('--loss_params', type=json.loads, default=default_loss_params,
+                        help='Loss function')
+    default_optimizers = ['sgd', 'momentum_0.9', 'rmsprop', 'adam']
+    parser.add_argument('--optimizers', nargs='+', default=default_optimizers,
+                        help='Subset of optimizers to consider')
 
     parser.add_argument('-n', '--num_trials', type=int, default=1,
                         help='number of repetitions')
