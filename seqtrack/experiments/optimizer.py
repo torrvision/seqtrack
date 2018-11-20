@@ -21,6 +21,7 @@ import os
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 
 import logging
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ def main():
             lr_params=dict(decay_rate=0.1, remain_rate=0.5, max_power=3))),
     ]
     inits = [1e-2, 1e-3, 1e-4]
+    # TODO: Add batch size!
 
     # Map stream of named vectors to stream of named results (order may be different).
     kwargs = dict([
@@ -74,62 +76,95 @@ def main():
     result_stream = mapper(slurm.partial_apply_kwargs(train.train_worker), kwargs.items())
     results = dict(result_stream)
 
-    def configs():
-        return ((opt, schedule, init)
-                for opt, opt_config in opt_configs
-                for schedule, schedule_config in schedule_configs
-                for init in inits)
-
     for metric_name in args.train_metrics:
+        # Plot all curves. Use one color per optimizer.
         fig, ax = plt.subplots()
         plt.xlabel('Gradient steps (k)')
         plt.ylabel(metric_name)
-        for i, (opt, schedule, init) in enumerate(configs()):
-            name_fn = lambda seed: make_name(seed=seed, opt=opt, schedule=schedule, init=init)
-            steps = sorted(results[name_fn(seed=0)]['train_series'].keys())
-            for subset in ['train', 'val']:
-                # Take mean across trials.
-                quality = np.mean([[
-                    results[name_fn(seed)]['train_series'][t][subset + '/' + metric_name]
-                    for t in steps] for seed in range(args.num_trials)], axis=0)
-                # TODO: Shade colors by learning rate?
-                label = '{} {} {}'.format(opt, init, schedule)
-                # TODO: Add variance across trials?
-                plt.plot(np.asfarray(steps) / 1000, quality, color=COLORS[i],
-                         linestyle=('solid' if subset == 'train' else 'dashed'),
-                         label=(label if subset == 'train' else None))
+        for opt_index, (opt, _) in enumerate(opt_configs):
+            done_label = False
+            for (init_index, init), schedule in (
+                    ((init_index, init), schedule)
+                    for init_index, init in enumerate(inits)
+                    for _, (schedule, _) in enumerate(schedule_configs)):
+                name_fn = lambda seed: make_name(seed=seed, opt=opt, schedule=schedule, init=init)
+                steps = sorted(results[name_fn(seed=0)]['train_series'].keys())
+                for subset in ['train', 'val']:
+                    # Take mean across trials.
+                    quality = np.mean([[
+                        results[name_fn(seed)]['train_series'][t][subset + '/' + metric_name]
+                        for t in steps] for seed in range(args.num_trials)], axis=0)
+                    plt.plot(np.asfarray(steps) / 1000, quality,
+                             color=COLORS[opt_index],
+                             linestyle=('solid' if subset == 'train' else 'dotted'),
+                             label=(opt if not done_label else None))
+                    done_label = True
         ax.legend()
         plt.savefig('plot_train_{}.pdf'.format(metric_name))
+        plt.close()
 
     for dataset in args.eval_datasets:
         for metric_name in args.track_metrics:
             fig, ax = plt.subplots()
             plt.xlabel('Gradient steps (k)')
             plt.ylabel(metric_name)
-            for i, (opt, schedule, init) in enumerate(configs()):
-                name_fn = lambda seed: make_name(seed=seed, opt=opt, schedule=schedule, init=init)
-                steps = sorted(results[name_fn(seed=0)]['track_series'].keys())
-                steps_k = np.asfarray(steps) / 1000
-                quality = np.mean([[
-                    results[name_fn(seed)]['track_series'][t][dataset + '-full'][metric_name]
-                    for t in steps] for seed in range(args.num_trials)], axis=0)
-                variance_name = metric_name + '_var'
-                variance_test = np.mean([[
-                    results[name_fn(seed)]['track_series'][t][dataset + '-full'][variance_name]
-                    for t in steps] for seed in range(args.num_trials)], axis=0)
-                variance_train = np.var([[
-                    results[name_fn(seed)]['track_series'][t][dataset + '-full'][metric_name]
-                    for t in steps] for seed in range(args.num_trials)], axis=0)
-                variance = variance_train + variance_test
-                error = np.sqrt(variance)
-                # TODO: Shade colors by learning rate?
-                label = '{} {} {}'.format(opt, init, schedule)
-                # TODO: Add variance across trials?
-                plt.fill_between(steps_k, quality - error, quality + error,
-                                 color=COLORS[i], label=None, alpha=0.2)
-                plt.plot(steps_k, quality, color=COLORS[i], label=label)
+            for opt_index, (opt, _) in enumerate(opt_configs):
+                done_label = False
+                for (init_index, init), schedule in (
+                        ((init_index, init), schedule)
+                        for init_index, init in enumerate(inits)
+                        for _, (schedule, _) in enumerate(schedule_configs)):
+                    name_fn = lambda seed: make_name(seed=seed, opt=opt, schedule=schedule, init=init)
+                    steps = sorted(results[name_fn(seed=0)]['track_series'].keys())
+                    steps_k = np.asfarray(steps) / 1000
+
+                    quality = np.mean([[
+                        results[name_fn(seed)]['track_series'][t][dataset + '-full'][metric_name]
+                        for t in steps] for seed in range(args.num_trials)], axis=0)
+                    variance_name = metric_name + '_var'
+                    variance_test = np.mean([[
+                        results[name_fn(seed)]['track_series'][t][dataset + '-full'][variance_name]
+                        for t in steps] for seed in range(args.num_trials)], axis=0)
+                    variance_train = np.var([[
+                        results[name_fn(seed)]['track_series'][t][dataset + '-full'][metric_name]
+                        for t in steps] for seed in range(args.num_trials)], axis=0)
+                    variance = variance_train + variance_test
+                    error = np.sqrt(variance)
+
+                    plt.fill_between(steps_k, quality - error, quality + error,
+                                     color=COLORS[opt_index], label=None, alpha=0.2)
+                    plt.plot(steps_k, quality, color=COLORS[opt_index],
+                             label=(opt if not done_label else None))
+                    done_label = True
             ax.legend()
             plt.savefig('plot_track_{}_{}.pdf'.format(dataset, metric_name))
+
+
+    # Plot different learning-rate schedules for each optimizer.
+    for opt, _ in opt_configs:
+        for metric_name in args.train_metrics:
+            fig, ax = plt.subplots()
+            plt.xlabel('Gradient steps (k)')
+            plt.ylabel(metric_name)
+            for (init_index, init), (schedule_index, schedule) in (
+                    ((init_index, init), (schedule_index, schedule))
+                    for schedule_index, (schedule, _) in enumerate(schedule_configs)
+                    for init_index, init in enumerate(inits)):
+                name_fn = lambda seed: make_name(seed=seed, opt=opt, schedule=schedule, init=init)
+                steps = sorted(results[name_fn(seed=0)]['train_series'].keys())
+                for subset in ['train', 'val']:
+                    # Take mean across trials.
+                    quality = np.mean([[
+                        results[name_fn(seed)]['train_series'][t][subset + '/' + metric_name]
+                        for t in steps] for seed in range(args.num_trials)], axis=0)
+                    label = '{} {}'.format(init, schedule)
+                    plt.plot(np.asfarray(steps) / 1000, quality,
+                             color=make_color(schedule_index, init_index / (len(inits) - 1)),
+                             linestyle=('solid' if subset == 'train' else 'dotted'),
+                             label=(label if subset == 'train' else None))
+            ax.legend()
+            plt.savefig('plot_optimizer_{}_train_{}.pdf'.format(opt, metric_name))
+            plt.close()
 
 
 def parse_arguments():
@@ -157,7 +192,8 @@ def parse_arguments():
 
     parser.add_argument('-n', '--num_trials', type=int, default=1,
                         help='number of repetitions')
-    parser.add_argument('--track_metrics', nargs='+', default=['TRE_3_iou_seq_mean'])
+    parser.add_argument('--track_metrics', nargs='+',
+                        default=['OPE_iou_seq_mean', 'TRE_3_iou_seq_mean'])
     parser.add_argument('--train_metrics', nargs='+', default=['loss', 'dist', 'iou'])
 
     return parser.parse_args()
@@ -211,6 +247,21 @@ def make_kwargs(args, seed, opt, opt_config, schedule, schedule_config, init):
 
 def make_name(seed=None, **kwargs):
     return '_'.join([key + '_' + str(kwargs[key]) for key in sorted(kwargs.keys())])
+
+
+def make_color(i, degree):
+    degree = float(degree)
+    base = colors.rgb_to_hsv(colors.to_rgb(COLORS[i]))
+    # TODO: This is not ideal because it does not include the original color.
+    def interpolate(a, b, p):
+        return (1 - p) * a + p * b
+    # The color `low` is darker. Decrease `value`.
+    low = np.array(base)
+    low[2] = 0.7 * low[2]
+    # The color `high` is lighter. Decrease saturation.
+    high = np.array(base)
+    high[1] = 0.7 * high[1]
+    return colors.hsv_to_rgb(interpolate(low, high, degree))
 
 
 if __name__ == '__main__':
