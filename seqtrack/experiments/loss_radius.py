@@ -36,45 +36,49 @@ def main():
     args = parse_arguments()
     logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
 
-    radii = [0.05, 0.1, 0.2, 0.3, 0.5]
-
-    # Parameterize losses.
-    sigmoid_pos_weights = [1.0]  # [0.1, 1.0, 10.0]
     # Given radius, return label_params dict.
     labels = [
         ('hard_binary', lambda r: dict(radius=r)),
         ('gaussian', lambda r: dict(sigma=r)),
     ]
+    labels = [x for x in labels if x[0] in args.labels]
+
     # Given radius return `params` dict for siamfc.compute_loss.
-    losses = list(itertools.chain(
-        [('sigmoid_{}_{}'.format(pos_weight, label_name), functools.partial(
-             lambda label_name, label_fn, r: dict(
-                 method='sigmoid',
-                 params=dict(balanced=True,
-                             pos_weight=pos_weight,
-                             label_method=label_name,
-                             label_params=label_fn(r))),
-             label_name, label_fn))
-         for pos_weight in sigmoid_pos_weights
-         for label_name, label_fn in labels],
-        [('softmax_{}'.format(label_name), functools.partial(
-             lambda label_name, label_fn, r: dict(
-                 method='softmax',
-                 params=dict(label_method=label_name,
-                             label_params=label_fn(r))),
-             label_name, label_fn))
-         for label_name, label_fn in labels],
-        [('max_margin_dist', lambda r: dict(
-            method='max_margin', params=dict(cost_method='distance_greater',
-                                             cost_params=dict(threshold=r))))],
-    ))
+    sigmoid_losses = [
+        ('sigmoid_{}_{}'.format(pos_weight, label_name), functools.partial(
+            lambda label_name, label_fn, r: dict(
+                method='sigmoid',
+                params=dict(balanced=True,
+                            pos_weight=pos_weight,
+                            label_method=label_name,
+                            label_params=label_fn(r))),
+            label_name, label_fn))
+        for pos_weight in args.sigmoid_pos_weights
+        for label_name, label_fn in labels]
+    softmax_losses = [
+        ('softmax_{}'.format(label_name), functools.partial(
+            lambda label_name, label_fn, r: dict(
+                method='softmax',
+                params=dict(label_method=label_name,
+                            label_params=label_fn(r))),
+            label_name, label_fn))
+        for label_name, label_fn in labels]
+    max_margin_losses = [
+        ('max_margin_dist', lambda r: dict(
+            method='max_margin', params=dict(
+                cost_method='distance_greater',
+                cost_params=dict(threshold=r))))]
+    losses = (
+        (sigmoid_losses if 'sigmoid' in args.loss_families else []) +
+        (softmax_losses if 'softmax' in args.loss_families else []) +
+        (max_margin_losses if 'max_margin' in args.loss_families else []))
 
     # Map stream of named vectors to stream of named results (order may be different).
     kwargs = dict([
         make_kwargs(args, seed=seed, loss=loss, loss_params_fn=loss_params_fn, radius=radius)
         for seed in range(args.num_trials)
         for loss, loss_params_fn in losses
-        for radius in radii])
+        for radius in args.radius])
     mapper = make_mapper(args)
     result_stream = mapper(slurm.partial_apply_kwargs(train.train_worker), kwargs.items())
     results = dict(result_stream)
@@ -82,7 +86,7 @@ def main():
     # To obtain one number per training process, we use one dataset as validation.
     summaries = {}
     for loss, _ in losses:
-        for radius in radii:
+        for radius in args.radius:
             summary_name = make_name(loss=loss, radius=radius)
             trial_names = [make_name(loss=loss, radius=radius, seed=seed)
                            for seed in range(args.num_trials)]
@@ -98,12 +102,12 @@ def main():
     plt.ylabel(quality_metric)
     for loss_ind, (loss, _) in enumerate(losses):
         name_fn = lambda radius: make_name(loss=loss, radius=radius)
-        quality = [summaries[name_fn(radius)][quality_metric] for radius in radii]
-        variance = [summaries[name_fn(radius)][quality_metric + '_var'] for radius in radii]
+        quality = [summaries[name_fn(radius)][quality_metric] for radius in args.radius]
+        variance = [summaries[name_fn(radius)][quality_metric + '_var'] for radius in args.radius]
         error = ERRORBAR_SIZE * np.sqrt(variance)
-        plt.fill_between(x=radii, y1=quality - error, y2=quality + error,
+        plt.fill_between(x=args.radius, y1=quality - error, y2=quality + error,
                          color=COLORS[loss_ind], alpha=0.2, label=None)
-        plt.plot(radii, quality, label=loss,
+        plt.plot(args.radius, quality, label=loss,
                  color=COLORS[loss_ind], marker=MARKERS[loss_ind])
     ax.legend()
     plt.savefig('plot.pdf')
@@ -122,8 +126,15 @@ def parse_arguments():
     parser.add_argument('--loglevel', default='info', help='debug, info, warning')
     parser.add_argument('--verbose_train', action='store_true')
 
+    parser.add_argument('--radius', type=float, nargs='+', default=[0.05, 0.1, 0.2, 0.3, 0.5],
+                        help='Radius of loss function')
+    parser.add_argument('--loss_families', nargs='+',
+                        default=['sigmoid', 'softmax', 'max_margin'])
+    parser.add_argument('--sigmoid_pos_weights', type=float, nargs='+', default=[0.1, 1.0])
+    parser.add_argument('--labels', nargs='+', default=['hard_binary', 'gaussian'])
     parser.add_argument('-n', '--num_trials', type=int, default=1,
                         help='number of repetitions')
+
     parser.add_argument('--optimize_dataset', default='pool_val-full',
                         help='eval_dataset to use to choose model')
     parser.add_argument('--optimize_metric', default='TRE_3_iou_seq_mean',
