@@ -16,6 +16,7 @@ import collections
 import itertools
 import json
 import os
+import pprint
 
 import matplotlib
 matplotlib.use('Agg')
@@ -28,6 +29,7 @@ from seqtrack import app
 from seqtrack import helpers
 from seqtrack import slurm
 from seqtrack import train
+from seqtrack.models import siamfc
 
 ERRORBAR_SIZE = 1.64485
 COLORS = plt.rcParams['axes.prop_cycle'].by_key()['color']
@@ -38,6 +40,8 @@ MARKERS = ['o', 'v', '^', '<', '>', '8', 's', 'p', 'P', '*', 'h', 'H', '+', 'x',
 def main():
     args = parse_arguments()
     logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
+
+    use_spatial_weights = [False, True]
 
     FeatureConfig = collections.namedtuple(
         'FeatureConfig',
@@ -70,15 +74,32 @@ def main():
             arch_params=dict(num_blocks=2),
             extra_conv_enable=True,
             extra_conv_params=None)),
-        # ('resnet_block3', FeatureConfig(
-        #     arch='slim_resnet_v1_50',
-        #     arch_params=dict(num_blocks=3),
-        #     extra_conv_enable=True,
-        #     extra_conv_params=None)),
+        ('resnet_block3', FeatureConfig(
+            arch='slim_resnet_v1_50',
+            arch_params=dict(num_blocks=3),
+            extra_conv_enable=True,
+            extra_conv_params=None)),
     ]
-    feat_archs = [alexnet_configs, resnet_configs]
+    feat_families = [alexnet_configs, resnet_configs]
 
-    use_spatial_weights = [False, True]
+    # Obtain a set of feature dimensions to consider for each feature.
+    # If there are multiple elements with the same key, only one will remain.
+    # This occurs when an architecture has a minimum context (due to the receptive field).
+    # For example, if the minimum possible context is 2.5
+    # and the desired contexts are 1, 2, 3,
+    # this will result in contexts [2.5, 2.5, 3].
+    # We remove duplicates here to avoid wasting computation.
+    image_dims = {
+        feat: collections.OrderedDict(
+            make_dimensions_pair(find_dimensions(
+                target_size=args.target_size,
+                desired_search_radius=args.desired_search_radius,
+                feat_config=feat_config,
+                context=context))
+            for context in args.desired_contexts)
+        for feat, feat_config in itertools.chain(*feat_families)}
+    print('image_dims:')
+    pprint.pprint(image_dims)
 
     # Map stream of named vectors to stream of named results (order may be different).
     kwargs = dict([
@@ -86,11 +107,12 @@ def main():
                     feat=feat,
                     feat_config=feat_config,
                     weight=weight,
-                    context=context,
+                    dims=dims,
+                    dims_config=dims_config,
                     seed=seed)
-        for feat, feat_config in itertools.chain(*feat_archs)
+        for feat, feat_config in itertools.chain(*feat_families)
         for weight in use_spatial_weights
-        for context in args.desired_contexts
+        for dims, dims_config in image_dims[feat].items()
         for seed in range(args.num_trials)
     ])
     mapper = make_mapper(args)
@@ -99,7 +121,7 @@ def main():
 
     # To obtain one number per training process, we use one dataset as validation.
     summaries = {}
-    for feat, feat_config in itertools.chain(*feat_archs):
+    for feat, feat_config in itertools.chain(*feat_families):
         for weight in use_spatial_weights:
             for context in args.desired_contexts:
                 summary_name = make_name(feat=feat, weight=weight, context=context)
@@ -121,14 +143,14 @@ def main():
     # Make one plot with weight and one plot without.
     for weight in use_spatial_weights:
         fig, ax = plt.subplots()
-        plt.xlabel('desired_template_scale')
+        plt.xlabel('template_scale')
         plt.ylabel(quality_metric)
         plt.title('learn_spatial_weight={}'.format(weight))
 
         i = 0
-        for arch_ind, feat_configs in enumerate(feat_archs):
+        for family_ind, feat_configs in enumerate(feat_families):
             for feat_ind, (feat, feat_config) in enumerate(feat_configs):
-                color = make_color(arch_ind, len(feat_archs), feat_ind, len(feat_configs))
+                color = make_color(family_ind, len(feat_families), feat_ind, len(feat_configs))
                 name_fn = lambda context: make_name(feat=feat, weight=weight, context=context)
                 contexts = [summaries[name_fn(context)]['model/template_scale']
                             for context in args.desired_contexts]
@@ -165,6 +187,16 @@ def parse_arguments():
                         help='number of repetitions')
     parser.add_argument('--desired_contexts', type=float, nargs='+', default=[1.0, 2.0, 4.0])
 
+    parser.add_argument('--target_size', type=int, default=64)
+    parser.add_argument('--desired_search_radius', type=float, default=1)
+
+    default_loss_params = dict(method='sigmoid',
+                               params=dict(balanced=True,
+                                           label_method='gaussian',
+                                           label_params=dict(sigma=0.2)))
+    parser.add_argument('--loss_params', type=json.loads,
+                        default=json.dumps(default_loss_params))
+
     parser.add_argument('--optimize_dataset', default='pool_val-full',
                         help='eval_dataset to use to choose model')
     parser.add_argument('--optimize_metric', default='TRE_3_iou_seq_mean',
@@ -186,16 +218,16 @@ def make_mapper(args):
     return mapper
 
 
-def make_kwargs(args, feat, feat_config, weight, context, seed):
-    name = make_name(feat=feat, weight=weight, context=context, seed=seed)
+def make_kwargs(args, feat, feat_config, weight, dims, dims_config, seed):
+    name = make_name(feat=feat, weight=weight, dims=dims, seed=seed)
     kwargs = app.train_kwargs(args, name)
     kwargs.update(
         seed=seed,
         model_params=dict(
-            use_desired_size=True,
-            target_size=64,
-            desired_template_scale=context,
-            desired_search_radius=1.0,
+            target_size=args.target_size,
+            use_desired_size=False,
+            template_size=dims_config['template_size'],
+            search_size=dims_config['search_size'],
             feature_arch=feat_config.arch,
             feature_arch_params=feat_config.arch_params,
             feature_extra_conv_enable=feat_config.extra_conv_enable,
@@ -215,14 +247,7 @@ def make_kwargs(args, feat, feat_config, weight, context, seed):
             arg_max_eps=0,
             # TODO: Study weight decay and loss config.
             wd=1e-4,
-            loss_params=dict(
-                method='sigmoid',
-                params=dict(
-                    balanced=True,
-                    label_method='gaussian',
-                    label_params=dict(sigma=0.2),
-                ),
-            ),
+            loss_params=args.loss_params,
         ),
     )
     return name, kwargs
@@ -241,9 +266,29 @@ def make_color(color_ind, color_num, level_ind, level_num, max_step=0.1):
     curr_hsv = matplotlib.colors.rgb_to_hsv(matplotlib.colors.to_rgb(COLORS[color_ind]))
     next_hsv = matplotlib.colors.rgb_to_hsv(matplotlib.colors.to_rgb(COLORS[color_ind + 1]))
     return matplotlib.colors.hsv_to_rgb((1 - u) * curr_hsv + u * next_hsv)
-    # x = color_ind / color_num + step * level_ind
-    # # return matplotlib.colors.hsv_to_rgb((h, 1, 0.95))
-    # return plt.get_cmap('brg')(x)
+
+
+def make_dimensions_name(dims):
+    return 'template_{}_search_{}'.format(dims['template_size'], dims['search_size'])
+
+
+def make_dimensions_pair(dims):
+    return (make_dimensions_name(dims), dims)
+
+
+def find_dimensions(target_size,
+                    desired_search_radius,
+                    feat_config,
+                    context):
+    return siamfc.dimensions(
+        target_size=target_size,
+        desired_template_scale=context,
+        desired_search_radius=desired_search_radius,
+        # Must be same as constructor:
+        feature_arch=feat_config.arch,
+        feature_arch_params=feat_config.arch_params,
+        feature_extra_conv_enable=feat_config.extra_conv_enable,
+        feature_extra_conv_params=feat_config.extra_conv_params)
 
 
 if __name__ == '__main__':

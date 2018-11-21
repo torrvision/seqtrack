@@ -268,6 +268,10 @@ BY_NAME = {name: globals()[name] for name in NAMES}
 
 
 def get_receptive_field(feature_fn):
+    '''
+    Args:
+        feature_fn: Function that maps (image, is_training) to (image, end_points).
+    '''
     graph = tf.Graph()
     with graph.as_default():
         image = tf.placeholder(tf.float32, (None, None, None, 3), name='image')

@@ -38,13 +38,12 @@ class SiamFC(models_interface.IterModel):
 
     def __init__(
             self,
+            target_size=64,
             use_desired_size=False,
             # If use_desired_size is False:
             template_size=127,
             search_size=255,
-            template_scale=2,
             # If use_desired_size is True:
-            target_size=64,
             desired_template_scale=2.0,
             desired_search_radius=1.0,
             # End of size args.
@@ -91,14 +90,13 @@ class SiamFC(models_interface.IterModel):
             ):
 
         if use_desired_size:
-            template_size, search_size, template_scale = dimensions(
+            dims = dimensions(
                 target_size=target_size,
                 desired_template_scale=desired_template_scale,
                 desired_search_radius=desired_search_radius,
                 arch=feature_arch, arch_params=feature_arch_params)
-        else:
-            # template_size = template_scale * target_size
-            target_size = template_size / template_scale
+            template_size = dims['template_size']
+            search_size = dims['search_size']
 
         self._target_size = target_size
         self._template_size = template_size
@@ -111,9 +109,9 @@ class SiamFC(models_interface.IterModel):
         self._feather_margin = feather_margin
         self._keep_uint8_range = keep_uint8_range
         self._center_input_range = center_input_range
-        self._template_scale = template_scale
         # Size of search area relative to object.
-        self._search_scale = float(search_size) / template_size * template_scale
+        self._template_scale = float(template_size) / target_size
+        self._search_scale = float(search_size) / target_size
         self._feature_arch = feature_arch
         self._feature_arch_params = feature_arch_params
         self._feature_extra_conv_enable = feature_extra_conv_enable
@@ -147,11 +145,13 @@ class SiamFC(models_interface.IterModel):
         self._feature_saver = None
 
     def derived_properties(self):
+        # Properties that are (or may be) internally computed.
         return dict(
-            target_size=self._target_size,
             template_size=self._template_size,
             search_size=self._search_size,
             template_scale=self._template_scale,
+            search_scale=self._search_scale,
+            # TODO: Add receptive field size and stride?
         )
 
     def start(self, frame, aspect, run_opts, enable_loss,
@@ -386,21 +386,23 @@ class SiamFC(models_interface.IterModel):
             # assert len(sess.run(tf.report_uninitialized_variables())) == 0
 
 
-def dimensions(target_size=64,
-               desired_template_scale=2.0,
-               desired_search_radius=1.0,
+def dimensions(target_size,
+               desired_template_scale,
+               desired_search_radius,
                # Must be same as constructor:
-               arch='alexnet',
-               arch_params=None):
+               feature_arch='alexnet',
+               feature_arch_params=None,
+               feature_extra_conv_enable=False,
+               feature_extra_conv_params=None):
     '''
     Returns:
         template_size, search_size, template_scale
     '''
-    arch_params = arch_params or {}
-
-    feature_fn = feature_nets.BY_NAME[arch]
-    feature_fn = functools.partial(feature_fn, **arch_params)
-    field = feature_nets.get_receptive_field(feature_fn)
+    field = _branch_net_receptive_field(
+        arch=feature_arch,
+        arch_params=feature_arch_params,
+        extra_conv_enable=feature_extra_conv_enable,
+        extra_conv_params=feature_extra_conv_params)
 
     def snap(x):
         return helpers.round_lattice(_unique(field.size), _unique(field.stride), x)
@@ -412,7 +414,8 @@ def dimensions(target_size=64,
 
     logger.debug('template_size %d, search_size %d, template_scale %.3g (desired %.3g)',
                  template_size, search_size, template_scale, desired_template_scale)
-    return template_size, search_size, template_scale
+    # return template_size, search_size, template_scale
+    return dict(template_size=template_size, search_size=search_size)
 
 
 # When we implement a multi-layer join,
@@ -445,6 +448,8 @@ def _branch_net(x, is_training, trainable, variables_collections,
     with tf.name_scope(name) as scope:
         arch_params = arch_params or {}
         extra_conv_params = extra_conv_params or {}
+        weight_decay = float(weight_decay)
+
         try:
             func = feature_nets.BY_NAME[arch]
         except KeyError:
@@ -489,6 +494,28 @@ def _extra_conv(x, is_training, trainable, variables_collections,
                                    stride=stride,
                                    padding=padding,
                                    activation_fn=helpers.get_act(activation))
+
+
+def _branch_net_receptive_field(arch='alexnet',
+                                arch_params=None,
+                                extra_conv_enable=False,
+                                extra_conv_params=None):
+    arch_params = arch_params or {}
+
+    graph = tf.Graph()
+    with graph.as_default():
+        image = tf.placeholder(tf.float32, (None, None, None, 3), name='image')
+        is_training = tf.placeholder(tf.bool, (), name='is_training')
+        image = cnn.as_tensor(image, add_to_set=True)
+        retvals = _branch_net(image, is_training,
+                              trainable=True,
+                              variables_collections=None,
+                              arch=arch,
+                              arch_params=arch_params,
+                              extra_conv_enable=extra_conv_enable,
+                              extra_conv_params=extra_conv_params)
+        feat = retvals[0]
+        return feat.fields[image.value]
 
 
 def apply_motion_penalty(scores, radius,
