@@ -47,6 +47,11 @@ def main():
         'FeatureConfig',
         ['arch', 'arch_params', 'extra_conv_enable', 'extra_conv_params'])
     alexnet_configs = [
+        ('alexnet_conv1', FeatureConfig(
+            arch='alexnet',
+            arch_params=dict(output_layer='conv1'),
+            extra_conv_enable=False,
+            extra_conv_params=None)),
         ('alexnet_conv2', FeatureConfig(
             arch='alexnet',
             arch_params=dict(output_layer='conv2'),
