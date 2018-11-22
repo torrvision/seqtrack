@@ -98,8 +98,6 @@ def main():
                 context=context))
             for context in args.desired_contexts)
         for feat, feat_config in itertools.chain(*feat_families)}
-    print('image_dims:')
-    pprint.pprint(image_dims)
 
     # Map stream of named vectors to stream of named results (order may be different).
     kwargs = dict([
@@ -121,11 +119,11 @@ def main():
 
     # To obtain one number per training process, we use one dataset as validation.
     summaries = {}
-    for feat, feat_config in itertools.chain(*feat_families):
+    for feat, _ in itertools.chain(*feat_families):
         for weight in use_spatial_weights:
-            for context in args.desired_contexts:
-                summary_name = make_name(feat=feat, weight=weight, context=context)
-                trial_names = [make_name(feat=feat, weight=weight, context=context, seed=seed)
+            for dims, _ in image_dims[feat].items():
+                summary_name = make_name(feat=feat, weight=weight, dims=dims)
+                trial_names = [make_name(feat=feat, weight=weight, dims=dims, seed=seed)
                                for seed in range(args.num_trials)]
                 summary = train.summarize_trials(
                     [results[name]['track_series'] for name in trial_names],
@@ -151,14 +149,13 @@ def main():
         for family_ind, feat_configs in enumerate(feat_families):
             for feat_ind, (feat, feat_config) in enumerate(feat_configs):
                 color = make_color(family_ind, len(feat_families), feat_ind, len(feat_configs))
-                name_fn = lambda context: make_name(feat=feat, weight=weight, context=context)
-                contexts = [summaries[name_fn(context)]['model/template_scale']
-                            for context in args.desired_contexts]
-                quality = [summaries[name_fn(context)][quality_metric]
-                           for context in args.desired_contexts]
-                # variance = [summaries[name_fn(context)].get(quality_metric + '_var', np.nan)
-                variance = [summaries[name_fn(context)][quality_metric + '_var']
-                            for context in args.desired_contexts]
+                name_fn = lambda dims: make_name(feat=feat, weight=weight, dims=dims)
+                contexts = [summaries[name_fn(dims)]['model/template_scale']
+                            for dims, _ in image_dims[feat].items()]
+                quality = [summaries[name_fn(dims)][quality_metric]
+                           for dims, _ in image_dims[feat].items()]
+                variance = [summaries[name_fn(dims)][quality_metric + '_var']
+                            for dims, _ in image_dims[feat].items()]
                 error = ERRORBAR_SIZE * np.sqrt(variance)
                 # TODO: Plot all fill_betweens then all lines?
                 plt.fill_between(x=contexts, y1=quality - error, y2=quality + error,
