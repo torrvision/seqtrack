@@ -183,6 +183,8 @@ def parse_arguments():
 
     parser.add_argument('--target_size', type=int, default=64)
     parser.add_argument('--desired_search_radius', type=float, default=1)
+    parser.add_argument('--arg_max_eps', type=float, default=0.01,
+                        'Epsilon for finding arg max in multi-scale sliding-window search')
 
     default_loss_params = dict(method='sigmoid',
                                params=dict(balanced=True,
@@ -238,7 +240,7 @@ def make_kwargs(args, feat, feat_config, weight, dims, dims_config, seed):
                 combine_method='mul',
             ),
             window_radius=1.0,
-            arg_max_eps=0,
+            arg_max_eps=args.arg_max_eps,
             # TODO: Study weight decay and loss config.
             wd=1e-4,
             loss_params=args.loss_params,
