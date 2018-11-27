@@ -77,8 +77,7 @@ def main():
 
     model_spec = ModelFromIterModel(SiamFC(**model_params))
 
-    example, run_opts = graph.make_placeholders(
-        args.ntimesteps, (args.imheight, args.imwidth))
+    example, run_opts = graph.make_placeholders(args.ntimesteps, (None, None))
     example_proc = graph.whiten(example)
     with tf.variable_scope('model'):
         # TODO: Can ignore image_summaries here?
@@ -87,7 +86,7 @@ def main():
     model_inst = graph.ModelInstance(
         example, run_opts, outputs, init_state, final_state,
         batchsz=outputs['y'].shape.as_list()[0], ntimesteps=args.ntimesteps,
-        imheight=args.imheight, imwidth=args.imwidth)
+        imheight=None, imwidth=None)
 
     saver = tf.train.Saver()
 
