@@ -111,7 +111,7 @@ def add_train_args(parser):
 
 
 def add_eval_args(parser):
-    parser.add_argument('--eval_datasets', nargs='+', default=['otb_50', 'vot2018'],
+    parser.add_argument('--eval_datasets', nargs='*', default=['otb_50', 'vot2018'],
                         help='dataset on which to evaluate tracker')
     # TODO: Only use TRE mode with "full" sampler?
     parser.add_argument('--eval_tre_num', type=int, default=3,

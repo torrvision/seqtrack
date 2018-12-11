@@ -65,6 +65,10 @@ class ChunkedTracker(object):
                     os.makedirs(self._frame_dir)
 
     def warmup(self):
+        if None in [self._model_inst.imheight, self._model_inst.imwidth]:
+            logger.warning('could not warm up with unknown dimensions')
+            return
+
         r = np.random.RandomState(0)
         first_image = np.random.normal(
             size=(self._model_inst.imheight, self._model_inst.imwidth, 3))
@@ -109,12 +113,14 @@ class ChunkedTracker(object):
         # JV: Use viewport.
         # first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
         if self._aspect is None:
+            # CAUTION: This will not work if using resized image dataset?
             im_width, im_height = Image.open(init_frame['image_files'][0]).size
             self._aspect = float(im_width) / im_height
-        first_image = load_image_viewport(
-            init_frame['image_files'][0],
-            init_frame['viewports'][0],
-            size_hw=(self._model_inst.imheight, self._model_inst.imwidth))
+        # first_image = load_image_viewport(
+        #     init_frame['image_files'][0],
+        #     init_frame['viewports'][0],
+        #     size_hw=(self._model_inst.imheight, self._model_inst.imwidth))
+        first_image = helpers.load_image(init_frame['image_files'][0])
         first_label = init_frame['labels'][0]
         # Prepare for input to network.
         self._batch_first_image = self._to_batch(im_to_arr(first_image))
@@ -138,11 +144,12 @@ class ChunkedTracker(object):
                 feed_dict[tensor] = value
 
         start_load = time.time()
-        image_size_hw = (self._model_inst.imheight, self._model_inst.imwidth)
-        images = [
-            load_image_viewport(image_file, viewport, image_size_hw)
-            for image_file, viewport in zip(chunk['image_files'], chunk['viewports'])
-        ]
+        # image_size_hw = (self._model_inst.imheight, self._model_inst.imwidth)
+        # images = [
+        #     load_image_viewport(image_file, viewport, image_size_hw)
+        #     for image_file, viewport in zip(chunk['image_files'], chunk['viewports'])
+        # ]
+        images = [helpers.load_image(image_file) for image_file in chunk['image_files']]
         labels = chunk['labels']
         is_valid = chunk['label_is_valid']
 

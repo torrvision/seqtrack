@@ -45,9 +45,11 @@ def parse_arguments():
     parser.add_argument('--sequence_name', type=str)
     parser.add_argument('--init_rect', type=json.loads,
                         help='e.g. {"xmin": 0.1, "ymin": 0.7, "xmax": 0.4, "ymax": 0.9}')
+    parser.add_argument('--images_file', type=str,
+                        help='Text file containing list of images; overrides image_format')
+    parser.add_argument('--image_format', type=str, help='e.g. sequence/%%06d.jpeg')
     parser.add_argument('--start', type=int)
     parser.add_argument('--end', type=int)
-    parser.add_argument('--image_format', type=str, help='e.g. sequence/%%06d.jpeg')
 
     # parser.add_argument('--gpu_frac', type=float, default='1.0', help='fraction of gpu memory')
     parser.add_argument('--vis', action='store_true')
@@ -75,17 +77,16 @@ def main():
 
     model_spec = ModelFromIterModel(SiamFC(**model_params))
 
-    example, run_opts = graph.make_placeholders(
-        args.ntimesteps, (args.imheight, args.imwidth))
+    example, run_opts = graph.make_placeholders(args.ntimesteps, (None, None))
     example_proc = graph.whiten(example)
-    with tf.name_scope('model'):
+    with tf.variable_scope('model'):
         # TODO: Can ignore image_summaries here?
         outputs, losses, init_state, final_state = model_spec.instantiate(
             example_proc, run_opts, enable_loss=False)
     model_inst = graph.ModelInstance(
         example, run_opts, outputs, init_state, final_state,
         batchsz=outputs['y'].shape.as_list()[0], ntimesteps=args.ntimesteps,
-        imheight=args.imheight, imwidth=args.imwidth)
+        imheight=None, imwidth=None)
 
     saver = tf.train.Saver()
 
@@ -131,9 +132,13 @@ def main():
             logger.debug('imwidth=%d imheight=%s', imwidth, imheight)
             init_rect = from_vot(init_rect_vot, imwidth=imwidth, imheight=imheight)
         else:
-            times = range(args.start, args.end + 1)
-            init_image = args.image_format % times[0]
+            if args.images_file:
+                image_files = read_lines(args.images_file)
+            else:
+                times = range(args.start, args.end + 1)
+                image_files = [args.image_format % t for t in times]
             init_rect = args.init_rect
+            init_image = image_files[0]
 
         tracker.start(init_image, rect_to_vec(init_rect))
         if args.vot:
@@ -148,8 +153,7 @@ def main():
                 handle.report(rect_vot, outputs_t['score'])
         else:
             pred = []
-            for t in times[1:]:
-                image_t = args.image_format % t
+            for image_t in image_files[1:]:
                 pred_t = tracker.next(image_t)['y']
                 pred.append(pred_t)
         info = tracker.end()
@@ -163,10 +167,9 @@ def main():
         # pred = np.asarray(pred).tolist()
         with open(args.out_file, 'w') as f:
             writer = csv.writer(f)
-            writer.writerow(['frame', 'xmin', 'ymin', 'xmax', 'ymax'])
-            # times = range(args.start, args.end + 1)
-            for t, rect_t in zip(times[1:], pred):
-                writer.writerow([t] + list(map(lambda x: '{:.6g}'.format(x), rect_t)))
+            writer.writerow(['image', 'xmin', 'ymin', 'xmax', 'ymax'])
+            for im_file, rect_t in zip(image_files[1:], pred):
+                writer.writerow([im_file] + list(map(lambda x: '{:.6g}'.format(x), rect_t)))
 
 
 def from_vot(r, imheight, imwidth):
@@ -198,6 +201,12 @@ def rect_from_vec(vec):
     xmin, ymin = min_pt.tolist()
     xmax, ymax = max_pt.tolist()
     return dict(xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
+
+
+def read_lines(fname):
+    with open(fname, 'r') as f:
+        lines = f.readlines()
+    return [x.strip() for x in lines]
 
 
 if __name__ == '__main__':
