@@ -8,7 +8,7 @@ import tensorflow as tf
 import numpy as np
 
 from seqtrack import geom
-from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to
+from seqtrack.helpers import load_image, im_to_arr, pad_to
 
 EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect']
 
@@ -118,13 +118,12 @@ def _whiten_image(x, mean, std, name='whiten_image'):
 #     return safe
 
 
-def load_images(image_files, image_size_hw, viewports=None, pad_value=128, name='load_images'):
+def load_images(image_files, image_size_hw, pad_value=128, name='load_images'):
     '''Loads, crops and resizes images for a sequence.
 
     Args:
         image_files: Tensor [None]
         image_size_hw: Image dimensions.
-        viewports: Tensor [None, 4] or None
     '''
     with tf.name_scope(name) as scope:
         # Read files from disk.
@@ -132,38 +131,22 @@ def load_images(image_files, image_size_hw, viewports=None, pad_value=128, name=
         # Decode images.
         images = tf.map_fn(lambda x: tf.image.decode_jpeg(x, channels=3),
                            file_contents, dtype=tf.uint8)
-        if viewports is None:
-            # Resize entire image.
-            images = tf.image.resize_images(images, image_size_hw)
-        else:
-            # Sample viewport in image.
-            # TODO: Avoid casting uint8 -> float32 -> uint8 -> float32.
-            images = tf.image.convert_image_dtype(images, tf.float32)
-            images = tf.image.crop_and_resize(images, geom.rect_to_tf_box(viewports),
-                                              box_ind=tf.range(tf.shape(images)[0]),
-                                              crop_size=image_size_hw,
-                                              extrapolation_value=pad_value / 255.)
-            # tf.image.crop_and_resize converts to float32.
-            images = tf.image.convert_image_dtype(images, tf.uint8)
+        # Resize entire image.
+        images = tf.image.resize_images(images, image_size_hw)
         return images
 
 
-def load_images_batch(image_files, image_size_hw, viewports=None, name='load_images_batch',
-                      **kwargs):
+def load_images_batch(image_files, image_size_hw, name='load_images_batch', **kwargs):
     '''Loads, crops and resizes images for a batch of sequences.
 
     Args:
         image_files: Tensor [batchsz, None]
         image_size_hw: Image dimensions.
-        viewports: Tensor [batchsz, None, 4] or None
     '''
     with tf.name_scope(name) as scope:
         elems = {'image_files': image_files}
-        if viewports is not None:
-            elems['viewports'] = viewports
         images = tf.map_fn(
-            lambda elem: load_images(elem['image_files'], image_size_hw,
-                                     elem.get('viewports', None), **kwargs),
+            lambda elem: load_images(elem['image_files'], image_size_hw, **kwargs),
             elems, dtype=tf.uint8)
         return images
 
@@ -213,7 +196,7 @@ def py_load_batch_elem(seq, im_size):
     # f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
     #                         dtype=np.float32)
     images = [
-        im_to_arr(load_image_viewport(seq['image_files'][t], seq['viewports'][t], im_size))
+        im_to_arr(load_image(seq['image_files'][t], im_size))
         for t in range(seq_len)
     ]
     return {

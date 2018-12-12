@@ -22,7 +22,7 @@ class ModelFromIterModel(models_interface.Model):
         The prediction in the window reference frame can be used to apply the loss.
 
         Example:
-            prediction_crop, viewport, prediction, init_state, final_state = model_graph.process_sequence(
+            prediction_crop, prediction, init_state, final_state = model_graph.process_sequence(
                 model, example, run_opts, batchsz, ntimesteps, im_size)
 
         Args:
@@ -30,15 +30,14 @@ class ModelFromIterModel(models_interface.Model):
                 x0, y0, x, y, y_is_valid
 
         Returns:
-            prediction_crop: Model prediction in reference frame of viewport.
-            viewport: Search region of model.
+            prediction_crop: Model prediction.
             prediction: Model prediction in image reference frame.
             init_state: Initial state.
             final_state: Final state.
                 Should be possible to feed final state to initial state to continue
                 from end of sequence.
         '''
-        # TODO: Aspect, viewport.
+        # TODO: Aspect.
         frame = {'x': example['x0'], 'y': example['y0']}
         init_state = self._model.start(frame, example['aspect'], run_opts, enable_loss=enable_loss,
                                        image_summaries_collections=image_summaries_collections)

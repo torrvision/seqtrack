@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import tensorflow as tf
 
-from seqtrack import evaluate
+from seqtrack import track
 from seqtrack import geom_np
 from seqtrack import model as model_pkg
 from seqtrack import opts
@@ -58,7 +58,7 @@ class TestTrack(unittest.TestCase):
                         saver.save(sess, model_file)
                     else:
                         saver.restore(sess, model_file)
-                    traj, _ = evaluate.track(sess, example, model, sequence, use_gt=False)
+                    traj, _ = track.track(sess, example, model, sequence, use_gt=False)
                     self.assertEqual(len(traj), sequence_len - 1)
                     trajectories.append(traj)
                     if i > 0:
@@ -76,7 +76,6 @@ class TestTrack(unittest.TestCase):
 def random_sequence(dir_name, num_frames, frmsz):
     seq = {
         'image_files': [],
-        'viewports': [],
         'labels': [],
         'label_is_valid': [],
         'original_image_size': (frmsz, frmsz),
@@ -94,7 +93,6 @@ def random_sequence(dir_name, num_frames, frmsz):
         center = np.random.uniform(max_radius, 1 - max_radius, size=2)
         label = np.concatenate([center - 0.5 * size, center + 0.5 * size])
         seq['image_files'].append(image_file)
-        seq['viewports'].append(geom_np.unit_rect())
         seq['labels'].append(label)
         seq['label_is_valid'].append(True)
     return seq

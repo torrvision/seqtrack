@@ -16,7 +16,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from seqtrack import app
-from seqtrack import evaluate
+from seqtrack import track
 from seqtrack import geom_np
 from seqtrack import data
 from seqtrack import draw
@@ -98,7 +98,6 @@ def main():
     # sequence = {}
     # sequence['video_name'] = args.sequence_name
     # sequence['image_files'] = [args.image_format % i for i in frames]
-    # sequence['viewports'] = [geom_np.unit_rect() for _ in frames]
     # init_rect = np.asfarray([args.init_rect[k] for k in ['xmin', 'ymin', 'xmax', 'ymax']])
     # sequence['labels'] = [init_rect if i == args.start else geom_np.unit_rect() for i in frames]
     # sequence['label_is_valid'] = [i == args.start for i in frames]
@@ -111,10 +110,10 @@ def main():
     # config.gpu_options.per_process_gpu_memory_fraction = args.gpu_frac
     with tf.Session(config=config) as sess:
         saver.restore(sess, args.model_file)
-        # rect_pred, _ = evaluate.track(sess, example, model, sequence, use_gt=False, verbose=True,
-        #                               visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
+        # rect_pred, _ = track.track(sess, example, model, sequence, use_gt=False, verbose=True,
+        #                            visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
 
-        tracker = evaluate.SimpleTracker(
+        tracker = track.SimpleTracker(
             sess, model_inst, verbose=True, sequence_name=sequence_name,
             visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
         tracker.warmup()
