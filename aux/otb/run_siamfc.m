@@ -30,10 +30,11 @@ function result = run_siamfc(seq, rp, bSaveImage)
     xmax = rect_data(:, 3) * w_im;
     ymax = rect_data(:, 4) * h_im;
 
-    x = xmin - 1;
-    y = ymin - 1;
     w = xmax - xmin;
     h = ymax - ymin;
+    % Restore the domain from [0, n) to [0.5, n + 0.5).
+    x = xmin + 0.5;
+    y = ymin + 0.5;
 
     result = struct();
     result.res = [x, y, w, h];
@@ -46,8 +47,9 @@ end
 
 
 function s = convert_rect(rect, im_size)
-    x = rect(1) - 1;
-    y = rect(2) - 1;
+    % Matlab images have real domain [0.5, n + 0.5).
+    x = rect(1) - 0.5;
+    y = rect(2) - 0.5;
     w = rect(3);
     h = rect(4);
     h_im = im_size(1);
