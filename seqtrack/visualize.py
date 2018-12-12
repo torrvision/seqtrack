@@ -95,7 +95,7 @@ def draw_output(im, rect_gt=None, rect_pred=None, hmap_pred=None, color_pred=Non
 
 
 def _unnormalize_rect(r, size):
-    # TODO: Avoid duplication. This was copied from evaluate.py.
+    # TODO: Avoid duplication. This was copied from track.py.
     width, height = size
     return r * np.array([width, height, width, height])
 

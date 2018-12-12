@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import tensorflow as tf
 
-from seqtrack import evaluate
+from seqtrack import track
 from seqtrack import geom_np
 from seqtrack import model as model_pkg
 from seqtrack import opts
@@ -58,7 +58,7 @@ class TestTrack(unittest.TestCase):
                         saver.save(sess, model_file)
                     else:
                         saver.restore(sess, model_file)
-                    traj, _ = evaluate.track(sess, example, model, sequence, use_gt=False)
+                    traj, _ = track.track(sess, example, model, sequence, use_gt=False)
                     self.assertEqual(len(traj), sequence_len - 1)
                     trajectories.append(traj)
                     if i > 0:

@@ -367,7 +367,7 @@ def _make_progress_bar():
     return helpers.ProgressMeter(interval_time=1)
 
 
-def evaluate_model(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
+def track_model(sess, model_inst, sequences, use_gt=False, tre_num=1, **kwargs):
     '''
     Args:
         kwargs: For track().

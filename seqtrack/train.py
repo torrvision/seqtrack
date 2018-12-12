@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 from seqtrack import data
 from seqtrack import draw
-from seqtrack import evaluate
+from seqtrack import track
 from seqtrack import geom
 from seqtrack import graph
 from seqtrack import helpers
@@ -966,7 +966,7 @@ def _evaluate(
     result_file = os.path.join(path_output, 'assess', eval_id, iter_id + '.json')
     result = helpers.cache_json(
         result_file,
-        lambda: evaluate.evaluate_model(
+        lambda: track.track_model(
             sess, model_inst, eval_sequences,
             visualize=visualize, vis_dir=vis_dir, keep_frames=keep_frames,
             tre_num=eval_tre_num),
