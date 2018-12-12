@@ -21,12 +21,11 @@ def add_instance_arguments(parser):
 
 def add_setup_data_args(parser):
     '''Arguments for train.setup_data.'''
+    parser.add_argument('--data_dir', help='Location of datasets')
+    parser.add_argument('--use_tmp_data_dir', action='store_true')
     parser.add_argument('--untar', action='store_true',
                         help='Untar dataset? Otherwise data must already exist')
-    parser.add_argument('--data_dir', help='Location of datasets (if already installed)')
     parser.add_argument('--tar_dir', help='Location of dataset tarballs')
-    parser.add_argument('--tmp_data_dir', default='/tmp/data/',
-                        help='Temporary directory in which to untar data (if slurm is disabled)')
     parser.add_argument('--preproc', default='original',
                         help='Name of preprocessing e.g. original, resize_fit_640x640')
     parser.add_argument('--data_cache_dir', help='Where to cache the dataset metadata')
@@ -157,7 +156,7 @@ def train_kwargs(args, name):
         untar=args.untar,
         data_dir=args.data_dir,
         tar_dir=args.tar_dir,
-        tmp_data_dir=args.tmp_data_dir,
+        use_tmp_data_dir=args.use_tmp_data_dir,
         preproc_id=args.preproc,
         data_cache_dir=args.data_cache_dir,
         pool_datasets=args.pool_datasets,

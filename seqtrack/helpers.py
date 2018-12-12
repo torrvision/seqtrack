@@ -502,7 +502,7 @@ class MapContext(object):
 
     def tmp_dir(self):
         '''Returns None to mean that a tmp_dir must be created if needed.'''
-        return None
+        return tempfile.mkdtemp()
 
 
 def map_dict(func, items):

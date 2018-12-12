@@ -40,8 +40,9 @@ from seqtrack.models.siamfc import SiamFC
 # Pickling a function in one module to load in another module does not work if
 # the function is defined in the same module.
 # Therefore provide a worker function here that takes tmp_dir from the mapper.
-def train_worker(context, tmp_data_dir=None, *args, **kwargs):
-    return train(*args, tmp_data_dir=context.tmp_dir(), **kwargs)
+def train_worker(context, *args, **kwargs):
+    # The mapper context provides a temporary directory.
+    return train(*args, tmp_dir=context.tmp_dir(), **kwargs)
 
 
 def train(
@@ -49,6 +50,7 @@ def train(
         model_params,
         seed,
         only_evaluate_existing=False,
+        tmp_dir=None,
         # Dataset:
         train_dataset=None,
         val_dataset=None,
@@ -58,7 +60,7 @@ def train(
         untar=None,
         data_dir=None,
         tar_dir=None,
-        tmp_data_dir=None,
+        use_tmp_data_dir=None,
         preproc_id=None,
         data_cache_dir=None,
         # Sampling:
@@ -75,6 +77,10 @@ def train(
     Args:
         kwargs: For train_model_data.
 
+    Specify either `data_dir` or `use_tmp_data_dir`.
+    The option `use_tmp_data_dir` implies `untar`.
+    It is possible to specify `untar` without `use_tmp_data_dir` to untar to `data_dir`.
+
     Side effects:
         Resets global random seed.
     '''
@@ -88,6 +94,10 @@ def train(
     if eval_samplers is None:
         eval_samplers = ['full']
 
+    if use_tmp_data_dir:
+        untar = True
+        data_dir = os.path.join(tmp_dir, 'data')
+
     # TODO: How to get datasets from train_dataset and eval_datasets?
     dataset_names = list(set(chain(_datasets_in_sampler(train_dataset),
                                    _datasets_in_sampler(val_dataset),
@@ -100,7 +110,6 @@ def train(
         untar=untar,
         data_dir=data_dir,
         tar_dir=tar_dir,
-        tmp_data_dir=tmp_data_dir,
         preproc_id=preproc_id,
         data_cache_dir=data_cache_dir)
 
@@ -152,7 +161,7 @@ def make_train_result(model_properties, train_series, track_series):
 
 
 def setup_data(dataset_names, pool_datasets, pool_split,
-               untar, data_dir, tar_dir, tmp_data_dir, preproc_id, data_cache_dir):
+               untar, data_dir, tar_dir, preproc_id, data_cache_dir):
     logger.info('load datasets: %s', helpers.quote_list(dataset_names))
 
     # If 'pool_train' or 'pool_val' are in dataset_names, replace them with the pool datasets.
@@ -163,7 +172,7 @@ def setup_data(dataset_names, pool_datasets, pool_split,
 
     if untar:
         datasets = data.untar_and_load_all(
-            tar_dir, tmp_data_dir, preproc_id, dataset_names,
+            tar_dir, data_dir, preproc_id, dataset_names,
             cache_dir=data_cache_dir)
     else:
         datasets = {
