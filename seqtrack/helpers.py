@@ -106,15 +106,6 @@ def crop_and_resize(src, box, size_hw, pad_value):
     return out
 
 
-def load_image_viewport(fname, viewport, size_hw, pad_value=None):
-    if pad_value is None:
-        pad_value = (128, 128, 128)
-    im = Image.open(fname)
-    if im.mode != 'RGB':
-        im = im.convert('RGB')
-    return crop_and_resize(im, viewport, size_hw, pad_value)
-
-
 def im_to_arr(x, dtype=np.float32):
     # return np.array(x, dtype=dtype)
     return (1. / 255) * np.array(x, dtype=dtype)

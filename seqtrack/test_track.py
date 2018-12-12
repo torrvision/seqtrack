@@ -76,7 +76,6 @@ class TestTrack(unittest.TestCase):
 def random_sequence(dir_name, num_frames, frmsz):
     seq = {
         'image_files': [],
-        'viewports': [],
         'labels': [],
         'label_is_valid': [],
         'original_image_size': (frmsz, frmsz),
@@ -94,7 +93,6 @@ def random_sequence(dir_name, num_frames, frmsz):
         center = np.random.uniform(max_radius, 1 - max_radius, size=2)
         label = np.concatenate([center - 0.5 * size, center + 0.5 * size])
         seq['image_files'].append(image_file)
-        seq['viewports'].append(geom_np.unit_rect())
         seq['labels'].append(label)
         seq['label_is_valid'].append(True)
     return seq

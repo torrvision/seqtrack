@@ -240,7 +240,6 @@ def make_sequence(dataset, track_id, frames):
     video_id = dataset.video(track_id)
     return {
         'image_files': [dataset.image_file(video_id, t) for t in frames],
-        'viewports': [geom_np.unit_rect() for _ in frames],
         'labels': [_rect_from_label(labels.get(t, None)) for t in frames],
         'label_is_valid': label_is_valid,
         'aspect': dataset.aspect(video_id),

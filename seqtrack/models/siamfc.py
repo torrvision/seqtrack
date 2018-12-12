@@ -165,7 +165,6 @@ class SiamFC(models_interface.IterModel):
 
             y = frame['y']
             mean_color = tf.reduce_mean(frame['x'], axis=(-3, -2), keepdims=True)
-            # TODO: frame['image'] and template_im have a viewport
             template_rect, y_square = _get_context_rect(
                 y, context_amount=self._template_scale, aspect=self._aspect,
                 aspect_method=self._aspect_method)

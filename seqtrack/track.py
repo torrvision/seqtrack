@@ -19,8 +19,6 @@ from seqtrack import data
 from seqtrack import geom_np
 from seqtrack import helpers
 from seqtrack import visualize as visualize_pkg
-from seqtrack.helpers import load_image_viewport, im_to_arr, pad_to, to_nested_tuple
-from seqtrack.helpers import escape_filename
 
 FRAME_PATTERN = '%06d.jpeg'
 
@@ -60,7 +58,8 @@ class ChunkedTracker(object):
             if not self._keep_frames:
                 self._frame_dir = tempfile.mkdtemp()
             else:
-                self._frame_dir = os.path.join(self._vis_dir, 'frames', escape_filename(self._sequence_name))
+                seq_fname = helpers.escape_filename(self._sequence_name)
+                self._frame_dir = os.path.join(self._vis_dir, 'frames', seq_fname)
                 if not os.path.exists(self._frame_dir):
                     os.makedirs(self._frame_dir)
 
@@ -110,20 +109,14 @@ class ChunkedTracker(object):
             init_frame: Sequence of length 1.
         '''
         self._start_time = time.time()
-        # JV: Use viewport.
-        # first_image = load_image(sequence['image_files'][0], model.image_size, resize=True)
         if self._aspect is None:
             # CAUTION: This will not work if using resized image dataset?
             im_width, im_height = Image.open(init_frame['image_files'][0]).size
             self._aspect = float(im_width) / im_height
-        # first_image = load_image_viewport(
-        #     init_frame['image_files'][0],
-        #     init_frame['viewports'][0],
-        #     size_hw=(self._model_inst.imheight, self._model_inst.imwidth))
         first_image = helpers.load_image(init_frame['image_files'][0])
         first_label = init_frame['labels'][0]
         # Prepare for input to network.
-        self._batch_first_image = self._to_batch(im_to_arr(first_image))
+        self._batch_first_image = self._to_batch(helpers.im_to_arr(first_image))
         self._batch_first_label = self._to_batch(first_label)
 
         if self._visualize:
@@ -139,22 +132,17 @@ class ChunkedTracker(object):
         if self._num_frames > 0:
             # This is not the first chunk.
             # Add the previous state to the feed dictionary.
-            tensor, value = to_nested_tuple(self._model_inst.state_init, self._prev_state)
+            tensor, value = helpers.to_nested_tuple(self._model_inst.state_init, self._prev_state)
             if tensor is not None:  # Function returns None if empty.
                 feed_dict[tensor] = value
 
         start_load = time.time()
-        # image_size_hw = (self._model_inst.imheight, self._model_inst.imwidth)
-        # images = [
-        #     load_image_viewport(image_file, viewport, image_size_hw)
-        #     for image_file, viewport in zip(chunk['image_files'], chunk['viewports'])
-        # ]
         images = [helpers.load_image(image_file) for image_file in chunk['image_files']]
         labels = chunk['labels']
         is_valid = chunk['label_is_valid']
 
         # Prepare data as input to network.
-        images_arr = list(map(im_to_arr, images))
+        images_arr = list(map(helpers.im_to_arr, images))
         feed_dict.update({
             self._model_inst.example['x0']: self._batch_first_image,
             self._model_inst.example['y0']: self._batch_first_label,
@@ -210,7 +198,7 @@ class ChunkedTracker(object):
                 '-i', FRAME_PATTERN,
                 '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
                 os.path.join(os.path.abspath(self._vis_dir),
-                             escape_filename(self._sequence_name) + '.mp4')]
+                             helpers.escape_filename(self._sequence_name) + '.mp4')]
             try:
                 subprocess.check_call(args, cwd=self._frame_dir)
             except Exception as ex:
@@ -230,7 +218,8 @@ class ChunkedTracker(object):
         return _single_to_batch(x, self._model_inst.batchsz)
 
     def _to_batch_sequence(self, x):
-        return _single_to_batch(pad_to(x, self._model_inst.ntimesteps), self._model_inst.batchsz)
+        return _single_to_batch(helpers.pad_to(x, self._model_inst.ntimesteps),
+                                self._model_inst.batchsz)
 
 
 def track(sess, model_inst, sequence, use_gt,
@@ -252,7 +241,6 @@ def track(sess, model_inst, sequence, use_gt,
     model_inst.state_final  -- Nested collection of tensors.
 
     sequence['image_files']    -- List of strings of length n.
-    sequence['viewports']      -- Numpy array of rectangles [n, 4].
     sequence['labels']         -- Numpy array of shape [n, 4]
     sequence['label_is_valid'] -- List of booleans of length n.
     sequence['aspect']         -- Aspect ratio of original image.
@@ -273,7 +261,6 @@ def track(sess, model_inst, sequence, use_gt,
     )
     init_frame = {
         'image_files': sequence['image_files'][0:1],
-        'viewports': sequence['viewports'][0:1],
         'labels': sequence['labels'][0:1],
         'is_valid': sequence['label_is_valid'][0:1],
     }
@@ -292,7 +279,6 @@ def track(sess, model_inst, sequence, use_gt,
 
         input_chunk = {
             'image_files': sequence['image_files'][start:start + chunk_len],
-            'viewports': sequence['viewports'][start:start + chunk_len],
             'labels': sequence['labels'][start:start + chunk_len],
             'label_is_valid': sequence['label_is_valid'][start:start + chunk_len],
         }
@@ -323,7 +309,6 @@ class SimpleTracker(object):
     def start(self, image_file, rect):
         init_frame = {
             'image_files': [image_file],
-            'viewports': [geom_np.unit_rect()],
             'labels': [rect],
         }
         self._tracker.start(init_frame)
@@ -332,7 +317,6 @@ class SimpleTracker(object):
         label_valid = gt_rect is not None
         chunk = {
             'image_files': [image_file],
-            'viewports': [geom_np.unit_rect()],
             'labels': [gt_rect if label_valid else geom_np.unit_rect()],
             'label_is_valid': [label_valid],
         }
@@ -354,7 +338,7 @@ def _single_to_batch(x, batch_size):
     x = np.expand_dims(x, 0)
     if batch_size is None:
         return x
-    return pad_to(x, batch_size)
+    return helpers.pad_to(x, batch_size)
 
 
 def _make_progress_bar():
@@ -478,7 +462,7 @@ def _extract_tre_sequence(seq, ind, num, subseq_name):
 
 
 def _extract_interval(seq, start, stop):
-    KEYS_SEQ = ['image_files', 'viewports', 'labels', 'label_is_valid']
+    KEYS_SEQ = ['image_files', 'labels', 'label_is_valid']
     KEYS_NON_SEQ = ['aspect']
     subseq = {}
     subseq.update({k: seq[k][start:stop] for k in KEYS_SEQ})

@@ -98,7 +98,6 @@ def main():
     # sequence = {}
     # sequence['video_name'] = args.sequence_name
     # sequence['image_files'] = [args.image_format % i for i in frames]
-    # sequence['viewports'] = [geom_np.unit_rect() for _ in frames]
     # init_rect = np.asfarray([args.init_rect[k] for k in ['xmin', 'ymin', 'xmax', 'ymax']])
     # sequence['labels'] = [init_rect if i == args.start else geom_np.unit_rect() for i in frames]
     # sequence['label_is_valid'] = [i == args.start for i in frames]

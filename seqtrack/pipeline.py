@@ -50,7 +50,6 @@ def get_example_filenames(capacity=32, name='get_example'):
     Each element of the queue represents a single example sequence.
     For a sequence of length n, each element is a dictionary with the elements::
         'image_files'    # Tensor with shape [n] containing strings.
-        'viewports'      # Tensor with shape [n, 4] containing rectangles.
         'labels'         # Tensor with shape [n, 4] containing rectangles.
         'label_is_valid' # Tensor with shape [n] containing booleans.
         'aspect'         # Tensor with shape [] containing aspect ratio.
@@ -68,12 +67,11 @@ def get_example_filenames(capacity=32, name='get_example'):
     with tf.name_scope(name) as scope:
         # Create queue to write examples to.
         queue = tf.FIFOQueue(capacity=capacity,
-                             dtypes=[tf.string, tf.float32, tf.float32, tf.bool, tf.float32],
-                             names=['image_files', 'viewports', 'labels', 'label_is_valid', 'aspect'],
+                             dtypes=[tf.string, tf.float32, tf.bool, tf.float32],
+                             names=['image_files', 'labels', 'label_is_valid', 'aspect'],
                              name='file_queue')
         placeholder = {
             'image_files': tf.placeholder(tf.string, shape=[None], name='example_files'),
-            'viewports': tf.placeholder(tf.float32, shape=[None, 4], name='example_viewports'),
             'labels': tf.placeholder(tf.float32, shape=[None, 4], name='example_labels'),
             'label_is_valid': tf.placeholder(tf.bool, shape=[None], name='example_label_is_valid'),
             'aspect': tf.placeholder(tf.float32, shape=[], name='example_aspect'),
@@ -106,7 +104,6 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
     Both dictionaries should have elements::
 
         'image_files'    # List of image filenames.
-        'viewports'      # Numpy array with shape [n, 4] containing rectangles.
         'labels'         # Numpy array with shape [n, 4] containing rectangles.
         'label_is_valid' # List of booleans.
         'aspect'         # Aspect ratio of original image.
@@ -120,7 +117,6 @@ def feed_example_filenames(placeholder, enqueue, sess, coord, examples):
                 return
             sess.run(enqueue, feed_dict={
                 placeholder['image_files']: example['image_files'],
-                placeholder['viewports']: example['viewports'],
                 placeholder['labels']: example['labels'],
                 placeholder['label_is_valid']: example['label_is_valid'],
                 placeholder['aspect']: example['aspect'],
@@ -151,7 +147,6 @@ def load_images(example, image_size=[None, None, None], pad_value=128,
     The input dictionary has fields::
 
         'image_files'    # Tensor with shape [n] containing strings.
-        'viewports'      # Tensor with shape [n, 4] containing rectangles.
         'labels'         # Tensor with shape [n, 4] containing rectangles.
         'label_is_valid' # Tensor with shape [n] containing booleans.
         'aspect'         # Tensor with shape [] containing aspect ratio.
@@ -174,11 +169,9 @@ def load_images(example, image_size=[None, None, None], pad_value=128,
                              names=['images', 'labels', 'label_is_valid', 'aspect'],
                              name='image_queue')
         example = dict(example)
-        images = graph.load_images(example['image_files'], image_size[0:2], example['viewports'],
-                                   pad_value=pad_value)
+        images = graph.load_images(example['image_files'], image_size[0:2], pad_value=pad_value)
         # Replace files with images.
         del example['image_files']
-        del example['viewports']
         example['images'] = images
         enqueue = queue.enqueue(example)
         tf.train.add_queue_runner(tf.train.QueueRunner(queue, [enqueue] * num_threads))
