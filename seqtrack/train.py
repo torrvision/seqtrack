@@ -3,12 +3,12 @@ from __future__ import division
 from __future__ import print_function
 
 import sys
+import collections
 import csv
 import json
 import math
 import numpy as np
 import tensorflow as tf
-import tensorflow.contrib.slim as slim
 from tensorflow.python import debug as tf_debug
 import time
 import os
@@ -33,7 +33,7 @@ from seqtrack import helpers
 from seqtrack import motion
 from seqtrack import pipeline
 from seqtrack import sample
-from seqtrack.models.itermodel import ModelFromIterModel
+from seqtrack.models import itermodel
 from seqtrack.models.siamfc import SiamFC
 
 
@@ -113,9 +113,8 @@ def train(
         preproc_id=preproc_id,
         data_cache_dir=data_cache_dir)
 
-    siamese = SiamFC(**model_params)
-    model_properties = siamese.derived_properties()
-    model = ModelFromIterModel(siamese)
+    create_iter_model_fn = partial(SiamFC, **model_params)
+    # model_properties = iter_model_fn.derived_properties()
 
     streams, eval_sample_fns = make_samplers(
         datasets,
@@ -131,13 +130,14 @@ def train(
         max_eval_videos=max_eval_videos)
 
     train_series, track_series = train_model_data(
-        dir, model, streams, eval_sample_fns,
+        dir, create_iter_model_fn, streams, eval_sample_fns,
         only_evaluate_existing=only_evaluate_existing,
         ntimesteps=ntimesteps,
         **kwargs)
 
     return make_train_result(
-        model_properties=model_properties,
+        model_properties={},
+        # model_properties=model_properties,
         train_series=train_series,
         track_series=track_series,
     )
@@ -276,7 +276,7 @@ def _make_video_sampler(names, datasets):
 # TODO: Look at resume and seeds.
 
 def train_model_data(
-        dir, model, sequences, eval_sets,
+        dir, create_iter_model_fn, sequences, eval_sets,
         override_ckpt_dir=None,
         # Args that affect the operation but not the result.
         only_evaluate_existing=False,
@@ -320,8 +320,7 @@ def train_model_data(
     '''Trains a network.
 
     Args:
-        create_model: Function that takes as input a dictionary of tensors and
-            returns a model object.
+        create_iter_model_fn: (models.interface.IterModel) Maps inputs to outputs.
         datasets: Dictionary of datasets with keys 'train' and 'val'.
         eval_sets: A dictionary of sampling functions which return collections
             of sequences on which to evaluate the tracker.
@@ -331,7 +330,7 @@ def train_model_data(
         train_series[step][metric]
         track_series[step][dataset][metric]
 
-    The method model.instantiate() constructs the model in the tf graph.
+    The method model_fn.instantiate() constructs the model in the tf graph.
     The model is expected to use variables scopes.
 
     The input dictionary has fields::
@@ -394,33 +393,48 @@ def train_model_data(
     # example = _perform_color_augmentation(example, args)
     metric_vars = {}
 
-    example_input = graph.whiten(example)
-    with tf.variable_scope('model'):
-        outputs, losses, init_state, final_state = model.instantiate(
-            example_input, run_opts, enable_loss=True,
-            image_summaries_collections=['IMAGE_SUMMARIES'])
-    metric_vars.update(losses)
-    _loss_summary(losses)
+    iter_model_fn = create_iter_model_fn(mode=tf.estimator.ModeKeys.TRAIN)
+    # model_fn = itermodel.ModelFromIterModel(iter_model_fn)
+    # example_input = graph.whiten(example)
+    args = itermodel.ArgsUnroll(
+        inputs_init={
+            'image': {'data': example['x0']},
+            'rect': example['y0'],
+            'aspect': example['aspect'],
+            'run_opts': run_opts,
+        },
+        inputs={
+            'image': {'data': example['x']},
+        },
+        labels={
+            'rect': example['y'],
+            'valid': example['y_is_valid'],
+        },
+    )
+
+    with tf.variable_scope('model', reuse=False) as vs:
+        ops = itermodel.instantiate_unroll(iter_model_fn, args, scope=vs)
+        # outputs, losses, init_state, final_state = model_fn.instantiate(
+        #     example_input, run_opts, enable_loss=True,
+        #     image_summaries_collections=['IMAGE_SUMMARIES'])
+    metric_vars.update(ops.losses)
+    _loss_summary(ops.losses)
     # _image_summary(example, outputs)
     # loss_var = _add_losses(losses, args.loss_coeffs)
-    loss_var = _add_losses(losses, {})
+    loss_var = _add_losses(ops.losses, {})
 
     with tf.name_scope('diagnostic'):
-        iou = geom.rect_iou(outputs['y'], example_input['y'])
-        mean_iou = tf.reduce_mean(tf.boolean_mask(iou, example_input['y_is_valid']))
+        iou = geom.rect_iou(ops.predictions['rect'], args.labels['rect'])
+        mean_iou = tf.reduce_mean(tf.boolean_mask(iou, args.labels['valid']))
         metric_vars['iou'] = mean_iou
         tf.summary.scalar('iou', mean_iou)
 
-        dist = tf.norm(geom.rect_center(outputs['y']) - geom.rect_center(example_input['y']), axis=-1)
-        dist = dist / tf.reduce_mean(geom.rect_size(example_input['y']), axis=-1)
-        mean_dist = tf.reduce_mean(tf.boolean_mask(dist, example_input['y_is_valid']))
+        dist = tf.norm((geom.rect_center(ops.predictions['rect']) -
+                        geom.rect_center(args.labels['rect'])), axis=-1)
+        dist = dist / tf.reduce_mean(geom.rect_size(args.labels['rect']), axis=-1)
+        mean_dist = tf.reduce_mean(tf.boolean_mask(dist, args.labels['valid']))
         tf.summary.scalar('dist', mean_dist)
         metric_vars['dist'] = mean_dist
-
-    model_inst = graph.ModelInstance(
-        example, run_opts, outputs, init_state, final_state,
-        batchsz=outputs['y'].shape.as_list()[0], ntimesteps=ntimesteps,
-        imheight=imheight, imwidth=imwidth)
 
     r = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     loss_var += r
@@ -457,7 +471,29 @@ def train_model_data(
                 summaries.extend(tf.get_collection('summaries_model'))
                 summary_vars_with_preview[mode] = tf.summary.merge(summaries)
 
-    init_op = tf.global_variables_initializer()
+    model_fn_track = create_iter_model_fn(mode=tf.estimator.ModeKeys.PREDICT)
+    # TODO: Ensure that the `track` instance does not include ops such as bnorm and summaries.
+    # Feed image files here:
+    args_track_with_files = _make_iter_placeholders(batch_size=1)
+    # Evaluate model_fn on these inputs:
+    args_track = _iter_load_images(args_track_with_files)
+    instantiate_method = 'assign'
+    if instantiate_method == 'assign':
+        # Create external scope for the local variables (reuse is false).
+        with tf.variable_scope('instance') as local_scope:
+            pass
+        with tf.variable_scope('model', reuse=True) as scope:
+            model_inst_track = itermodel.InstanceAssign(
+                args_track_with_files,
+                itermodel.instantiate_iter_assign(model_fn_track, args_track,
+                                                  local_scope=local_scope, scope=scope))
+    else:
+        with tf.variable_scope('model', reuse=True) as scope:
+            model_inst_track = itermodel.InstanceFeed(
+                args_track_with_files,
+                itermodel.instantiate_iter_feed(model_fn_track, args_track, scope=scope))
+
+    init_op = [tf.initializers.global_variables(), tf.initializers.local_variables()]
     saver = tf.train.Saver(max_to_keep=100)
 
     # if args.siamese_pretrain:
@@ -478,18 +514,18 @@ def train_model_data(
         print('\ntraining starts! --------------------------------------------')
         sys.stdout.flush()
 
-        if only_evaluate_existing:
-            return _evaluate_at_existing_checkpoints(
-                saver, eval_sets, sess, model_inst,
-                path_ckpt=path_ckpt,
-                period_skip=period_skip,
-                period_assess=period_assess,
-                extra_assess=extra_assess,
-                # For _evaluate():
-                eval_tre_num=eval_tre_num,
-                path_output=path_output,
-                visualize=visualize,
-                keep_frames=keep_frames)
+        # if only_evaluate_existing:
+        #     return _evaluate_at_existing_checkpoints(
+        #         saver, eval_sets, sess, model_inst,
+        #         path_ckpt=path_ckpt,
+        #         period_skip=period_skip,
+        #         period_assess=period_assess,
+        #         extra_assess=extra_assess,
+        #         # For _evaluate():
+        #         eval_tre_num=eval_tre_num,
+        #         path_output=path_output,
+        #         visualize=visualize,
+        #         keep_frames=keep_frames)
 
         # 1. resume (full restore), 2. initialize from scratch, 3. curriculume learning (partial restore)
         prev_ckpt = 0
@@ -504,7 +540,9 @@ def train_model_data(
             prev_ckpt = np.asscalar(global_step_var.eval())
         else:
             sess.run(init_op)
-            model.init(sess)  # Loads pre-trained features if applicable.
+            # TODO: This method should belong to the instance?
+            # model_fn.init(sess)  # Loads pre-trained features if applicable.
+
             # if args.siamese_pretrain:
             #     saver_siamese.restore(sess, args.siamese_model_file)
             #     # vars_uninit = sess.run(tf.report_uninitialized_variables())
@@ -552,7 +590,7 @@ def train_model_data(
                 for eval_id, sampler in eval_sets.items():
                     eval_sequences = sampler()
                     result = _evaluate(
-                        global_step, eval_id, sess, model_inst, eval_sequences,
+                        global_step, eval_id, sess, model_inst_track, eval_sequences,
                         eval_tre_num=eval_tre_num,
                         path_output=path_output,
                         visualize=visualize,
@@ -975,7 +1013,7 @@ def _evaluate(
     result_file = os.path.join(path_output, 'assess', eval_id, iter_id + '.json')
     result = helpers.cache_json(
         result_file,
-        lambda: track.track_model(
+        lambda: track.track_and_assess(
             sess, model_inst, eval_sequences,
             visualize=visualize, vis_dir=vis_dir, keep_frames=keep_frames,
             tre_num=eval_tre_num),
@@ -1056,3 +1094,97 @@ def combine_dicts(delim='/', **kwargs):
 def _to_assess_step(step, period_assess, period_skip, extra_assess):
     return (step in extra_assess or
             (step > 0 and step >= period_skip and step % period_assess == 0))
+
+
+def _make_iter_placeholders(batch_size=None):
+    with tf.name_scope('inputs_init'):
+        inputs_init = {
+            'image': {
+                'file': tf.placeholder(tf.string, [batch_size], name='image_file'),
+            },
+            'aspect': tf.placeholder(tf.float32, [batch_size], name='aspect'),
+            'rect': tf.placeholder(tf.float32, [batch_size, 4], name='rect'),
+            # TODO: Pass this in?
+            'run_opts': {
+                'use_gt': tf.placeholder_with_default(False, [], name='use_gt'),
+                'is_training': tf.placeholder_with_default(False, [], name='is_training'),
+                'is_tracking': tf.placeholder_with_default(False, [], name='is_tracking'),
+                'gt_ratio': tf.placeholder_with_default(1.0, [], name='gt_ratio'),
+            }
+        }
+    with tf.name_scope('inputs_curr'):
+        inputs_curr = {
+            'image': {
+                'file': tf.placeholder(tf.string, [batch_size], name='image_file'),
+            }
+        }
+        labels_curr = {
+            'valid': tf.placeholder(tf.bool, [batch_size], name='valid'),
+            'rect': tf.placeholder(tf.float32, [batch_size, 4], name='rect'),
+        }
+    return itermodel.ArgsIter(
+        inputs_init=inputs_init,
+        inputs_curr=inputs_curr,
+        labels_curr=labels_curr,
+    )
+
+
+def _iter_load_images(with_files, resize=False, size=None):
+    # Load init image.
+    inputs_init = dict(with_files.inputs_init)
+    inputs_init['image'] = {
+        'data': load_and_resize_images(
+            inputs_init['image']['file'], resize=resize, size=size)
+    }
+    # Load curr image.
+    inputs_curr = dict(with_files.inputs_curr)
+    inputs_curr['image'] = {
+        'data': load_and_resize_images(
+            inputs_curr['image']['file'], resize=resize, size=size)
+    }
+    return itermodel.ArgsIter(inputs_init, inputs_curr, with_files.labels_curr)
+
+
+def load_and_resize_images(image_files, resize=False, size=None,
+                           name='load_and_resize_images'):
+    '''
+    Args:
+        image_files: Tensor of type string with shape `[k[0], ..., k[n-1]]`.
+        size: Tuple (h, w).
+
+    If `resize` is true, images will be resized to this `size`.
+    If `resize` is false and `size` is specified, the shape will be set with `set_shape`.
+    Otherwise the shape of the image tensor will be left unspecified.
+
+    Returns:
+        Tensor of type uint8 with shape `[k[0], ..., k[n-1], h, w, 3]`.
+
+    If `resize` is false, then the image files must be the same size.
+    '''
+    with tf.name_scope(name) as scope:
+        image_files, restore_fn = helpers.merge_dims(image_files, None, None)
+        images = tf.map_fn(
+            lambda image_file: _load_and_resize_image(image_file, resize=resize, size=size),
+            image_files,
+            dtype=tf.float32)
+        images = restore_fn(images, 0)
+        return images
+
+
+def _load_and_resize_image(image_file, resize=False, size=None, name='_load_and_resize_image'):
+    '''Loads a single image file and performs optional resize.
+
+    Args:
+        image_file: Tensor with shape [].
+    '''
+    with tf.name_scope(name) as scope:
+        with tf.device('/cpu:0'):
+            file_contents = tf.read_file(image_file)
+            image = tf.image.decode_jpeg(file_contents, channels=3)
+            if resize:
+                image = tf.image.resize_images(image, size)
+            else:
+                if size:
+                    image = tf.set_shape(image, list(size) + [3])
+            image = tf.image.convert_image_dtype(image, tf.float32)
+            return image

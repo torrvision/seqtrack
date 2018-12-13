@@ -165,7 +165,7 @@ def load_images(example, image_size=[None, None, None], pad_value=128,
     with tf.name_scope(name) as scope:
         # Create queue to write images to.
         queue = tf.FIFOQueue(capacity=capacity,
-                             dtypes=[tf.uint8, tf.float32, tf.bool, tf.float32],
+                             dtypes=[tf.float32, tf.float32, tf.bool, tf.float32],
                              names=['images', 'labels', 'label_is_valid', 'aspect'],
                              name='image_queue')
         example = dict(example)

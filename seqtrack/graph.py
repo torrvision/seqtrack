@@ -8,7 +8,7 @@ import tensorflow as tf
 import numpy as np
 
 from seqtrack import geom
-from seqtrack.helpers import load_image, im_to_arr, pad_to
+# from seqtrack.helpers import load_image, im_to_arr, pad_to
 
 EXAMPLE_KEYS = ['x0', 'y0', 'x', 'y', 'y_is_valid', 'aspect']
 
@@ -132,6 +132,7 @@ def load_images(image_files, image_size_hw, pad_value=128, name='load_images'):
         images = tf.map_fn(lambda x: tf.image.decode_jpeg(x, channels=3),
                            file_contents, dtype=tf.uint8)
         # Resize entire image.
+        images = tf.image.convert_image_dtype(images, tf.float32)
         images = tf.image.resize_images(images, image_size_hw)
         return images
 
@@ -151,59 +152,59 @@ def load_images_batch(image_files, image_size_hw, name='load_images_batch', **kw
         return images
 
 
-def py_load_batch(seqs, ntimesteps, im_size):
-    '''Loads image data for a batch of sequences and constructs values for feed dict.
+# def py_load_batch(seqs, ntimesteps, im_size):
+#     '''Loads image data for a batch of sequences and constructs values for feed dict.
+# 
+#     All sequences will be padded to ntimesteps.
+# 
+#     Args:
+#         im_size: (height, width)
+# 
+#     Example has keys:
+#         'x0'     # First image in sequence, shape [h, w, 3]
+#         'y0'         # Position of target in first image, shape [4]
+#         'x'      # Input images, shape [n-1, h, w, 3]
+#         'y'          # Position of target in following frames, shape [n-1, 4]
+#         'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
+#         'aspect'     # Aspect ratio of original image.
+#     '''
+#     sequence_keys = set(['x', 'y', 'y_is_valid'])
+#     examples = list(map(lambda x: py_load_batch_elem(x, im_size), seqs))
+#     # Pad all sequences to o.ntimesteps.
+#     # NOTE: Assumes that none of the arrays to be padded are empty.
+#     return {k: np.stack([pad_to(x[k], ntimesteps, axis=0)
+#                          if k in sequence_keys else x[k]
+#                          for x in examples])
+#             for k in EXAMPLE_KEYS}
 
-    All sequences will be padded to ntimesteps.
 
-    Args:
-        im_size: (height, width)
-
-    Example has keys:
-        'x0'     # First image in sequence, shape [h, w, 3]
-        'y0'         # Position of target in first image, shape [4]
-        'x'      # Input images, shape [n-1, h, w, 3]
-        'y'          # Position of target in following frames, shape [n-1, 4]
-        'y_is_valid' # Booleans indicating presence of frame, shape [n-1]
-        'aspect'     # Aspect ratio of original image.
-    '''
-    sequence_keys = set(['x', 'y', 'y_is_valid'])
-    examples = list(map(lambda x: py_load_batch_elem(x, im_size), seqs))
-    # Pad all sequences to o.ntimesteps.
-    # NOTE: Assumes that none of the arrays to be padded are empty.
-    return {k: np.stack([pad_to(x[k], ntimesteps, axis=0)
-                         if k in sequence_keys else x[k]
-                         for x in examples])
-            for k in EXAMPLE_KEYS}
-
-
-def py_load_batch_elem(seq, im_size):
-    '''Loads image data for one element of a batch.
-
-    Args:
-        im_size: (height, width)
-
-    Sequence has keys:
-        'image_files'    # Tensor with shape [n] containing strings.
-        'labels'         # Tensor with shape [n, 4] containing rectangles.
-        'label_is_valid' # Tensor with shape [n] containing booleans.
-        'aspect'         # Tensor with shape [] containing aspect ratio.
-    '''
-    seq_len = len(seq['image_files'])
-    assert(len(seq['labels']) == seq_len)
-    assert(len(seq['label_is_valid']) == seq_len)
-    assert(seq['label_is_valid'][0] is True)
-    # f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
-    #                         dtype=np.float32)
-    images = [
-        im_to_arr(load_image(seq['image_files'][t], im_size))
-        for t in range(seq_len)
-    ]
-    return {
-        'x0': np.array(images[0]),
-        'y0': np.array(seq['labels'][0]),
-        'x': np.array(images[1:]),
-        'y': np.array(seq['labels'][1:]),
-        'y_is_valid': np.array(seq['label_is_valid'][1:]),
-        'aspect': seq['aspect'],
-    }
+# def py_load_batch_elem(seq, im_size):
+#     '''Loads image data for one element of a batch.
+# 
+#     Args:
+#         im_size: (height, width)
+# 
+#     Sequence has keys:
+#         'image_files'    # Tensor with shape [n] containing strings.
+#         'labels'         # Tensor with shape [n, 4] containing rectangles.
+#         'label_is_valid' # Tensor with shape [n] containing booleans.
+#         'aspect'         # Tensor with shape [] containing aspect ratio.
+#     '''
+#     seq_len = len(seq['image_files'])
+#     assert(len(seq['labels']) == seq_len)
+#     assert(len(seq['label_is_valid']) == seq_len)
+#     assert(seq['label_is_valid'][0] is True)
+#     # f = lambda x: im_to_arr(load_image(x, size=(o.frmsz, o.frmsz), resize=False),
+#     #                         dtype=np.float32)
+#     images = [
+#         im_to_arr(load_image(seq['image_files'][t], im_size))
+#         for t in range(seq_len)
+#     ]
+#     return {
+#         'x0': np.array(images[0]),
+#         'y0': np.array(seq['labels'][0]),
+#         'x': np.array(images[1:]),
+#         'y': np.array(seq['labels'][1:]),
+#         'y_is_valid': np.array(seq['label_is_valid'][1:]),
+#         'aspect': seq['aspect'],
+#     }

@@ -59,13 +59,13 @@ class Tensor(object):
 def get_value(x):
     if isinstance(x, Tensor):
         x = x.value
-    assert isinstance(x, (tf.Tensor, tf.Variable))
+    assert tf.contrib.framework.is_tensor(x)
     return x
 
 
 def as_tensor(x, add_to_set=False):
     if not isinstance(x, Tensor):
-        assert isinstance(x, (tf.Tensor, tf.Variable))
+        assert tf.contrib.framework.is_tensor(x)
         x = Tensor(x)
     if add_to_set:
         x.add_to_set()

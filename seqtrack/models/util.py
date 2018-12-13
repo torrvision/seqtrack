@@ -29,13 +29,13 @@ def crop(im, rect, im_size, pad_value=0, feather=False, feather_margin=0.05, nam
     '''
     Args:
         im: [b, h, w, c]
-        rect: [b, 4] or [4]
+        rect: [b, 4]
         im_size: (height, width)
         pad_value: Either scalar constant or
             tf.Tensor that is broadcast-compatible with image.
     '''
     with tf.name_scope(name) as scope:
-        if isinstance(pad_value, tf.Tensor):
+        if tf.contrib.framework.is_tensor(pad_value):
             # TODO: This operation seems slow!
             im -= pad_value
             im = crop(im, rect, im_size, pad_value=0,
@@ -45,9 +45,8 @@ def crop(im, rect, im_size, pad_value=0, feather=False, feather_margin=0.05, nam
 
         if feather:
             im = feather_image(im, margin=feather_margin, background_value=pad_value)
-        batch_len = tf.shape(im)[0]
-        # Make rect broadcast.
-        rect = rect + tf.zeros([batch_len, 1], tf.float32)
+        # Use static shape if possible.
+        batch_len = im.shape[0].value or tf.shape(im)[0]
         return tf.image.crop_and_resize(im, geom.rect_to_tf_box(rect),
                                         box_ind=tf.range(batch_len),
                                         crop_size=n_positive_integers(2, im_size),
@@ -68,7 +67,7 @@ def crop_pyr(im, rect, im_size, scales, pad_value=0, feather=False, feather_marg
         [b, s, h, w, 3]
     '''
     with tf.name_scope(name) as scope:
-        if isinstance(pad_value, tf.Tensor):
+        if tf.contrib.framework.is_tensor(pad_value):
             # TODO: This operation seems slow!
             im -= pad_value
             crop_ims, rects = crop_pyr(im, rect, im_size, scales, pad_value=0,
@@ -131,7 +130,7 @@ def feather_mask(im_size, margin, name='feather_mask'):
 def scale_range(num, step, name='scale_range'):
     '''Creates a geometric progression with 1 at the center.'''
     with tf.name_scope(name) as scope:
-        assert isinstance(num, tf.Tensor)
+        assert tf.contrib.framework.is_tensor(num)
         with tf.control_dependencies(
                 [tf.assert_equal(num % 2, 1, message='number of scales must be odd')]):
             half = (num - 1) / 2

@@ -91,7 +91,7 @@ IOU_THRESHOLDS = [0.5, 0.7]
 AUC_NUM_STEPS = 1000
 SEQUENCE_METRICS = list(itertools.chain(
     FRAME_METRICS,
-    ['speed_eval', 'speed_with_load', 'speed_real'],
+    ['speed_with_load', 'speed_real'],
     ['iou_success_{}'.format(thr) for thr in IOU_THRESHOLDS],
     ['iou_success_auc'],
     ['iou_success_until_failure_{}'.format(thr) for thr in IOU_THRESHOLDS],
@@ -116,10 +116,7 @@ def assess_sequence(sequence, predictions, frame_metrics, timing=None):
                      np.where(_is_before_first(correct == 0), correct, 0)))
 
     if timing is not None:
-        metrics['speed_eval'] = timing['num_frames'] / timing['duration_eval']
-        metrics['speed_with_load'] = timing['num_frames'] / timing['duration_with_load']
-        # Maybe this should be num_frames + 1 but at least it is an under-estimate.
-        metrics['speed_real'] = timing['num_frames'] / timing['duration_real']
+        metrics.update(timing)
 
     metrics['iou_success_auc'] = _compute_auc(frame_metrics['iou'], AUC_NUM_STEPS)
     metrics['iou_success_until_failure_auc'] = _compute_auc(frame_metrics['iou'], AUC_NUM_STEPS,

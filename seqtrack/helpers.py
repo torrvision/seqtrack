@@ -18,6 +18,7 @@ import time
 from PIL import Image
 from contextlib import contextmanager
 
+nest = tf.contrib.framework.nest
 from tensorflow.contrib.layers.python.layers import utils as layer_utils
 
 import matplotlib
@@ -64,51 +65,51 @@ def createScalarMap(name='hot', vmin=-10, vmax=10):
     return matplotlib.cmx.ScalarMappable(norm=cNorm, cmap=cm)
 
 
-def load_image(fname, size_hw=None, resize=False):
-    im = Image.open(fname)
-    if im.mode != 'RGB':
-        im = im.convert('RGB')
-    if size_hw is not None:
-        height, width = size_hw
-        size_wh = (width, height)
-        if im.size != size_wh:
-            if resize:
-                im = im.resize(size_wh)
-            else:
-                pdb.set_trace()
-                raise ValueError('size does not match')
-    return im
+# def load_image(fname, size_hw=None, resize=False):
+#     im = Image.open(fname)
+#     if im.mode != 'RGB':
+#         im = im.convert('RGB')
+#     if size_hw is not None:
+#         height, width = size_hw
+#         size_wh = (width, height)
+#         if im.size != size_wh:
+#             if resize:
+#                 im = im.resize(size_wh)
+#             else:
+#                 pdb.set_trace()
+#                 raise ValueError('size does not match')
+#     return im
 
 
-def crop_and_resize(src, box, size_hw, pad_value):
-    '''
-    Args:
-        src: PIL image
-    '''
-    assert len(pad_value) == 3
-    height, width = size_hw
-    size_wh = (width, height)
-    # Valid region in original image.
-    src_valid = geom_np.rect_intersect(box, geom_np.unit_rect())
-    # Valid region in box.
-    box_valid = geom_np.crop_rect(src_valid, box)
-    src_valid_pix = np.rint(geom_np.rect_mul(src_valid, src.size)).astype(np.int)
-    box_valid_pix = np.rint(geom_np.rect_mul(box_valid, size_wh)).astype(np.int)
+# def crop_and_resize(src, box, size_hw, pad_value):
+#     '''
+#     Args:
+#         src: PIL image
+#     '''
+#     assert len(pad_value) == 3
+#     height, width = size_hw
+#     size_wh = (width, height)
+#     # Valid region in original image.
+#     src_valid = geom_np.rect_intersect(box, geom_np.unit_rect())
+#     # Valid region in box.
+#     box_valid = geom_np.crop_rect(src_valid, box)
+#     src_valid_pix = np.rint(geom_np.rect_mul(src_valid, src.size)).astype(np.int)
+#     box_valid_pix = np.rint(geom_np.rect_mul(box_valid, size_wh)).astype(np.int)
+# 
+#     out = Image.new('RGB', size_wh, pad_value)
+#     src_valid_pix_size = geom_np.rect_size(src_valid_pix)
+#     box_valid_pix_size = geom_np.rect_size(box_valid_pix)
+#     if all(src_valid_pix_size >= 1) and all(box_valid_pix_size >= 1):
+#         # Resize to final size in output image.
+#         src_valid_im = src.crop(src_valid_pix)
+#         out_valid_im = src_valid_im.resize(box_valid_pix_size)
+#         out.paste(out_valid_im, box_valid_pix)
+#     return out
 
-    out = Image.new('RGB', size_wh, pad_value)
-    src_valid_pix_size = geom_np.rect_size(src_valid_pix)
-    box_valid_pix_size = geom_np.rect_size(box_valid_pix)
-    if all(src_valid_pix_size >= 1) and all(box_valid_pix_size >= 1):
-        # Resize to final size in output image.
-        src_valid_im = src.crop(src_valid_pix)
-        out_valid_im = src_valid_im.resize(box_valid_pix_size)
-        out.paste(out_valid_im, box_valid_pix)
-    return out
 
-
-def im_to_arr(x, dtype=np.float32):
-    # return np.array(x, dtype=dtype)
-    return (1. / 255) * np.array(x, dtype=dtype)
+# def im_to_arr(x, dtype=np.float32):
+#     # return np.array(x, dtype=dtype)
+#     return (1. / 255) * np.array(x, dtype=dtype)
 
 
 def pad_to(x, n, axis=0, mode='constant'):
@@ -162,40 +163,32 @@ def merge_dims(x, a, b, name='merge_dims'):
     Returns:
         Reshaped tensor and a function to restore the shape.
     '''
-    n = len(x.shape)
-    a, b = _array_interval(a, b, n)
-
-    def restore(v, axis, x_static, x_dynamic, name='restore'):
-        with tf.name_scope(name) as scope:
-            '''Restores dimensions [axis] to dimensions [a, ..., b-1].'''
-            v_dynamic = tf.unstack(tf.shape(v))
-            v_static = v.shape.as_list()
-            m = len(v_static)
-            # Substitute the static size where possible.
-            u_dynamic = ([v_static[i] or v_dynamic[i] for i in range(0, axis)] +
-                         [x_static[i] or x_dynamic[i] for i in range(a, b)] +
-                         [v_static[i] or v_dynamic[i] for i in range(axis + 1, m)])
-            u = tf.reshape(v, u_dynamic)
-            return u
-
     with tf.name_scope(name) as scope:
-        # Group dimensions of x into a, b-a, n-b:
-        #     [0, ..., a-1 | a, ..., b-1 | b, ..., n-1]
-        # Then y has dimensions grouped in: a, 1, n-b:
-        #     [0, ..., a-1 | a | a+1, ..., a+n-b]
-        # giving a total length of m = n-b+a+1.
+        n = len(x.shape)
+        a, b = _array_interval(a, b, n)
         x_dynamic = tf.unstack(tf.shape(x))
         x_static = x.shape.as_list()
-
+        # Substitute the static size where possible.
+        x_shape = [x_static[i] or x_dynamic[i] for i in range(n)]
         def prod(xs):
             return functools.reduce(lambda x, y: x * y, xs)
-        # Substitute the static size where possible.
-        y_dynamic = ([x_static[i] or x_dynamic[i] for i in range(0, a)] +
-                     [prod([x_static[i] or x_dynamic[i] for i in range(a, b)])] +
-                     [x_static[i] or x_dynamic[i] for i in range(b, n)])
-        y = tf.reshape(x, y_dynamic)
-        restore_fn = functools.partial(restore, x_static=x_static, x_dynamic=x_dynamic)
+        y_shape = x_shape[:a] + [prod(x_shape[a:b])] + x_shape[b:]
+        y = tf.reshape(x, y_shape)
+        restore_fn = functools.partial(split_dims, shape=x_shape[a:b])
         return y, restore_fn
+
+
+def split_dims(v, axis, shape, name='restore'):
+    '''Split single dimension `axis` into `shape`.'''
+    with tf.name_scope(name) as scope:
+        m = len(v.shape)
+        shape = list(shape)
+        v_dynamic = tf.unstack(tf.shape(v))
+        v_static = v.shape.as_list()
+        v_shape = [v_static[i] or v_dynamic[i] for i in range(m)]
+        u_shape = v_shape[:axis] + list(shape) + v_shape[axis + 1:]
+        u = tf.reshape(v, u_shape)
+        return u
 
 
 def expand_dims_n(input, axis=None, n=1, name=None):
@@ -243,31 +236,31 @@ def diag_xcorr(x, f, stride=1, padding='VALID', name='diag_xcorr', **kwargs):
         return x
 
 
-def to_nested_tuple(tensor, value):
-    if isinstance(tensor, dict) or isinstance(tensor, list) or isinstance(tensor, tuple):
-        # Recurse on collection.
-        if isinstance(tensor, dict):
-            assert isinstance(value, dict)
-            assert set(tensor.keys()) == set(value.keys())
-            keys = sorted(tensor.keys())  # Not necessary but may as well.
-            pairs = [(tensor[k], value[k]) for k in keys]
-        else:
-            assert isinstance(value, list) or isinstance(value, tuple)
-            assert len(tensor) == len(value)
-            pairs = zip(tensor, value)
-        pairs = list(map(lambda pair: to_nested_tuple(*pair), pairs))
-        # Remove pairs that are empty.
-        pairs = list(filter(lambda x: x != (None, None), pairs))
-        if len(pairs) == 0:
-            return None, None
-        # Convert from list of tuples to tuple of lists.
-        tensor, value = zip(*pairs)
-        # Convert from lists to tuples.
-        return tuple(tensor), tuple(value)
-    else:
-        # TODO: Assert tensor is tf.Tensor?
-        # TODO: Assert value is np.array?
-        return tensor, value
+# def to_nested_tuple(tensor, value):
+#     if isinstance(tensor, dict) or isinstance(tensor, list) or isinstance(tensor, tuple):
+#         # Recurse on collection.
+#         if isinstance(tensor, dict):
+#             assert isinstance(value, dict)
+#             assert set(tensor.keys()) == set(value.keys())
+#             keys = sorted(tensor.keys())  # Not necessary but may as well.
+#             pairs = [(tensor[k], value[k]) for k in keys]
+#         else:
+#             assert isinstance(value, list) or isinstance(value, tuple)
+#             assert len(tensor) == len(value)
+#             pairs = zip(tensor, value)
+#         pairs = list(map(lambda pair: to_nested_tuple(*pair), pairs))
+#         # Remove pairs that are empty.
+#         pairs = list(filter(lambda x: x != (None, None), pairs))
+#         if len(pairs) == 0:
+#             return None, None
+#         # Convert from list of tuples to tuple of lists.
+#         tensor, value = zip(*pairs)
+#         # Convert from lists to tuples.
+#         return tuple(tensor), tuple(value)
+#     else:
+#         # TODO: Assert tensor is tf.Tensor?
+#         # TODO: Assert value is np.array?
+#         return tensor, value
 
 
 def escape_filename(s):
@@ -379,14 +372,31 @@ def most_static_shape(x):
     return [s or d for s, d in zip(x.shape.as_list(), tf.unstack(tf.shape(x)))]
 
 
-def stack_dict(frames, axis=0, keys=None):
-    '''Converts list of dictionaries to dictionary of tensors.'''
-    if keys is None:
-        keys = frames[0].keys()
-    return {
-        k: tf.stack([frame[k] for frame in frames], axis=axis)
-        for k in keys
-    }
+def stack_structure(elems, axis=0):
+    '''
+    Args:
+        elems: List of (identically) structured elements.
+    '''
+    assert len(elems) > 0
+    structure = elems[0]
+    for i in range(1, len(elems)):
+        nest.assert_same_structure(structure, elems[i])
+    elems = [nest.flatten(x) for x in elems]
+    fields = [tf.stack(field, axis=axis) for field in zip(*elems)]
+    fields = nest.pack_sequence_as(structure, fields)
+    return fields
+
+
+def unstack_structure(fields, axis=0):
+    '''
+    Args:
+        elems: List of (identically) structured elements.
+    '''
+    structure = fields
+    fields = nest.flatten(fields)
+    elems = list(zip(*[tf.unstack(field, axis=axis) for field in fields]))
+    elems = [nest.pack_sequence_as(structure, elem) for elem in elems]
+    return elems
 
 
 def quote(s):
@@ -395,16 +405,6 @@ def quote(s):
 
 def quote_list(x):
     return ', '.join(map(quote, x))
-
-
-# def unstack_dict(d, keys, axis):
-#     '''Converts dictionary of tensors to list of dictionaries.'''
-#     # Gather lists of all elements at same index.
-#     # {'x': [x0, x1], 'y': [y0, y1]} => [[x0, y0], [x1, y1]]
-#     value_lists = zip(*[tf.unstack(d[k], axis=axis) for k in keys])
-#     # Create a dictionary from each.
-#     # [[x0, y0], [x1, y1]] => [{'x': x0, 'y': y0}, {'x': x1, 'y': y1}]
-#     return [dict(zip(keys, vals)) for vals in value_lists]
 
 
 class ProgressMeter(object):
@@ -679,3 +679,42 @@ def set_xscale_log(ax):
         matplotlib.ticker.LogLocator(base=10.0, subs=minor_subs, numticks=12))
     ax.xaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%g'))
     ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+
+
+def wrap_merge_batch_dims_and_call(n, fn, x, *args, **kwargs):
+    '''
+    If `x` has `N` dimensions, then the first `N - n` are merged before calling `fn`.
+    The structure is then restored.
+    '''
+    assert n >= 0
+    num_batch_dims = len(x.shape) - n
+    if num_batch_dims > 1:
+        # We must merge the multiple batch dimensions into one.
+        x, restore_fn = merge_dims(x, None, -n)
+        y = fn(x, *args, **kwargs)
+        y = restore_fn(y, 0)
+    else:
+        # No merge necessary.
+        y = fn(x, *args, **kwargs)
+    return y
+
+
+def wrap_merge_batch_dims(n, fn):
+    return functools.partial(wrap_merge_batch_dims_and_call, n, fn)
+
+
+def merge_batch_dims_decorator(n):
+    return functools.partial(wrap_merge_batch_dims, n)
+
+
+def wrap_merge_batch_and_map(n, fn, x, *args, **kwargs):
+    return wrap_merge_batch_dims_and_call(
+        n,
+        functools.partial(tf.map_fn, fn),
+        x,
+        *args,
+        **kwargs)
+
+
+def merge_dicts(*args):
+    return dict(itertools.chain.from_iterable(x.items() for x in args))
