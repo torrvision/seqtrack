@@ -3,36 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 
-class Model(object):
-    '''Model can instantiate a model.'''
-
-    def instantiate(self, example, run_opts, enable_loss,
-                    image_summaries_collections=None):
-        '''
-        Args:
-            example has fields:
-                example['x0']
-                example['y0']
-                example['x']
-                example['y']
-                example['y_is_valid']
-                example['aspect']
-
-            run_opts has fields:
-                run_opts['is_training']
-
-            enable_loss is True to add loss terms to the graph.
-
-        Returns:
-            outputs, losses, init_state, final_state
-
-        The losses are returned as a dictionary.
-        '''
-        raise NotImplementedError()
-
-    def init(self, sess):
-        raise NotImplementedError()
-
+# TODO: This doc is out of date.
 
 class IterModel(object):
     '''

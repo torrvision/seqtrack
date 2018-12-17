@@ -157,10 +157,9 @@ class SiamFC(models_interface.IterModel):
             # TODO: Add receptive field size and stride?
         )
 
-    def start(self, inputs_init, enable_loss=False, image_summaries_collections=None, name='start'):
+    def start(self, inputs_init, run_opts, enable_loss=False, image_summaries_collections=None, name='start'):
         with tf.name_scope(name) as scope:
             aspect = inputs_init['aspect']
-            run_opts = inputs_init['run_opts']
 
             self._enable_loss = enable_loss
             self._image_summaries_collections = image_summaries_collections

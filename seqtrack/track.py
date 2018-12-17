@@ -24,214 +24,15 @@ from seqtrack import helpers
 FRAME_PATTERN = '%06d.jpeg'
 
 
-# class ChunkedTracker(object):
-# 
-#     def __init__(self, sess, model_inst,
-#                  use_gt=False,
-#                  verbose=False,
-#                  sequence_name='untitled',
-#                  sequence_aspect=None,
-#                  # Visualization options:
-#                  visualize=False,
-#                  vis_dir=None,
-#                  keep_frames=False):
-#         self._sess = sess
-#         self._model_inst = model_inst
-#         self._use_gt = use_gt
-#         self._verbose = verbose
-#         self._sequence_name = sequence_name
-#         self._aspect = sequence_aspect
-#         self._visualize = visualize
-#         self._vis_dir = vis_dir
-#         self._keep_frames = keep_frames
-# 
-#         self._num_frames = 0  # Does not include initial frame.
-#         self._prev_state = {}
-#         self._start_time = 0
-#         self._duration_eval = 0  # Does not include initial frame.
-#         self._duration_with_load = 0  # Does not include initial frame.
-# 
-#         self._frame_dir = None
-#         if self._visualize:
-#             assert self._vis_dir is not None
-#             if not os.path.exists(self._vis_dir):
-#                 os.makedirs(self._vis_dir, 0o755)
-#             if not self._keep_frames:
-#                 self._frame_dir = tempfile.mkdtemp()
-#             else:
-#                 seq_fname = helpers.escape_filename(self._sequence_name)
-#                 self._frame_dir = os.path.join(self._vis_dir, 'frames', seq_fname)
-#                 if not os.path.exists(self._frame_dir):
-#                     os.makedirs(self._frame_dir)
-# 
-#     def warmup(self):
-#         if None in [self._model_inst.imheight, self._model_inst.imwidth]:
-#             logger.warning('could not warm up with unknown dimensions')
-#             return
-# 
-#         r = np.random.RandomState(0)
-#         first_image = np.random.normal(
-#             size=(self._model_inst.imheight, self._model_inst.imwidth, 3))
-#         first_label = geom_np.make_rect([0.4, 0.4], [0.6, 0.6])
-# 
-#         images_arr = np.random.normal(
-#             size=(self._model_inst.ntimesteps,
-#                   self._model_inst.imheight, self._model_inst.imwidth, 3))
-#         labels = [geom_np.make_rect([0.4, 0.4], [0.6, 0.6])
-#                   for _ in range(self._model_inst.ntimesteps)]
-#         is_valid = [True for _ in range(self._model_inst.ntimesteps)]
-#         aspect = 1
-# 
-#         feed_dict = {}
-#         feed_dict.update({
-#             self._model_inst.example['x0']: self._to_batch(first_image),
-#             self._model_inst.example['y0']: self._to_batch(first_label),
-#             self._model_inst.example['x']: self._to_batch_sequence(images_arr),
-#             self._model_inst.example['y']: self._to_batch_sequence(labels),
-#             self._model_inst.example['y_is_valid']: self._to_batch_sequence(is_valid),
-#             self._model_inst.example['aspect']: self._to_batch(aspect),
-#             self._model_inst.run_opts['use_gt']: self._use_gt,
-#             self._model_inst.run_opts['is_tracking']: True,
-#         })
-# 
-#         # Get output and final state.
-#         output_vars = {'y': self._model_inst.outputs['y'],
-#                        'score': self._model_inst.outputs['score']}
-#         if self._visualize and 'vis' in self._model_inst.outputs:
-#             output_vars['vis'] = self._model_inst.outputs['vis']
-#         for i in range(3):
-#             outputs, self._prev_state = self._sess.run(
-#                 [output_vars, self._model_inst.state_final], feed_dict=feed_dict)
-# 
-# 
-#     def start(self, init_frame):
-#         '''
-#         Args:
-#             init_frame: Sequence of length 1.
-#         '''
-#         self._start_time = time.time()
-#         if self._aspect is None:
-#             # CAUTION: This will not work if using resized image dataset?
-#             im_width, im_height = Image.open(init_frame['image_files'][0]).size
-#             self._aspect = float(im_width) / im_height
-#         first_image = helpers.load_image(init_frame['image_files'][0])
-#         first_label = init_frame['labels'][0]
-#         # Prepare for input to network.
-#         self._batch_first_image = self._to_batch(helpers.im_to_arr(first_image))
-#         self._batch_first_label = self._to_batch(first_label)
-# 
-#         if self._visualize:
-#             im_vis = visualize_pkg.draw_output(first_image.copy(), rect_gt=first_label)
-#             im_vis.save(os.path.join(self._frame_dir, FRAME_PATTERN % 0))
-# 
-#     def next(self, chunk):
-#         chunk_len = len(chunk['image_files'])
-#         assert chunk_len <= self._model_inst.ntimesteps
-#         # TODO: If chunk_len != self._model.sequence_len, then set self._final.
-# 
-#         feed_dict = {}
-#         if self._num_frames > 0:
-#             # This is not the first chunk.
-#             # Add the previous state to the feed dictionary.
-#             tensor, value = helpers.to_nested_tuple(self._model_inst.state_init, self._prev_state)
-#             if tensor is not None:  # Function returns None if empty.
-#                 feed_dict[tensor] = value
-# 
-#         start_load = time.time()
-#         images = [helpers.load_image(image_file) for image_file in chunk['image_files']]
-#         labels = chunk['labels']
-#         is_valid = chunk['label_is_valid']
-# 
-#         # Prepare data as input to network.
-#         images_arr = list(map(helpers.im_to_arr, images))
-#         feed_dict.update({
-#             self._model_inst.example['x0']: self._batch_first_image,
-#             self._model_inst.example['y0']: self._batch_first_label,
-#             self._model_inst.example['x']: self._to_batch_sequence(images_arr),
-#             self._model_inst.example['y']: self._to_batch_sequence(labels),
-#             self._model_inst.example['y_is_valid']: self._to_batch_sequence(is_valid),
-#             self._model_inst.example['aspect']: self._to_batch(self._aspect),
-#             self._model_inst.run_opts['use_gt']: self._use_gt,
-#             self._model_inst.run_opts['is_tracking']: True,
-#         })
-# 
-#         # Get output and final state.
-#         output_vars = {'y': self._model_inst.outputs['y'],
-#                        'score': self._model_inst.outputs['score']}
-#         if self._visualize and 'vis' in self._model_inst.outputs:
-#             output_vars['vis'] = self._model_inst.outputs['vis']
-#         start_run = time.time()
-#         outputs, self._prev_state = self._sess.run(
-#             [output_vars, self._model_inst.state_final], feed_dict=feed_dict)
-# 
-#         self._duration_eval += time.time() - start_run
-#         self._duration_with_load += time.time() - start_load
-# 
-#         # Take first element of batch and first `chunk_len` elements of output.
-#         outputs['y'] = outputs['y'][0][:chunk_len]
-#         outputs['score'] = outputs['score'][0][:chunk_len]
-#         if self._visualize and 'vis' in self._model_inst.outputs:
-#             outputs['vis'] = outputs['vis'][0][:chunk_len]
-# 
-#         if self._visualize:
-#             for i in range(len(images)):
-#                 t = self._num_frames + i + 1
-#                 im_vis = visualize_pkg.draw_output(
-#                     images[i].copy(),
-#                     rect_gt=(labels[i] if is_valid[i] else None),
-#                     rect_pred=outputs['y'][i])
-#                 im_vis.save(os.path.join(self._frame_dir, FRAME_PATTERN % t))
-# 
-#         self._num_frames += chunk_len
-#         # return y_pred, hmap_pred
-#         return outputs
-# 
-#     def end(self):
-#         end_time = time.time()
-# 
-#         if self._visualize:
-#             args = [
-#                 'ffmpeg',
-#                 '-loglevel', 'error',
-#                 # '-r', '1', # fps.
-#                 '-y',  # Overwrite without asking.
-#                 '-nostdin',  # No interaction with user.
-#                 '-i', FRAME_PATTERN,
-#                 '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-#                 os.path.join(os.path.abspath(self._vis_dir),
-#                              helpers.escape_filename(self._sequence_name) + '.mp4')]
-#             try:
-#                 subprocess.check_call(args, cwd=self._frame_dir)
-#             except Exception as ex:
-#                 logger.warning('error calling ffmpeg: %s', str(ex))
-#             finally:
-#                 if not self._keep_frames:
-#                     shutil.rmtree(self._frame_dir)
-# 
-#         timing = {}
-#         timing['duration_eval'] = self._duration_eval
-#         timing['duration_with_load'] = self._duration_with_load
-#         timing['duration_real'] = end_time - self._start_time
-#         timing['num_frames'] = self._num_frames
-#         return timing
-# 
-#     def _to_batch(self, x):
-#         return _single_to_batch(x, self._model_inst.batchsz)
-# 
-#     def _to_batch_sequence(self, x):
-#         return _single_to_batch(helpers.pad_to(x, self._model_inst.ntimesteps),
-#                                 self._model_inst.batchsz)
+# Sequence = collections.namedtuple('Sequence', [
+#     'image_files',     # List of strings of length n.
+#     'labels',          # Numpy array of shape [n, 4]
+#     'label_is_valid',  # List of booleans of length n.
+#     'aspect',          # Aspect ratio of original image (width / height).
+# ])
 
 
-Sequence = collections.namedtuple('Sequence', [
-    'image_files',     # List of strings of length n.
-    'labels',          # Numpy array of shape [n, 4]
-    'label_is_valid',  # List of booleans of length n.
-    'aspect',          # Aspect ratio of original image (width / height).
-])
-
-
-def track(sess, model_inst, sequence,
+def track(sess, tracker, sequence,
           verbose=False,
           # Visualization options:
           visualize=False,
@@ -240,16 +41,10 @@ def track(sess, model_inst, sequence,
     '''Run an instantiated tracker on a sequence.'''
 
     # assert sequence['label_is_valid'][0]
-    model_inst.start(sess, {
+    tracker.start(sess, {
         'image': {'file': [sequence['image_files'][0]]},
         'rect': [sequence['labels'][0]],
         'aspect': [sequence['aspect']],
-        'run_opts': {
-            'is_training': False,
-            'is_tracking': True,
-            'use_gt': False,
-            'gt_ratio': np.nan,
-        },
     })
 
     start = time.time()
@@ -262,7 +57,7 @@ def track(sess, model_inst, sequence,
     for t in range(1, sequence_len):
         start_curr = time.time()
         # TODO: Load image separately.
-        curr = model_inst.next(sess, {
+        curr = tracker.next(sess, {
             'image': {'file': [sequence['image_files'][t]]},
         })
         duration_with_load += time.time() - start_curr
@@ -279,62 +74,6 @@ def track(sess, model_inst, sequence,
     return predictions, timing
 
 
-class SimpleTracker(object):
-    '''Describes a frame-by-frame tracker.'''
-
-    def __init__(self, sess, model_inst):
-        '''
-        kwargs for ChunkedTracker
-        '''
-        # self._tracker = ChunkedTracker(sess, model_inst, **kwargs)
-        self._sess = sess
-        self._model_inst = model_inst
-
-    def warmup(self):
-        # self._tracker.warmup()
-        pass
-
-    def start(self, image_file, aspect, rect):
-        # Create batch of size 1.
-        self._model_inst.start(self._sess, {
-            'image': {'file': [image_file]},
-            'aspect': [aspect],
-            'rect': [rect],
-        })
-
-    def next(self, image_file, gt_rect=None):
-        predictions = self._model_inst.next(self._sess, {
-            'image': {'file': [image_file]},
-        })
-        # Unpack from batch.
-        return _only(predictions['rect'])
-
-    # def end(self):
-    #     return self._model_inst.end()
-
-
-def _only(xs):
-    x, = xs
-    return x
-
-
-def _single_to_batch(x, batch_size):
-    x = np.expand_dims(x, 0)
-    if batch_size is None:
-        return x
-    return helpers.pad_to(x, batch_size)
-
-
-def _make_progress_bar():
-    # return progressbar.ProgressBar(widgets=[
-    #     progressbar.SimpleProgress(format='sequence %(value_s)s/%(max_value_s)s'), ' ',
-    #     '(', progressbar.Percentage(), ') ',
-    #     progressbar.Bar(), ' ',
-    #     progressbar.Timer(), ' (', progressbar.ETA(format_finished='ETA: Complete'), ')',
-    # ])
-    return helpers.ProgressMeter(interval_time=1)
-
-
 def track_and_assess(sess, model_inst, sequences, tre_num=1, **kwargs):
     '''
     Args:
@@ -346,7 +85,7 @@ def track_and_assess(sess, model_inst, sequences, tre_num=1, **kwargs):
     subseqs, tre_groups = _split_tre_all(sequences, tre_num)
     predictions = {}
     timing = {}
-    bar = _make_progress_bar()
+    bar = helpers.ProgressMeter(interval_time=1)
     for name in bar(subseqs.keys()):
         # TODO: Cache.
         # If we use a subset of sequences, we need to ensure that the subset is the same?

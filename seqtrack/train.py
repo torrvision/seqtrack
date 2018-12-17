@@ -16,7 +16,6 @@ import pprint
 import random
 import re
 import subprocess
-import threading
 from functools import partial
 from itertools import chain
 from six import string_types
@@ -28,13 +27,13 @@ from seqtrack import data
 from seqtrack import draw
 from seqtrack import track
 from seqtrack import geom
-from seqtrack import graph
 from seqtrack import helpers
 from seqtrack import motion
-from seqtrack import pipeline
 from seqtrack import sample
 from seqtrack.models import itermodel
 from seqtrack.models.siamfc import SiamFC
+
+NUM_PREFETCH = 8
 
 
 # Pickling a function in one module to load in another module does not work if
@@ -320,7 +319,7 @@ def train_model_data(
     '''Trains a network.
 
     Args:
-        create_iter_model_fn: (models.interface.IterModel) Maps inputs to outputs.
+        create_iter_model_fn: (models.interface.IterModel) Maps example to outputs.
         datasets: Dictionary of datasets with keys 'train' and 'val'.
         eval_sets: A dictionary of sampling functions which return collections
             of sequences on which to evaluate the tracker.
@@ -371,49 +370,41 @@ def train_model_data(
     # However, this makes it difficult to plot training and validation error on the same axes
     # since there are separate summary ops for training and validation (with different names).
     # Option 2 is to use FIFOQueue.from_list()
+    #
+    # Update (2018-12):
+    # Replace explicit queues with tf.data.Dataset and prefetch().
+    # Use separate instance (with shared variables) for tracking.
 
     modes = ['train', 'val']
 
-    feed_loop = {}  # Each value is a function to call in a thread.
-    with tf.name_scope('input'):
-        from_queue = None
-        if use_queues:
-            queues = []
-            for mode in modes:
-                # Create a queue each for training and validation data.
-                queue, feed_loop[mode] = _make_input_pipeline(
-                    ntimesteps=ntimesteps, batchsz=batchsz,
-                    im_size=(imheight, imwidth),
-                    num_load_threads=1, num_batch_threads=1, name='pipeline_' + mode)
-                queues.append(queue)
-            queue_index, from_queue = pipeline.make_multiplexer(queues, capacity=4, num_threads=1)
-        example, run_opts = graph.make_placeholders(
-            ntimesteps, (imheight, imwidth), default=from_queue)
+    datasets = {
+        mode: (
+            _dataset_from_sequence_generator(partial(_identity, sequences[mode]),
+                                             sequence_len=ntimesteps + 1)
+            .map(_sequence_to_example_unroll)
+            .map(_load_images_unroll)
+            .batch(batchsz, drop_remainder=True)
+        ) for mode in modes
+    }
+    if use_queues:
+        datasets = {mode: datasets[mode].prefetch(NUM_PREFETCH) for mode in modes}
+    iterators = {mode: datasets[mode].make_one_shot_iterator() for mode in modes}
+
+    # https://www.tensorflow.org/guide/datasets
+    switch_handle = tf.placeholder(tf.string, shape=[])
+    switch_iterator = tf.data.Iterator.from_string_handle(
+        switch_handle,
+        output_types=datasets['train'].output_types,
+        output_shapes=datasets['train'].output_shapes)
+    example = switch_iterator.get_next()
+    run_opts = _make_run_opts_placeholders()
 
     # example = _perform_color_augmentation(example, args)
     metric_vars = {}
 
     iter_model_fn = create_iter_model_fn(mode=tf.estimator.ModeKeys.TRAIN)
-    # model_fn = itermodel.ModelFromIterModel(iter_model_fn)
-    # example_input = graph.whiten(example)
-    args = itermodel.ArgsUnroll(
-        inputs_init={
-            'image': {'data': example['x0']},
-            'rect': example['y0'],
-            'aspect': example['aspect'],
-            'run_opts': run_opts,
-        },
-        inputs={
-            'image': {'data': example['x']},
-        },
-        labels={
-            'rect': example['y'],
-            'valid': example['y_is_valid'],
-        },
-    )
-
     with tf.variable_scope('model', reuse=False) as vs:
-        ops = itermodel.instantiate_unroll(iter_model_fn, args, scope=vs)
+        ops = itermodel.instantiate_unroll(iter_model_fn, example, run_opts=run_opts, scope=vs)
         # outputs, losses, init_state, final_state = model_fn.instantiate(
         #     example_input, run_opts, enable_loss=True,
         #     image_summaries_collections=['IMAGE_SUMMARIES'])
@@ -424,15 +415,15 @@ def train_model_data(
     loss_var = _add_losses(ops.losses, {})
 
     with tf.name_scope('diagnostic'):
-        iou = geom.rect_iou(ops.predictions['rect'], args.labels['rect'])
-        mean_iou = tf.reduce_mean(tf.boolean_mask(iou, args.labels['valid']))
+        iou = geom.rect_iou(ops.predictions['rect'], example.labels['rect'])
+        mean_iou = tf.reduce_mean(tf.boolean_mask(iou, example.labels['valid']))
         metric_vars['iou'] = mean_iou
         tf.summary.scalar('iou', mean_iou)
 
         dist = tf.norm((geom.rect_center(ops.predictions['rect']) -
-                        geom.rect_center(args.labels['rect'])), axis=-1)
-        dist = dist / tf.reduce_mean(geom.rect_size(args.labels['rect']), axis=-1)
-        mean_dist = tf.reduce_mean(tf.boolean_mask(dist, args.labels['valid']))
+                        geom.rect_center(example.labels['rect'])), axis=-1)
+        dist = dist / tf.reduce_mean(geom.rect_size(example.labels['rect']), axis=-1)
+        mean_dist = tf.reduce_mean(tf.boolean_mask(dist, example.labels['valid']))
         tf.summary.scalar('dist', mean_dist)
         metric_vars['dist'] = mean_dist
 
@@ -474,26 +465,33 @@ def train_model_data(
     model_fn_track = create_iter_model_fn(mode=tf.estimator.ModeKeys.PREDICT)
     # TODO: Ensure that the `track` instance does not include ops such as bnorm and summaries.
     # Feed image files here:
-    args_track_with_files = _make_iter_placeholders(batch_size=1)
-    # Evaluate model_fn on these inputs:
-    args_track = _iter_load_images(args_track_with_files)
+    example_track_with_files = _make_iter_placeholders(batch_size=1)
+    # Evaluate model_fn on these features:
+    example_track = _load_images_iter(example_track_with_files)
     instantiate_method = 'assign'
     if instantiate_method == 'assign':
         # Create external scope for the local variables (reuse is false).
         with tf.variable_scope('instance') as local_scope:
             pass
         with tf.variable_scope('model', reuse=True) as scope:
-            model_inst_track = itermodel.InstanceAssign(
-                args_track_with_files,
-                itermodel.instantiate_iter_assign(model_fn_track, args_track,
+            model_inst_track = itermodel.TrackerAssign(
+                example_track_with_files,
+                itermodel.instantiate_iter_assign(model_fn_track, example_track,
+                                                  run_opts=_make_run_opts_tracking(),
                                                   local_scope=local_scope, scope=scope))
     else:
         with tf.variable_scope('model', reuse=True) as scope:
-            model_inst_track = itermodel.InstanceFeed(
-                args_track_with_files,
-                itermodel.instantiate_iter_feed(model_fn_track, args_track, scope=scope))
+            model_inst_track = itermodel.TrackerFeed(
+                example_track_with_files,
+                itermodel.instantiate_iter_feed(model_fn_track, example_track,
+                                                run_opts=_make_run_opts_tracking(),
+                                                scope=scope))
 
-    init_op = [tf.initializers.global_variables(), tf.initializers.local_variables()]
+    init_op = [
+        tf.initializers.global_variables(),
+        tf.initializers.local_variables(),
+        # [iterator.initializer for iterator in iterators.values()],
+    ]
     saver = tf.train.Saver(max_to_keep=100)
 
     # if args.siamese_pretrain:
@@ -513,6 +511,8 @@ def train_model_data(
     with tf.Session(config=make_session_config(**session_config_kwargs)) as sess:
         print('\ntraining starts! --------------------------------------------')
         sys.stdout.flush()
+
+        iterator_handles = {mode: sess.run(iterators[mode].string_handle()) for mode in modes}
 
         # if only_evaluate_existing:
         #     return _evaluate_at_existing_checkpoints(
@@ -551,16 +551,6 @@ def train_model_data(
             #     # sess.run(tf.variables_initializer([v for v in tf.global_variables()
             #     #                                    if v.name.split(':')[0] in vars_uninit]))
             #     # assert len(sess.run(tf.report_uninitialized_variables())) == 0
-
-        if use_queues:
-            coord = tf.train.Coordinator()
-            tf.train.start_queue_runners(sess, coord)
-            # Run the feed loops in another thread.
-            threads = [threading.Thread(target=feed_loop[mode],
-                                        args=(sess, coord, sequences[mode]))
-                       for mode in modes]
-            for t in threads:
-                t.start()
 
         if tfdb:
             sess = tf_debug.LocalCLIDebugWrapperSession(sess)
@@ -615,15 +605,8 @@ def train_model_data(
             feed_dict = {run_opts['use_gt']: use_gt_train,
                          run_opts['is_training']: True,
                          run_opts['is_tracking']: False,
-                         run_opts['gt_ratio']: gt_ratio}
-            if use_queues:
-                feed_dict.update({queue_index: 0})  # Choose validation queue.
-            else:
-                batch_seqs = [next(sequences['train']) for i in range(batchsz)]
-                # batch = _load_batch(batch_seqs, args)
-                batch = graph.py_load_batch(batch_seqs, ntimesteps, (imheight, imwidth))
-                feed_dict.update({example[k]: v for k, v in batch.items()})
-                dur_load = time.time() - start
+                         run_opts['gt_ratio']: gt_ratio,
+                         switch_handle: iterator_handles['train']}
             if global_step % period_summary == 0:
                 summary_var = (summary_vars_with_preview['train']
                                if global_step % period_preview == 0
@@ -647,15 +630,8 @@ def train_model_data(
                 feed_dict = {run_opts['use_gt']: use_gt_train,  # Match training.
                              run_opts['is_training']: False,  # Do not update bnorm stats.
                              run_opts['is_tracking']: False,
-                             run_opts['gt_ratio']: gt_ratio}  # Match training.
-                if use_queues:
-                    feed_dict.update({queue_index: 1})  # Choose validation queue.
-                else:
-                    batch_seqs = [next(sequences['val']) for i in range(batchsz)]
-                    # batch = _load_batch(batch_seqs, args)
-                    batch = graph.py_load_batch(batch_seqs, ntimesteps, (imheight, imwidth))
-                    feed_dict.update({example[k]: v for k, v in batch.items()})
-                    dur_load = time.time() - start
+                             run_opts['gt_ratio']: gt_ratio,  # Match training.
+                             switch_handle: iterator_handles['val']}
                 summary_var = (summary_vars_with_preview['val']
                                if global_step % period_preview == 0
                                else summary_vars['val'])
@@ -746,44 +722,6 @@ def make_session_config(gpu_manctrl=False, gpu_frac=1.0, log_device_placement=Fa
     if gpu_manctrl:
         config.gpu_options.allow_growth = True
         config.gpu_options.per_process_gpu_memory_fraction = gpu_frac
-
-
-def _make_input_pipeline(ntimesteps, batchsz, im_size, dtype=tf.float32,
-                         example_capacity=4, load_capacity=4, batch_capacity=4,
-                         num_load_threads=1, num_batch_threads=1,
-                         name='pipeline'):
-    '''
-    Args:
-        im_size: (height, width) to construct tensor
-    '''
-    with tf.name_scope(name) as scope:
-        height, width = im_size
-        files, feed_loop = pipeline.get_example_filenames(capacity=example_capacity)
-        images = pipeline.load_images(files, capacity=load_capacity,
-                                      num_threads=num_load_threads, image_size=[height, width, 3])
-        images_batch = pipeline.batch(images,
-                                      batch_size=batchsz, sequence_length=ntimesteps + 1,
-                                      capacity=batch_capacity, num_threads=num_batch_threads)
-
-        # Set static dimension of sequence length.
-        # TODO: This may only be necessary due to how the model is written.
-        images_batch['images'].set_shape([None, ntimesteps + 1, None, None, None])
-        images_batch['labels'].set_shape([None, ntimesteps + 1, None])
-        # Cast type of images.
-        # JV: convert_image_dtype changes range to 1, as expected by other tf functions
-        # images_batch['images'] = tf.cast(images_batch['images'], tf.float32)
-        images_batch['images'] = tf.image.convert_image_dtype(images_batch['images'], tf.float32)
-        # Put in format expected by model.
-        # is_valid = (range(1, ntimesteps+1) < tf.expand_dims(images_batch['num_frames'], -1))
-        example_batch = {
-            'x0': images_batch['images'][:, 0],
-            'y0': images_batch['labels'][:, 0],
-            'x': images_batch['images'][:, 1:],
-            'y': images_batch['labels'][:, 1:],
-            'y_is_valid': images_batch['label_is_valid'][:, 1:],
-            'aspect': images_batch['aspect'],
-        }
-        return example_batch, feed_loop
 
 
 # def _perform_color_augmentation(example_raw, o, name='color_augmentation'):
@@ -1097,23 +1035,16 @@ def _to_assess_step(step, period_assess, period_skip, extra_assess):
 
 
 def _make_iter_placeholders(batch_size=None):
-    with tf.name_scope('inputs_init'):
-        inputs_init = {
+    with tf.name_scope('features_init'):
+        features_init = {
             'image': {
                 'file': tf.placeholder(tf.string, [batch_size], name='image_file'),
             },
             'aspect': tf.placeholder(tf.float32, [batch_size], name='aspect'),
             'rect': tf.placeholder(tf.float32, [batch_size, 4], name='rect'),
-            # TODO: Pass this in?
-            'run_opts': {
-                'use_gt': tf.placeholder_with_default(False, [], name='use_gt'),
-                'is_training': tf.placeholder_with_default(False, [], name='is_training'),
-                'is_tracking': tf.placeholder_with_default(False, [], name='is_tracking'),
-                'gt_ratio': tf.placeholder_with_default(1.0, [], name='gt_ratio'),
-            }
         }
-    with tf.name_scope('inputs_curr'):
-        inputs_curr = {
+    with tf.name_scope('features_curr'):
+        features_curr = {
             'image': {
                 'file': tf.placeholder(tf.string, [batch_size], name='image_file'),
             }
@@ -1122,27 +1053,122 @@ def _make_iter_placeholders(batch_size=None):
             'valid': tf.placeholder(tf.bool, [batch_size], name='valid'),
             'rect': tf.placeholder(tf.float32, [batch_size, 4], name='rect'),
         }
-    return itermodel.ArgsIter(
-        inputs_init=inputs_init,
-        inputs_curr=inputs_curr,
+    return itermodel.ExampleIter(
+        features_init=features_init,
+        features_curr=features_curr,
         labels_curr=labels_curr,
     )
 
 
-def _iter_load_images(with_files, resize=False, size=None):
+def _make_run_opts_placeholders():
+    return {
+        'use_gt': tf.placeholder(tf.bool, [], name='use_gt'),
+        'is_training': tf.placeholder(tf.bool, [], name='is_training'),
+        'is_tracking': tf.placeholder(tf.bool, [], name='is_tracking'),
+        'gt_ratio': tf.placeholder(tf.float32, [], name='gt_ratio'),
+    }
+
+
+def _make_run_opts_tracking():
+    return {
+        'use_gt': tf.constant(False),
+        'is_training': tf.constant(False),
+        'is_tracking': tf.constant(True),
+        'gt_ratio': tf.constant(np.nan),  # Not used during tracking.
+    }
+
+
+def _dataset_from_sequence_generator(sequences, sequence_len):
+    '''
+    Args:
+        sequences: Callable that returns iterable (like `from_generator`).
+        sequence_len: Dimension of tensors (int or None).
+
+    Returns:
+        tf.data.Dataset
+    '''
+    types = {
+        'image_files': tf.string,
+        'labels': tf.float32,
+        'label_is_valid': tf.bool,
+        'aspect': tf.float32,
+        'video_name': tf.string,
+    }
+    shapes = {
+        'image_files': [sequence_len],
+        'labels': [sequence_len, 4],
+        'label_is_valid': [sequence_len],
+        'aspect': [],
+        'video_name': [],
+    }
+    return tf.data.Dataset.from_generator(sequences, types, output_shapes=shapes)
+
+
+def _sequence_to_example_unroll(sequence):
+    '''
+    Args:
+        sequence: Dict (defined in `sample`)
+
+    Returns:
+        itermodel.ExampleUnroll
+    '''
+    # TODO: Assert `sequence['label_is_valid'][0]`?
+    return itermodel.ExampleUnroll(
+        features_init={
+            'image': {'file': sequence['image_files'][0]},
+            'aspect': sequence['aspect'],
+            'rect': sequence['labels'][0],
+        },
+        features={
+            'image': {'file': sequence['image_files'][1:]},
+        },
+        labels={
+            'valid': sequence['label_is_valid'][1:],
+            'rect': sequence['labels'][1:],
+        },
+    )
+
+
+def _load_images_unroll(with_files, resize=False, size=None):
+    '''
+    Args:
+        with_files: itermodel.ExampleUnroll
+
+    Returns:
+        itermodel.ExampleUnroll
+    '''
     # Load init image.
-    inputs_init = dict(with_files.inputs_init)
-    inputs_init['image'] = {
-        'data': load_and_resize_images(
-            inputs_init['image']['file'], resize=resize, size=size)
+    features_init = dict(with_files.features_init)
+    features_init['image'] = {
+        'data': load_and_resize_images(features_init['image']['file'], resize=resize, size=size)
     }
     # Load curr image.
-    inputs_curr = dict(with_files.inputs_curr)
-    inputs_curr['image'] = {
-        'data': load_and_resize_images(
-            inputs_curr['image']['file'], resize=resize, size=size)
+    features = dict(with_files.features)
+    features['image'] = {
+        'data': load_and_resize_images(features['image']['file'], resize=resize, size=size)
     }
-    return itermodel.ArgsIter(inputs_init, inputs_curr, with_files.labels_curr)
+    return itermodel.ExampleUnroll(features_init, features, with_files.labels)
+
+
+def _load_images_iter(with_files, resize=False, size=None):
+    '''
+    Args:
+        with_files: itermodel.ExampleIter
+
+    Returns:
+        itermodel.ExampleIter
+    '''
+    # Load init image.
+    features_init = dict(with_files.features_init)
+    features_init['image'] = {
+        'data': load_and_resize_images(features_init['image']['file'], resize=resize, size=size)
+    }
+    # Load curr image.
+    features_curr = dict(with_files.features_curr)
+    features_curr['image'] = {
+        'data': load_and_resize_images(features_curr['image']['file'], resize=resize, size=size)
+    }
+    return itermodel.ExampleIter(features_init, features_curr, with_files.labels_curr)
 
 
 def load_and_resize_images(image_files, resize=False, size=None,
@@ -1188,3 +1214,7 @@ def _load_and_resize_image(image_file, resize=False, size=None, name='_load_and_
                     image = tf.set_shape(image, list(size) + [3])
             image = tf.image.convert_image_dtype(image, tf.float32)
             return image
+
+
+def _identity(x):
+    return x

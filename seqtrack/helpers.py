@@ -171,7 +171,7 @@ def merge_dims(x, a, b, name='merge_dims'):
         # Substitute the static size where possible.
         x_shape = [x_static[i] or x_dynamic[i] for i in range(n)]
         def prod(xs):
-            return functools.reduce(lambda x, y: x * y, xs)
+            return functools.reduce(lambda x, y: x * y, xs, 1)
         y_shape = x_shape[:a] + [prod(x_shape[a:b])] + x_shape[b:]
         y = tf.reshape(x, y_shape)
         restore_fn = functools.partial(split_dims, shape=x_shape[a:b])
@@ -718,3 +718,9 @@ def wrap_merge_batch_and_map(n, fn, x, *args, **kwargs):
 
 def merge_dicts(*args):
     return dict(itertools.chain.from_iterable(x.items() for x in args))
+
+
+def flatten_dict(keys, values):
+    nest.assert_shallow_structure(keys, values)
+    return dict(zip(nest.flatten(keys),
+                    nest.flatten_up_to(keys, values)))
