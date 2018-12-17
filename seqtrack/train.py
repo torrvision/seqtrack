@@ -886,7 +886,8 @@ def summarize_trials(trial_metrics, val_dataset, sort_key):
     '''
     num_trials = len(trial_metrics)
     # For each training run, choose the iteration which gave the best performance.
-    best = [max(trial_metrics[trial].values(), key=lambda x: sort_key(x[val_dataset]))
+    best = [max(trial_metrics[trial]['track_series'].values(),
+                key=lambda x: sort_key(x[val_dataset]))
             for trial in range(num_trials)]
     # Compute the mean of each metric
     # and the variance of a metric if there is enough information.
