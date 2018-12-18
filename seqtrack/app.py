@@ -13,6 +13,7 @@ def add_instance_arguments(parser):
     parser.add_argument('--batchsz', type=int, default=8, help='batch size')
     parser.add_argument('--imwidth', type=int, default=640, help='image resolution')
     parser.add_argument('--imheight', type=int, default=360, help='image resolution')
+    parser.add_argument('--resize_online', action='store_true')
 
     # parser.add_argument('--model', default='')
     # parser.add_argument('--model_params', type=json.loads, default={},
@@ -166,6 +167,7 @@ def train_kwargs(args, name):
         batchsz=args.batchsz,
         imwidth=args.imwidth,
         imheight=args.imheight,
+        resize_online=args.resize_online,
         # From app.add_train_args():
         train_dataset=args.train_dataset,
         val_dataset=args.val_dataset,

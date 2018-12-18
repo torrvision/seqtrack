@@ -301,6 +301,7 @@ def train_model_data(
         batchsz=None,
         imwidth=None,
         imheight=None,
+        resize_online=False,
         lr_schedule='constant',
         lr_init=1e-3,
         lr_params=None,
@@ -382,7 +383,7 @@ def train_model_data(
             _dataset_from_sequence_generator(partial(_identity, sequences[mode]),
                                              sequence_len=ntimesteps + 1)
             .map(_sequence_to_example_unroll)
-            .map(_load_images_unroll)
+            .map(partial(_load_images_unroll, resize=resize_online, size=(imheight, imwidth)))
             .batch(batchsz, drop_remainder=True)
         ) for mode in modes
     }
