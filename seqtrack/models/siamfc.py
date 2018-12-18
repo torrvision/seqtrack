@@ -97,7 +97,10 @@ class SiamFC(models_interface.IterModel):
                 target_size=target_size,
                 desired_template_scale=desired_template_scale,
                 desired_search_radius=desired_search_radius,
-                arch=feature_arch, arch_params=feature_arch_params)
+                feature_arch=feature_arch,
+                feature_arch_params=feature_arch_params,
+                feature_extra_conv_enable=feature_extra_conv_enable,
+                feature_extra_conv_params=feature_extra_conv_params)
             template_size = dims['template_size']
             search_size = dims['search_size']
 
