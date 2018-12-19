@@ -33,6 +33,7 @@ from seqtrack.models import itermodel
 from seqtrack.models import siamfc
 
 NUM_PREFETCH = 8
+INSTANTIATE_METHOD_TRACK = 'assign'
 
 
 # Pickling a function in one module to load in another module does not work if
@@ -293,6 +294,7 @@ def train_model_data(
         imwidth=None,
         imheight=None,
         resize_online=False,
+        resize_method='bilinear',
         lr_schedule='constant',
         lr_init=1e-3,
         lr_params=None,
@@ -374,7 +376,10 @@ def train_model_data(
             _dataset_from_sequence_generator(partial(_identity, sequences[mode]),
                                              sequence_len=ntimesteps + 1)
             .map(_sequence_to_example_unroll)
-            .map(partial(_load_images_unroll, resize=resize_online, size=(imheight, imwidth)))
+            .map(partial(_load_images_unroll,
+                         resize=resize_online,
+                         size=(imheight, imwidth),
+                         method=resize_method))
             .batch(batchsz, drop_remainder=True)
         ) for mode in modes
     }
@@ -460,8 +465,7 @@ def train_model_data(
     example_track_with_files = _make_iter_placeholders(batch_size=1)
     # Evaluate model_fn on these features:
     example_track = _load_images_iter(example_track_with_files)
-    instantiate_method = 'assign'
-    if instantiate_method == 'assign':
+    if INSTANTIATE_METHOD_TRACK == 'assign':
         # Create external scope for the local variables (reuse is false).
         with tf.variable_scope('instance') as local_scope:
             pass
@@ -1016,7 +1020,7 @@ def _sequence_to_example_unroll(sequence):
     )
 
 
-def _load_images_unroll(with_files, resize=False, size=None):
+def _load_images_unroll(with_files, **kwargs):
     '''
     Args:
         with_files: itermodel.ExampleUnroll
@@ -1027,17 +1031,17 @@ def _load_images_unroll(with_files, resize=False, size=None):
     # Load init image.
     features_init = dict(with_files.features_init)
     features_init['image'] = {
-        'data': load_and_resize_images(features_init['image']['file'], resize=resize, size=size)
+        'data': load_and_resize_images(features_init['image']['file'], **kwargs)
     }
     # Load curr image.
     features = dict(with_files.features)
     features['image'] = {
-        'data': load_and_resize_images(features['image']['file'], resize=resize, size=size)
+        'data': load_and_resize_images(features['image']['file'], **kwargs)
     }
     return itermodel.ExampleUnroll(features_init, features, with_files.labels)
 
 
-def _load_images_iter(with_files, resize=False, size=None):
+def _load_images_iter(with_files, **kwargs):
     '''
     Args:
         with_files: itermodel.ExampleIter
@@ -1048,17 +1052,17 @@ def _load_images_iter(with_files, resize=False, size=None):
     # Load init image.
     features_init = dict(with_files.features_init)
     features_init['image'] = {
-        'data': load_and_resize_images(features_init['image']['file'], resize=resize, size=size)
+        'data': load_and_resize_images(features_init['image']['file'], **kwargs)
     }
     # Load curr image.
     features_curr = dict(with_files.features_curr)
     features_curr['image'] = {
-        'data': load_and_resize_images(features_curr['image']['file'], resize=resize, size=size)
+        'data': load_and_resize_images(features_curr['image']['file'], **kwargs)
     }
     return itermodel.ExampleIter(features_init, features_curr, with_files.labels_curr)
 
 
-def load_and_resize_images(image_files, resize=False, size=None,
+def load_and_resize_images(image_files, resize=False, size=None, method='bilinear',
                            name='load_and_resize_images'):
     '''
     Args:
@@ -1077,14 +1081,15 @@ def load_and_resize_images(image_files, resize=False, size=None,
     with tf.name_scope(name) as scope:
         image_files, restore_fn = helpers.merge_dims(image_files, None, None)
         images = tf.map_fn(
-            lambda image_file: _load_and_resize_image(image_file, resize=resize, size=size),
+            partial(_load_and_resize_image, resize=resize, size=size, method=method),
             image_files,
             dtype=tf.float32)
         images = restore_fn(images, 0)
         return images
 
 
-def _load_and_resize_image(image_file, resize=False, size=None, name='_load_and_resize_image'):
+def _load_and_resize_image(image_file, resize=False, size=None, method='bilinear',
+                           name='_load_and_resize_image'):
     '''Loads a single image file and performs optional resize.
 
     Args:
@@ -1094,12 +1099,14 @@ def _load_and_resize_image(image_file, resize=False, size=None, name='_load_and_
         with tf.device('/cpu:0'):
             file_contents = tf.read_file(image_file)
             image = tf.image.decode_jpeg(file_contents, channels=3)
+            # The function `resize_images` will convert to float32 (unless using nearest).
+            image = tf.image.convert_image_dtype(image, tf.float32)
             if resize:
-                image = tf.image.resize_images(image, size)
+                method = getattr(tf.image.ResizeMethod, method.upper())
+                image = tf.image.resize_images(image, size, method=method)
             else:
                 if size:
-                    image = tf.set_shape(image, list(size) + [3])
-            image = tf.image.convert_image_dtype(image, tf.float32)
+                    image.set_shape(list(size) + [3])
             return image
 
 
