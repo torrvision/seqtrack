@@ -24,14 +24,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 from seqtrack import data
-from seqtrack import draw
 from seqtrack import track
 from seqtrack import geom
 from seqtrack import helpers
 from seqtrack import motion
 from seqtrack import sample
 from seqtrack.models import itermodel
-from seqtrack.models.siamfc import SiamFC
+from seqtrack.models import siamfc
 
 NUM_PREFETCH = 8
 
@@ -112,7 +111,7 @@ def train(
         preproc_id=preproc_id,
         data_cache_dir=data_cache_dir)
 
-    create_iter_model_fn = partial(SiamFC, **model_params)
+    create_iter_model_fn = partial(siamfc.SiamFC, **model_params)
     # model_properties = iter_model_fn.derived_properties()
 
     streams, eval_sample_fns = make_samplers(
@@ -189,14 +188,6 @@ def setup_data(dataset_names, pool_datasets, pool_split,
         datasets['pool_val'] = data.Concat({x: pool_splits[x][1] for x in pool_datasets})
 
     return datasets
-
-
-# def _make_model_spec(args):
-#     if args.model == 'SiamFC':
-#         model = ModelFromIterModel(SiamFC(**args.model_params))
-#     else:
-#         raise ValueError('unknown model: {}'.format(args.model))
-#     return model
 
 
 def _set_global_seed(seed):
