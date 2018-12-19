@@ -740,112 +740,6 @@ def make_session_config(gpu_manctrl=False, gpu_frac=1.0, log_device_placement=Fa
 #     return example
 
 
-def _generate_report(args, samplers, datasets,
-                     modes=['OPE', 'TRE'],
-                     metrics=['iou_mean', 'auc']):
-    '''Finds all results for each evaluation distribution.
-
-    Identifies the best result for each metric.
-    Caution: More frequent evaluations might lead to better results.
-    '''
-    def helper():
-        def eval_id_fn(sampler, dataset):
-            return '{}-{}'.format(dataset, sampler)
-        best_fn = {'iou_mean': np.amax, 'auc': np.amax, 'cle_mean': np.amin, 'cle_representative': np.amax}
-        report_dir = os.path.join(args.path_output, 'report')
-        if not os.path.isdir(report_dir): os.makedirs(report_dir)
-
-        # Plot each metric versus iteration.
-        # Create one plot per sampler, with a line per dataset.
-        for sampler in samplers:
-            # Load all results using this sampler.
-            results = {dataset: load_results(eval_id_fn(sampler, dataset)) for dataset in datasets}
-            # Print results for each dataset.
-            for dataset in datasets:
-                for mode in modes:
-                    print('==== evaluation: sampler {}, dataset {}, mode {} ===='.format(sampler, dataset, mode))
-                    steps = sorted(results[dataset].keys())
-                    # for step in steps:
-                    #     print 'iter {}:  {}'.format(step,
-                    #         '; '.join(['{}: {:.3g}'.format(metric, results[dataset][step][mode][metric])
-                    #                    for metric in metrics]))
-                    # for metric in metrics:
-                    #     values = [results[dataset][step][mode][metric] for step in steps]
-                    #     print 'best {}: {:.3g}'.format(metric, np.asscalar(best_fn[metric](values)))
-                    for metric in metrics:
-                        r = {step: results[dataset][step][mode] for step in steps}
-                        print(metric)
-                        print(';'.join([str(step) for step in steps]))
-                        print(';'.join(['{:04g}'.format(r[step][metric]) for step in steps]))
-                        metric_stddev = metric + '_std_err'
-                        print(';'.join(['{:04g}'.format(r[step][metric_stddev]) for step in steps]))
-            for mode in modes:
-                # Generate plot for each metric.
-                # Take union of steps for all datasets.
-                steps = sorted(set.union(*[set(r.keys()) for r in results.values()]))
-                for metric in metrics:
-                    # Plot this metric over time for all datasets.
-                    data_file = 'sampler-{}-mode-{}-metric-{}'.format(sampler, mode, metric)
-                    with open(os.path.join(report_dir, data_file + '.tsv'), 'w') as f:
-                        write_data_file(f, mode, metric, steps, results)
-                    try:
-                        plot_file = plot_data(report_dir, data_file)
-                        print('plot created:', plot_file)
-                    except Exception as e:
-                        print('could not create plot:', e)
-
-    def load_results(eval_id):
-        '''Returns a dictionary from step number to dictionary of metrics.'''
-        dirname = os.path.join(args.path_output, 'assess', eval_id)
-        pattern = re.compile(r'^iteration(\d+)\.json$')
-        results = {}
-        for f in os.listdir(dirname):
-            if not os.path.isfile(os.path.join(dirname, f)):
-                continue
-            match = pattern.match(f)
-            if not match:
-                continue
-            step = int(match.group(1))
-            with open(os.path.join(dirname, f), 'r') as r:
-                results[step] = json.load(r)
-        if not results:
-            print('warning: no results found:', eval_id)
-        return results
-
-    def write_data_file(f, mode, metric, steps, results):
-        # Create a column for the variance.
-        fieldnames = ['step'] + [x + suffix for x in datasets for suffix in ['', '_std_err']]
-        w = csv.DictWriter(f, delimiter='\t', fieldnames=fieldnames)
-        w.writeheader()
-        for step in steps:
-            # Map variance of metric to variance of
-            row = {
-                dataset + suffix:
-                    gnuplot_str(results[dataset].get(step, {}).get(mode, {}).get(metric + suffix, None))
-                for dataset in datasets
-                for suffix in ['', '_std_err']}
-            row['step'] = step
-            w.writerow(row)
-
-    def plot_data(plot_dir, filename):
-        src_dir = os.path.dirname(__file__)
-        args = ['gnuplot',
-                '-e', 'filename = "{}"'.format(filename),
-                os.path.join(src_dir, 'plot_eval_metric.gnuplot'),
-                ]
-        p = subprocess.Popen(args, cwd=plot_dir)
-        p.wait()
-        return os.path.join(plot_dir, filename + '.png')
-
-    return helper()
-
-
-def gnuplot_str(x):
-    if x is None:
-        return '?'
-    return str(x)
-
-
 def _add_losses(losses, loss_coeffs, name='add_losses'):
     with tf.name_scope(name) as scope:
         assert isinstance(losses, dict)
@@ -984,7 +878,8 @@ def summarize_trials(trial_metrics, val_dataset, sort_key):
     '''
     num_trials = len(trial_metrics)
     # For each training run, choose the iteration which gave the best performance.
-    best = [max(trial_metrics[trial].values(), key=lambda x: sort_key(x[val_dataset]))
+    best = [max(trial_metrics[trial]['track_series'].values(),
+                key=lambda x: sort_key(x[val_dataset]))
             for trial in range(num_trials)]
     # Compute the mean of each metric
     # and the variance of a metric if there is enough information.

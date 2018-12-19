@@ -2,6 +2,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import functools
 import itertools
 import numpy as np
 import operator
@@ -71,13 +72,16 @@ def assess_frames(sequence, pred_rects):
     oracle_size_iou = geom_np.rect_iou(label_rects, oracle_size_rect)
 
     # Set metrics to nan when object is not present.
-    iou = np.where(label_present, iou, float('nan'))
-    center_dist = np.where(label_present, center_dist, float('nan'))
-    oracle_size_iou = np.where(label_present, oracle_size_iou, float('nan'))
+    iou = np.where(label_present, iou, np.nan)
+    center_dist = np.where(label_present, center_dist, np.nan)
+    oracle_size_iou = np.where(label_present, oracle_size_iou, np.nan)
 
     # Set IOU to zero after it first reaches zero.
     iou_until_zero = np.where(np.isnan(iou), np.nan,
                               np.where(_is_before_first(iou == 0), iou, 0))
+
+    assert all(np.isfinite(iou[label_present]))
+    assert all(np.isnan(iou[~label_present]))
 
     return {
         'iou': iou,
@@ -88,14 +92,13 @@ def assess_frames(sequence, pred_rects):
 
 
 IOU_THRESHOLDS = [0.5, 0.7]
-AUC_NUM_STEPS = 1000
 SEQUENCE_METRICS = list(itertools.chain(
     FRAME_METRICS,
     ['speed_with_load', 'speed_real'],
     ['iou_success_{}'.format(thr) for thr in IOU_THRESHOLDS],
     ['iou_success_auc'],
     ['iou_success_until_failure_{}'.format(thr) for thr in IOU_THRESHOLDS],
-    ['iou_success_until_failure_auc']))
+))
 
 
 def assess_sequence(sequence, predictions, frame_metrics, timing=None):
@@ -118,9 +121,9 @@ def assess_sequence(sequence, predictions, frame_metrics, timing=None):
     if timing is not None:
         metrics.update(timing)
 
-    metrics['iou_success_auc'] = _compute_auc(frame_metrics['iou'], AUC_NUM_STEPS)
-    metrics['iou_success_until_failure_auc'] = _compute_auc(frame_metrics['iou'], AUC_NUM_STEPS,
-                                                            only_until_failure=True)
+    # OTB does not exclude the initial frame.
+    iou_with_initial_frame = np.concatenate([[1.0], frame_metrics['iou']])
+    metrics['iou_success_auc'] = _compute_auc(iou_with_initial_frame, 20, otb_mode=True)
     return metrics
 
 
@@ -139,7 +142,11 @@ def _summarize(frame_metrics, sequence_metrics, tre_groups):
         metrics[key + '_frame_mean'] = np.nanmean(np.concatenate(
             [frame_metrics[subseq][key] for subseq in all_subseqs]))
     # Compute the per-sequence averages and bootstrap variances.
-    for key in SEQUENCE_METRICS:
+    # TODO: Is it better to be sure of which keys we get here?
+    sequence_metric_keys = _union(
+        sequence_metrics[subseq_name].keys() for subseq_name in all_subseqs
+    )
+    for key in sequence_metric_keys:
         subseq_means = {subseq_name: np.nanmean(sequence_metrics[subseq_name][key])
                         for subseq_name in all_subseqs}
         # Take mean over all subsequences within a sequence (in OPE mode, just one).
@@ -157,22 +164,34 @@ def _summarize(frame_metrics, sequence_metrics, tre_groups):
     all_iou = np.concatenate([frame_metrics[subseq]['iou'] for subseq in all_subseqs])
     for thr in IOU_THRESHOLDS:
         metrics['iou_success_{}'.format(thr)] = np.nanmean(_greater_equal_keep_nan(all_iou, thr))
-    metrics['iou_success_auc'] = _compute_auc(all_iou, AUC_NUM_STEPS)
     return metrics
 
 
-def _compute_auc(iou, num, only_until_failure=False):
+def _compute_auc(iou, num, only_until_failure=False, otb_mode=False):
     thresholds, step = np.linspace(0, 1, num + 1, retstep=True)
+    iou = iou[~np.isnan(iou)]
+    # https://github.com/ZhouYzzz/otb-toolkit/blob/d912bf8/tracker_benchmark_v1.0/rstEval/calcSeqErrRobust.m#L102-L108
+    # if otb_mode:
+    #     iou[np.isnan(iou)] = 0  # Count missing data as incorrect.
+    # else:
+    #     iou = iou[~np.isnan(iou)]
+    assert len(iou) > 0
+    # https://github.com/ZhouYzzz/otb-toolkit/blob/d912bf8/evals/OPE_perfmat.m#L75
+    if otb_mode:
+        correct = (iou[:, np.newaxis] > thresholds)
+    else:
+        correct = (iou[:, np.newaxis] >= thresholds)
     # correct: [num_frames, num_thresholds]
-    # Type is float with values in {0, 1, nan}.
-    correct = _greater_equal_keep_nan(iou[:, np.newaxis], thresholds)
     if only_until_failure:
-        # The condition correct == 0 represents a failure and not an unlabelled frame (nan).
-        is_before_failure = np.apply_along_axis(_is_before_first, 0, correct == 0)
-        correct = np.where(np.isnan(correct), np.nan,
-                           np.asfarray(np.logical_and(correct == 1, is_before_failure)))
-    success = np.nanmean(correct, axis=0)
-    return np.trapz(success, dx=step)
+        is_before_failure = np.apply_along_axis(_is_before_first, 0, correct)
+        correct = np.logical_and(correct, is_before_failure)
+    correct = np.asfarray(correct)
+    success = np.mean(correct, axis=0)
+    # https://github.com/ZhouYzzz/otb-toolkit/blob/d912bf8/evals/OPE_drawplot.m#L22-L23
+    if otb_mode:
+        return np.mean(success)
+    else:
+        return np.trapz(success, dx=step)
 
 
 def _greater_equal_keep_nan(x, y):
@@ -209,3 +228,7 @@ def _is_before_first(xs):
         return np.less(np.arange(len(xs)), np.argmax(xs))
     else:
         return np.ones(len(xs), dtype=np.bool)
+
+
+def _union(iterable):
+    return functools.reduce(set.union, iterable, set())
