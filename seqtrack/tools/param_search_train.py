@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 from seqtrack import app
 from seqtrack import cnnutil
 from seqtrack import helpers
-from seqtrack import search
+from seqtrack import param_search
 from seqtrack import train
 from seqtrack.models import util
 
@@ -27,7 +27,7 @@ def main():
 
     input_stream = make_input_stream(args, np.random.RandomState(args.seed))
 
-    search.main(
+    param_search.main(
         work.train_worker,
         input_stream,
         kwargs_fn=functools.partial(to_kwargs, args),
@@ -172,7 +172,7 @@ def make_input_stream(args, rand):
 
     while True:
         vector = sample_vector(rand, p)
-        name = search.hash_vector(vector)
+        name = param_search.hash_vector(vector)
         yield name, vector
 
 
@@ -194,7 +194,7 @@ def sample_vector_train(rand, p):
     Some values may be set to None.
     '''
     def sample(spec):
-        return search.sample_param(rand, *spec)
+        return param_search.sample_param(rand, *spec)
 
     x = {k: None for k in KEYS_TRAIN}
 
@@ -241,7 +241,7 @@ def sample_vector_siamfc(rand, p):
     Some values may be set to None.
     '''
     def sample(spec):
-        return search.sample_param(rand, *spec)
+        return param_search.sample_param(rand, *spec)
 
     x = {k: None for k in KEYS_SIAMFC}
 
