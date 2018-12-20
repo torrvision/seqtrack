@@ -40,9 +40,9 @@ class TestAssess(unittest.TestCase):
     def test_assess_dataset(self):
         num_seqs = 50
         seqs, preds = random_dataset_and_predictions(np.random.RandomState(0), num_seqs)
-        metrics = assess.assess_dataset(seqs, preds)
-        self.assertLessEqual(0, metrics['OPE_iou_seq_mean'])
-        self.assertLessEqual(metrics['OPE_iou_seq_mean'], 1)
+        metrics, _ = assess.assess_dataset(seqs, preds)
+        self.assertLessEqual(0, metrics['OPE/iou_seq_mean'])
+        self.assertLessEqual(metrics['OPE/iou_seq_mean'], 1)
         for key in metrics:
             self.assertTrue(np.isscalar(metrics[key]),
                             'not scalar \'{}\': {}'.format(key, metrics[key]))
@@ -61,8 +61,8 @@ class TestAssess(unittest.TestCase):
         seqs = _load_otb_sequences()
         for tracker, desired_auc in OTB_TRACKERS:
             preds, ious = _load_otb_predictions(tracker, list(seqs.keys()))
-            metrics = assess.assess_dataset(seqs, preds)
-            np.testing.assert_almost_equal(metrics['OPE_iou_success_auc_seq_mean'],
+            metrics, _ = assess.assess_dataset(seqs, preds)
+            np.testing.assert_almost_equal(metrics['OPE/iou_success_auc_otb_seq_mean'],
                                            desired_auc, decimal=3)
 
 

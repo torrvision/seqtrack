@@ -36,11 +36,11 @@ def main():
     # Dump time-series for training and tracking for each seed.
     for name in kwargs.keys():
         report_dir = os.path.join('reports', 'trials', name)
-        mkdir_p(report_dir, 0o755)
-        with open(os.path.join(report_dir, 'train_series.txt'), 'w') as f:
-            dump_dict(f, flatten_dicts(results[name]['train_series']))
-        with open(os.path.join(report_dir, 'track_series.txt'), 'w') as f:
-            dump_dict(f, flatten_dicts(results[name]['track_series']))
+        helpers.mkdir_p(report_dir, 0o755)
+        with open(os.path.join(report_dir, 'train_series.csv'), 'w') as f:
+            helpers.dump_csv(f, flatten_dicts(results[name]['train_series']))
+        with open(os.path.join(report_dir, 'track_series.csv'), 'w') as f:
+            helpers.dump_csv(f, flatten_dicts(results[name]['track_series']))
 
     # Find best checkpoint for each seed and write metrics to file.
     best = {}
@@ -50,9 +50,10 @@ def main():
             lambda x: x[args.optimize_dataset][args.optimize_metric])
         print('max for "{:s}" at {:d} ({:.3g})'.format(
             name, best[name]['arg'], best[name][args.optimize_dataset][args.optimize_metric]))
-    mkdir_p('reports', 0o755)
-    with open(os.path.join('reports', 'best.txt'), 'w') as f:
-        dump_dict(f, flatten_dicts(best))
+    report_dir = os.path.join('reports')
+    helpers.mkdir_p(report_dir, 0o755)
+    with open(os.path.join(report_dir, 'best.csv'), 'w') as f:
+        helpers.dump_csv(f, flatten_dicts(best))
 
     # Compute statistics across trials.
     summary = train.summarize_trials(results.values(), val_dataset=args.optimize_dataset,
@@ -113,25 +114,6 @@ def make_kwargs(args, seed):
     return name, kwargs
 
 
-def dump_dict(f, series, sort_keys=True, sort_fields=True):
-    if len(series) == 0:
-        return
-    keys = list(series.keys())
-    if sort_keys:
-        keys = sorted(keys)
-    fields = list(series[keys[0]])
-    # TODO: Assert all the same or take (order-preserving?) union?
-    if sort_fields:
-        fields = sorted(fields)
-    writer = csv.DictWriter(f, fieldnames=['key'] + fields)
-    writer.writeheader()
-    for key in keys:
-        row = dict(series[key])
-        assert 'key' not in row
-        row['key'] = key
-        writer.writerow(row)
-
-
 def flatten_dicts(series):
     return {k: dict(nest.flatten_with_joined_string_paths(v)) for k, v in series.items()}
 
@@ -144,16 +126,6 @@ def find_max(series, key):
     assert 'arg' not in result
     result['arg'] = arg
     return result
-
-
-def mkdir_p(*args, **kwargs):
-    try:
-        os.makedirs(*args, **kwargs)
-    except OSError as ex:
-        if ex.errno == errno.EEXIST:
-            pass
-        else:
-            raise
 
 
 if __name__ == '__main__':

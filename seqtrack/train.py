@@ -839,19 +839,25 @@ def _evaluate(
     print('evaluation: {}'.format(eval_id))
     # Cache the results.
     result_file = os.path.join(path_output, 'assess', eval_id, iter_id + '.json')
-    result = helpers.cache_json(
-        result_file,
-        lambda: track.track_and_assess(
+    # Dump the per-sequence results to a file.
+    report_file = os.path.join(path_output, 'assess_per_sequence', eval_id, iter_id + '.csv')
+
+    def _eval_and_dump_report():
+        dataset_metrics, sequence_metrics = track.track_and_assess(
             sess, model_inst, eval_sequences,
             visualize=visualize, vis_dir=vis_dir, keep_frames=keep_frames,
-            tre_num=eval_tre_num),
-        makedir=True)
+            tre_num=eval_tre_num)
+        helpers.mkdir_p(os.path.dirname(report_file))
+        with open(report_file, 'w') as f:
+            helpers.dump_csv(f, sequence_metrics)
+        return dataset_metrics
+    result = helpers.cache_json(result_file, _eval_and_dump_report, makedir=True)
 
     modes = ['OPE', 'TRE_{}'.format(eval_tre_num)]
     metric_keys = ['iou_seq_mean', 'iou_frame_mean', 'iou_success_0.5']
     for mode in modes:
         for metric_key in metric_keys:
-            full_key = mode + '_' + metric_key
+            full_key = mode + '/' + metric_key
             var_key = full_key + '_var'
             if full_key in result:
                 value = '{:.3g}'.format(result[full_key])
@@ -865,6 +871,7 @@ def _evaluate(
         #     result[mode]['cle_mean'], result[mode]['cle_representative'])
 
     return result
+
 
 
 def _is_pair(x):

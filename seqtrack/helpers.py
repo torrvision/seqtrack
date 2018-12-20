@@ -3,6 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import csv
 import datetime
 import errno
 import functools
@@ -724,3 +725,31 @@ def flatten_dict(keys, values):
     nest.assert_shallow_structure(keys, values)
     return dict(zip(nest.flatten(keys),
                     nest.flatten_up_to(keys, values)))
+
+
+def dump_csv(f, series, sort_keys=True, sort_fields=True):
+    assert len(series) > 0
+    keys = list(series.keys())
+    if sort_keys:
+        keys = sorted(keys)
+    fields = list(series[keys[0]])
+    # TODO: Assert all the same or take (order-preserving?) union?
+    if sort_fields:
+        fields = sorted(fields)
+    writer = csv.DictWriter(f, fieldnames=['key'] + fields)
+    writer.writeheader()
+    for key in keys:
+        row = dict(series[key])
+        assert 'key' not in row
+        row['key'] = key
+        writer.writerow(row)
+
+
+def mkdir_p(*args, **kwargs):
+    try:
+        os.makedirs(*args, **kwargs)
+    except OSError as ex:
+        if ex.errno == errno.EEXIST:
+            pass
+        else:
+            raise
