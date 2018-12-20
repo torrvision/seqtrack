@@ -3,12 +3,16 @@ from __future__ import division
 from __future__ import print_function
 
 import argparse
+import csv
+import errno
 import functools
 import itertools
 import json
 import numpy as np
 import os
 import pprint
+import tensorflow as tf
+nest = tf.contrib.framework.nest
 
 import logging
 logger = logging.getLogger(__name__)
@@ -29,18 +33,32 @@ def main():
     result_stream = mapper(slurm.partial_apply_kwargs(train.train_worker), kwargs.items())
     results = dict(result_stream)
 
-    names = sorted(kwargs.keys())
-    for name in names:
-        print('-' * 40)
-        print('name:', name)
-        print('result:')
-        pprint.pprint(results[name])
+    # Dump time-series for training and tracking for each seed.
+    for name in kwargs.keys():
+        report_dir = os.path.join('reports', 'trials', name)
+        mkdir_p(report_dir, 0o755)
+        with open(os.path.join(report_dir, 'train_series.txt'), 'w') as f:
+            dump_dict(f, flatten_dicts(results[name]['train_series']))
+        with open(os.path.join(report_dir, 'track_series.txt'), 'w') as f:
+            dump_dict(f, flatten_dicts(results[name]['track_series']))
 
+    # Find best checkpoint for each seed and write metrics to file.
+    best = {}
+    for name in sorted(kwargs.keys()):
+        best[name] = find_max(
+            results[name]['track_series'],
+            lambda x: x[args.optimize_dataset][args.optimize_metric])
+        print('max for "{:s}" at {:d} ({:.3g})'.format(
+            name, best[name]['arg'], best[name][args.optimize_dataset][args.optimize_metric]))
+    mkdir_p('reports', 0o755)
+    with open(os.path.join('reports', 'best.txt'), 'w') as f:
+        dump_dict(f, flatten_dicts(best))
+
+    # Compute statistics across trials.
     summary = train.summarize_trials(results.values(), val_dataset=args.optimize_dataset,
                                      sort_key=lambda metrics: metrics[args.optimize_metric])
-
     print()
-    print('summary:')
+    print('statistics over all trials:')
     pprint.pprint(summary)
 
 
@@ -93,6 +111,49 @@ def make_kwargs(args, seed):
         resume=args.resume,
     )
     return name, kwargs
+
+
+def dump_dict(f, series, sort_keys=True, sort_fields=True):
+    if len(series) == 0:
+        return
+    keys = list(series.keys())
+    if sort_keys:
+        keys = sorted(keys)
+    fields = list(series[keys[0]])
+    # TODO: Assert all the same or take (order-preserving?) union?
+    if sort_fields:
+        fields = sorted(fields)
+    writer = csv.DictWriter(f, fieldnames=['key'] + fields)
+    writer.writeheader()
+    for key in keys:
+        row = dict(series[key])
+        assert 'key' not in row
+        row['key'] = key
+        writer.writerow(row)
+
+
+def flatten_dicts(series):
+    return {k: dict(nest.flatten_with_joined_string_paths(v)) for k, v in series.items()}
+
+
+def find_max(series, key):
+    keys = list(series.keys())
+    arg = max(keys, key=lambda x: key(series[x]))
+    # TODO: Use OrderedDict and put 'arg' first?
+    result = dict(series[arg])
+    assert 'arg' not in result
+    result['arg'] = arg
+    return result
+
+
+def mkdir_p(*args, **kwargs):
+    try:
+        os.makedirs(*args, **kwargs)
+    except OSError as ex:
+        if ex.errno == errno.EEXIST:
+            pass
+        else:
+            raise
 
 
 if __name__ == '__main__':
