@@ -58,6 +58,7 @@ def add_tracker_config_args(parser):
     parser.add_argument('--period_preview', type=int, default=100,
                         help='period to include images in summary (number of steps)')
 
+    parser.add_argument('--verbose_train', action='store_true')
     parser.add_argument('--visualize', action='store_true',
                         help='create video during evaluation')
     parser.add_argument('--keep_frames', action='store_true',
@@ -149,17 +150,10 @@ def add_slurm_args(parser):
 #     # parser.add_argument('--siamese_model_file', help='specify if using pretrained model')
 
 
-def train_kwargs(args, name):
-    '''Constructs kwargs for train.train() from command-line args.'''
+def train_params_kwargs(args):
     return dict(
-        dir=os.path.join('train', name),
         # From app.add_setup_data_args():
-        untar=args.untar,
-        data_dir=args.data_dir,
-        tar_dir=args.tar_dir,
-        use_tmp_data_dir=args.use_tmp_data_dir,
         preproc_id=args.preproc,
-        data_cache_dir=args.data_cache_dir,
         pool_datasets=args.pool_datasets,
         pool_split=args.pool_split,
         # From app.add_instance_arguments():
@@ -190,12 +184,27 @@ def train_kwargs(args, name):
         eval_tre_num=args.eval_tre_num,
         max_eval_videos=args.max_eval_videos,
         # From add_tracker_config_args(parser)
-        use_queues=args.use_queues,
-        nosave=args.nosave,
-        period_ckpt=args.period_ckpt,
         period_assess=args.period_assess,
         extra_assess=args.extra_assess,
         period_skip=args.period_skip,
+    )
+
+
+def train_kwargs(args):
+    '''Constructs kwargs for train.train() from command-line args.'''
+    return dict(
+        # From app.add_setup_data_args():
+        # dir=os.path.join('train', name),
+        # From app.add_setup_data_args():
+        untar=args.untar,
+        data_dir=args.data_dir,
+        tar_dir=args.tar_dir,
+        use_tmp_data_dir=args.use_tmp_data_dir,
+        data_cache_dir=args.data_cache_dir,
+        # From add_tracker_config_args(parser)
+        use_queues=args.use_queues,
+        nosave=args.nosave,
+        period_ckpt=args.period_ckpt,
         period_summary=args.period_summary,
         period_preview=args.period_preview,
         visualize=args.visualize,
@@ -207,5 +216,5 @@ def train_kwargs(args, name):
         # Other arguments:
         verbose_train=args.verbose_train,
         summary_dir='summary',
-        summary_name=name,
+        # summary_name=name,
     )
