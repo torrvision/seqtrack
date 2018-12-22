@@ -17,13 +17,118 @@ logger = logging.getLogger(__name__)
 
 from seqtrack import app
 from seqtrack import track
+from seqtrack import train
 from seqtrack import geom_np
 from seqtrack import data
-from seqtrack import draw
-from seqtrack import graph
-from seqtrack.models.itermodel import ModelFromIterModel
-from seqtrack.models.siamfc import SiamFC
+from seqtrack.models import itermodel
+from seqtrack.models import siamfc
 import trackdat
+
+
+def main():
+    args = parse_arguments()
+    logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
+    if args.vot:
+        global vot
+        vot = __import__('vot', globals(), locals())
+
+    if args.model_params and args.model_params_file:
+        raise RuntimeError('cannot specify both model_params and model_params_file')
+    model_params = {}
+    if args.model_params_file:
+        with open(args.model_params_file, 'r') as f:
+            model_params = json.load(f)
+    elif args.model_params:
+        model_params = args.model_params
+
+    model_fn = siamfc.SiamFC(mode=tf.estimator.ModeKeys.PREDICT, **model_params)
+    # TODO: Ensure that the `track` instance does not include ops such as bnorm and summaries.
+    # Feed image files here:
+    example_with_files = train._make_iter_placeholders(batch_size=1)
+    # Evaluate model_fn on these features:
+    example = train._load_images_iter(example_with_files)
+    with tf.variable_scope('model', reuse=False) as scope:
+        tracker = itermodel.TrackerFeed(
+            example_with_files,
+            itermodel.instantiate_iter_feed(model_fn, example,
+                                            run_opts=train._make_run_opts_tracking(),
+                                            scope=scope))
+
+    saver = tf.train.Saver()
+
+    sequence_name = (args.sequence_name or
+                     'untitled_{}'.format(datetime.datetime.now().strftime('%Y%m%dT%H%M%S')))
+
+    config = tf.ConfigProto()
+    # config.gpu_options.allow_growth = True
+    # config.gpu_options.per_process_gpu_memory_fraction = args.gpu_frac
+    with tf.Session(config=config) as sess:
+        saver.restore(sess, args.model_file)
+        # rect_pred, _ = track.track(sess, example, model, sequence, use_gt=False, verbose=True,
+        #                            visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
+
+        # tracker = track.SimpleTracker(
+        #     sess, model_inst, verbose=True, sequence_name=sequence_name,
+        #     visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
+        # tracker.warmup()
+
+        if args.vot:
+            logger.debug('try to obtain VOT handle')
+            handle = vot.VOT('rectangle')
+            logger.debug('obtained VOT handle')
+            init_rect_vot = handle.region()
+            logger.debug('init rectangle: %s', init_rect_vot)
+            init_image = handle.frame()
+            if not init_image:
+                return
+            imwidth, imheight = Image.open(init_image).size
+            logger.debug('imwidth=%d imheight=%s', imwidth, imheight)
+            init_rect = from_vot(init_rect_vot, imwidth=imwidth, imheight=imheight)
+        else:
+            if args.images_file:
+                image_files = read_lines(args.images_file)
+            else:
+                times = range(args.start, args.end + 1)
+                image_files = [args.image_format % t for t in times]
+            init_rect = args.init_rect
+            init_image = image_files[0]
+            imwidth, imheight = Image.open(init_image).size
+
+        tracker.start(sess, {
+            'image': {'file': [init_image]},
+            'aspect': [imwidth / imheight],
+            'rect': [rect_to_vec(init_rect)],
+        })
+        if args.vot:
+            while True:
+                image_t = handle.frame()
+                if image_t is None:
+                    break
+                # Untested:
+                outputs_t = tracker.next(sess, {'image': {'file': [image_t]}})
+                rect_vot = to_vot(rect_from_vec(outputs_t['rect'][0]),
+                                  imwidth=imwidth, imheight=imheight)
+                logger.debug('report rectangle: %s', rect_vot)
+                handle.report(rect_vot, outputs_t['score'])
+        else:
+            pred = []
+            for image_t in image_files[1:]:
+                pred_t = tracker.next(sess, {'image': {'file': [image_t]}})
+                pred.append(pred_t['rect'][0])
+        # info = tracker.end()
+        # logger.info('tracker speed (eval): %.3g', info['num_frames'] / info['duration_eval'])
+        # logger.info('tracker speed (with_load): %.3g',
+        #              info['num_frames'] / info['duration_with_load'])
+        # logger.info('tracker speed (real): %.3g', info['num_frames'] / info['duration_real'])
+
+    if args.out_file is not None:
+        # Write to file.
+        # pred = np.asarray(pred).tolist()
+        with open(args.out_file, 'w') as f:
+            writer = csv.writer(f)
+            writer.writerow(['image', 'xmin', 'ymin', 'xmax', 'ymax'])
+            for im_file, rect_t in zip(image_files[1:], pred):
+                writer.writerow([im_file] + list(map(lambda x: '{:.6g}'.format(x), rect_t)))
 
 
 def parse_arguments():
@@ -57,118 +162,6 @@ def parse_arguments():
     parser.add_argument('--vis_keep_frames', action='store_true')
 
     return parser.parse_args()
-
-
-def main():
-    args = parse_arguments()
-    logging.basicConfig(level=getattr(logging, args.loglevel.upper()))
-    if args.vot:
-        global vot
-        vot = __import__('vot', globals(), locals())
-
-    if args.model_params and args.model_params_file:
-        raise RuntimeError('cannot specify both model_params and model_params_file')
-    model_params = {}
-    if args.model_params_file:
-        with open(args.model_params_file, 'r') as f:
-            model_params = json.load(f)
-    elif args.model_params:
-        model_params = args.model_params
-
-    model_spec = ModelFromIterModel(SiamFC(**model_params))
-
-    example, run_opts = graph.make_placeholders(args.ntimesteps, (None, None))
-    example_proc = graph.whiten(example)
-    with tf.variable_scope('model'):
-        # TODO: Can ignore image_summaries here?
-        outputs, losses, init_state, final_state = model_spec.instantiate(
-            example_proc, run_opts, enable_loss=False)
-    model_inst = graph.ModelInstance(
-        example, run_opts, outputs, init_state, final_state,
-        batchsz=outputs['y'].shape.as_list()[0], ntimesteps=args.ntimesteps,
-        imheight=None, imwidth=None)
-
-    saver = tf.train.Saver()
-
-    sequence_name = (args.sequence_name or
-                     'untitled_{}'.format(datetime.datetime.now().strftime('%Y%m%dT%H%M%S')))
-
-    # # Load sequence from args.
-    # frames = range(args.start, args.end + 1)
-    # sequence = {}
-    # sequence['video_name'] = args.sequence_name
-    # sequence['image_files'] = [args.image_format % i for i in frames]
-    # init_rect = np.asfarray([args.init_rect[k] for k in ['xmin', 'ymin', 'xmax', 'ymax']])
-    # sequence['labels'] = [init_rect if i == args.start else geom_np.unit_rect() for i in frames]
-    # sequence['label_is_valid'] = [i == args.start for i in frames]
-    # width, height = Image.open(args.image_format % args.start).size
-    # sequence['aspect'] = float(width) / height
-    # # sequence['original_image_size']
-
-    config = tf.ConfigProto()
-    # config.gpu_options.allow_growth = True
-    # config.gpu_options.per_process_gpu_memory_fraction = args.gpu_frac
-    with tf.Session(config=config) as sess:
-        saver.restore(sess, args.model_file)
-        # rect_pred, _ = track.track(sess, example, model, sequence, use_gt=False, verbose=True,
-        #                            visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
-
-        tracker = track.SimpleTracker(
-            sess, model_inst, verbose=True, sequence_name=sequence_name,
-            visualize=args.vis, vis_dir=args.vis_dir, keep_frames=args.vis_keep_frames)
-        tracker.warmup()
-
-        if args.vot:
-            logger.debug('try to obtain VOT handle')
-            handle = vot.VOT('rectangle')
-            logger.debug('obtained VOT handle')
-            init_rect_vot = handle.region()
-            logger.debug('init rectangle: %s', init_rect_vot)
-            init_image = handle.frame()
-            if not init_image:
-                return
-            imwidth, imheight = Image.open(init_image).size
-            logger.debug('imwidth=%d imheight=%s', imwidth, imheight)
-            init_rect = from_vot(init_rect_vot, imwidth=imwidth, imheight=imheight)
-        else:
-            if args.images_file:
-                image_files = read_lines(args.images_file)
-            else:
-                times = range(args.start, args.end + 1)
-                image_files = [args.image_format % t for t in times]
-            init_rect = args.init_rect
-            init_image = image_files[0]
-
-        tracker.start(init_image, rect_to_vec(init_rect))
-        if args.vot:
-            while True:
-                image_t = handle.frame()
-                if image_t is None:
-                    break
-                outputs_t = tracker.next(image_t)
-                rect_vot = to_vot(rect_from_vec(outputs_t['y']),
-                                  imwidth=imwidth, imheight=imheight)
-                logger.debug('report rectangle: %s', rect_vot)
-                handle.report(rect_vot, outputs_t['score'])
-        else:
-            pred = []
-            for image_t in image_files[1:]:
-                pred_t = tracker.next(image_t)['y']
-                pred.append(pred_t)
-        info = tracker.end()
-        logger.info('tracker speed (eval): %.3g', info['num_frames'] / info['duration_eval'])
-        logger.info('tracker speed (with_load): %.3g',
-                     info['num_frames'] / info['duration_with_load'])
-        logger.info('tracker speed (real): %.3g', info['num_frames'] / info['duration_real'])
-
-    if args.out_file is not None:
-        # Write to file.
-        # pred = np.asarray(pred).tolist()
-        with open(args.out_file, 'w') as f:
-            writer = csv.writer(f)
-            writer.writerow(['image', 'xmin', 'ymin', 'xmax', 'ymax'])
-            for im_file, rect_t in zip(image_files[1:], pred):
-                writer.writerow([im_file] + list(map(lambda x: '{:.6g}'.format(x), rect_t)))
 
 
 def from_vot(r, imheight, imwidth):
