@@ -8,8 +8,6 @@ import csv
 import json
 import math
 import numpy as np
-import tensorflow as tf
-from tensorflow.python import debug as tf_debug
 import time
 import os
 import pprint
@@ -19,6 +17,10 @@ import subprocess
 from functools import partial
 from itertools import chain
 from six import string_types
+
+import tensorflow as tf
+from tensorflow.python import debug as tf_debug
+nest = tf.contrib.framework.nest
 
 import logging
 logger = logging.getLogger(__name__)
@@ -39,42 +41,142 @@ INSTANTIATE_METHOD_TRACK = 'assign'
 # Pickling a function in one module to load in another module does not work if
 # the function is defined in the same module.
 # Therefore provide a worker function here that takes tmp_dir from the mapper.
-def train_worker(context, *args, **kwargs):
-    # The mapper context provides a temporary directory.
-    return train(*args, tmp_dir=context.tmp_dir(), **kwargs)
+def train_worker(context, kwargs, train_dir='train'):
+    # The mapper context provides a temporary directory and a name.
+    return train(dir=os.path.join(train_dir, context.name),
+                 summary_name=context.name,
+                 tmp_dir=context.tmp_dir(),
+                 **kwargs)
+
+
+def train_worker_params(context, params_dict, kwargs, train_dir='train'):
+    kwargs = dict(kwargs)
+    kwargs['params_dict'] = params_dict
+    return train_worker(context, kwargs, train_dir=train_dir)
+
+
+class TrainParams(object):
+    '''Collects the "mathematical" training arguments.
+
+    That is, the arguments which describe the training procedure, not the system configuration.
+    These are the parameters which may be optimized in hyper-param search.
+
+    This kwargs structure will be flattened using `nest.flatten_with_joined_string_paths`.
+    If the values are lists/tuples/namedtuples, these will be flattened.
+    '''
+
+    def __init__(self, **kwargs):
+        params = dict(
+            model_params=None,
+            seed=0,
+            # Dataset:
+            train_dataset=None,
+            val_dataset=None,
+            eval_datasets=None,  # TODO: Remove from TrainParams?
+            pool_datasets=None,
+            pool_split=None,
+            # Sampling:
+            sampler_params=None,
+            augment_motion=False,
+            motion_params=None,
+            # Evaluation:
+            eval_samplers='full',  # Comma-separated list of sampler names.
+            max_eval_videos=None,
+            # Training process:
+            ntimesteps=None,
+            metrics_resolution=1000,
+            period_assess=40000,
+            extra_assess=None,
+            period_skip=0,
+            # Training args:
+            num_steps=None,
+            batchsz=None,
+            imwidth=None,
+            imheight=None,
+            preproc_id=None,
+            resize_online=False,  # Tied to `preproc_id`.
+            resize_method='bilinear',
+            lr_schedule='constant',
+            lr_init=1e-3,
+            lr_params=None,
+            optimizer=None,
+            optimizer_params=None,
+            grad_clip=False,
+            grad_clip_params=None,
+            siamese_pretrain=None,
+            siamese_model_file=None,
+            use_gt_train=True,
+            gt_decay_rate=1,
+            min_gt_ratio=0,
+            # Evaluation args:
+            eval_tre_num=None,
+        )
+
+        helpers.update_existing_keys(params, kwargs)
+        for key, value in params.items():
+            setattr(self, key, value)
+
+
+# class TrainConfig(object):
+#     '''System configuration for training.'''
+# 
+#     def __init__(self, **kwargs):
+#         params = dict(
+#             dir=None,
+#             tmp_dir=None,
+#             only_evaluate_existing=False,
+#             untar=False,
+#             data_dir=None,
+#             use_tmp_data_dir=False,
+#             data_cache_dir=None,
+#             resume=False,
+#             tfdb=False,
+#             use_queues=True,
+#             summary_dir=None,
+#             summary_name=None,
+#             nosave=False,
+#             period_summary=100,
+#             period_preview=1000,
+#             verbose_train=False,
+#             visualize=False,
+#             keep_frames=False,
+#             session_config_kwargs=None,
+#         )
+# 
+#         helpers.update_existing_keys(params, kwargs)
+#         for key, value in params.items():
+#             setattr(self, key, value)
 
 
 def train(
-        dir,
-        model_params,
-        seed,
-        only_evaluate_existing=False,
+        params_dict=None,
+        dir=None,
         tmp_dir=None,
-        # Dataset:
-        train_dataset=None,
-        val_dataset=None,
-        eval_datasets=None,
-        pool_datasets=None,
-        pool_split=None,
-        untar=None,
+        # only_evaluate_existing=False,
         data_dir=None,
+        use_tmp_data_dir=False,
+        untar=False,
         tar_dir=None,
-        use_tmp_data_dir=None,
-        preproc_id=None,
         data_cache_dir=None,
-        # Sampling:
-        sampler_params=None,
-        augment_motion=False,
-        motion_params=None,
-        # Evaluation:
-        eval_samplers=None,
-        max_eval_videos=None,
-        # Training process:
-        ntimesteps=None,  # Needed for constructing sampler.
+        # resume=False,
+        # tfdb=False,
+        # use_queues=True,
+        # summary_dir=None,
+        # summary_name=None,
+        # nosave=False,
+        # period_ckpt=10000,
+        # period_summary=100,
+        # period_preview=1000,
+        # verbose_train=False,
+        # visualize=False,
+        # keep_frames=False,
+        # session_config_kwargs=None,
         **kwargs):
     '''
+    All arguments should be JSON-serializable to facilitate RPC (for experiments).
+
     Args:
-        kwargs: For train_model_data.
+        params_dict: Dict of kwargs for TrainParams().
 
     Specify either `data_dir` or `use_tmp_data_dir`.
     The option `use_tmp_data_dir` implies `untar`.
@@ -82,64 +184,81 @@ def train(
 
     Side effects:
         Resets global random seed.
+
+    Writes output/{model_params.json,train_series.csv,track_series.csv}.
     '''
+    assert params_dict is not None
+    params = TrainParams(**params_dict)
+
+    helpers.mkdir_p(os.path.join(dir, 'output'))
+    with open(os.path.join(dir, 'output', 'model_params.json'), 'w') as f:
+        json.dump(params.model_params, f)
+
     tf.reset_default_graph()
-    _set_global_seed(seed)  # Caution: Global side effects!
+    _set_global_seed(params.seed)  # Caution: Global side effects!
 
-    if only_evaluate_existing:
-        train_dataset = None
-        val_dataset = None
+    # # TODO: Move? Modifying params is ugly?
+    # if only_evaluate_existing:
+    #     params.train_dataset = None
+    #     params.val_dataset = None
 
-    if eval_samplers is None:
-        eval_samplers = ['full']
+    eval_samplers = params.eval_samplers.split(',')
 
     if use_tmp_data_dir:
         untar = True
         data_dir = os.path.join(tmp_dir, 'data')
 
     # TODO: How to get datasets from train_dataset and eval_datasets?
-    dataset_names = list(set(chain(_datasets_in_sampler(train_dataset),
-                                   _datasets_in_sampler(val_dataset),
-                                   eval_datasets)))
+    dataset_names = list(set(chain(_datasets_in_sampler(params.train_dataset),
+                                   _datasets_in_sampler(params.val_dataset),
+                                   params.eval_datasets)))
     # TODO: Flag to enable/disable.
     datasets = setup_data(
         dataset_names=dataset_names,
-        pool_datasets=pool_datasets,
-        pool_split=pool_split,
-        untar=untar,
+        pool_datasets=params.pool_datasets,
+        pool_split=params.pool_split,
         data_dir=data_dir,
+        untar=untar,
         tar_dir=tar_dir,
-        preproc_id=preproc_id,
+        preproc_id=params.preproc_id,
         data_cache_dir=data_cache_dir)
 
-    create_iter_model_fn = partial(siamfc.SiamFC, **model_params)
+    create_iter_model_fn = partial(siamfc.SiamFC, **params.model_params)
     # model_properties = iter_model_fn.derived_properties()
 
     streams, eval_sample_fns = make_samplers(
         datasets,
-        seed=seed,
-        ntimesteps=ntimesteps,
-        sampler_params=sampler_params,
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
-        augment_motion=augment_motion,
-        motion_params=motion_params,
-        eval_datasets=eval_datasets,
+        seed=params.seed,
+        ntimesteps=params.ntimesteps,
+        sampler_params=params.sampler_params,
+        train_dataset=params.train_dataset,
+        val_dataset=params.val_dataset,
+        augment_motion=params.augment_motion,
+        motion_params=params.motion_params,
+        eval_datasets=params.eval_datasets,
         eval_samplers=eval_samplers,
-        max_eval_videos=max_eval_videos)
+        max_eval_videos=params.max_eval_videos)
 
     train_series, track_series = train_model_data(
-        dir, create_iter_model_fn, streams, eval_sample_fns,
-        only_evaluate_existing=only_evaluate_existing,
-        ntimesteps=ntimesteps,
+        params, dir, create_iter_model_fn, streams, eval_sample_fns,
+        # only_evaluate_existing=only_evaluate_existing,
         **kwargs)
 
-    return make_train_result(
+    result = make_train_result(
         model_properties={},
         # model_properties=model_properties,
         train_series=train_series,
         track_series=track_series,
     )
+
+    # Dump time-series for training and tracking for each seed.
+    with open(os.path.join(dir, 'output', 'train_series.csv'), 'w') as f:
+        helpers.dump_csv(f, _flatten_dicts(result['train_series']))
+    with open(os.path.join(dir, 'output', 'track_series.csv'), 'w') as f:
+        helpers.dump_csv(f, _flatten_dicts(result['track_series']))
+
+    return result
+
 
 
 def make_train_result(model_properties, train_series, track_series):
@@ -267,49 +386,24 @@ def _make_video_sampler(names, datasets):
 # TODO: Look at resume and seeds.
 
 def train_model_data(
+        params,
         dir, create_iter_model_fn, sequences, eval_sets,
-        override_ckpt_dir=None,
-        # Args that affect the operation but not the result.
-        only_evaluate_existing=False,
+        # override_ckpt_dir=None,
+        # only_evaluate_existing=False,
         resume=False,
         tfdb=False,
         use_queues=True,
         summary_dir=None,
         summary_name=None,
         nosave=False,
-        metrics_resolution=1000,
         period_ckpt=10000,
-        period_assess=40000,
-        extra_assess=None,
-        period_skip=0,  # TODO: Change name since not periodic?
-        period_summary=10,
-        period_preview=100,
+        period_summary=100,
+        period_preview=1000,
         verbose_train=False,
         visualize=False,
         keep_frames=False,
         session_config_kwargs=None,
-        # Training args:
-        ntimesteps=None,
-        batchsz=None,
-        imwidth=None,
-        imheight=None,
-        resize_online=False,
-        resize_method='bilinear',
-        lr_schedule='constant',
-        lr_init=1e-3,
-        lr_params=None,
-        optimizer=None,
-        optimizer_params=None,
-        grad_clip=False,
-        grad_clip_params=None,
-        siamese_pretrain=None,
-        siamese_model_file=None,
-        num_steps=None,
-        use_gt_train=True,
-        gt_decay_rate=1,
-        min_gt_ratio=0,
-        # Evaluation args:
-        eval_tre_num=None):
+        ):
     '''Trains a network.
 
     Args:
@@ -344,14 +438,12 @@ def train_model_data(
     Each sampler in the eval_sets dictionary is a function that
     returns a collection of sequences or is a finite generator of sequences.
     '''
-    extra_assess = extra_assess or []
     session_config_kwargs = session_config_kwargs or {}
-    optimizer_params = optimizer_params or {}
-    grad_clip_params = grad_clip_params or {}
 
     if not os.path.exists(dir):
         os.makedirs(dir, 0o755)
-    path_ckpt = override_ckpt_dir or os.path.join(dir, 'ckpt')
+    # path_ckpt = override_ckpt_dir or os.path.join(dir, 'ckpt')
+    path_ckpt = os.path.join(dir, 'ckpt')
     path_output = os.path.join(dir, 'output')
     if summary_dir:
         assert summary_name is not None
@@ -374,13 +466,13 @@ def train_model_data(
     datasets = {
         mode: (
             _dataset_from_sequence_generator(partial(_identity, sequences[mode]),
-                                             sequence_len=ntimesteps + 1)
+                                             sequence_len=params.ntimesteps + 1)
             .map(_sequence_to_example_unroll)
             .map(partial(_load_images_unroll,
-                         resize=resize_online,
-                         size=(imheight, imwidth),
-                         method=resize_method))
-            .batch(batchsz, drop_remainder=True)
+                         resize=params.resize_online,
+                         size=(params.imheight, params.imwidth),
+                         method=params.resize_method))
+            .batch(params.batchsz, drop_remainder=True)
         ) for mode in modes
     }
     if use_queues:
@@ -432,13 +524,13 @@ def train_model_data(
 
     global_step_var = tf.Variable(0, name='global_step', trainable=False)
 
-    lr = make_learning_rate(global_step_var, num_steps, lr_init,
-                            schedule=lr_schedule, schedule_params=lr_params)
+    lr = make_learning_rate(global_step_var, params.num_steps, params.lr_init,
+                            schedule=params.lr_schedule, schedule_params=params.lr_params)
     tf.summary.scalar('lr', lr, collections=['summaries_train'])
-    optimizer_obj = make_optimizer(lr, optimizer, **optimizer_params)
+    optimizer_obj = make_optimizer(lr, params.optimizer, **(params.optimizer_params or {}))
     grads_and_vars = optimizer_obj.compute_gradients(loss_var)
-    if grad_clip:
-        grads_and_vars = clip_gradients(grads_and_vars, **(grad_clip_params or {}))
+    if params.grad_clip:
+        grads_and_vars = clip_gradients(grads_and_vars, **(params.grad_clip_params or {}))
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     with tf.control_dependencies(update_ops):
         optimize_op = optimizer_obj.apply_gradients(grads_and_vars, global_step=global_step_var)
@@ -561,7 +653,8 @@ def train_model_data(
 
         while True:
             global_step = np.asscalar(global_step_var.eval())
-            assess_step = _to_assess_step(global_step, period_assess, period_skip, extra_assess)
+            assess_step = _to_assess_step(
+                global_step, params.period_assess, params.period_skip, params.extra_assess)
             if not nosave:
                 if global_step > prev_ckpt and (global_step % period_ckpt == 0 or assess_step):
                     if not os.path.isdir(path_ckpt):
@@ -577,28 +670,29 @@ def train_model_data(
                     eval_sequences = sampler()
                     result = _evaluate(
                         global_step, eval_id, sess, model_inst_track, eval_sequences,
-                        eval_tre_num=eval_tre_num,
+                        eval_tre_num=params.eval_tre_num,
                         path_output=path_output,
                         visualize=visualize,
                         keep_frames=keep_frames)
                     track_series.setdefault(global_step, {})[eval_id] = result
 
-            if global_step > 0 and global_step % metrics_resolution == 0:
+            if global_step > 0 and global_step % params.metrics_resolution == 0:
                 train_series[global_step] = combine_dicts(train=train_accum.flush(),
                                                           val=val_accum.flush())
 
-            if global_step >= num_steps:
+            if global_step >= params.num_steps:
                 break
 
-            if use_gt_train:
+            if params.use_gt_train:
                 # TODO: Use a different base!
-                gt_ratio = max(1.0 * np.exp(-gt_decay_rate * global_step), min_gt_ratio)
+                gt_ratio = max(1.0 * np.exp(-params.gt_decay_rate * global_step),
+                               params.min_gt_ratio)
             else:
                 gt_ratio = 0
 
             # Take a training step.
             start = time.time()
-            feed_dict = {run_opts['use_gt']: use_gt_train,
+            feed_dict = {run_opts['use_gt']: params.use_gt_train,
                          run_opts['is_training']: True,
                          run_opts['is_tracking']: False,
                          run_opts['gt_ratio']: gt_ratio,
@@ -623,7 +717,7 @@ def train_model_data(
             # Evaluate validation error.
             if global_step % period_summary == 0:
                 start = time.time()
-                feed_dict = {run_opts['use_gt']: use_gt_train,  # Match training.
+                feed_dict = {run_opts['use_gt']: params.use_gt_train,  # Match training.
                              run_opts['is_training']: False,  # Do not update bnorm stats.
                              run_opts['is_tracking']: False,
                              run_opts['gt_ratio']: gt_ratio,  # Match training.
@@ -831,27 +925,44 @@ def _evaluate(
         path_output,
         visualize,
         keep_frames):
+    '''
+    Returns:
+        Dict of metrics for dataset assessment.
+
+    Result is cached in '{path_output}/assess/{eval_id}/{iter_id}.json'.
+
+    Writes per-sequence assessments to '{path_output}/assess_per_sequence/{eval_id}/{iter_id}.csv'.
+    '''
     iter_id = 'iteration{}'.format(global_step)
-    vis_dir = os.path.join(path_output, iter_id, eval_id)
-    if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0o755)
+    # vis_dir = os.path.join(path_output, iter_id, eval_id)
+    # if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0o755)
     # visualizer = visualize.VideoFileWriter(vis_dir)
     # Run the tracker on a full epoch.
     print('evaluation: {}'.format(eval_id))
     # Cache the results.
     result_file = os.path.join(path_output, 'assess', eval_id, iter_id + '.json')
-    result = helpers.cache_json(
-        result_file,
-        lambda: track.track_and_assess(
+    # Dump the per-sequence results to a file.
+    report_file = os.path.join(path_output, 'assess_per_sequence', eval_id, iter_id + '.csv')
+
+    def _eval_and_dump_report():
+        dataset_metrics, sequence_metrics = track.track_and_assess(
             sess, model_inst, eval_sequences,
             visualize=visualize, vis_dir=vis_dir, keep_frames=keep_frames,
-            tre_num=eval_tre_num),
-        makedir=True)
+            tre_num=eval_tre_num)
+        helpers.mkdir_p(os.path.dirname(report_file))
+        with open(report_file, 'w') as f:
+            helpers.dump_csv(f, sequence_metrics)
+        return dataset_metrics
+    result = helpers.cache_json(result_file, _eval_and_dump_report, makedir=True)
 
-    modes = ['OPE', 'TRE_{}'.format(eval_tre_num)]
-    metric_keys = ['iou_seq_mean', 'iou_frame_mean', 'iou_success_0.5']
+    # Print results.
+    modes = ['OPE']
+    if eval_tre_num and eval_tre_num > 1:
+        modes.append('TRE_{}'.format(eval_tre_num))
+    metric_keys = ['iou_seq_mean', 'iou_success_0.5']
     for mode in modes:
         for metric_key in metric_keys:
-            full_key = mode + '_' + metric_key
+            full_key = mode + '/' + metric_key
             var_key = full_key + '_var'
             if full_key in result:
                 value = '{:.3g}'.format(result[full_key])
@@ -860,11 +971,9 @@ def _evaluate(
             else:
                 value = '--'
             print('{} {}: {}'.format(mode, metric_key, value))
-        # print 'mode {}: IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
-        #     mode, result[mode]['iou_mean'], result[mode]['auc'],
-        #     result[mode]['cle_mean'], result[mode]['cle_representative'])
 
     return result
+
 
 
 def _is_pair(x):
@@ -876,41 +985,57 @@ def summarize_trials(trial_metrics, val_dataset, sort_key):
 
     Args:
         trial_metrics: List of dicts, each of which is the result of train().
-            trial_metrics[trial][step][dataset]
+            trial_metrics[trial]['track_series'][step][dataset]
         sort_key: The key for comparing two metric dictionaries.
             The maximum sort key will be chosen.
     '''
     num_trials = len(trial_metrics)
+    # Take just the time-series of tracking data for each.
     # For each training run, choose the iteration which gave the best performance.
-    best = [max(trial_metrics[trial]['track_series'].values(),
-                key=lambda x: sort_key(x[val_dataset]))
-            for trial in range(num_trials)]
+    best_step = [find_arg_max(trial_metrics[i]['track_series'],
+                              key=lambda x: sort_key(x[val_dataset]))
+                 for i in range(num_trials)]
+    best = [trial_metrics[i]['track_series'][best_step[i]] for i in range(num_trials)]
+    # Flatten all datasets into one dictionary.
+    best = [dict(nest.flatten_with_joined_string_paths(best[i])) for i in range(num_trials)]
+    # Augment with arg max.
+    for i in range(num_trials):
+        assert 'step' not in best[i]
+        # best[i] = dict(best[i])
+        best[i]['step'] = best_step[i]
+
     # Compute the mean of each metric
     # and the variance of a metric if there is enough information.
     # Take union of metrics from all trials (should all be identical).
-    datasets = set(dataset for trial in range(num_trials) for dataset in best[trial].keys())
-
     metrics = {}
-    for dataset in datasets:
-        # Take union of metric keys across trials (should be identical).
-        keys = set(key for trial in range(num_trials) for key in best[trial][dataset].keys())
-        # If there exists a metric xxx and xxx_var, then remove xxx_var from the list.
-        basic_keys = keys.difference(set(key + '_var' for key in keys))
-        for key in basic_keys:
-            metrics[dataset + '_' + key] = np.mean(
-                [best[trial][dataset][key] for trial in range(num_trials)])
-            if key + '_var' in keys:
-                # Use variance of means plus mean of variances.
-                # This assumes that each metric (which has a variance) is a mean.
-                metrics[dataset + '_' + key + '_var'] = (
-                    np.mean([best[trial][dataset][key + '_var'] for trial in range(num_trials)]) +
-                    np.var([best[trial][dataset][key] for trial in range(num_trials)]))
-            else:
-                # TODO: Could report simple variance across trials if xxx_var is not present?
-                # However, this might be confusing because then some variances are more correct.
-                pass
+    # Take union of metric keys across trials (should be identical).
+    keys = set(key for i in range(num_trials) for key in best[i].keys())
+    # If there exists a metric xxx and xxx_var, then remove xxx_var from the list.
+    basic_keys = keys.difference(set(key + '_var' for key in keys))
+    for key in basic_keys:
+        metrics[key] = np.mean([best[i][key] for i in range(num_trials)])
+        if key + '_var' in keys:
+            # Use variance of means plus mean of variances.
+            # This assumes that each metric (which has a variance) is a mean.
+            metrics[key + '_var'] = (
+                np.mean([best[i][key + '_var'] for i in range(num_trials)]) +
+                np.var([best[i][key] for i in range(num_trials)]))
+        else:
+            # TODO: Could report simple variance across trials if xxx_var is not present?
+            # However, this might be confusing because then some variances are more correct.
+            pass
 
     return metrics
+
+
+def find_arg_max(series, key):
+    keys = list(series.keys())
+    return max(keys, key=lambda x: key(series[x]))
+    # # TODO: Use OrderedDict and put 'arg' first?
+    # result = dict(series[arg])
+    # assert 'arg' not in result
+    # result['arg'] = arg
+    # return result
 
 
 def combine_dicts(delim='/', **kwargs):
@@ -921,6 +1046,7 @@ def combine_dicts(delim='/', **kwargs):
 
 
 def _to_assess_step(step, period_assess, period_skip, extra_assess):
+    extra_assess = extra_assess or []
     return (step in extra_assess or
             (step > 0 and step >= period_skip and step % period_assess == 0))
 
@@ -1108,6 +1234,10 @@ def _load_and_resize_image(image_file, resize=False, size=None, method='bilinear
                 if size:
                     image.set_shape(list(size) + [3])
             return image
+
+
+def _flatten_dicts(series):
+    return {k: dict(nest.flatten_with_joined_string_paths(v)) for k, v in series.items()}
 
 
 def _identity(x):

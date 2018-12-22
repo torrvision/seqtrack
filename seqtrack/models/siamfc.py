@@ -65,11 +65,7 @@ class SiamFC(models_interface.IterModel):
             join_params=None,
             multi_join_layers=None,
             feature_model_file='',
-            # feature_act='linear',
-            # enable_feature_bnorm=True,
             # template_mask_kind='none',  # none, static, dynamic
-            # xcorr_padding='VALID',
-            # bnorm_after_xcorr=True,
             freeze_siamese=False,
             learnable_prior=False,
             train_multiscale=False,
@@ -245,9 +241,10 @@ class SiamFC(models_interface.IterModel):
 
             # Extract an image pyramid (use 1 scale when not in tracking mode).
             num_scales = tf.cond(tf.logical_or(run_opts['is_tracking'], self._train_multiscale),
-                                 lambda: self._num_scales, lambda: 1)
+                                 lambda: tf.constant(self._num_scales, dtype=tf.int32),
+                                 lambda: tf.constant(1, dtype=tf.int32))
             mid_scale = (num_scales - 1) // 2
-            scales = util.scale_range(num_scales, self._scale_step)
+            scales = util.scale_range(num_scales, tf.to_float(self._scale_step))
             search_ims, search_rects = util.crop_pyr(
                 inputs['image']['data'], search_rect, self._search_size, scales,
                 pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
@@ -410,8 +407,7 @@ def dimensions(target_size,
                feature_extra_conv_enable=False,
                feature_extra_conv_params=None):
     '''
-    Returns:
-        template_size, search_size, template_scale
+    Returns: Dict with "template_size", "search_size".
     '''
     field = _branch_net_receptive_field(
         arch=feature_arch,
@@ -431,6 +427,26 @@ def dimensions(target_size,
                  template_size, search_size, template_scale, desired_template_scale)
     # return template_size, search_size, template_scale
     return dict(template_size=template_size, search_size=search_size)
+
+
+def scale_sequence(num_scales, max_scale):
+    '''
+    >>> round(scale_sequence(3, 1.02)['scale_step'], 6)
+    1.02
+    >>> round(scale_sequence(5, 1.02)['scale_step'], 4)
+    1.01
+    '''
+    # TODO: Use log1p and exp1m? Probably not necessary.
+    if num_scales == 1:
+        # There is no scale step.
+        return dict(num_scales=1)
+    assert num_scales % 2 == 1
+    h = (num_scales - 1) // 2
+    # Scales will be:
+    #   scales = step ** [-h, ..., h]
+    #   log(scales) = log(step) * [-h, ..., h]
+    scale_step = math.exp(abs(math.log(max_scale)) / h)
+    return dict(num_scales=num_scales, scale_step=scale_step)
 
 
 # When we implement a multi-layer join,

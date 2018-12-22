@@ -224,14 +224,6 @@ class MapContext(object):
         return get_tmp_dir()
 
 
-def partial_apply_kwargs(func):
-    return functools.partial(apply_kwargs, func)
-
-
-def apply_kwargs(func, context, kwargs):
-    return func(context, **kwargs)
-
-
 def get_tmp_dir():
     return '/raid/local_scratch/{}-{}'.format(os.environ['SLURM_JOB_USER'],
                                               os.environ['SLURM_JOB_ID'])

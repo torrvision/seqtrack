@@ -3,6 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import csv
 import datetime
 import errno
 import functools
@@ -486,21 +487,6 @@ def default_print_func(i, n, time_elapsed):
     print(progress_str, file=sys.stderr)
 
 
-class MapContext(object):
-
-    def __init__(self, name):
-        self.name = name
-
-    def tmp_dir(self):
-        '''Returns None to mean that a tmp_dir must be created if needed.'''
-        return tempfile.mkdtemp()
-
-
-def map_dict(func, items):
-    for k, v in items:
-        yield k, func(MapContext(k), v)
-
-
 def map_dict_list(func, items):
     return list(map_dict(func, items))
 
@@ -511,37 +497,6 @@ def filter_dict(func, items):
             yield k, v
 
 
-class CachedDictMapper(object):
-
-    def __init__(self, dir, codec_name='json', mapper=None):
-        # Default to simple mapper.
-        mapper = mapper or map_dict
-        self._dir = dir
-        self._codec_name = codec_name
-        self._mapper = mapper
-
-    def __call__(self, func, items):
-        cache_filter = CacheFilter(self._dir, codec_name=self._codec_name)
-        uncached_items = cache_filter.filter(items)
-        uncached_results = self._mapper(func, uncached_items)
-        # Construct list here to deliberately not be lazy (write when available).
-        uncached_results = list(_dump_cache_for_each(uncached_results, self._dir,
-                                                     codec_name=self._codec_name))
-        # Combine cached and uncached results.
-        return itertools.chain(cache_filter.results, uncached_results)
-
-
-def _dump_cache_for_each(items, dir, codec_name='json'):
-    codec = CODECS[codec_name]
-    if not os.path.exists(dir):
-        os.makedirs(dir, 0o755)
-    for k, v in items:
-        fname = os.path.join(dir, k + codec.ext)
-        with open_atomic_write(fname, 'wb' if codec.binary else 'w') as f:
-            codec.module.dump(v, f)
-        yield k, v
-
-
 @contextmanager
 def open_atomic_write(filename, mode='w+b', perm=0o644):
     dir, basename = os.path.split(filename)
@@ -549,29 +504,6 @@ def open_atomic_write(filename, mode='w+b', perm=0o644):
         yield f
     os.chmod(f.name, perm)  # Default permissions are 600.
     os.rename(f.name, filename)
-
-
-class CacheFilter(object):
-    '''Keeps only items that do not have a cached value.
-
-    Items that do have a cache are loaded and stored in results.
-    '''
-
-    def __init__(self, dir, codec_name='json'):
-        self.results = []
-        self._dir = dir
-        self._codec_name = codec_name
-
-    def filter(self, items):
-        codec = CODECS[self._codec_name]
-        for k, v in items:
-            fname = os.path.join(self._dir, k + codec.ext)
-            if os.path.exists(fname):
-                with open(fname, 'rb' if codec.binary else 'r') as f:
-                    result = codec.module.load(f)
-                self.results.append((k, result))
-            else:
-                yield k, v
 
 
 def assert_partition(x, subsets):
@@ -724,3 +656,47 @@ def flatten_dict(keys, values):
     nest.assert_shallow_structure(keys, values)
     return dict(zip(nest.flatten(keys),
                     nest.flatten_up_to(keys, values)))
+
+
+def dump_csv(f, series, sort_keys=True, sort_fields=True):
+    assert len(series) > 0
+    keys = list(series.keys())
+    if sort_keys:
+        keys = sorted(keys)
+    fields = list(series[keys[0]])
+    # TODO: Assert all the same or take (order-preserving?) union?
+    if sort_fields:
+        fields = sorted(fields)
+    writer = csv.DictWriter(f, fieldnames=['key'] + fields)
+    writer.writeheader()
+    for key in keys:
+        row = dict(series[key])
+        assert 'key' not in row
+        row['key'] = key
+        writer.writerow(row)
+
+
+def mkdir_p(*args, **kwargs):
+    try:
+        os.makedirs(*args, **kwargs)
+    except OSError as ex:
+        if ex.errno == errno.EEXIST:
+            pass
+        else:
+            raise
+
+
+def update_existing_keys(target, modifications):
+    '''Modifies target in-place.'''
+    new_keys = set(modifications.keys()) - set(target.keys())
+    if new_keys:
+        raise ValueError('new keys: {}'.format(list(new_keys)))
+    target.update(modifications)
+
+
+def partial_apply_kwargs(func):
+    return functools.partial(apply_kwargs, func)
+
+
+def apply_kwargs(func, kwargs):
+    return func(**kwargs)

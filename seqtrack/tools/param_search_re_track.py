@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 from seqtrack import app
 from seqtrack import helpers
-from seqtrack import search
+from seqtrack import param_search
 from seqtrack.tools.param_search_train import _compute_rf
 from seqtrack.tools.param_search_train import _round_lattice
 from seqtrack.tools.param_search_train import select_best_epoch
@@ -31,7 +31,7 @@ def main():
     with open(args.kwargs_file, 'r') as f:
         original_kwargs = json.load(f)  # TODO: Not assume JSON?
 
-    search.main(
+    param_search.main(
         functools.partial(work.train_worker,
                           only_evaluate_existing=True, override_ckpt_dir=args.ckpt_dir),
         input_stream,
@@ -151,7 +151,7 @@ def make_input_stream(args, rand):
 
     while True:
         vector = sample_vector(rand, p)
-        name = search.hash_vector(vector)
+        name = param_search.hash_vector(vector)
         yield name, vector
 
 
@@ -161,7 +161,7 @@ def sample_vector(rand, p):
     Some values may be set to None.
     '''
     def sample(spec):
-        return search.sample_param(rand, *spec)
+        return param_search.sample_param(rand, *spec)
 
     x = {k: None for k in KEYS}
 

@@ -29,6 +29,7 @@ def assess_dataset(seqs, predictions, tre_groups=None, timing=None):
         # Use each sequence by itself and call it OPE mode.
         tre_groups = {'OPE': {name: [name] for name in seqs.keys()}}
 
+    # TODO: Should `assess_sequence` call `assess_frames` to be consistent?
     # Compute per-frame metrics.
     frame_metrics = {
         name: assess_frames(seqs[name], predictions[name]) for name in seqs.keys()}
@@ -43,8 +44,8 @@ def assess_dataset(seqs, predictions, tre_groups=None, timing=None):
         mode_metrics = _summarize(frame_metrics, sequence_metrics, tre_groups[mode])
         # Add metrics for all modes.
         for key in mode_metrics:
-            metrics[mode + '_' + key] = mode_metrics[key]
-    return metrics
+            metrics[mode + '/' + key] = mode_metrics[key]
+    return metrics, sequence_metrics
 
 
 FRAME_METRICS = ['iou', 'center_dist', 'oracle_size_iou', 'iou_until_zero']
@@ -96,7 +97,7 @@ SEQUENCE_METRICS = list(itertools.chain(
     FRAME_METRICS,
     ['speed_with_load', 'speed_real'],
     ['iou_success_{}'.format(thr) for thr in IOU_THRESHOLDS],
-    ['iou_success_auc'],
+    ['iou_success_auc_otb'],
     ['iou_success_until_failure_{}'.format(thr) for thr in IOU_THRESHOLDS],
 ))
 
@@ -123,7 +124,7 @@ def assess_sequence(sequence, predictions, frame_metrics, timing=None):
 
     # OTB does not exclude the initial frame.
     iou_with_initial_frame = np.concatenate([[1.0], frame_metrics['iou']])
-    metrics['iou_success_auc'] = _compute_auc(iou_with_initial_frame, 20, otb_mode=True)
+    metrics['iou_success_auc_otb'] = _compute_auc(iou_with_initial_frame, 20, otb_mode=True)
     return metrics
 
 
