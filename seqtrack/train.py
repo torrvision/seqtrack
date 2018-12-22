@@ -8,8 +8,6 @@ import csv
 import json
 import math
 import numpy as np
-import tensorflow as tf
-from tensorflow.python import debug as tf_debug
 import time
 import os
 import pprint
@@ -19,6 +17,10 @@ import subprocess
 from functools import partial
 from itertools import chain
 from six import string_types
+
+import tensorflow as tf
+from tensorflow.python import debug as tf_debug
+nest = tf.contrib.framework.nest
 
 import logging
 logger = logging.getLogger(__name__)
@@ -70,7 +72,7 @@ class TrainParams(object):
             # Dataset:
             train_dataset=None,
             val_dataset=None,
-            eval_datasets=None,
+            eval_datasets=None,  # TODO: Remove from TrainParams?
             pool_datasets=None,
             pool_split=None,
             # Sampling:
@@ -182,9 +184,15 @@ def train(
 
     Side effects:
         Resets global random seed.
+
+    Writes output/{model_params.json,train_series.csv,track_series.csv}.
     '''
     assert params_dict is not None
     params = TrainParams(**params_dict)
+
+    helpers.mkdir_p(os.path.join(dir, 'output'))
+    with open(os.path.join(dir, 'output', 'model_params.json'), 'w') as f:
+        json.dump(params.model_params, f)
 
     tf.reset_default_graph()
     _set_global_seed(params.seed)  # Caution: Global side effects!
@@ -236,12 +244,21 @@ def train(
         # only_evaluate_existing=only_evaluate_existing,
         **kwargs)
 
-    return make_train_result(
+    result = make_train_result(
         model_properties={},
         # model_properties=model_properties,
         train_series=train_series,
         track_series=track_series,
     )
+
+    # Dump time-series for training and tracking for each seed.
+    with open(os.path.join(dir, 'output', 'train_series.csv'), 'w') as f:
+        helpers.dump_csv(f, _flatten_dicts(result['train_series']))
+    with open(os.path.join(dir, 'output', 'track_series.csv'), 'w') as f:
+        helpers.dump_csv(f, _flatten_dicts(result['track_series']))
+
+    return result
+
 
 
 def make_train_result(model_properties, train_series, track_series):
@@ -917,8 +934,8 @@ def _evaluate(
     Writes per-sequence assessments to '{path_output}/assess_per_sequence/{eval_id}/{iter_id}.csv'.
     '''
     iter_id = 'iteration{}'.format(global_step)
-    vis_dir = os.path.join(path_output, iter_id, eval_id)
-    if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0o755)
+    # vis_dir = os.path.join(path_output, iter_id, eval_id)
+    # if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0o755)
     # visualizer = visualize.VideoFileWriter(vis_dir)
     # Run the tracker on a full epoch.
     print('evaluation: {}'.format(eval_id))
@@ -938,22 +955,22 @@ def _evaluate(
         return dataset_metrics
     result = helpers.cache_json(result_file, _eval_and_dump_report, makedir=True)
 
-    # modes = ['OPE', 'TRE_{}'.format(eval_tre_num)]
-    # metric_keys = ['iou_seq_mean', 'iou_frame_mean', 'iou_success_0.5']
-    # for mode in modes:
-    #     for metric_key in metric_keys:
-    #         full_key = mode + '/' + metric_key
-    #         var_key = full_key + '_var'
-    #         if full_key in result:
-    #             value = '{:.3g}'.format(result[full_key])
-    #             if var_key in result:
-    #                 value += ' (1.96 sigma = {:.3g})'.format(1.96 * math.sqrt(result[var_key]))
-    #         else:
-    #             value = '--'
-    #         print('{} {}: {}'.format(mode, metric_key, value))
-    #     # print 'mode {}: IOU: {:.3f}, AUC: {:.3f}, CLE: {:.3f}, Prec.@20px: {:.3f}'.format(
-    #     #     mode, result[mode]['iou_mean'], result[mode]['auc'],
-    #     #     result[mode]['cle_mean'], result[mode]['cle_representative'])
+    # Print results.
+    modes = ['OPE']
+    if eval_tre_num and eval_tre_num > 1:
+        modes.append('TRE_{}'.format(eval_tre_num))
+    metric_keys = ['iou_seq_mean', 'iou_success_0.5']
+    for mode in modes:
+        for metric_key in metric_keys:
+            full_key = mode + '/' + metric_key
+            var_key = full_key + '_var'
+            if full_key in result:
+                value = '{:.3g}'.format(result[full_key])
+                if var_key in result:
+                    value += ' (1.96 sigma = {:.3g})'.format(1.96 * math.sqrt(result[var_key]))
+            else:
+                value = '--'
+            print('{} {}: {}'.format(mode, metric_key, value))
 
     return result
 
@@ -968,41 +985,57 @@ def summarize_trials(trial_metrics, val_dataset, sort_key):
 
     Args:
         trial_metrics: List of dicts, each of which is the result of train().
-            trial_metrics[trial][step][dataset]
+            trial_metrics[trial]['track_series'][step][dataset]
         sort_key: The key for comparing two metric dictionaries.
             The maximum sort key will be chosen.
     '''
     num_trials = len(trial_metrics)
+    # Take just the time-series of tracking data for each.
     # For each training run, choose the iteration which gave the best performance.
-    best = [max(trial_metrics[trial]['track_series'].values(),
-                key=lambda x: sort_key(x[val_dataset]))
-            for trial in range(num_trials)]
+    best_step = [find_arg_max(trial_metrics[i]['track_series'],
+                              key=lambda x: sort_key(x[val_dataset]))
+                 for i in range(num_trials)]
+    best = [trial_metrics[i]['track_series'][best_step[i]] for i in range(num_trials)]
+    # Flatten all datasets into one dictionary.
+    best = [dict(nest.flatten_with_joined_string_paths(best[i])) for i in range(num_trials)]
+    # Augment with arg max.
+    for i in range(num_trials):
+        assert 'step' not in best[i]
+        # best[i] = dict(best[i])
+        best[i]['step'] = best_step[i]
+
     # Compute the mean of each metric
     # and the variance of a metric if there is enough information.
     # Take union of metrics from all trials (should all be identical).
-    datasets = set(dataset for trial in range(num_trials) for dataset in best[trial].keys())
-
     metrics = {}
-    for dataset in datasets:
-        # Take union of metric keys across trials (should be identical).
-        keys = set(key for trial in range(num_trials) for key in best[trial][dataset].keys())
-        # If there exists a metric xxx and xxx_var, then remove xxx_var from the list.
-        basic_keys = keys.difference(set(key + '_var' for key in keys))
-        for key in basic_keys:
-            metrics[dataset + '_' + key] = np.mean(
-                [best[trial][dataset][key] for trial in range(num_trials)])
-            if key + '_var' in keys:
-                # Use variance of means plus mean of variances.
-                # This assumes that each metric (which has a variance) is a mean.
-                metrics[dataset + '_' + key + '_var'] = (
-                    np.mean([best[trial][dataset][key + '_var'] for trial in range(num_trials)]) +
-                    np.var([best[trial][dataset][key] for trial in range(num_trials)]))
-            else:
-                # TODO: Could report simple variance across trials if xxx_var is not present?
-                # However, this might be confusing because then some variances are more correct.
-                pass
+    # Take union of metric keys across trials (should be identical).
+    keys = set(key for i in range(num_trials) for key in best[i].keys())
+    # If there exists a metric xxx and xxx_var, then remove xxx_var from the list.
+    basic_keys = keys.difference(set(key + '_var' for key in keys))
+    for key in basic_keys:
+        metrics[key] = np.mean([best[i][key] for i in range(num_trials)])
+        if key + '_var' in keys:
+            # Use variance of means plus mean of variances.
+            # This assumes that each metric (which has a variance) is a mean.
+            metrics[key + '_var'] = (
+                np.mean([best[i][key + '_var'] for i in range(num_trials)]) +
+                np.var([best[i][key] for i in range(num_trials)]))
+        else:
+            # TODO: Could report simple variance across trials if xxx_var is not present?
+            # However, this might be confusing because then some variances are more correct.
+            pass
 
     return metrics
+
+
+def find_arg_max(series, key):
+    keys = list(series.keys())
+    return max(keys, key=lambda x: key(series[x]))
+    # # TODO: Use OrderedDict and put 'arg' first?
+    # result = dict(series[arg])
+    # assert 'arg' not in result
+    # result['arg'] = arg
+    # return result
 
 
 def combine_dicts(delim='/', **kwargs):
@@ -1201,6 +1234,10 @@ def _load_and_resize_image(image_file, resize=False, size=None, method='bilinear
                 if size:
                     image.set_shape(list(size) + [3])
             return image
+
+
+def _flatten_dicts(series):
+    return {k: dict(nest.flatten_with_joined_string_paths(v)) for k, v in series.items()}
 
 
 def _identity(x):

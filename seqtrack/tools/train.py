@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 from seqtrack import app
 from seqtrack import helpers
+from seqtrack import mapdict
 from seqtrack import slurm
 from seqtrack import train
 
@@ -30,17 +31,8 @@ def main():
     # Map stream of named vectors to stream of named results (order may be different).
     kwargs = dict(make_kwargs(args, seed) for seed in range(args.num_trials))
     mapper = make_mapper(args)
-    result_stream = mapper(slurm.partial_apply_kwargs(train.train_worker), kwargs.items())
+    result_stream = mapper(train.train_worker, kwargs.items())
     results = dict(result_stream)
-
-    # Dump time-series for training and tracking for each seed.
-    for name in kwargs.keys():
-        report_dir = os.path.join('reports', 'trials', name)
-        helpers.mkdir_p(report_dir, 0o755)
-        with open(os.path.join(report_dir, 'train_series.csv'), 'w') as f:
-            helpers.dump_csv(f, flatten_dicts(results[name]['train_series']))
-        with open(os.path.join(report_dir, 'track_series.csv'), 'w') as f:
-            helpers.dump_csv(f, flatten_dicts(results[name]['track_series']))
 
     # Find best checkpoint for each seed and write metrics to file.
     best = {}
@@ -74,7 +66,6 @@ def parse_arguments():
     app.add_slurm_args(parser)
 
     parser.add_argument('--loglevel', default='info', help='debug, info, warning')
-    parser.add_argument('--verbose_train', action='store_true')
 
     parser.add_argument('-n', '--num_trials', type=int, default=1,
                         help='number of repetitions')
@@ -96,21 +87,20 @@ def make_mapper(args):
                                        max_submit=args.slurm_max_submit,
                                        opts=['--' + x for x in args.slurm_flags])
     else:
-        mapper = helpers.map_dict
+        mapper = mapdict.map
     # Cache the results and use SLURM mapper to evaluate those without cache.
-    mapper = helpers.CachedDictMapper(dir=os.path.join('cache', 'train'),
+    mapper = mapdict.CachedDictMapper(dir=os.path.join('cache', 'train'),
                                       codec_name='msgpack', mapper=mapper)
     return mapper
 
 
 def make_kwargs(args, seed):
     name = 'seed_{}'.format(seed)
-    kwargs = app.train_kwargs(args, name)
-    kwargs.update(
-        seed=seed,
-        model_params=args.model_params,
-        resume=args.resume,
-    )
+    kwargs = app.train_kwargs(args)
+    kwargs['params_dict'] = app.train_params_kwargs(args)
+    kwargs['params_dict']['seed'] = seed
+    kwargs['params_dict']['model_params'] = args.model_params
+    kwargs['resume'] = args.resume
     return name, kwargs
 
 
