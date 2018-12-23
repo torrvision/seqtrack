@@ -934,7 +934,7 @@ def _evaluate(
     Writes per-sequence assessments to '{path_output}/assess_per_sequence/{eval_id}/{iter_id}.csv'.
     '''
     iter_id = 'iteration{}'.format(global_step)
-    # vis_dir = os.path.join(path_output, iter_id, eval_id)
+    vis_dir = os.path.join(path_output, 'vis', eval_id, iter_id)
     # if not os.path.isdir(vis_dir): os.makedirs(vis_dir, 0o755)
     # visualizer = visualize.VideoFileWriter(vis_dir)
     # Run the tracker on a full epoch.
