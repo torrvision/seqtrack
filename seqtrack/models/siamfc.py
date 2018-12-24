@@ -48,6 +48,8 @@ class SiamFC(models_interface.IterModel):
             desired_template_scale=2.0,
             desired_search_radius=1.0,
             # End of size args.
+            template_method='init',
+            template_prev_weight=0.0,
             aspect_method='perimeter',  # TODO: Equivalent to SiamFC?
             use_gt=True,
             curr_as_prev=True,  # Extract centered examples?
@@ -103,6 +105,8 @@ class SiamFC(models_interface.IterModel):
         self._target_size = target_size
         self._template_size = template_size
         self._search_size = search_size
+        self._template_method = template_method
+        self._template_prev_weight = template_prev_weight
         self._aspect_method = aspect_method
         self._use_gt = use_gt
         self._curr_as_prev = curr_as_prev
@@ -163,15 +167,15 @@ class SiamFC(models_interface.IterModel):
             self._enable_loss = enable_loss
             self._image_summaries_collections = image_summaries_collections
 
-            x = inputs_init['image']['data']
+            im = inputs_init['image']['data']
             y = inputs_init['rect']
-            mean_color = tf.reduce_mean(x, axis=(-3, -2), keepdims=True)
+            mean_color = tf.reduce_mean(im, axis=(-3, -2), keepdims=True)
             template_rect, y_square = _get_context_rect(
                 y, context_amount=self._template_scale, aspect=aspect,
                 aspect_method=self._aspect_method)
             if self._report_square:
                 y = y_square
-            template_im = util.crop(x, template_rect, self._template_size,
+            template_im = util.crop(im, template_rect, self._template_size,
                                     pad_value=mean_color if self._pad_with_mean else 0.5,
                                     feather=self._feather, feather_margin=self._feather_margin)
 
@@ -213,28 +217,46 @@ class SiamFC(models_interface.IterModel):
                 'run_opts': run_opts,
                 'aspect': aspect,
                 'rect': tf.identity(y),
-                'template_feat': tf.identity(template_feat),
+                'template_init': tf.identity(template_feat),
                 'mean_color': tf.identity(mean_color),
             }
+            if self._mode == tf.estimator.ModeKeys.PREDICT:
+                state['template_prev'] = tf.identity(template_feat)
             return state
 
-    def next(self, inputs, labels, prev_state, name='timestep'):
+    def next(self, inputs, labels, state, name='timestep'):
         with tf.name_scope(name) as scope:
-            run_opts = prev_state['run_opts']
-            template_feat = prev_state['template_feat']
-            aspect = prev_state['aspect']
+            im = inputs['image']['data']
+            run_opts = state['run_opts']
+            aspect = state['aspect']
+            mean_color = state['mean_color']
 
             if self._mode == tf.estimator.ModeKeys.PREDICT:
                 # In predict mode, the labels will not be provided.
-                b, _, _, _ = tf.unstack(tf.shape(inputs['image']['data']))
+                b, _, _, _ = tf.unstack(tf.shape(im))
                 labels = {'valid': tf.fill([b], False), 'rect': tf.fill([b, 4], np.nan)}
             # During training, let the "previous location" be the current true location
             # so that the object is in the center of the search area (like SiamFC).
-            gt_rect = tf.where(labels['valid'], labels['rect'], prev_state['rect'])
+            gt_rect = tf.where(labels['valid'], labels['rect'], state['rect'])
             if self._curr_as_prev:
-                prev_rect = tf.cond(run_opts['is_tracking'], lambda: prev_state['rect'], lambda: gt_rect)
+                prev_rect = tf.cond(run_opts['is_tracking'], lambda: state['rect'], lambda: gt_rect)
             else:
-                prev_rect = prev_state['rect']
+                prev_rect = state['rect']
+
+            if self._mode == tf.estimator.ModeKeys.PREDICT:
+                if self._template_method == 'init':
+                    template_feat = state['template_init']
+                elif self._template_method == 'convex_init_prev':
+                    # TODO: This will not work with "multi" joins yet.
+                    # TODO: Could instead combine after computing response.
+                    # (May be more important with fully-connected output stage.)
+                    template_feat = (self._template_prev_weight * state['template_prev'] +
+                                     (1 - self._template_prev_weight) * state['template_init'])
+                else:
+                    raise ValueError('unknown template method: "{}"'.format(self._template_method))
+            else:
+                template_feat = state['template_init']
+
             # Coerce the aspect ratio of the rectangle to construct the search area.
             search_rect, _ = _get_context_rect(prev_rect, self._search_scale,
                                                aspect=aspect, aspect_method=self._aspect_method)
@@ -246,8 +268,8 @@ class SiamFC(models_interface.IterModel):
             mid_scale = (num_scales - 1) // 2
             scales = util.scale_range(num_scales, tf.to_float(self._scale_step))
             search_ims, search_rects = util.crop_pyr(
-                inputs['image']['data'], search_rect, self._search_size, scales,
-                pad_value=prev_state['mean_color'] if self._pad_with_mean else 0.5,
+                im, search_rect, self._search_size, scales,
+                pad_value=mean_color if self._pad_with_mean else 0.5,
                 feather=self._feather, feather_margin=self._feather_margin)
 
             self._info.setdefault('search', []).append(_to_uint8(search_ims[:, mid_scale]))
@@ -351,9 +373,34 @@ class SiamFC(models_interface.IterModel):
                 pred = _global_search()
             else:
                 raise ValueError('unknown search method "{}"'.format(self._search_method))
-
             # Limit size of object.
             pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
+
+            if self._mode == tf.estimator.ModeKeys.PREDICT:
+                # Use prediction to extract new template.
+                curr_template_rect, _ = _get_context_rect(pred,
+                                                          context_amount=self._template_scale,
+                                                          aspect=aspect,
+                                                          aspect_method=self._aspect_method)
+                curr_template_im = util.crop(im, curr_template_rect, self._template_size,
+                                             pad_value=mean_color if self._pad_with_mean else 0.5,
+                                             feather=self._feather,
+                                             feather_margin=self._feather_margin)
+                curr_template_input = _preproc(curr_template_im,
+                                               center_input_range=self._center_input_range,
+                                               keep_uint8_range=self._keep_uint8_range)
+                curr_template_input = cnn.as_tensor(curr_template_input, add_to_set=True)
+                with tf.variable_scope('features', reuse=True):
+                    curr_template_feat, curr_template_layers, _ = _branch_net(
+                        curr_template_input, run_opts['is_training'],
+                        trainable=(not self._freeze_siamese),
+                        variables_collections=['siamese'],
+                        weight_decay=self._wd,
+                        arch=self._feature_arch,
+                        arch_params=self._feature_arch_params,
+                        extra_conv_enable=self._feature_extra_conv_enable,
+                        extra_conv_params=self._feature_extra_conv_params)
+                curr_template_feat = cnn.get_value(curr_template_feat)
 
             # Rectangle to use in next frame for search area.
             # If using gt and rect not valid, use previous.
@@ -370,9 +417,11 @@ class SiamFC(models_interface.IterModel):
                 'run_opts': run_opts,
                 'aspect': aspect,
                 'rect': next_prev_rect,
-                'template_feat': prev_state['template_feat'],
-                'mean_color': prev_state['mean_color'],
+                'template_init': state['template_init'],
+                'mean_color': state['mean_color'],
             }
+            if self._mode == tf.estimator.ModeKeys.PREDICT:
+                state['template_prev'] = curr_template_feat
             return outputs, state, losses
 
     def end(self):
