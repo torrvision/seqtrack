@@ -15,9 +15,7 @@ from seqtrack import helpers
 from seqtrack import param_search
 from seqtrack import train
 from seqtrack import slurm
-
-# The pickled object must be imported to unpickle in a different package (slurmproc.worker).
-from seqtrack.tools import param_search_train_work as work
+from seqtrack.models import siamfc
 
 
 def main():
@@ -104,141 +102,169 @@ def select_best_epoch(args, results):
 
 
 def make_sample_fn(args):
+    return functools.partial(sample_train_params, args)
 
-    def sample_train_params(rand):
-        return dict(
-            model_params=sample_siamfc_params(rand),
-            seed=rand.randint(0xffff),
-            # Dataset:
-            train_dataset=args.train_dataset,
-            val_dataset=args.val_dataset,
-            eval_datasets=args.eval_datasets,
-            pool_datasets=args.pool_datasets,
-            pool_split=args.pool_split,
-            # Sampling:
-            sampler_params=sample_frame_sampler_params(rand),
-            augment_motion=False,
-            motion_params=None,
-            # Training:
-            ntimesteps=1,
-            num_steps=args.num_steps,
-            metrics_resolution=1000,
-            period_assess=args.period_assess,
-            extra_assess=args.extra_assess,
-            period_skip=args.period_skip,
-            batchsz=8,
-            imwidth=360,
-            imheight=360,
-            preproc_id='original',
-            resize_online=True,
-            resize_method='bilinear',
-            lr_schedule='remain',
-            lr_init=1e-3,
-            lr_params=None,
-            optimizer='momentum',
-            optimizer_params={'momentum': 0.9},
-            grad_clip=False,
-            grad_clip_params=None,
-            siamese_pretrain=None,
-            siamese_model_file=None,
-            use_gt_train=True,
-            gt_decay_rate=1,
-            min_gt_ratio=0,
-            # Evaluation:
-            eval_samplers='full',
-            max_eval_videos=args.max_eval_videos,
-            eval_tre_num=args.eval_tre_num,
-        )
 
-    def sample_frame_sampler_params(rand):
-        return dict(
-            kind='freq-range-fit',
-            min_freq=50,
-            max_freq=100,
-            use_log=False,
-        )
+def sample_train_params(args, rand):
+    return dict(
+        model_params=sample_siamfc_params(args, rand),
+        seed=rand.randint(0xffff),
+        # Dataset:
+        train_dataset=args.train_dataset,
+        val_dataset=args.val_dataset,
+        eval_datasets=args.eval_datasets,
+        pool_datasets=args.pool_datasets,
+        pool_split=args.pool_split,
+        # Sampling:
+        sampler_params=sample_frame_sampler_params(args, rand),
+        augment_motion=False,
+        motion_params=None,
+        # Training:
+        ntimesteps=1,
+        num_steps=args.num_steps,
+        metrics_resolution=1000,
+        period_assess=args.period_assess,
+        extra_assess=args.extra_assess,
+        period_skip=args.period_skip,
+        batchsz=8,
+        imwidth=360,
+        imheight=360,
+        preproc_id='original',
+        resize_online=True,
+        resize_method='bilinear',
+        lr_schedule='remain',
+        lr_init=1e-3,
+        lr_params=None,
+        optimizer='momentum',
+        optimizer_params={'momentum': 0.9},
+        grad_clip=False,
+        grad_clip_params=None,
+        siamese_pretrain=None,
+        siamese_model_file=None,
+        use_gt_train=True,
+        gt_decay_rate=1,
+        min_gt_ratio=0,
+        # Evaluation:
+        eval_samplers='full',
+        max_eval_videos=args.max_eval_videos,
+        eval_tre_num=args.eval_tre_num,
+    )
 
-    def sample_siamfc_params(rand):
-        return dict(
-            target_size=64,
-            template_size=127,
-            search_size=255,
-            aspect_method='perimeter',
-            use_gt=True,
-            curr_as_prev=True,
-            pad_with_mean=True,
-            feather=False,
-            center_input_range=True,
-            keep_uint8_range=False,
-            feature_arch='alexnet',
-            feature_arch_params=sample_alexnet_params(rand),
-            feature_extra_conv_enable=False,
-            join_type='single',
-            join_arch='xcorr',
-            join_params=sample_xcorr_params(rand),
-            freeze_siamese=False,
-            learnable_prior=False,
-            train_multiscale=False,
-            # Tracking parameters:
-            search_method='local',
-            num_scales=rand.choice([3, 5]),
-            scale_step=rand.choice([1.01, 1.02, 1.03]),
-            scale_update_rate=1,
-            report_square=False,
-            window_params=sample_window_params(rand),
-            window_radius=rand.choice([0.5, 1.0, 2.0]),
-            arg_max_eps=rand.choice([0.0, 0.01, 0.05]),
-            # Loss parameters:
-            wd=0.0,
-            loss_params=sample_loss_params(rand),
-        )
 
-    def sample_alexnet_params(rand):
-        return dict(
-            output_layer='conv5',
-            output_act='linear',
-            freeze_until_layer=None,
-            padding='VALID',
-            enable_bnorm=True,
-        )
+def sample_frame_sampler_params(args, rand):
+    return dict(
+        kind='freq-range-fit',
+        min_freq=50,
+        max_freq=100,
+        use_log=False,
+    )
 
-    def sample_xcorr_params(rand):
-        return dict(
-            enable_pre_conv=False,
-            pre_conv_params=None,
-            learn_spatial_weight=False,
-            reduce_channels=True,
-            use_mean=False,
-            use_batch_norm=True,
-            learn_gain=False,
-        )
 
-    def sample_window_params(rand):
-        return dict(
-            normalize_method='mean',
-            window_profile=rand.choice(['hann']),
-            window_mode=rand.choice(['radial', 'cartesian']),
-            combine_method='mul',
-        )
+def sample_siamfc_params(args, rand):
+    target_size = 64
+    feature_arch = 'alexnet'
+    feature_arch_params = sample_alexnet_params(args, rand)
 
-    def sample_loss_params(rand):
-        return dict(
-            method='sigmoid',
-            params=sample_sigmoid_params(rand),
-        )
+    # Find minimum dimensions.
+    field = siamfc._branch_net_receptive_field(
+        arch=feature_arch,
+        arch_params=feature_arch_params)
+    field_size = helpers.get_unique_value(field.size)
+    min_template_scale = field_size / target_size
 
-    def sample_sigmoid_params(rand):
-        return dict(
-            balanced=True,
-            pos_weight=1,
-            label_method='gaussian',
-            label_params=sample_gaussian_label_params(rand),
-        )
+    dims = siamfc.dimensions(
+        target_size=64,
+        desired_template_scale=rand.uniform(max(min_template_scale, 1.0),
+                                            max(min_template_scale, 2.0)),
+        desired_search_radius=1.0,
+        # Must be same as constructor:
+        feature_arch=feature_arch,
+        feature_arch_params=feature_arch_params)
 
-    def sample_gaussian_label_params(rand):
-        return dict(sigma=0.2)
+    return dict(
+        target_size=target_size,
+        # TODO: How to avoid re-computing?
+        template_size=dims['template_size'],
+        search_size=dims['search_size'],
+        aspect_method='perimeter',
+        use_gt=True,
+        curr_as_prev=True,
+        pad_with_mean=True,
+        feather=False,
+        center_input_range=True,
+        keep_uint8_range=False,
+        feature_arch=feature_arch,
+        feature_arch_params=feature_arch_params,
+        join_type='single',
+        join_arch='xcorr',
+        join_params=sample_xcorr_params(args, rand),
+        freeze_siamese=False,
+        learnable_prior=False,
+        train_multiscale=False,
+        # Tracking parameters:
+        search_method='local',
+        num_scales=rand.choice([3, 5]),
+        scale_step=rand.choice([1.01, 1.02, 1.03]),
+        scale_update_rate=1,
+        report_square=False,
+        window_params=sample_window_params(args, rand),
+        window_radius=rand.choice([1.0, 2.0]),
+        arg_max_eps=rand.choice([0.0, 0.01, 0.05]),
+        # Loss parameters:
+        wd=0.0,
+        loss_params=sample_loss_params(args, rand),
+    )
 
-    return sample_train_params
+
+def sample_alexnet_params(args, rand):
+    return dict(
+        output_layer='conv2',
+        output_act='linear',
+        freeze_until_layer=None,
+        padding='VALID',
+        enable_bnorm=True,
+    )
+
+
+def sample_xcorr_params(args, rand):
+    return dict(
+        enable_pre_conv=False,
+        pre_conv_params=None,
+        learn_spatial_weight=False,
+        reduce_channels=True,
+        use_mean=False,
+        use_batch_norm=True,
+        learn_gain=False,
+    )
+
+
+def sample_window_params(args, rand):
+    return dict(
+        normalize_method='mean',
+        window_profile=rand.choice(['hann']),
+        window_mode=rand.choice(['radial', 'cartesian']),
+        combine_method='mul',
+    )
+
+
+def sample_loss_params(args, rand):
+    return dict(
+        method='sigmoid',
+        params=sample_sigmoid_params(args, rand),
+    )
+
+
+def sample_sigmoid_params(args, rand):
+    return dict(
+        balanced=True,
+        pos_weight=1,
+        label_method='gaussian',
+        label_params=sample_gaussian_label_params(args, rand),
+    )
+
+
+def sample_gaussian_label_params(args, rand):
+    return dict(sigma=0.2)
 
 
 if __name__ == '__main__':

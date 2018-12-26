@@ -700,3 +700,17 @@ def partial_apply_kwargs(func):
 
 def apply_kwargs(func, kwargs):
     return func(**kwargs)
+
+
+def get_unique_value(elems):
+    '''Maps element or collection of repeated elements to single element.
+
+    Intended as inverse of n_positive_integers().
+    '''
+    try:
+        iterator = iter(elems)
+    except TypeError as ex:
+        return elems
+    values = set(iterator)
+    value, = values
+    return value

@@ -464,13 +464,16 @@ def dimensions(target_size,
         extra_conv_enable=feature_extra_conv_enable,
         extra_conv_params=feature_extra_conv_params)
 
+    field_size = helpers.get_unique_value(field.size)
+    field_stride = helpers.get_unique_value(field.stride)
     def snap(x):
-        return helpers.round_lattice(_unique(field.size), _unique(field.stride), x)
+        return helpers.round_lattice(field_size, field_stride, x)
 
     template_size = snap(target_size * desired_template_scale)
     search_size = snap(template_size + 2 * desired_search_radius * target_size)
     # Actual context amount will not be exactly equal to desired after snap.
-    template_scale = _unique(template_size) / _unique(target_size)
+    template_scale = (helpers.get_unique_value(template_size) /
+                      helpers.get_unique_value(target_size))
 
     logger.debug('template_size %d, search_size %d, template_scale %.3g (desired %.3g)',
                  template_size, search_size, template_scale, desired_template_scale)
@@ -1121,12 +1124,3 @@ def _remove_prefix(prefix, x):
     if not x.startswith(prefix):
         raise ValueError('does not have prefix "{}": "{}"'.format(prefix, x))
     return x[len(prefix):]
-
-
-def _unique(elems):
-    if len(np.shape(elems)) == 0:
-        return elems
-    assert len(elems) > 0
-    value = elems[0]
-    assert all(x == value for x in elems)
-    return value
