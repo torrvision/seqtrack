@@ -85,7 +85,7 @@ class SiamFC(models_interface.IterModel):
             arg_max_eps=0.0,
             # Loss parameters:
             wd=0.0,
-            loss_params=None,
+            loss_params=None,  # kwargs for compute_loss()
             ):
 
         self._mode = mode

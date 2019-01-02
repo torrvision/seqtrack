@@ -81,6 +81,7 @@ class TrainParams(object):
             motion_params=None,
             # Evaluation:
             eval_samplers='full',  # Comma-separated list of sampler names.
+            eval_tre_num=None,
             max_eval_videos=None,
             # Training process:
             ntimesteps=None,
@@ -108,8 +109,6 @@ class TrainParams(object):
             use_gt_train=True,
             gt_decay_rate=1,
             min_gt_ratio=0,
-            # Evaluation args:
-            eval_tre_num=None,
         )
 
         helpers.update_existing_keys(params, kwargs)
@@ -177,6 +176,7 @@ def train(
 
     Args:
         params_dict: Dict of kwargs for TrainParams().
+        kwargs: For train_model_data().
 
     Specify either `data_dir` or `use_tmp_data_dir`.
     The option `use_tmp_data_dir` implies `untar`.
