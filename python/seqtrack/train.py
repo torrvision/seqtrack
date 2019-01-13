@@ -223,7 +223,7 @@ def train(
         preproc_id=params.preproc_id,
         data_cache_dir=data_cache_dir)
 
-    create_iter_model_fn = partial(siamfc.SiamFC, **params.model_params)
+    create_iter_model_fn = partial(siamfc.SiamFC, params=params.model_params)
     # model_properties = iter_model_fn.derived_properties()
 
     streams, eval_sample_fns = make_samplers(

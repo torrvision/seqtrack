@@ -41,7 +41,7 @@ def instantiate_unroll(iter_model_fn, example, run_opts, scope='model'):
     Can feed either `example.features_init` or `ops.state_init` when obtaining predictions.
     '''
     with tf.variable_scope(scope):
-        state_init = iter_model_fn.start(example.features_init, run_opts, enable_loss=True)
+        state_init = iter_model_fn.start(example.features_init, run_opts)
         features = helpers.unstack_structure(example.features, axis=1)
         labels = helpers.unstack_structure(example.labels, axis=1)
         ntimesteps = len(features)
@@ -98,7 +98,6 @@ def instantiate_iter_assign(iter_model_fn, example, run_opts, local_scope, scope
         OperationsIterAssign
     '''
     with tf.variable_scope(scope):
-        # TODO: Add `mode`? (like `enable_loss`)
         # Initialize model in first frame.
         state_init = iter_model_fn.start(example.features_init, run_opts)
         with tf.variable_scope(local_scope):  # Outside the model scope.
@@ -161,7 +160,6 @@ def instantiate_iter_feed(iter_model_fn, example, run_opts, scope='model'):
         OperationsIterFeed
     '''
     with tf.variable_scope(scope):
-        # TODO: Add `mode`? (like `enable_loss`)
         # Initialize model in first frame.
         state_init = iter_model_fn.start(example.features_init, run_opts)
         with tf.name_scope('state_prev'):

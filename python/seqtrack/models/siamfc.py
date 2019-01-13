@@ -92,8 +92,7 @@ class SiamFC(object):
     def __init__(self, mode, params):
         self.mode = mode
 
-        defaults = default_params()
-        helpers.update_existing_keys(defaults, params)
+        params = helpers.update_existing_keys(default_params(), params)
         for key, value in params.items():
             assert not hasattr(self, key)
             setattr(self, key, value)
@@ -123,14 +122,14 @@ class SiamFC(object):
             aspect_method=self.aspect_method)
         return template_rect
 
-    def _crop(image, rect, size, mean_color):
+    def _crop(self, image, rect, size, mean_color):
         return util.crop(
             image, rect, size,
             pad_value=mean_color if self.pad_with_mean else 0.5,
             feather=self.feather,
             feather_margin=self.feather_margin)
 
-    def _crop_pyr(image, rect, size, mean_color):
+    def _crop_pyr(self, image, rect, size, scales, mean_color):
         return util.crop_pyr(
             image, rect, size, scales,
             pad_value=mean_color if self.pad_with_mean else 0.5,
@@ -189,7 +188,8 @@ class SiamFC(object):
                 'template_init': tf.identity(template_feat),
                 'mean_color': tf.identity(mean_color),
             }
-            if self.mode == tf.estimator.ModeKeys.PREDICT:
+            if (self.template_method == 'convex_init_prev' and
+                    self.mode == tf.estimator.ModeKeys.PREDICT):
                 state['template_prev'] = tf.identity(template_feat)
             return state
 
@@ -208,7 +208,7 @@ class SiamFC(object):
             # If the label is not valid, there will be no loss for this frame.
             # However, the input image may still be processed.
             # Adopt the previous rectangle as the "ground-truth".
-            if mode in MODE_KEYS_SUPERVISED:
+            if self.mode in MODE_KEYS_SUPERVISED:
                 last_valid_gt_rect = tf.where(labels['valid'], labels['rect'], state['rect'])
             else:
                 last_valid_gt_rect = None
@@ -247,9 +247,9 @@ class SiamFC(object):
             else:
                 num_scales = 1
             mid_scale = (num_scales - 1) // 2
-            scales = util.scale_range(num_scales, tf.to_float(self.scale_step))
+            scales = util.scale_range(tf.constant(num_scales), tf.to_float(self.scale_step))
             search_ims, search_rects = self._crop_pyr(
-                im, search_rect, self.search_size, self._scales, mean_color)
+                im, search_rect, self.search_size, scales, mean_color)
 
             self._info.setdefault('search', []).append(_to_uint8(search_ims[:, mid_scale]))
 
@@ -316,7 +316,7 @@ class SiamFC(object):
                     response_resize, radius=self.window_radius * self.target_size,
                     **self.window_params)
                 translation, scale, in_arg_max = util.find_peak_pyr(
-                    response_final, self._scales, eps_abs=self.arg_max_eps)
+                    response_final, scales, eps_abs=self.arg_max_eps)
                 # Obtain translation in relative co-ordinates within search image.
                 translation = 1 / tf.to_float(self.search_size) * translation
                 # Get scalar representing confidence in prediction.

@@ -658,6 +658,7 @@ def update_existing_keys(target, modifications):
     if new_keys:
         raise ValueError('new keys: {}'.format(list(new_keys)))
     target.update(modifications)
+    return target
 
 
 def partial_apply_kwargs(func):
