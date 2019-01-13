@@ -34,384 +34,317 @@ from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 _COLORMAP = 'viridis'
 
 
-class SiamFC(models_interface.IterModel):
+IMAGE_SUMMARIES_COLLECTIONS = ['image_summaries']
+MODE_KEYS_SUPERVISED = [tf.estimator.ModeKeys.TRAIN, tf.estimator.ModeKeys.EVAL]
 
-    def __init__(
-            self,
-            mode,
-            target_size=64,
-            use_desired_size=False,
-            # If use_desired_size is False:
-            template_size=127,
-            search_size=255,
-            # If use_desired_size is True:
-            desired_template_scale=2.0,
-            desired_search_radius=1.0,
-            # End of size args.
-            template_method='init',
-            template_prev_weight=0.0,
-            aspect_method='perimeter',  # TODO: Equivalent to SiamFC?
-            use_gt=True,
-            curr_as_prev=True,  # Extract centered examples?
-            pad_with_mean=True,  # Use mean of first image for padding.
-            feather=False,
-            feather_margin=0.1,
-            center_input_range=True,  # Make range [-0.5, 0.5] instead of [0, 1].
-            keep_uint8_range=False,  # Use input range of 255 instead of 1.
-            feature_arch='alexnet',
-            feature_arch_params=None,
-            feature_extra_conv_enable=False,
-            feature_extra_conv_params=None,
-            join_type='single',  # Either 'single' or 'multi'
-            join_arch='xcorr',
-            join_params=None,
-            multi_join_layers=None,
-            feature_model_file='',
-            # template_mask_kind='none',  # none, static, dynamic
-            freeze_siamese=False,
-            learnable_prior=False,
-            train_multiscale=False,
-            # Tracking parameters:
-            search_method='local',
-            global_search_min_resolution=64,
-            global_search_max_resolution=512,
-            global_search_num_scales=4,  # 64, 128, 256, 512
-            num_scales=5,
-            scale_step=1.03,
-            scale_update_rate=1,
-            report_square=False,
-            window_params=None,
-            window_radius=1.0,
-            arg_max_eps=0.0,
-            # Loss parameters:
-            wd=0.0,
-            loss_params=None,  # kwargs for compute_loss()
-            ):
 
-        self._mode = mode
+def default_params():
+    return dict(
+        target_size=64,
+        template_size=127,
+        search_size=255,
+        template_method='init',
+        template_prev_weight=0.0,
+        aspect_method='perimeter',  # TODO: Equivalent to SiamFC?
+        pad_with_mean=True,  # Use mean of first image for padding.
+        feather=False,
+        feather_margin=0.1,
+        center_input_range=True,  # Make range [-0.5, 0.5] instead of [0, 1].
+        keep_uint8_range=False,  # Use input range of 255 instead of 1.
+        feature_arch='alexnet',
+        feature_arch_params=None,
+        feature_extra_conv_enable=False,
+        feature_extra_conv_params=None,
+        join_type='single',  # Either 'single' or 'multi'
+        join_arch='xcorr',
+        join_params=None,
+        multi_join_layers=None,
+        feature_model_file='',
+        # template_mask_kind='none',  # none, static, dynamic
+        learn_appearance=True,
+        learn_motion=False,
+        use_predictions=True,  # Use predictions for previous positions?
+        train_multiscale=False,
+        # Tracking parameters:
+        search_method='local',
+        # global_search_min_resolution=64,
+        # global_search_max_resolution=512,
+        # global_search_num_scales=4,  # 64, 128, 256, 512
+        num_scales=5,
+        scale_step=1.03,
+        scale_update_rate=1,
+        report_square=False,
+        window_params=None,
+        window_radius=1.0,
+        arg_max_eps=0.0,
+        # Loss parameters:
+        wd=0.0,
+        loss_params=None,  # kwargs for compute_loss()
+    )
 
-        if use_desired_size:
-            dims = dimensions(
-                target_size=target_size,
-                desired_template_scale=desired_template_scale,
-                desired_search_radius=desired_search_radius,
-                feature_arch=feature_arch,
-                feature_arch_params=feature_arch_params,
-                feature_extra_conv_enable=feature_extra_conv_enable,
-                feature_extra_conv_params=feature_extra_conv_params)
-            template_size = dims['template_size']
-            search_size = dims['search_size']
 
-        self._target_size = target_size
-        self._template_size = template_size
-        self._search_size = search_size
-        self._template_method = template_method
-        self._template_prev_weight = template_prev_weight
-        self._aspect_method = aspect_method
-        self._use_gt = use_gt
-        self._curr_as_prev = curr_as_prev
-        self._pad_with_mean = pad_with_mean
-        self._feather = feather
-        self._feather_margin = feather_margin
-        self._keep_uint8_range = keep_uint8_range
-        self._center_input_range = center_input_range
+class SiamFC(object):
+    '''Instantiates the TF graph.
+
+    Use either `train` or `start` and `next`.
+    '''
+
+    def __init__(self, mode, params):
+        self.mode = mode
+
+        defaults = default_params()
+        helpers.update_existing_keys(defaults, params)
+        for key, value in params.items():
+            assert not hasattr(self, key)
+            setattr(self, key, value)
+
         # Size of search area relative to object.
-        self._template_scale = float(template_size) / target_size
-        self._search_scale = float(search_size) / target_size
-        self._feature_arch = feature_arch
-        self._feature_arch_params = feature_arch_params
-        self._feature_extra_conv_enable = feature_extra_conv_enable
-        self._feature_extra_conv_params = feature_extra_conv_params
-        self._feature_model_file = feature_model_file
-        self._join_type = join_type
-        self._join_arch = join_arch
-        self._join_params = join_params or {}
-        self._multi_join_layers = multi_join_layers or []
-        self._freeze_siamese = freeze_siamese
-        self._learnable_prior = learnable_prior
-        self._train_multiscale = train_multiscale
-        self._search_method = search_method
-        self._global_search_min_resolution = global_search_min_resolution
-        self._global_search_max_resolution = global_search_max_resolution
-        self._global_search_num_scales = global_search_num_scales
-        self._num_scales = num_scales
-        self._scale_step = scale_step
-        self._scale_update_rate = float(scale_update_rate)
-        self._report_square = report_square
-        self._window_params = window_params or {}
-        self._window_radius = window_radius
-        self._arg_max_eps = arg_max_eps
-        self._wd = wd
-        self._loss_params = loss_params or {}
+        self.template_scale = float(self.template_size) / self.target_size
+        self.search_scale = float(self.search_size) / self.target_size
+        # Defaults instead of None.
+        self.join_params = self.join_params or {}
+        self.multi_join_layers = self.multi_join_layers or []
+        self.window_params = self.window_params or {}
+        self.loss_params = self.loss_params or {}
+        # Ensure types are correct.
+        self.scale_update_rate = float(self.scale_update_rate)
 
         self._num_frames = 0
         # For summaries in end():
         self._info = {}
 
-        self._feature_saver = None
+        # self._feature_saver = None
 
-    def derived_properties(self):
-        # Properties that are (or may be) internally computed.
-        return dict(
-            template_size=self._template_size,
-            search_size=self._search_size,
-            template_scale=self._template_scale,
-            search_scale=self._search_scale,
-            # TODO: Add receptive field size and stride?
-        )
+    def _context_rect(self, rect, aspect, amount):
+        template_rect, _ = _get_context_rect(
+            rect,
+            context_amount=amount,
+            aspect=aspect,
+            aspect_method=self.aspect_method)
+        return template_rect
 
-    def start(self, inputs_init, run_opts, enable_loss=False, image_summaries_collections=None, name='start'):
+    def _crop(image, rect, size, mean_color):
+        return util.crop(
+            image, rect, size,
+            pad_value=mean_color if self.pad_with_mean else 0.5,
+            feather=self.feather,
+            feather_margin=self.feather_margin)
+
+    def _crop_pyr(image, rect, size, mean_color):
+        return util.crop_pyr(
+            image, rect, size, scales,
+            pad_value=mean_color if self.pad_with_mean else 0.5,
+            feather=self.feather,
+            feather_margin=self.feather_margin)
+
+    def _preproc(self, im):
+        return _preproc(
+            im,
+            center_input_range=self.center_input_range,
+            keep_uint8_range=self.keep_uint8_range)
+
+    def _embed_net(self, im, is_training):
+        return _embed_net(
+            im, is_training,
+            trainable=self.learn_appearance,
+            variables_collections=['siamese'],
+            weight_decay=self.wd,
+            arch=self.feature_arch,
+            arch_params=self.feature_arch_params,
+            extra_conv_enable=self.feature_extra_conv_enable,
+            extra_conv_params=self.feature_extra_conv_params)
+
+    def start(self, features_init, run_opts, name='start'):
         with tf.name_scope(name) as scope:
-            aspect = inputs_init['aspect']
-
-            self._enable_loss = enable_loss
-            self._image_summaries_collections = image_summaries_collections
-
-            im = inputs_init['image']['data']
-            y = inputs_init['rect']
+            im = features_init['image']['data']
+            aspect = features_init['aspect']
+            target_rect = features_init['rect']
             mean_color = tf.reduce_mean(im, axis=(-3, -2), keepdims=True)
-            template_rect, y_square = _get_context_rect(
-                y, context_amount=self._template_scale, aspect=aspect,
-                aspect_method=self._aspect_method)
-            if self._report_square:
-                y = y_square
-            template_im = util.crop(im, template_rect, self._template_size,
-                                    pad_value=mean_color if self._pad_with_mean else 0.5,
-                                    feather=self._feather, feather_margin=self._feather_margin)
 
-            self._target_in_template = geom.crop_rect(y, template_rect)
-
-            template_input = _preproc(template_im, center_input_range=self._center_input_range,
-                                      keep_uint8_range=self._keep_uint8_range)
+            template_rect = self._context_rect(target_rect, aspect, self.template_scale)
+            template_im = self._crop(im, template_rect, self.template_size, mean_color)
+            template_input = self._preproc(template_im)
             template_input = cnn.as_tensor(template_input, add_to_set=True)
-            with tf.variable_scope('features', reuse=False):
-                template_feat, template_layers, feature_scope = _branch_net(
-                    template_input, run_opts['is_training'],
-                    trainable=(not self._freeze_siamese),
-                    variables_collections=['siamese'],
-                    weight_decay=self._wd,
-                    arch=self._feature_arch,
-                    arch_params=self._feature_arch_params,
-                    extra_conv_enable=self._feature_extra_conv_enable,
-                    extra_conv_params=self._feature_extra_conv_params)
+            with tf.variable_scope('embed', reuse=False):
+                template_feat, template_layers, feature_scope = self._embed_net(
+                    template_input, run_opts['is_training'])
                 # Get names relative to this scope for loading pre-trained.
                 self._feature_vars = _global_variables_relative_to_scope(feature_scope)
-            # self._template_feat = template_feat
-            self._template_layers = template_layers
             rf_template = template_feat.fields[template_input.value]
             template_feat = cnn.get_value(template_feat)
-            feat_size = template_feat.shape.as_list()[-3:-1]
-            try:
-                receptive_field.assert_center_alignment(self._template_size, feat_size, rf_template)
-            except AssertionError as ex:
-                raise ValueError('template features not centered: {:s}'.format(ex))
+            feat_size = template_feat.shape[-3:-1].as_list()
+            receptive_field.assert_center_alignment(self.template_size, feat_size, rf_template)
 
-            self._feature_saver = tf.train.Saver(self._feature_vars)
+            # self._feature_saver = tf.train.Saver(self._feature_vars)
 
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
-                                 max_outputs=1, collections=self._image_summaries_collections)
+                                 max_outputs=1,
+                                 collections=IMAGE_SUMMARIES_COLLECTIONS)
 
-            # TODO: Avoid passing template_feat to and from GPU (or re-computing).
             state = {
                 'run_opts': run_opts,
                 'aspect': aspect,
-                'rect': tf.identity(y),
+                'rect': tf.identity(target_rect),
                 'template_init': tf.identity(template_feat),
                 'mean_color': tf.identity(mean_color),
             }
-            if self._mode == tf.estimator.ModeKeys.PREDICT:
+            if self.mode == tf.estimator.ModeKeys.PREDICT:
                 state['template_prev'] = tf.identity(template_feat)
             return state
 
-    def next(self, inputs, labels, state, name='timestep'):
+    def next(self, features, labels, state, name='timestep', reset_position=False):
+        '''
+        Args:
+            reset_position: Keep the appearance model but reset the position.
+                If this is true, then features['rect'] must be present.
+        '''
         with tf.name_scope(name) as scope:
-            im = inputs['image']['data']
+            im = features['image']['data']
             run_opts = state['run_opts']
             aspect = state['aspect']
             mean_color = state['mean_color']
 
-            if self._mode == tf.estimator.ModeKeys.PREDICT:
-                # In predict mode, the labels will not be provided.
-                b, _, _, _ = tf.unstack(tf.shape(im))
-                labels = {'valid': tf.fill([b], False), 'rect': tf.fill([b, 4], np.nan)}
-            # During training, let the "previous location" be the current true location
-            # so that the object is in the center of the search area (like SiamFC).
-            gt_rect = tf.where(labels['valid'], labels['rect'], state['rect'])
-            if self._curr_as_prev:
-                prev_rect = tf.cond(run_opts['is_tracking'], lambda: state['rect'], lambda: gt_rect)
+            # If the label is not valid, there will be no loss for this frame.
+            # However, the input image may still be processed.
+            # Adopt the previous rectangle as the "ground-truth".
+            if mode in MODE_KEYS_SUPERVISED:
+                last_valid_gt_rect = tf.where(labels['valid'], labels['rect'], state['rect'])
             else:
-                prev_rect = state['rect']
+                last_valid_gt_rect = None
+            # When learning motion or tracking, use the previous rectangle.
+            # Otherwise adopt the ground-truth as the previous rectangle
+            # so that the object is in the center of the search area.
+            if self.learn_motion or self.mode == tf.estimator.ModeKeys.PREDICT:
+                # Use previous position from state.
+                prev_target_rect = state['rect']
+            else:
+                # Use ground-truth rectangle as previous position
+                prev_target_rect = last_valid_gt_rect
 
-            if self._mode == tf.estimator.ModeKeys.PREDICT:
-                if self._template_method == 'init':
+            # How to obtain template from previous state?
+            if self.template_method == 'init':
+                template_feat = state['template_init']
+            elif self.template_method == 'convex_init_prev':
+                # During training, still use the initial template.
+                # During tracking, take a combination of the previous and initial templates.
+                if self.mode in MODE_KEYS_SUPERVISED:
                     template_feat = state['template_init']
-                elif self._template_method == 'convex_init_prev':
+                else:
                     # TODO: This will not work with "multi" joins yet.
                     # TODO: Could instead combine after computing response.
                     # (May be more important with fully-connected output stage.)
-                    template_feat = (self._template_prev_weight * state['template_prev'] +
-                                     (1 - self._template_prev_weight) * state['template_init'])
-                else:
-                    raise ValueError('unknown template method: "{}"'.format(self._template_method))
+                    template_feat = (self.template_prev_weight * state['template_prev'] +
+                                     (1 - self.template_prev_weight) * state['template_init'])
             else:
-                template_feat = state['template_init']
+                raise ValueError('unknown template method: "{}"'.format(self.template_method))
 
             # Coerce the aspect ratio of the rectangle to construct the search area.
-            search_rect, _ = _get_context_rect(prev_rect, self._search_scale,
-                                               aspect=aspect, aspect_method=self._aspect_method)
-
+            search_rect = self._context_rect(prev_target_rect, aspect, self.search_scale)
             # Extract an image pyramid (use 1 scale when not in tracking mode).
-            num_scales = tf.cond(tf.logical_or(run_opts['is_tracking'], self._train_multiscale),
-                                 lambda: tf.constant(self._num_scales, dtype=tf.int32),
-                                 lambda: tf.constant(1, dtype=tf.int32))
+            if self.train_multiscale or self.mode == tf.estimator.ModeKeys.PREDICT:
+                num_scales = self.num_scales
+            else:
+                num_scales = 1
             mid_scale = (num_scales - 1) // 2
-            scales = util.scale_range(num_scales, tf.to_float(self._scale_step))
-            search_ims, search_rects = util.crop_pyr(
-                im, search_rect, self._search_size, scales,
-                pad_value=mean_color if self._pad_with_mean else 0.5,
-                feather=self._feather, feather_margin=self._feather_margin)
+            scales = util.scale_range(num_scales, tf.to_float(self.scale_step))
+            search_ims, search_rects = self._crop_pyr(
+                im, search_rect, self.search_size, self._scales, mean_color)
 
             self._info.setdefault('search', []).append(_to_uint8(search_ims[:, mid_scale]))
 
             # Extract features, perform search, get receptive field of response wrt image.
-            search_input = _preproc(search_ims, center_input_range=self._center_input_range,
-                                    keep_uint8_range=self._keep_uint8_range)
-            # Convert to cnn.Tensor to track receptive field.
+            search_input = self._preproc(search_ims)
             search_input = cnn.as_tensor(search_input, add_to_set=True)
-
-            with tf.variable_scope('features', reuse=True):
-                search_feat, search_layers, _ = _branch_net(
-                    search_input, run_opts['is_training'],
-                    trainable=(not self._freeze_siamese),
-                    variables_collections=['siamese'],
-                    weight_decay=self._wd,
-                    arch=self._feature_arch,
-                    arch_params=self._feature_arch_params,
-                    extra_conv_enable=self._feature_extra_conv_enable,
-                    extra_conv_params=self._feature_extra_conv_params)
+            with tf.variable_scope('embed', reuse=True):
+                search_feat, search_layers, _ = self._embed_net(
+                    search_input, run_opts['is_training'])
             rf_search = search_feat.fields[search_input.value]
-            search_feat_size = search_feat.value.shape.as_list()[-3:-1]
-            try:
-                receptive_field.assert_center_alignment(self._search_size, search_feat_size, rf_search)
-            except AssertionError as ex:
-                raise ValueError('search features not centered: {:s}'.format(ex))
+            search_feat_size = search_feat.value.shape[-3:-1].as_list()
+            receptive_field.assert_center_alignment(self.search_size, search_feat_size, rf_search)
 
             with tf.variable_scope('join', reuse=(self._num_frames >= 1)):
-                join_fn = join_nets.BY_NAME[self._join_arch]
-                if self._join_type == 'single':
+                join_fn = join_nets.BY_NAME[self.join_arch]
+                if self.join_type == 'single':
                     response = join_fn(template_feat, search_feat, run_opts['is_training'],
-                                       **self._join_params)
-                elif self._join_type == 'multi':
+                                       **self.join_params)
+                elif self.join_type == 'multi':
                     response = join_fn(template_feat, search_feat, run_opts['is_training'],
-                                       self._multi_join_layers,
-                                       self._template_layers, search_layers, search_input,
-                                       **self._join_params)
+                                       self.multi_join_layers,
+                                       template_layers, search_layers, search_input,
+                                       **self.join_params)
                 else:
-                    raise ValueError('unknown join type: "{}"'.format(self._join_type))
+                    raise ValueError('unknown join type: "{}"'.format(self.join_type))
             rf_response = response.fields[search_input.value]
             response = cnn.get_value(response)
             response_size = response.shape[-3:-1].as_list()
-            try:
-                receptive_field.assert_center_alignment(self._search_size, response_size, rf_response)
-            except AssertionError as ex:
-                raise ValueError('response map not centered: {:s}'.format(ex))
+            receptive_field.assert_center_alignment(self.search_size, response_size, rf_response)
 
             response = tf.verify_tensor_all_finite(response, 'output of xcorr is not finite')
 
+            # # Post-process scores.
             # with tf.variable_scope('output', reuse=(self._num_frames > 0)):
-            #     if self._bnorm_after_xcorr:
-            #         response = slim.batch_norm(response, scale=True, is_training=self._is_training,
-            #                                    trainable=(not self._freeze_siamese),
+            #     if self.bnorm_after_xcorr:
+            #         response = slim.batch_norm(response, scale=True, is_training=self.is_training,
+            #                                    trainable=self.learn_appearance,
             #                                    variables_collections=['siamese'])
             #     else:
             #         response = _affine_scalar(response, variables_collections=['siamese'])
-            #     if self._freeze_siamese:
+            #     if not self.learn_appearance:
             #         # TODO: Prevent batch-norm updates as well.
             #         # TODO: Set trainable=False for all variables above.
             #         response = tf.stop_gradient(response)
-            #     if self._learnable_prior:
+            #     if self.learn_motion:
             #         response = _add_learnable_motion_prior(response)
 
             self._info.setdefault('response', []).append(
                 _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
 
             losses = {}
-            if self._enable_loss:
+            if self.mode in MODE_KEYS_SUPERVISED:
                 loss_name, loss = compute_loss(
-                    response, self._target_size / rf_response.stride, **self._loss_params)
+                    response, self.target_size / rf_response.stride, **self.loss_params)
                 losses[loss_name] = loss
 
-            if self._search_method == 'local':
+            if self.search_method == 'local':
                 # Use pyramid from loss function to obtain position.
                 # Get relative translation and scale from response.
                 # TODO: Upsample to higher resolution than original image?
                 response_resize = cnn.get_value(cnn.upsample(
                     response, rf_response.stride, method=tf.image.ResizeMethod.BICUBIC))
-                # TODO: Could have target size be dynamic based on object? Probably overkill.
                 response_final = apply_motion_penalty(
-                    response_resize, radius=self._window_radius * self._target_size,
-                    **self._window_params)
+                    response_resize, radius=self.window_radius * self.target_size,
+                    **self.window_params)
                 translation, scale, in_arg_max = util.find_peak_pyr(
-                    response_final, scales, eps_abs=self._arg_max_eps)
+                    response_final, self._scales, eps_abs=self.arg_max_eps)
                 # Obtain translation in relative co-ordinates within search image.
-                translation = 1 / tf.to_float(self._search_size) * translation
+                translation = 1 / tf.to_float(self.search_size) * translation
                 # Get scalar representing confidence in prediction.
                 # Use raw appearance score (before motion penalty).
                 confidence = weighted_mean(response_resize, in_arg_max, axis=(-4, -3, -2))
                 # Damp the scale update towards 1 (no change).
                 # TODO: Should this be in log space?
-                scale = self._scale_update_rate * scale + (1. - self._scale_update_rate) * 1.
+                scale = self.scale_update_rate * scale + (1. - self.scale_update_rate) * 1.
                 # Get rectangle in search image.
-                prev_target_in_search = geom.crop_rect(prev_rect, search_rect)
+                prev_target_in_search = geom.crop_rect(prev_target_rect, search_rect)
                 pred_in_search = _rect_translate_scale(prev_target_in_search, translation,
                                                        tf.expand_dims(scale, -1))
                 # Move from search back to original image.
                 pred = geom.crop_rect(pred_in_search, geom.crop_inverse(search_rect))
-
-            elif self._search_method == 'global':
-                pred = _global_search()
             else:
-                raise ValueError('unknown search method "{}"'.format(self._search_method))
+                raise ValueError('unknown search method "{}"'.format(self.search_method))
+
             # Limit size of object.
             pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
 
-            if self._mode == tf.estimator.ModeKeys.PREDICT:
-                # Use prediction to extract new template.
-                curr_template_rect, _ = _get_context_rect(pred,
-                                                          context_amount=self._template_scale,
-                                                          aspect=aspect,
-                                                          aspect_method=self._aspect_method)
-                curr_template_im = util.crop(im, curr_template_rect, self._template_size,
-                                             pad_value=mean_color if self._pad_with_mean else 0.5,
-                                             feather=self._feather,
-                                             feather_margin=self._feather_margin)
-                curr_template_input = _preproc(curr_template_im,
-                                               center_input_range=self._center_input_range,
-                                               keep_uint8_range=self._keep_uint8_range)
-                curr_template_input = cnn.as_tensor(curr_template_input, add_to_set=True)
-                with tf.variable_scope('features', reuse=True):
-                    curr_template_feat, curr_template_layers, _ = _branch_net(
-                        curr_template_input, run_opts['is_training'],
-                        trainable=(not self._freeze_siamese),
-                        variables_collections=['siamese'],
-                        weight_decay=self._wd,
-                        arch=self._feature_arch,
-                        arch_params=self._feature_arch_params,
-                        extra_conv_enable=self._feature_extra_conv_enable,
-                        extra_conv_params=self._feature_extra_conv_params)
-                curr_template_feat = cnn.get_value(curr_template_feat)
-
             # Rectangle to use in next frame for search area.
             # If using gt and rect not valid, use previous.
-            # gt_rect = tf.where(frame['y_is_valid'], frame['y'], prev_rect)
-            if self._use_gt:
-                next_prev_rect = tf.cond(run_opts['is_tracking'], lambda: pred, lambda: gt_rect)
-            else:
+            if tf.estimator.ModeKeys.PREDICT or self.use_predictions:
                 next_prev_rect = pred
+            else:
+                next_prev_rect = last_valid_gt_rect
 
             self._num_frames += 1
-            # outputs = {'rect': pred, 'vis': vis}
             outputs = {'rect': pred, 'score': confidence}
             state = {
                 'run_opts': run_opts,
@@ -420,8 +353,20 @@ class SiamFC(models_interface.IterModel):
                 'template_init': state['template_init'],
                 'mean_color': state['mean_color'],
             }
-            if self._mode == tf.estimator.ModeKeys.PREDICT:
-                state['template_prev'] = curr_template_feat
+
+            # If required, extract new template at current position and add to state.
+            if (self.template_method == 'convex_init_prev' and
+                    self.mode == tf.estimator.ModeKeys.PREDICT):
+                template_rect = self._context_rect(target_rect, aspect, self.template_scale)
+                template_im = self._crop(im, template_rect, self.template_size, mean_color)
+                template_input = self._preproc(template_im)
+                # template_input = cnn.as_tensor(template_input, add_to_set=True)
+                with tf.variable_scope('embed', reuse=True):
+                    template_feat, template_layers, _ = self._embed_net(
+                        template_input, run_opts['is_training'])
+                template_feat = cnn.get_value(template_feat)
+                state['template_prev'] = template_feat
+
             return outputs, state, losses
 
     def end(self):
@@ -429,22 +374,22 @@ class SiamFC(models_interface.IterModel):
         with tf.name_scope('summary'):
             for key in self._info:
                 _image_sequence_summary(key, tf.stack(self._info[key], axis=1),
-                                        collections=self._image_summaries_collections)
+                                        collections=IMAGE_SUMMARIES_COLLECTIONS)
         return losses
 
-    def init(self, sess):
-        if self._feature_model_file:
-            # TODO: Confirm that all variables were loaded?
-            try:
-                self._feature_saver.restore(sess, self._feature_model_file)
-            except tf.errors.NotFoundError as ex:
-                pprint.pprint(tf.contrib.framework.list_variables(self._feature_model_file))
-                raise
-            # # initialize uninitialized variables
-            # vars_uninit = sess.run(tf.report_uninitialized_variables())
-            # sess.run(tf.variables_initializer([v for v in tf.global_variables()
-            #                                    if v.name.split(':')[0] in vars_uninit]))
-            # assert len(sess.run(tf.report_uninitialized_variables())) == 0
+    # def init(self, sess):
+    #     if self.feature_model_file:
+    #         # TODO: Confirm that all variables were loaded?
+    #         try:
+    #             self._feature_saver.restore(sess, self.feature_model_file)
+    #         except tf.errors.NotFoundError as ex:
+    #             pprint.pprint(tf.contrib.framework.list_variables(self.feature_model_file))
+    #             raise
+    #         # # initialize uninitialized variables
+    #         # vars_uninit = sess.run(tf.report_uninitialized_variables())
+    #         # sess.run(tf.variables_initializer([v for v in tf.global_variables()
+    #         #                                    if v.name.split(':')[0] in vars_uninit]))
+    #         # assert len(sess.run(tf.report_uninitialized_variables())) == 0
 
 
 def dimensions(target_size,
@@ -512,14 +457,14 @@ def scale_sequence(num_scales, max_scale):
 # If we put it in the join function, then we can adapt it to the size of the template.
 
 
-def _branch_net(x, is_training, trainable, variables_collections,
-                weight_decay=0,
-                name='features',
-                # Additional arguments:
-                arch='alexnet',
-                arch_params=None,
-                extra_conv_enable=False,
-                extra_conv_params=None):
+def _embed_net(x, is_training, trainable, variables_collections,
+               weight_decay=0,
+               name='embed',
+               # Additional arguments:
+               arch='alexnet',
+               arch_params=None,
+               extra_conv_enable=False,
+               extra_conv_params=None):
     '''
     Args:
         x: Image of which to compute features. Shape [..., h, w, c]
@@ -590,13 +535,13 @@ def _branch_net_receptive_field(arch='alexnet',
         image = tf.placeholder(tf.float32, (None, None, None, 3), name='image')
         is_training = tf.placeholder(tf.bool, (), name='is_training')
         image = cnn.as_tensor(image, add_to_set=True)
-        retvals = _branch_net(image, is_training,
-                              trainable=True,
-                              variables_collections=None,
-                              arch=arch,
-                              arch_params=arch_params,
-                              extra_conv_enable=extra_conv_enable,
-                              extra_conv_params=extra_conv_params)
+        retvals = _embed_net(image, is_training,
+                             trainable=True,
+                             variables_collections=None,
+                             arch=arch,
+                             arch_params=arch_params,
+                             extra_conv_enable=extra_conv_enable,
+                             extra_conv_params=extra_conv_params)
         feat = retvals[0]
         return feat.fields[image.value]
 
@@ -790,7 +735,7 @@ def _add_learnable_motion_prior(response, name='motion_prior'):
         #     tf.summary.image(
         #         'motion_prior', max_outputs=1,
         #         tensor=_to_uint8(util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
-        #         collections=self._image_summaries_collections)
+        #         collections=IMAGE_SUMMARIES_COLLECTIONS)
         return response + prior
 
 

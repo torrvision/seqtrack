@@ -16,7 +16,6 @@ import sys
 import tempfile
 import tensorflow as tf
 import time
-from PIL import Image
 from contextlib import contextmanager
 
 nest = tf.contrib.framework.nest
@@ -64,53 +63,6 @@ def createScalarMap(name='hot', vmin=-10, vmax=10):
     cm = plt.get_cmap(name)
     cNorm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
     return matplotlib.cmx.ScalarMappable(norm=cNorm, cmap=cm)
-
-
-# def load_image(fname, size_hw=None, resize=False):
-#     im = Image.open(fname)
-#     if im.mode != 'RGB':
-#         im = im.convert('RGB')
-#     if size_hw is not None:
-#         height, width = size_hw
-#         size_wh = (width, height)
-#         if im.size != size_wh:
-#             if resize:
-#                 im = im.resize(size_wh)
-#             else:
-#                 pdb.set_trace()
-#                 raise ValueError('size does not match')
-#     return im
-
-
-# def crop_and_resize(src, box, size_hw, pad_value):
-#     '''
-#     Args:
-#         src: PIL image
-#     '''
-#     assert len(pad_value) == 3
-#     height, width = size_hw
-#     size_wh = (width, height)
-#     # Valid region in original image.
-#     src_valid = geom_np.rect_intersect(box, geom_np.unit_rect())
-#     # Valid region in box.
-#     box_valid = geom_np.crop_rect(src_valid, box)
-#     src_valid_pix = np.rint(geom_np.rect_mul(src_valid, src.size)).astype(np.int)
-#     box_valid_pix = np.rint(geom_np.rect_mul(box_valid, size_wh)).astype(np.int)
-# 
-#     out = Image.new('RGB', size_wh, pad_value)
-#     src_valid_pix_size = geom_np.rect_size(src_valid_pix)
-#     box_valid_pix_size = geom_np.rect_size(box_valid_pix)
-#     if all(src_valid_pix_size >= 1) and all(box_valid_pix_size >= 1):
-#         # Resize to final size in output image.
-#         src_valid_im = src.crop(src_valid_pix)
-#         out_valid_im = src_valid_im.resize(box_valid_pix_size)
-#         out.paste(out_valid_im, box_valid_pix)
-#     return out
-
-
-# def im_to_arr(x, dtype=np.float32):
-#     # return np.array(x, dtype=dtype)
-#     return (1. / 255) * np.array(x, dtype=dtype)
 
 
 def pad_to(x, n, axis=0, mode='constant'):
@@ -653,9 +605,23 @@ def merge_dicts(*args):
 
 
 def flatten_dict(keys, values):
+    # return flatten_items(zip(keys, values))
     nest.assert_shallow_structure(keys, values)
     return dict(zip(nest.flatten(keys),
                     nest.flatten_up_to(keys, values)))
+
+
+def flatten_items(items):
+    '''Maps list of (key, value) pairs to list of flattened (key, value) pairs.
+
+    This is useful for constructing a `feed_dict` when the key is a dictionary of tensors.
+
+    >>> flatten_items([(1, 2), ([3, 4], [5, 6]), ({'a': 7, 'b': 8}, {'a': 9, 'b': 10})])
+    {1: 2, 3: 5, 4: 6, 7: 9, 8: 10}
+    '''
+    for k, v in items:
+        nest.assert_shallow_structure(k, v)
+        yield (nest.flatten(k), nest.flatten_up_to(k, v))
 
 
 def dump_csv(f, series, sort_keys=True, sort_fields=True):

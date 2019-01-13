@@ -37,6 +37,8 @@ def instantiate_unroll(iter_model_fn, example, run_opts, scope='model'):
 
     Returns:
         OperationsUnroll
+
+    Can feed either `example.features_init` or `ops.state_init` when obtaining predictions.
     '''
     with tf.variable_scope(scope):
         state_init = iter_model_fn.start(example.features_init, run_opts, enable_loss=True)
