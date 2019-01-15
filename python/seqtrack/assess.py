@@ -60,8 +60,9 @@ def assess_frames(sequence, pred_rects):
             label_is_valid: Array of bools. Shape [num_frames].
         pred_rects: Array of rects. Shape [num_frames - 1, 4].
     '''
-    label_present = np.array(sequence['label_is_valid'][1:])
-    label_rects = np.array(sequence['labels'][1:])
+    is_valid = [(t in sequence.valid_set) for t in range(len(sequence))]
+    label_present = np.array(is_valid[1:])
+    label_rects = np.array(sequence.rects[1:])
 
     iou = geom_np.rect_iou(label_rects, pred_rects)
     # Compute distance between centers of rectangles.

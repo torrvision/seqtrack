@@ -61,9 +61,9 @@ class EpochSampler(object):
     '''Standard sampler for a finite dataset.'''
 
     def __init__(self, rand, dataset, repeat=False):
+        self._rand = rand
         self._dataset = dataset
         self._repeat = repeat
-        self._rand = rand
 
     def dataset(self):
         return self._dataset
@@ -86,12 +86,13 @@ class EpochSampler(object):
 class MixtureSampler(object):
     '''Weighted mixture of other samplers.'''
 
-    def __init__(self, samplers, p=None):
+    def __init__(self, rand, samplers, p=None):
         '''
         Args:
             samplers: Dictionary that maps dataset name to sampler.
             p: Dictionary that maps dataset name to weight.
         '''
+        self._rand = rand
         self._samplers = samplers
         self._p = None if not p else (np.asfarray(p) / np.sum(p))
         # Construct concatenation of datasets.
@@ -128,7 +129,7 @@ class Sequence(object):
         self.name = name
 
     def __len__(self):
-        return len(image_files)
+        return len(self.image_files)
 
 
 def extract_sequence_from_dataset(dataset, track_id, times=None):
@@ -145,7 +146,7 @@ def extract_sequence_from_dataset(dataset, track_id, times=None):
     video_id = dataset.video(track_id)
     return Sequence(
         image_files=[dataset.image_file(video_id, t) for t in times],
-        valid_set=set(i for i, t in enumerate(times) if t in labels and _is_present(labels[t]))
+        valid_set=set(i for i, t in enumerate(times) if t in labels and _is_present(labels[t])),
         rects=np.array([_rect_from_label(labels.get(t, None)) for t in times]),
         aspect=dataset.aspect(video_id),
         name=track_id,
@@ -166,8 +167,12 @@ def _rect_from_label(label):
 
 
 def select_frames(seq, times):
+    try:
+        image_files = [seq.image_files[t] for t in times]
+    except IndexError as ex:
+        raise RuntimeError('invalid times (sequence length {}): {}'.format(len(seq), str(times)))
     return Sequence(
-        image_files=[seq.image_files[t] for t in times],
+        image_files=image_files,
         valid_set=set(i for i, t in enumerate(times) if t in seq.valid_set),
         rects=[seq.rects[t] for t in times],
         aspect=seq.aspect,
@@ -176,6 +181,12 @@ def select_frames(seq, times):
 
 
 def sequence_to_example(seq):
+    is_valid = [(t in seq.valid_set) for t in range(len(seq))]
+    if not is_valid[0]:
+        raise RuntimeError('first label is not valid')
+    if not any(is_valid[1:]):
+        raise RuntimeError('no valid labels after first label')
+
     return itermodel.ExampleUnroll(
         features_init={
             'image': {'file': seq.image_files[0]},
@@ -186,7 +197,7 @@ def sequence_to_example(seq):
             'image': {'file': seq.image_files[1:]}
         },
         labels={
-            'valid': [(t in seq.valid_set) for t in range(1, len(seq))],
+            'valid': is_valid[1:],
             'rect': seq.rects[1:],
         },
     )
@@ -237,7 +248,7 @@ def times_freq_range(rand, seq_len, valid_set, ntimesteps, min_freq, max_freq, u
     # Let n = ntimesteps*freq.
     n = int(round(ntimesteps * freq))
     # Choose first frame such that all frames are present.
-    a = rand.choice(sorted([a for a in valid_set if a + n <= seq_len]))
+    a = rand.choice(sorted([a for a in valid_set if a + n <= seq_len - 1]))
     times = [int(round(a + freq * t)) for t in range(ntimesteps + 1)]
     return times
 

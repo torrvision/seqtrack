@@ -24,14 +24,6 @@ from seqtrack import helpers
 FRAME_PATTERN = '%06d.jpeg'
 
 
-# Sequence = collections.namedtuple('Sequence', [
-#     'image_files',     # List of strings of length n.
-#     'labels',          # Numpy array of shape [n, 4]
-#     'label_is_valid',  # List of booleans of length n.
-#     'aspect',          # Aspect ratio of original image (width / height).
-# ])
-
-
 def track(sess, tracker, sequence,
           verbose=False,
           # Visualization options:
@@ -40,25 +32,25 @@ def track(sess, tracker, sequence,
           keep_frames=False):
     '''Run an instantiated tracker on a sequence.'''
 
-    # assert sequence['label_is_valid'][0]
+    assert 0 in sequence.valid_set
     tracker.start(sess, {
-        'image': {'file': [sequence['image_files'][0]]},
-        'rect': [sequence['labels'][0]],
-        'aspect': [sequence['aspect']],
+        'image': {'file': [sequence.image_files[0]]},
+        'rect': [sequence.rects[0]],
+        'aspect': [sequence.aspect],
     })
 
     start = time.time()
     # Durations do not include initial frame.
     duration_with_load = 0
 
-    sequence_len = len(sequence['image_files'])
+    sequence_len = len(sequence)
     assert(sequence_len >= 2)
     predictions = []
     for t in range(1, sequence_len):
         start_curr = time.time()
         # TODO: Load image separately.
         curr = tracker.next(sess, {
-            'image': {'file': [sequence['image_files'][t]]},
+            'image': {'file': [sequence.image_files[t]]},
         })
         duration_with_load += time.time() - start_curr
         # Unpack from batch.
@@ -102,14 +94,14 @@ def _split_tre_all(sequences, tre_num):
     for sequence in sequences:
         for tre_ind in range(tre_num):
             # subseq_name = subseq['video_name']
-            subseq_name = _tre_seq_name(sequence['video_name'], tre_ind, tre_num)
+            subseq_name = _tre_seq_name(sequence.name, tre_ind, tre_num)
             if subseq_name in subseqs:
                 raise RuntimeError('name already exists: \'{}\''.format(subseq_name))
             try:
                 subseq = _extract_tre_sequence(sequence, tre_ind, tre_num, subseq_name)
             except RuntimeError as ex:
                 logger.warning('sequence \'%s\': could not extract TRE sequence %d of %d: %s',
-                               sequence['video_name'], tre_ind, tre_num, str(ex))
+                               sequence.name, tre_ind, tre_num, str(ex))
                 # Still insert None if sequence could not be extracted.
                 subseq = None
             subseqs[subseq_name] = subseq
@@ -122,7 +114,7 @@ def _split_tre_all(sequences, tre_num):
         mode = _mode_name(tre_group_num)
         tre_groups[mode] = {}
         for sequence in sequences:
-            seq_name = sequence['video_name']
+            seq_name = sequence.name
             tre_groups[mode][seq_name] = []
             for tre_ind in range(tre_group_num):
                 subseq_name = _tre_seq_name(seq_name, tre_ind, tre_group_num)

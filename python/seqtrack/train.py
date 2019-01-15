@@ -2,9 +2,10 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import sys
 import collections
 import csv
+import functools
+import itertools
 import json
 import math
 import numpy as np
@@ -15,8 +16,7 @@ import random
 import re
 import six
 import subprocess
-from functools import partial
-from itertools import chain
+import sys
 
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
@@ -207,9 +207,9 @@ def train(
         data_dir = os.path.join(tmp_dir, 'data')
 
     # TODO: How to get datasets from train_dataset and eval_datasets?
-    dataset_names = list(set(chain(_datasets_in_sampler(params.train_dataset),
-                                   _datasets_in_sampler(params.val_dataset),
-                                   params.eval_datasets)))
+    dataset_names = list(set(itertools.chain(_datasets_in_sampler(params.train_dataset),
+                                             _datasets_in_sampler(params.val_dataset),
+                                             params.eval_datasets)))
     # TODO: Flag to enable/disable.
     datasets = setup_data(
         dataset_names=dataset_names,
@@ -221,7 +221,7 @@ def train(
         preproc_id=params.preproc_id,
         data_cache_dir=data_cache_dir)
 
-    create_iter_model_fn = partial(siamfc.SiamFC, params=params.model_params)
+    create_iter_model_fn = functools.partial(siamfc.SiamFC, params=params.model_params)
     # model_properties = iter_model_fn.derived_properties()
 
     TRAIN_VAL = ('train', 'val')
@@ -262,7 +262,8 @@ def train(
 
 
 def _make_sequence_stream(dataset, seed, max_num):
-    video_sampler = sample.EpochSampler(datasets[names], rand=rand, repeat=False)
+    rand = np.random.RandomState(seed)
+    video_sampler = sample.EpochSampler(rand, dataset, repeat=False)
     track_ids = video_sampler.sample()
     if max_num is not None and max_num > 0:
         track_ids = itertools.islice(track_ids, max_num)
@@ -275,14 +276,19 @@ def _make_example_stream(video_sampler_spec,
                          example_sampler,
                          example_sampler_params,
                          seed):
-    video_sampler = _make_video_sampler(video_sampler_spec, datasets, params.seed, repeat=True)
+    video_sampler = _make_video_sampler(video_sampler_spec, datasets, seed=seed, repeat=True)
     sampler_dataset = video_sampler.dataset()
 
     rand = np.random.RandomState(seed)
-    example_fn = partial(sample.EXAMPLE_FNS[example_sampler], **example_sampler_params)
+    example_fn = functools.partial(sample.EXAMPLE_FNS[example_sampler], **example_sampler_params)
     for track_id in video_sampler.sample():
         seq = sample.extract_sequence_from_dataset(sampler_dataset, track_id)
-        yield example_fn(rand, seq)
+        try:
+            example = example_fn(rand, seq)
+        except RuntimeError as ex:
+            logger.info('failed to extract an example for track "%s": %s', track_id, ex)
+            continue
+        yield example
 
 
 def make_train_result(model_properties, train_series, track_series):
@@ -363,18 +369,19 @@ def _make_video_sampler(names, datasets, seed, repeat):
     '''
     rand = np.random.RandomState(seed)
     if isinstance(names, six.string_types):
-        return sample.EpochSampler(datasets[names], rand=rand, repeat=repeat)
+        return sample.EpochSampler(rand, datasets[names], repeat=repeat)
     if isinstance(names, list):
         assert len(names) > 0
         if all(isinstance(name, six.string_types) for name in names):
             concat = data.Concat({name: datasets[name] for name in names})
-            return sample.EpochSampler(concat, rand=rand, repeat=repeat)
+            return sample.EpochSampler(rand, concat, repeat=repeat)
         elif all(_is_pair(elem) for elem in names):
+            # Use the same generator `rand` for subsets.
             samplers = {
-                name: sample.EpochSampler(datasets[name], rand=rand, repeat=True)
+                name: sample.EpochSampler(rand, datasets[name], repeat=True)
                 for _, name in names}
             weights = {name: weight for weight, name in names}
-            return sample.MixtureSampler(samplers, weights)
+            return sample.MixtureSampler(rand, samplers, weights)
     raise ValueError('invalid structure: {}'.format(repr(names)))
 
 
@@ -460,12 +467,12 @@ def train_model_data(
 
     datasets = {
         mode: (
-            _dataset_from_sequence_generator(partial(_identity, sequences[mode]),
-                                             sequence_len=params.ntimesteps + 1)
-            .map(partial(_load_images_unroll,
-                         resize=params.resize_online,
-                         size=(params.imheight, params.imwidth),
-                         method=params.resize_method))
+            _dataset_from_example_generator(functools.partial(_identity, sequences[mode]),
+                                            ntimesteps=params.ntimesteps)
+            .map(functools.partial(_load_images_unroll,
+                                   resize=params.resize_online,
+                                   size=(params.imheight, params.imwidth),
+                                   method=params.resize_method))
             .batch(params.batchsz, drop_remainder=True)
         ) for mode in modes
     }
@@ -591,8 +598,7 @@ def train_model_data(
 
     t_total = time.time()
     with tf.Session(config=make_session_config(**session_config_kwargs)) as sess:
-        print('\ntraining starts! --------------------------------------------')
-        sys.stdout.flush()
+        print('training starts! --------------------------------------------')
 
         iterator_handles = {mode: sess.run(iterators[mode].string_handle()) for mode in modes}
 
@@ -615,10 +621,9 @@ def train_model_data(
             model_file = tf.train.latest_checkpoint(path_ckpt)
             if model_file is None:
                 raise ValueError('could not find checkpoint')
-            print('restore: {}'.format(model_file))
+            logger.info('restore: {}'.format(model_file))
             saver.restore(sess, model_file)
-            print('done: restore')
-            sys.stdout.flush()
+            logger.info('done: restore')
             prev_ckpt = np.asscalar(global_step_var.eval())
         else:
             sess.run(init_op)
@@ -653,10 +658,9 @@ def train_model_data(
                 if global_step > prev_ckpt and (global_step % period_ckpt == 0 or assess_step):
                     if not os.path.isdir(path_ckpt):
                         os.makedirs(path_ckpt)
-                    print('save model')
+                    logger.info('save model')
                     saver.save(sess, path_ckpt + '/iteration', global_step=global_step)
-                    print('done: save model')
-                    sys.stdout.flush()
+                    logger.info('done: save model')
                     prev_ckpt = global_step
             # intermediate evaluation of model
             if assess_step:
@@ -1089,7 +1093,7 @@ def _make_run_opts_tracking():
     }
 
 
-def _dataset_from_sequence_generator(sequences, sequence_len):
+def _dataset_from_example_generator(examples, ntimesteps):
     '''
     Args:
         sequences: Callable that returns iterable (like `from_generator`).
@@ -1098,21 +1102,49 @@ def _dataset_from_sequence_generator(sequences, sequence_len):
     Returns:
         tf.data.Dataset
     '''
-    types = {
-        'image_files': tf.string,
-        'labels': tf.float32,
-        'label_is_valid': tf.bool,
-        'aspect': tf.float32,
-        'video_name': tf.string,
-    }
-    shapes = {
-        'image_files': [sequence_len],
-        'labels': [sequence_len, 4],
-        'label_is_valid': [sequence_len],
-        'aspect': [],
-        'video_name': [],
-    }
-    return tf.data.Dataset.from_generator(sequences, types, output_shapes=shapes)
+    types = itermodel.ExampleUnroll(
+        features_init={
+            'image': {'file': tf.string},
+            'aspect': tf.float32,
+            'rect': tf.float32,
+        },
+        features={
+            'image': {'file': tf.string},
+        },
+        labels={
+            'valid': tf.bool,
+            'rect': tf.float32,
+        },
+    )
+    shapes = itermodel.ExampleUnroll(
+        features_init={
+            'image': {'file': []},
+            'aspect': [],
+            'rect': [4],
+        },
+        features={
+            'image': {'file': [ntimesteps]},
+        },
+        labels={
+            'valid': [ntimesteps],
+            'rect': [ntimesteps, 4],
+        },
+    )
+    # types = {
+    #     'image_files': tf.string,
+    #     'labels': tf.float32,
+    #     'label_is_valid': tf.bool,
+    #     'aspect': tf.float32,
+    #     'video_name': tf.string,
+    # }
+    # shapes = {
+    #     'image_files': [sequence_len],
+    #     'labels': [sequence_len, 4],
+    #     'label_is_valid': [sequence_len],
+    #     'aspect': [],
+    #     'video_name': [],
+    # }
+    return tf.data.Dataset.from_generator(examples, types, output_shapes=shapes)
 
 
 def _sequence_to_example_unroll(sequence):
@@ -1201,7 +1233,7 @@ def load_and_resize_images(image_files, resize=False, size=None, method='bilinea
     with tf.name_scope(name) as scope:
         image_files, restore_fn = helpers.merge_dims(image_files, None, None)
         images = tf.map_fn(
-            partial(_load_and_resize_image, resize=resize, size=size, method=method),
+            functools.partial(_load_and_resize_image, resize=resize, size=size, method=method),
             image_files,
             dtype=tf.float32)
         images = restore_fn(images, 0)
