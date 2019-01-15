@@ -13,10 +13,10 @@ import os
 import pprint
 import random
 import re
+import six
 import subprocess
 from functools import partial
 from itertools import chain
-from six import string_types
 
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
@@ -76,11 +76,11 @@ class TrainParams(object):
             pool_datasets=None,
             pool_split=None,
             # Sampling:
+            sampler='uniform',
             sampler_params=None,
             augment_motion=False,
             motion_params=None,
             # Evaluation:
-            eval_samplers='full',  # Comma-separated list of sampler names.
             eval_tre_num=None,
             max_eval_videos=None,
             # Training process:
@@ -202,8 +202,6 @@ def train(
     #     params.train_dataset = None
     #     params.val_dataset = None
 
-    eval_samplers = params.eval_samplers.split(',')
-
     if use_tmp_data_dir:
         untar = True
         data_dir = os.path.join(tmp_dir, 'data')
@@ -226,21 +224,24 @@ def train(
     create_iter_model_fn = partial(siamfc.SiamFC, params=params.model_params)
     # model_properties = iter_model_fn.derived_properties()
 
-    streams, eval_sample_fns = make_samplers(
-        datasets,
-        seed=params.seed,
-        ntimesteps=params.ntimesteps,
-        sampler_params=params.sampler_params,
-        train_dataset=params.train_dataset,
-        val_dataset=params.val_dataset,
-        augment_motion=params.augment_motion,
-        motion_params=params.motion_params,
-        eval_datasets=params.eval_datasets,
-        eval_samplers=eval_samplers,
-        max_eval_videos=params.max_eval_videos)
+    TRAIN_VAL = ('train', 'val')
+    video_sampler_specs = {'train': params.train_dataset, 'val': params.val_dataset}
+    example_streams = {
+        k: _make_example_stream(video_sampler_spec=video_sampler_specs[k],
+                                datasets=datasets,
+                                example_sampler=params.sampler,
+                                example_sampler_params=params.sampler_params,
+                                seed=params.seed)
+        for k in TRAIN_VAL}
+    eval_sample_fns = {
+        dataset_name: functools.partial(_make_sequence_stream,
+                                        datasets[dataset_name],
+                                        params.seed,
+                                        params.max_eval_videos)
+        for dataset_name in params.eval_datasets}
 
     train_series, track_series = train_model_data(
-        params, dir, create_iter_model_fn, streams, eval_sample_fns,
+        params, dir, create_iter_model_fn, example_streams, eval_sample_fns,
         # only_evaluate_existing=only_evaluate_existing,
         **kwargs)
 
@@ -259,6 +260,29 @@ def train(
 
     return result
 
+
+def _make_sequence_stream(dataset, seed, max_num):
+    video_sampler = sample.EpochSampler(datasets[names], rand=rand, repeat=False)
+    track_ids = video_sampler.sample()
+    if max_num is not None and max_num > 0:
+        track_ids = itertools.islice(track_ids, max_num)
+    for track_id in track_ids:
+        yield sample.extract_sequence_from_dataset(dataset, track_id)
+
+
+def _make_example_stream(video_sampler_spec,
+                         datasets,
+                         example_sampler,
+                         example_sampler_params,
+                         seed):
+    video_sampler = _make_video_sampler(video_sampler_spec, datasets, params.seed, repeat=True)
+    sampler_dataset = video_sampler.dataset()
+
+    rand = np.random.RandomState(seed)
+    example_fn = partial(sample.EXAMPLE_FNS[example_sampler], **example_sampler_params)
+    for track_id in video_sampler.sample():
+        seq = sample.extract_sequence_from_dataset(sampler_dataset, track_id)
+        yield example_fn(rand, seq)
 
 
 def make_train_result(model_properties, train_series, track_series):
@@ -317,67 +341,38 @@ def _set_global_seed(seed):
     random.seed(seed)
 
 
-def make_samplers(datasets, seed, ntimesteps, sampler_params, train_dataset, val_dataset,
-                  augment_motion, motion_params,
-                  eval_datasets, eval_samplers, max_eval_videos):
-    frame_sampler_presets = {
-        'full': partial(sample.FrameSampler, kind='full'),
-        'train': partial(sample.FrameSampler, ntimesteps=ntimesteps, **sampler_params)}
-
-    # Create infinite example streams for train and val.
-    # Use a separate random number generator for each sampler as they may run in parallel.
-    sampler_specs = {'train': train_dataset, 'val': val_dataset}
-    streams = {}
-    for i, mode in enumerate(['train', 'val']):
-        if sampler_specs[mode] is None:
-            continue
-        # Use a different seed for train and val, in particular for augmentation!
-        postproc_fn = (
-            None if not augment_motion else
-            partial(motion.augment, rand=np.random.RandomState(seed + i), **motion_params))
-        streams[mode] = sample.sample(
-            _make_video_sampler(sampler_specs[mode], datasets), frame_sampler_presets['train'](),
-            postproc_fn=postproc_fn, rand=np.random.RandomState(seed + i), infinite=True)
-    # Create functions to sample finite sets for evaluation.
-    eval_sample_fns = {
-        # Give each dataset its own random stream.
-        (d + '-' + s): partial(
-            sample.sample, sample.EpochSampler(datasets[d]), frame_sampler_presets[s](),
-            rand=np.random.RandomState(seed),
-            infinite=False, max_num=max_eval_videos)
-        for d in eval_datasets for s in eval_samplers}
-    return streams, eval_sample_fns
-
-
 def _datasets_in_sampler(names):
     if names is None:
         return []
-    if isinstance(names, string_types):
+    if isinstance(names, six.string_types):
         return [names]
     if isinstance(names, list):
         assert len(names) > 0
-        if all(isinstance(name, string_types) for name in names):
+        if all(isinstance(name, six.string_types) for name in names):
             return names
         elif all(_is_pair(elem) for elem in names):
             return [name for _, name in names]
     raise ValueError('invalid structure: {}'.format(repr(names)))
 
 
-def _make_video_sampler(names, datasets):
+def _make_video_sampler(names, datasets, seed, repeat):
     '''
     Args:
         names: string (EpochSampler), list of strings (EpochSampler of Concat) or
             list of float-string-pairs (MixtureSampler).
     '''
-    if isinstance(names, string_types):
-        return sample.EpochSampler(datasets[names])
+    rand = np.random.RandomState(seed)
+    if isinstance(names, six.string_types):
+        return sample.EpochSampler(datasets[names], rand=rand, repeat=repeat)
     if isinstance(names, list):
         assert len(names) > 0
-        if all(isinstance(name, string_types) for name in names):
+        if all(isinstance(name, six.string_types) for name in names):
             concat = data.Concat({name: datasets[name] for name in names})
-            return sample.EpochSampler(concat)
+            return sample.EpochSampler(concat, rand=rand, repeat=repeat)
         elif all(_is_pair(elem) for elem in names):
-            samplers = {name: sample.EpochSampler(datasets[name]) for _, name in names}
+            samplers = {
+                name: sample.EpochSampler(datasets[name], rand=rand, repeat=True)
+                for _, name in names}
             weights = {name: weight for weight, name in names}
             return sample.MixtureSampler(samplers, weights)
     raise ValueError('invalid structure: {}'.format(repr(names)))
@@ -467,7 +462,6 @@ def train_model_data(
         mode: (
             _dataset_from_sequence_generator(partial(_identity, sequences[mode]),
                                              sequence_len=params.ntimesteps + 1)
-            .map(_sequence_to_example_unroll)
             .map(partial(_load_images_unroll,
                          resize=params.resize_online,
                          size=(params.imheight, params.imwidth),
