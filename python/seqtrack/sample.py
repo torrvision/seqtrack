@@ -115,6 +115,10 @@ class MixtureSampler(object):
 
 
 class Sequence(object):
+    '''Describes a sequence with optional labels.
+
+    The sequence spans frames `0 <= t < len(sequence)`.
+    '''
 
     def __init__(self,
                  image_files,
@@ -132,13 +136,26 @@ class Sequence(object):
         return len(self.image_files)
 
 
+class InvalidExampleException(Exception):
+
+    def __init__(self, message):
+        self._message = message
+
+    def __str__(self):
+        return self._message
+
+
 def extract_sequence_from_dataset(dataset, track_id, times=None):
+    '''Constructs a Sequence object for a track in a dataset.
+
+    If `times` is not specified, the sequence extends from the first to the last valid frame.
+    '''
     labels = dataset.labels(track_id)
     if not times:
         # Default: Use all frames between first and last valid frame.
         valid_times = [t for t, label in labels.items() if _is_present(label)]
         if not valid_times:
-            raise RuntimeError('sequence contains no labels')
+            raise InvalidExampleException('sequence contains no labels')
         t_start = min(valid_times)
         t_stop = max(valid_times) + 1
         times = list(range(t_start, t_stop))
@@ -167,10 +184,12 @@ def _rect_from_label(label):
 
 
 def select_frames(seq, times):
+    '''Extracts a subset of times from a sequence.'''
     try:
         image_files = [seq.image_files[t] for t in times]
     except IndexError as ex:
-        raise RuntimeError('invalid times (sequence length {}): {}'.format(len(seq), str(times)))
+        raise InvalidExampleException(
+            'invalid times (sequence length {}): {}'.format(len(seq), str(times)))
     return Sequence(
         image_files=image_files,
         valid_set=set(i for i, t in enumerate(times) if t in seq.valid_set),
@@ -183,9 +202,9 @@ def select_frames(seq, times):
 def sequence_to_example(seq):
     is_valid = [(t in seq.valid_set) for t in range(len(seq))]
     if not is_valid[0]:
-        raise RuntimeError('first label is not valid')
+        raise InvalidExampleException('first label is not valid')
     if not any(is_valid[1:]):
-        raise RuntimeError('no valid labels after first label')
+        raise InvalidExampleException('no valid labels after first label')
 
     return itermodel.ExampleUnroll(
         features_init={
@@ -203,7 +222,8 @@ def sequence_to_example(seq):
     )
 
 
-def example_fn_from_times_fn(times_fn):
+def _example_fn_from_times_fn(times_fn):
+    '''Transforms a function that returns times into one that returns an example.'''
     def f(rand, seq, **kwargs):
         times = times_fn(rand, len(seq), seq.valid_set, **kwargs)
         return sequence_to_example(select_frames(seq, times))
@@ -211,14 +231,22 @@ def example_fn_from_times_fn(times_fn):
 
 
 def times_uniform(rand, seq_len, valid_set, ntimesteps):
+    '''Chooses a random set of valid frames.
+
+    We use the data structure of a sequence, but the frames have no order.
+    '''
     if len(valid_set) < 2:
-        raise RuntimeError('not enough labels: {}'.format(len(valid_set)))
+        raise InvalidExampleException('not enough labels: {}'.format(len(valid_set)))
     valid_frames = sorted(valid_set)
     times = rand.choice(valid_frames, size=ntimesteps + 1, replace=True)
     return times
 
 
 def times_regular(rand, seq_len, valid_set, freq):
+    '''Samples a sub-sequence with a fixed frequency.
+
+    May choose a sub-sequence with no valid frames except the first.
+    '''
     # Sample frames with `freq`, regardless of label
     # (only the first frame need to have label).
     # Note also that the returned frames can have length < ntimesteps+1.
@@ -229,18 +257,26 @@ def times_regular(rand, seq_len, valid_set, freq):
 
 
 def times_freq_range(rand, seq_len, valid_set, ntimesteps, min_freq, max_freq, use_log):
+    '''Samples a sub-sequence with a frequency in [min_freq, max_freq].
+
+    Chooses frames `a + round(freq * i)` for `i` in [0, 1, ..., ntimesteps].
+    The first frame `a` must be valid.
+    Raises an exception if there are no such sub-sequences with `freq >= min_freq`.
+    May choose a sub-sequence where all subsequent frames are not valid.
+    '''
     # Choose frames:
     #   a, round(a+freq), round(a+2*freq), round(a+3*freq), ...
     # Therefore, for frames [0, ..., ntimesteps], we need:
     #   a + ntimesteps*freq <= seq_len - 1
-    # The smallest possible value of a is 0
-    #   0 + ntimesteps*freq <= seq_len - 1
-    #   ntimesteps*freq <= seq_len - 1
-    #   freq <= (seq_len - 1) / ntimesteps
+    # The smallest possible value of a is t_first = min(valid_set).
+    #   t_first + ntimesteps*freq <= seq_len - 1
+    #   ntimesteps*freq <= seq_len - 1 - t_first
+    #   freq <= (seq_len - 1 - t_first) / ntimesteps
+    t_first = min(valid_set)
     u = min_freq
-    v = min(max_freq, (seq_len - 1) / ntimesteps)
+    v = min(max_freq, (seq_len - 1 - t_first) / ntimesteps)
     if not u <= v:
-        raise RuntimeError('cannot satisfy freqency range')
+        raise InvalidExampleException('cannot satisfy freqency range')
     if use_log:
         freq = math.exp(rand.uniform(math.log(u), math.log(v)))
     else:
@@ -253,30 +289,24 @@ def times_freq_range(rand, seq_len, valid_set, ntimesteps, min_freq, max_freq, u
     return times
 
 
-uniform = example_fn_from_times_fn(times_uniform)
-regular = example_fn_from_times_fn(times_regular)
-freq_range = example_fn_from_times_fn(times_freq_range)
+def times_pair_range(rand, seq_len, valid_set, low, high):
+    '''Samples two valid frames whose distance apart is in [low, high).
 
-EXAMPLE_FNS = {name: globals()[name] for name in  [
-    'uniform',
-    'regular',
-    'freq_range',
-]}
+    Raises an exception if no such pairs exist.
 
-
-def choose_pair_uniform_range(rand, seq, is_valid, low, high):
-    '''Samples two frames whose distance apart is in [low, high).'''
-    n = len(seq)
-    subset = sorted(seq.valid_set)
-    if len(subset) < 2:
-        # Need at least two labels.
-        return None
+    The first frame is chosen uniformly from the feasible set (of frames with a partner).
+    The second frame is chosen uniformly from the feasible set (of partners).
+    '''
+    # Need at least two labels.
+    if len(valid_set) < 2:
+        raise InvalidExampleException('not enough labels: {}'.format(len(valid_set)))
+    subset = sorted(valid_set)
     # |x - y| is in [gap_min, gap_max].
     max_dist = subset[-1] - subset[0]
     min_dist = min(b - a for a, b in zip(subset, subset[1:]))
 
-    if high is None or high > n:
-        high = n  # Max distance is n - 1.
+    if high is None or high > seq_len:
+        high = seq_len  # Max distance is seq_len - 1.
     if low is None or low < 1:
         low = 1
     assert low < high
@@ -285,65 +315,61 @@ def choose_pair_uniform_range(rand, seq, is_valid, low, high):
     # If (low <=) high - 1 < min_dist (<= max_dist), there are no pairs.
     # If (min_dist <=) max_dist < low (<= high - 1), there are no pairs.
     if high - 1 < min_dist or max_dist < low:
-        return None
+        raise InvalidExampleException('cannot satisfy range')
     # # To avoid these situations, clip the interval to [min_dist, max_dist].
     # assert min_dist <= max_dist
     # low = max(min_dist, min(max_dist, low))
     # high = max(min_dist, min(max_dist, high - 1)) + 1
 
     # Obtain a list of all frames that have a partner in [low, high + 1).
-    candidates_a = find_with_neighbor(is_valid, low, high)
+    candidates_a = find_with_subsequent_within(seq_len, valid_set, low, high)
     # Uniformly choose frame from candidates.
     a = rand.choice(candidates_a)
-    candidates_b = [t for t in range(a + low, a + high) if is_valid[t]]
+    candidates_b = [t for t in range(a + low, a + high) if (t in valid_set)]
     assert len(candidates_b) > 0
     # Uniformly choose partner from candidates.
     b = rand.choice(candidates_b)
 
     # Flip order.
     # a, b = rand.choice([(a, b), (b, a)])
-    return (a, b)
+    return [a, b]
 
 
-def find_with_neighbor(is_valid, low, high):
+def find_with_subsequent_within(seq_len, valid_set, low, high):
     '''Finds the elements that have a subsequent neighbour with distance in [low, high).
 
-    Finds the indices i such that is_valid[i] is true and
-    there exists j such that j - i in [low, high) and is_valid[j] is true.
+    Finds the indices i such that (i in valid_set) and
+    there exists j such that j - i in [low, high) and (j in valid_set) is true.
 
-    Args:
-        is_valid: List of bools with length n.
-
-    >>> find_with_neighbor([0] * 4, 1, 3)
+    >>> find_with_subsequent_within(4, set(), 1, 3)
     []
-    >>> find_with_neighbor([1] * 4, 1, 4)
+    >>> find_with_subsequent_within(4, set(range(4)), 1, 4)
     [0, 1, 2]
-    >>> find_with_neighbor([1] * 4, 2, 4)
+    >>> find_with_subsequent_within(4, set(range(4)), 2, 4)
     [0, 1]
-    >>> find_with_neighbor([1, 0, 1, 0, 1], 1, 2)
+    >>> find_with_subsequent_within(5, set([0, 2, 4]), 1, 2)
     []
-    >>> find_with_neighbor([1, 0, 1, 0, 1], 1, 3)
+    >>> find_with_subsequent_within(5, set([0, 2, 4]), 1, 3)
     [0, 2]
-    >>> find_with_neighbor([1, 1, 0, 0, 1, 1], 2, 3)
+    >>> find_with_subsequent_within(6, set([0, 1, 4, 5]), 2, 3)
     []
-    >>> find_with_neighbor([1, 1, 0, 0, 1, 1], 1, 3)
+    >>> find_with_subsequent_within(6, set([0, 1, 4, 5]), 1, 3)
     [0, 4]
-    >>> find_with_neighbor([1, 1, 0, 0, 1, 1], 1, 4)
+    >>> find_with_subsequent_within(6, set([0, 1, 4, 5]), 1, 4)
     [0, 1, 4]
-    >>> find_with_neighbor([0, 1, 0, 0, 1, 0, 0, 0, 1, 0], 1, 4)
+    >>> find_with_subsequent_within(10, set([1, 4, 8]), 1, 4)
     [1]
-    >>> find_with_neighbor([0, 1, 0, 0, 0, 1, 0, 0, 1, 0], 1, 4)
+    >>> find_with_subsequent_within(10, set([1, 5, 8]), 1, 4)
     [5]
-    >>> find_with_neighbor([1, 1, 0, 1], 2, 3)
+    >>> find_with_subsequent_within(4, set([0, 1, 3]), 2, 3)
     [1]
     '''
 
-    n = len(is_valid)
     if low is None:
         low = 1
     assert low >= 1
     if high is None:
-        high = n
+        high = seq_len
     # If |x - y| in [low, high) and y > x
     # then y - x in [low, high).
     # This is equivalent to y in [x + low, x + high).
@@ -352,70 +378,79 @@ def find_with_neighbor(is_valid, low, high):
     a = low
     b = high
     # Initialize count.
-    count = sum(1 for y in range(a, b) if is_valid[y])
-    # Continue until [a, b) is outside [0, n)
-    while a < n:
-        if is_valid[x] and count > 0:
+    count = sum(1 for y in range(a, b) if (y in valid_set))
+    # Continue until [a, b) is outside [0, seq_len)
+    while a < seq_len:
+        if (x in valid_set) and count > 0:
             result.append(x)
         # Advance one position.
         x += 1
         # Lose element a.
-        if is_valid[a]:
+        if (a in valid_set):
             count -= 1
         # Gain element b.
-        if b < n and is_valid[b]:
+        if b < seq_len and (b in valid_set):
             count += 1
         a += 1
         b += 1
     return result
 
 
-def choose_disjoint_uniform(rand, is_valid, k):
-    '''Chooses an initial frame and a subsequent consecutive sequence.
+def times_disjoint(rand, seq_len, valid_set, ntimesteps):
+    '''Samples an initial frame and a consecutive sequence.
+    The initial frame will not occur within the consecutive sequence.
+    The first frame of the sequence must be valid, and it should contain another valid frame.
 
-    At least one of the consecutive frames must have a valid label.
-
-    Note that some algorithms might require a rectangle even if the label is not valid.
-    This can be achieved by interpolating between valid frames or filling with the previous value.
-
-    >>> choose_disjoint_uniform(np.random, [1, 0, 0, 1], 2)
+    Examples of (deterministic) edge cases:
+    >>> sorted(times_disjoint(np.random, 3, set(range(3)), 2))
+    [0, 1, 2]
+    >>> times_disjoint(np.random, 4, set([0, 2, 3]), 2)
     [0, 2, 3]
-    >>> choose_disjoint_uniform(np.random, [1, 1], 1)
-    [0, 1]
-    >>> choose_disjoint_uniform(np.random, [1, 1, 1, 1], 3)
-    [0, 1, 2, 3]
-    >>> choose_disjoint_uniform(np.random, [1, 0, 0, 1], 3)
-    [0, 1, 2, 3]
-    >>> choose_disjoint_uniform(np.random, [1, 1, 0, 0], 3)
-    [0, 1, 2, 3]
-    >>> choose_disjoint_uniform(np.random, [0, 0, 1, 0, 1], 2)
-    [2, 3, 4]
+    >>> times_disjoint(np.random, 4, set([0, 1, 3]), 2)
+    [3, 0, 1]
+    >>> times_disjoint(np.random, 8, set([2, 5, 7]), 3)
+    [2, 5, 6, 7]
+    >>> times_disjoint(np.random, 8, set([0, 4, 5]), 4)
+    [0, 4, 5, 6, 7]
+    >>> times_disjoint(np.random, 8, set([0, 4, 5, 6]), 4)
+    [0, 4, 5, 6, 7]
     '''
-    # TODO: Could use mocking to better test edge cases above?
-    # (have `rand` return first or last)
+    assert ntimesteps >= 2
+    # Find all candidates for the consecutive part.
+    starts = sorted(valid_set)
+    # Require that the sub-sequence does not extend beyond the length of the sequence.
+    starts = [s for s in starts if s + ntimesteps - 1 < seq_len]
+    # Require that there is at least one other valid frame within the sub-sequence.
+    is_valid = [int(t in valid_set) for t in range(seq_len)]
+    # num_valid_until[i] = sum(is_valid[:i])
+    # sum(is_valid[i:j]) = sum(is_valid[:j]) - sum(is_valid[:i])
+    #                    = num_valid_until[j] - num_valid_until[i]
+    num_valid_until = np.cumsum([0] + is_valid)
+    num_in_subseq_at = {s: num_valid_until[s + ntimesteps] - num_valid_until[s] for s in starts}
+    starts = [s for s in starts if num_in_subseq_at[s] >= 2]
+    # Require that there is at least one valid frame outside the sub-sequence.
+    num_valid = len(is_valid)
+    starts = [s for s in starts if num_valid - num_in_subseq_at[s] >= 1]
+    if not starts:
+        raise InvalidExampleException('no examples exist')
+    s = rand.choice(starts)
+    subseq = list(range(s, s + ntimesteps))
 
-    n = len(is_valid)
-    subset = [t for t in range(n) if is_valid[t]]
-    if len(subset) < 2:
-        return None  # Need at least 2 frames with labels.
+    others = valid_set.difference(subseq)
+    t = rand.choice(sorted(others))
+    return [t] + subseq
 
-    # We need to find frames t0, t1, t1 + 1, ..., t1 + k - 1.
-    # The first frame must come before the last k frames and the last valid label.
-    t0_high = min(n - k, subset[-1])
-    if not subset[0] < t0_high:
-        return None  # No frames with labels that satisfy the constraint.
-    candidates_t0 = [t for t in subset if t < t0_high]
-    t0 = rand.choice(candidates_t0)
 
-    # Find another frame with a label after t0.
-    # This could become any of t1, ..., t1 + k - 1.
-    candidates_u = [t for t in subset if t > t0]
-    u = rand.choice(candidates_u)
-    # Now we choose a range of length n that contains u.
-    # t1 in [u - k + 1, u] and t1 in [t0 + 1, n - k]
-    t1_low = max(u - k + 1, t0 + 1)
-    t1_high = min(u, n - k) + 1
-    assert t1_low < t1_high
-    t1 = rand.randint(t1_low, t1_high)
+uniform = _example_fn_from_times_fn(times_uniform)
+regular = _example_fn_from_times_fn(times_regular)
+freq_range = _example_fn_from_times_fn(times_freq_range)
+pair_range = _example_fn_from_times_fn(times_pair_range)
+disjoint = _example_fn_from_times_fn(times_disjoint)
 
-    return [t0] + [t1 + i for i in range(k)]
+EXAMPLE_FNS = {name: globals()[name] for name in  [
+    'uniform',
+    'regular',
+    'freq_range',
+    'pair_range',
+    'disjoint',
+]}

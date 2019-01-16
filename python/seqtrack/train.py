@@ -285,7 +285,7 @@ def _make_example_stream(video_sampler_spec,
         seq = sample.extract_sequence_from_dataset(sampler_dataset, track_id)
         try:
             example = example_fn(rand, seq)
-        except RuntimeError as ex:
+        except sample.InvalidExampleException as ex:
             logger.info('failed to extract an example for track "%s": %s', track_id, ex)
             continue
         yield example
