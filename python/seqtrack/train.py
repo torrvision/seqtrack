@@ -1068,7 +1068,7 @@ def _make_iter_placeholders(batch_size=None):
             'valid': tf.placeholder(tf.bool, [batch_size], name='valid'),
             'rect': tf.placeholder(tf.float32, [batch_size, 4], name='rect'),
         }
-    return itermodel.ExampleIter(
+    return sample.ExampleStep(
         features_init=features_init,
         features_curr=features_curr,
         labels_curr=labels_curr,
@@ -1102,7 +1102,7 @@ def _dataset_from_example_generator(examples, ntimesteps):
     Returns:
         tf.data.Dataset
     '''
-    types = itermodel.ExampleUnroll(
+    types = sample.ExampleSequence(
         features_init={
             'image': {'file': tf.string},
             'aspect': tf.float32,
@@ -1116,7 +1116,7 @@ def _dataset_from_example_generator(examples, ntimesteps):
             'rect': tf.float32,
         },
     )
-    shapes = itermodel.ExampleUnroll(
+    shapes = sample.ExampleSequence(
         features_init={
             'image': {'file': []},
             'aspect': [],
@@ -1153,10 +1153,10 @@ def _sequence_to_example_unroll(sequence):
         sequence: Dict (defined in `sample`)
 
     Returns:
-        itermodel.ExampleUnroll
+        sample.ExampleSequence
     '''
     # TODO: Assert `sequence['label_is_valid'][0]`?
-    return itermodel.ExampleUnroll(
+    return sample.ExampleSequence(
         features_init={
             'image': {'file': sequence['image_files'][0]},
             'aspect': sequence['aspect'],
@@ -1175,10 +1175,10 @@ def _sequence_to_example_unroll(sequence):
 def _load_images_unroll(with_files, **kwargs):
     '''
     Args:
-        with_files: itermodel.ExampleUnroll
+        with_files: sample.ExampleSequence
 
     Returns:
-        itermodel.ExampleUnroll
+        sample.ExampleSequence
     '''
     # Load init image.
     features_init = dict(with_files.features_init)
@@ -1190,16 +1190,16 @@ def _load_images_unroll(with_files, **kwargs):
     features['image'] = {
         'data': load_and_resize_images(features['image']['file'], **kwargs)
     }
-    return itermodel.ExampleUnroll(features_init, features, with_files.labels)
+    return sample.ExampleSequence(features_init, features, with_files.labels)
 
 
 def _load_images_iter(with_files, **kwargs):
     '''
     Args:
-        with_files: itermodel.ExampleIter
+        with_files: sample.ExampleStep
 
     Returns:
-        itermodel.ExampleIter
+        sample.ExampleStep
     '''
     # Load init image.
     features_init = dict(with_files.features_init)
@@ -1211,7 +1211,7 @@ def _load_images_iter(with_files, **kwargs):
     features_curr['image'] = {
         'data': load_and_resize_images(features_curr['image']['file'], **kwargs)
     }
-    return itermodel.ExampleIter(features_init, features_curr, with_files.labels_curr)
+    return sample.ExampleStep(features_init, features_curr, with_files.labels_curr)
 
 
 def load_and_resize_images(image_files, resize=False, size=None, method='bilinear',

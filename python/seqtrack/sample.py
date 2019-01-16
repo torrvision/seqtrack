@@ -52,7 +52,6 @@ logger = logging.getLogger(__name__)
 
 from seqtrack import data
 from seqtrack import geom_np
-from seqtrack.models import itermodel
 import trackdat
 from trackdat.dataset import is_present as _is_present
 
@@ -136,13 +135,19 @@ class Sequence(object):
         return len(self.image_files)
 
 
-class InvalidExampleException(Exception):
-
-    def __init__(self, message):
-        self._message = message
-
-    def __str__(self):
-        return self._message
+def select_frames(seq, times):
+    '''Extracts a subset of times from a sequence.'''
+    try:
+        image_files = [seq.image_files[t] for t in times]
+    except IndexError as ex:
+        raise RuntimeError('invalid times (sequence length {}): {}'.format(len(seq), str(times)))
+    return Sequence(
+        image_files=image_files,
+        valid_set=set(i for i, t in enumerate(times) if t in seq.valid_set),
+        rects=[seq.rects[t] for t in times],
+        aspect=seq.aspect,
+        name=seq.name,
+    )
 
 
 def extract_sequence_from_dataset(dataset, track_id, times=None):
@@ -155,7 +160,7 @@ def extract_sequence_from_dataset(dataset, track_id, times=None):
         # Default: Use all frames between first and last valid frame.
         valid_times = [t for t, label in labels.items() if _is_present(label)]
         if not valid_times:
-            raise InvalidExampleException('sequence contains no labels')
+            raise RuntimeError('sequence contains no labels')
         t_start = min(valid_times)
         t_stop = max(valid_times) + 1
         times = list(range(t_start, t_stop))
@@ -183,30 +188,43 @@ def _rect_from_label(label):
     return geom_np.make_rect(min_pt, max_pt)
 
 
-def select_frames(seq, times):
-    '''Extracts a subset of times from a sequence.'''
-    try:
-        image_files = [seq.image_files[t] for t in times]
-    except IndexError as ex:
-        raise InvalidExampleException(
-            'invalid times (sequence length {}): {}'.format(len(seq), str(times)))
-    return Sequence(
-        image_files=image_files,
-        valid_set=set(i for i, t in enumerate(times) if t in seq.valid_set),
-        rects=[seq.rects[t] for t in times],
-        aspect=seq.aspect,
-        name=seq.name,
-    )
+ExampleSequence = collections.namedtuple('ExampleSequence', [
+    'features_init',
+    'features',
+    'labels',
+])
+
+
+ExampleStep = collections.namedtuple('ExampleStep', [
+    'features_init',
+    'features_curr',
+    'labels_curr',
+])
+
+
+class InvalidExampleException(Exception):
+
+    def __init__(self, message):
+        self._message = message
+
+    def __str__(self):
+        return self._message
 
 
 def sequence_to_example(seq):
+    '''Turns a sequence into an example.
+
+    The first label must be valid.
+    There must be at least one valid label in the rest of the sequence.
+    Otherwise an `InvalidExampleException` will be raised.
+    '''
     is_valid = [(t in seq.valid_set) for t in range(len(seq))]
     if not is_valid[0]:
         raise InvalidExampleException('first label is not valid')
     if not any(is_valid[1:]):
         raise InvalidExampleException('no valid labels after first label')
 
-    return itermodel.ExampleUnroll(
+    return ExampleSequence(
         features_init={
             'image': {'file': seq.image_files[0]},
             'aspect': seq.aspect,

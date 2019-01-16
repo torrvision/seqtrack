@@ -7,17 +7,11 @@ import tensorflow as tf
 nest = tf.contrib.framework.nest
 
 from seqtrack import helpers
+from seqtrack import sample
 
 
 # Do not include `run_opts` in ExampleXxx because examples are what gets batched.
 # That is, each batch contains a collection of examples, but `run_opts` is global.
-
-
-ExampleUnroll = collections.namedtuple('ExampleUnroll', [
-    'features_init',
-    'features',
-    'labels',
-])
 
 
 OperationsUnroll = collections.namedtuple('OperationsUnroll', [
@@ -33,7 +27,7 @@ def instantiate_unroll(iter_model_fn, example, run_opts, scope='model'):
 
     Args:
         iter_model_fn: IterModel
-        example: ExampleUnroll
+        example: sample.ExampleSequence
 
     Returns:
         OperationsUnroll
@@ -73,13 +67,6 @@ def _assert_no_keys_in_common(a, b):
         raise ValueError('keys in common: {}'.format(str(intersection)))
 
 
-ExampleIter = collections.namedtuple('ExampleIter', [
-    'features_init',
-    'features_curr',
-    'labels_curr',
-])
-
-
 OperationsIterAssign = collections.namedtuple('OperationsIterAssign', [
     'assign_state_init',
     'assign_state_curr',
@@ -92,7 +79,7 @@ def instantiate_iter_assign(iter_model_fn, example, run_opts, local_scope, scope
 
     Args:
         iter_model_fn: IterModel
-        example: ExampleIter
+        example: sample.ExampleStep
 
     Returns:
         OperationsIterAssign
@@ -154,7 +141,7 @@ def instantiate_iter_feed(iter_model_fn, example, run_opts, scope='model'):
 
     Args:
         iter_model_fn: IterModel
-        example: ExampleIter
+        example: sample.ExampleStep
 
     Returns:
         OperationsIterFeed
@@ -187,7 +174,7 @@ class TrackerAssign(object):
     def __init__(self, example, ops):
         '''
         Args:
-            example: ExampleIter
+            example: sample.ExampleStep
             ops: OperationsIterAssign
         '''
         self.example = example
@@ -212,7 +199,7 @@ class TrackerFeed(object):
     def __init__(self, example, ops):
         '''
         Args:
-            example: ExampleIter
+            example: sample.ExampleStep
             ops: OperationsIterFeed
         '''
         self.example = example
