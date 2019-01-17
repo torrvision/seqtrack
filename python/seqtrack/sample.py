@@ -324,11 +324,14 @@ def times_pair_range(rand, seq_len, valid_set, low, high):
     max_dist = subset[-1] - subset[0]
     min_dist = min(b - a for a, b in zip(subset, subset[1:]))
 
-    if high is None or high > seq_len:
+    if low is not None and high is not None:
+        assert low < high
+    if high is None:
         high = seq_len  # Max distance is seq_len - 1.
-    if low is None or low < 1:
+    if low is None:
         low = 1
-    assert low < high
+    high = min(seq_len, high)
+    low = max(1, low)
 
     # Does [low, high) = [low, high - 1] intersect [min_dist, max_dist]?
     # If (low <=) high - 1 < min_dist (<= max_dist), there are no pairs.
@@ -342,6 +345,8 @@ def times_pair_range(rand, seq_len, valid_set, low, high):
 
     # Obtain a list of all frames that have a partner in [low, high + 1).
     candidates_a = find_with_subsequent_within(seq_len, valid_set, low, high)
+    if not candidates_a:
+        raise InvalidExampleException('no pairs in desired range: [{}, {})'.format(low, high))
     # Uniformly choose frame from candidates.
     a = rand.choice(candidates_a)
     candidates_b = [t for t in range(a + low, a + high) if (t in valid_set)]
