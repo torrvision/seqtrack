@@ -78,6 +78,7 @@ class TrainParams(object):
             # Sampling:
             sampler='uniform',
             sampler_params=None,
+            example_type='CONSECUTIVE',
             augment_motion=False,
             motion_params=None,
             # Evaluation:
@@ -492,9 +493,11 @@ def train_model_data(
     # example = _perform_color_augmentation(example, args)
     metric_vars = {}
 
-    iter_model_fn = create_iter_model_fn(mode=tf.estimator.ModeKeys.TRAIN)
+    iter_model_fn = create_iter_model_fn(
+        mode=tf.estimator.ModeKeys.TRAIN,
+        example_type=getattr(itermodel.ExampleTypeKeys, example_type))
     with tf.variable_scope('model', reuse=False) as vs:
-        ops = itermodel.instantiate_unroll(iter_model_fn, example, run_opts=run_opts, scope=vs)
+        ops = iter_model_fn.train(example, run_opts=run_opts, scope=vs)
         # outputs, losses, init_state, final_state = model_fn.instantiate(
         #     example_input, run_opts, enable_loss=True,
         #     image_summaries_collections=['IMAGE_SUMMARIES'])

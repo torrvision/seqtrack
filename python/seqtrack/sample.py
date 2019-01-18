@@ -189,6 +189,38 @@ def _rect_from_label(label):
     return geom_np.make_rect(min_pt, max_pt)
 
 
+class ExampleTypeKeys(object):
+    '''Types of example for training.
+
+    Different examples may have different `features` and `labels`.
+
+    CONSECUTIVE:
+    The frames represent consecutive frames of video.
+    features:
+        image_init: [b, h, w, c]
+        rect_init: [b, 4]
+        images:
+            data: [b, t, h, w, c]
+    labels:
+        valid: [b, t]
+        rects: [b, t, 4]
+
+    UNORDERED:
+    The images have no temporal relation.
+    The `features` and `labels` are the same as CONSECUTIVE.
+
+    SEPARATE_INIT:
+    The initial frame defines the appearance model.
+    But then this model should be used from the position in the next frame.
+    The `features` and `labels` are the same as CONSECUTIVE.
+    The first label should be valid.
+    '''
+
+    CONSECUTIVE = 'consecutive'
+    UNORDERED = 'unordered'
+    SEPARATE_INIT = 'separate_init'
+
+
 ExampleSequence = collections.namedtuple('ExampleSequence', [
     'features_init',
     'features',

@@ -17,8 +17,8 @@ from seqtrack import cnn
 from seqtrack import geom
 from seqtrack import helpers
 from seqtrack import lossfunc
-from seqtrack import models
 from seqtrack import receptive_field
+from seqtrack.models import itermodel
 
 from . import interface as models_interface
 from . import util
@@ -89,8 +89,15 @@ class SiamFC(object):
     Use either `train` or `start` and `next`.
     '''
 
-    def __init__(self, mode, params):
+    def __init__(self, mode, example_type, params):
+        '''
+        Args:
+            mode: tf.estimator.ModeKeys.{TRAIN, EVAL, PREDICT}
+                Losses are not computed in PREDICT mode (no labels).
+            example_type: sample.ExampleTypeKeys.{CONSECUTIVE, UNORDERED, SEPARATE_INIT}
+        '''
         self.mode = mode
+        self.example_type = example_type
 
         params = helpers.update_existing_keys(default_params(), params)
         for key, value in params.items():
@@ -113,6 +120,49 @@ class SiamFC(object):
         self._info = {}
 
         # self._feature_saver = None
+
+    def train(self, example, run_opts, scope='model'):
+        '''
+        Args:
+            example: ExampleSequence
+
+        Returns: itermodel.OperationsUnroll
+        '''
+        if self.example_type in [sample.ExampleTypeKeys.CONSECUTIVE,
+                                 sample.ExampleTypeKeys.UNORDERED]:
+            # Use the default `instantiate_unroll` method.
+            return itermodel.instantiate_unroll(self, example, run_opts=run_opts, scope=scope)
+        elif self.example_type == sample.ExampleTypeKeys.SEPARATE_INIT:
+            # Obtain the appearance model from the first frame,
+            # then start tracking from the position in the second frame.
+            # The following code is copied and modified from `itermodel.instantiate_unroll`.
+            with tf.variable_scope(scope):
+                state_init = self.start(example.features_init, run_opts)
+                features = helpers.unstack_structure(example.features, axis=1)
+                labels = helpers.unstack_structure(example.labels, axis=1)
+                ntimesteps = len(features)
+                predictions = [None for _ in range(ntimesteps)]
+                losses = [None for _ in range(ntimesteps)]
+                state = state_init
+                for i in range(ntimesteps):
+                    # Reset the position in the first step!
+                    predictions[i], state, losses[i] = self.next(features[i], labels[i], state,
+                                                                 reset_position=(i == 0))
+                predictions = helpers.stack_structure(predictions, axis=1)
+                losses = helpers.stack_structure(losses, axis=0)
+                # Compute mean over frames.
+                losses = {k: tf.reduce_mean(v) for k, v in losses.items()}
+                state_final = state
+
+                extra_losses = self.end()
+                _assert_no_keys_in_common(losses, extra_losses)
+                losses.update(extra_losses)
+                return itermodel.OperationsUnroll(
+                    predictions=predictions,
+                    losses=losses,
+                    state_init=state_init,
+                    state_final=state_final,
+                )
 
     def _context_rect(self, rect, aspect, amount):
         template_rect, _ = _get_context_rect(
@@ -207,7 +257,7 @@ class SiamFC(object):
 
             # If the label is not valid, there will be no loss for this frame.
             # However, the input image may still be processed.
-            # Adopt the previous rectangle as the "ground-truth".
+            # In this case, adopt the previous rectangle as the "ground-truth".
             if self.mode in MODE_KEYS_SUPERVISED:
                 last_valid_gt_rect = tf.where(labels['valid'], labels['rect'], state['rect'])
             else:
@@ -215,12 +265,19 @@ class SiamFC(object):
             # When learning motion or tracking, use the previous rectangle.
             # Otherwise adopt the ground-truth as the previous rectangle
             # so that the object is in the center of the search area.
-            if self.learn_motion or self.mode == tf.estimator.ModeKeys.PREDICT:
+            if self.mode == tf.estimator.ModeKeys.PREDICT:
                 # Use previous position from state.
                 prev_target_rect = state['rect']
-            else:
-                # Use ground-truth rectangle as previous position
+            elif not self.learn_motion:
+                # Use ground-truth rectangle as previous position (centered training data).
                 prev_target_rect = last_valid_gt_rect
+            else:
+                # We are in a supervised mode and learn_motion is true.
+                if reset_position:
+                    # TODO: Assert that current rect is valid?
+                    prev_target_rect = labels['rect']
+                else:
+                    prev_target_rect = state['rect']
 
             # How to obtain template from previous state?
             if self.template_method == 'init':
@@ -282,26 +339,20 @@ class SiamFC(object):
 
             response = tf.verify_tensor_all_finite(response, 'output of xcorr is not finite')
 
-            # # Post-process scores.
-            # with tf.variable_scope('output', reuse=(self._num_frames > 0)):
-            #     if self.bnorm_after_xcorr:
-            #         response = slim.batch_norm(response, scale=True, is_training=self.is_training,
-            #                                    trainable=self.learn_appearance,
-            #                                    variables_collections=['siamese'])
-            #     else:
-            #         response = _affine_scalar(response, variables_collections=['siamese'])
-            #     if not self.learn_appearance:
-            #         # TODO: Prevent batch-norm updates as well.
-            #         # TODO: Set trainable=False for all variables above.
-            #         response = tf.stop_gradient(response)
-            #     if self.learn_motion:
-            #         response = _add_learnable_motion_prior(response)
+            # Post-process scores.
+            with tf.variable_scope('output', reuse=(self._num_frames > 0)):
+                if not self.learn_appearance:
+                    # TODO: Prevent batch-norm updates as well.
+                    # TODO: Set trainable=False for all variables above.
+                    response = tf.stop_gradient(response)
+                if self.learn_motion:
+                    response = _add_learnable_motion_prior(response)
 
             self._info.setdefault('response', []).append(
                 _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
 
             losses = {}
-            if self.mode in MODE_KEYS_SUPERVISED:
+            if self.mode in MODE_KEYS_SUPERVISED and not reset_position:
                 loss_name, loss = compute_loss(
                     response, self.target_size / rf_response.stride, **self.loss_params)
                 losses[loss_name] = loss
@@ -312,9 +363,12 @@ class SiamFC(object):
                 # TODO: Upsample to higher resolution than original image?
                 response_resize = cnn.get_value(cnn.upsample(
                     response, rf_response.stride, method=tf.image.ResizeMethod.BICUBIC))
-                response_final = apply_motion_penalty(
-                    response_resize, radius=self.window_radius * self.target_size,
-                    **self.window_params)
+                if self.learn_motion:
+                    response_final = response_resize
+                else:
+                    response_final = apply_motion_penalty(
+                        response_resize, radius=self.window_radius * self.target_size,
+                        **self.window_params)
                 translation, scale, in_arg_max = util.find_peak_pyr(
                     response_final, scales, eps_abs=self.arg_max_eps)
                 # Obtain translation in relative co-ordinates within search image.
@@ -725,7 +779,7 @@ def _get_context_rect(rect, context_amount, aspect, aspect_method):
 
 def _add_learnable_motion_prior(response, name='motion_prior'):
     with tf.name_scope(name) as scope:
-        response_shape = response.shape.as_list()[-3:]
+        response_shape = response.shape[-3:].as_list()
         assert response_shape[-1] == 1
         prior = slim.model_variable('prior', shape=response_shape, dtype=tf.float32,
                                     initializer=tf.zeros_initializer(dtype=tf.float32))
