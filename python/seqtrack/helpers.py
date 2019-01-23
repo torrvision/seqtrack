@@ -131,7 +131,7 @@ def merge_dims(x, a, b, name='merge_dims'):
         return y, restore_fn
 
 
-def split_dims(v, axis, shape, name='restore'):
+def split_dims(v, axis, shape, name='split'):
     '''Split single dimension `axis` into `shape`.'''
     with tf.name_scope(name) as scope:
         m = len(v.shape)
@@ -681,3 +681,9 @@ def get_unique_value(elems):
     values = set(iterator)
     value, = values
     return value
+
+
+def assert_no_keys_in_common(a, b):
+    intersection = set(a.keys()).intersection(set(b.keys()))
+    if intersection:
+        raise ValueError('keys in common: {}'.format(str(intersection)))

@@ -18,9 +18,9 @@ from seqtrack import geom
 from seqtrack import helpers
 from seqtrack import lossfunc
 from seqtrack import receptive_field
+from seqtrack import sample
 from seqtrack.models import itermodel
 
-from . import interface as models_interface
 from . import util
 from . import feature_nets
 from . import join_nets
@@ -89,7 +89,7 @@ class SiamFC(object):
     Use either `train` or `start` and `next`.
     '''
 
-    def __init__(self, mode, example_type, params):
+    def __init__(self, mode, params, example_type=None):
         '''
         Args:
             mode: tf.estimator.ModeKeys.{TRAIN, EVAL, PREDICT}
@@ -155,7 +155,7 @@ class SiamFC(object):
                 state_final = state
 
                 extra_losses = self.end()
-                _assert_no_keys_in_common(losses, extra_losses)
+                helpers.assert_no_keys_in_common(losses, extra_losses)
                 losses.update(extra_losses)
                 return itermodel.OperationsUnroll(
                     predictions=predictions,
@@ -352,10 +352,14 @@ class SiamFC(object):
                 _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
 
             losses = {}
-            if self.mode in MODE_KEYS_SUPERVISED and not reset_position:
+            if self.mode in MODE_KEYS_SUPERVISED:
                 loss_name, loss = compute_loss(
                     response, self.target_size / rf_response.stride, **self.loss_params)
-                losses[loss_name] = loss
+                if reset_position:
+                    # TODO: Something better!
+                    losses[loss_name] = tf.zeros_like(loss)
+                else:
+                    losses[loss_name] = loss
 
             if self.search_method == 'local':
                 # Use pyramid from loss function to obtain position.

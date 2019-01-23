@@ -495,7 +495,7 @@ def train_model_data(
 
     iter_model_fn = create_iter_model_fn(
         mode=tf.estimator.ModeKeys.TRAIN,
-        example_type=getattr(itermodel.ExampleTypeKeys, example_type))
+        example_type=getattr(sample.ExampleTypeKeys, params.example_type))
     with tf.variable_scope('model', reuse=False) as vs:
         ops = iter_model_fn.train(example, run_opts=run_opts, scope=vs)
         # outputs, losses, init_state, final_state = model_fn.instantiate(
