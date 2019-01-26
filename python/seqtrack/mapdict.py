@@ -83,7 +83,7 @@ def _dump_cache_for_each(items, dir, codec_name='json'):
     for k, v in items:
         fname = os.path.join(dir, k + codec.ext)
         with helpers.open_atomic_write(fname, 'wb' if codec.binary else 'w') as f:
-            codec.module.dump(v, f)
+            codec.dump(v, f)
         yield k, v
 
 
@@ -104,7 +104,7 @@ class CacheFilter(object):
             fname = os.path.join(self._dir, k + codec.ext)
             if os.path.exists(fname):
                 with open(fname, 'rb' if codec.binary else 'r') as f:
-                    result = codec.module.load(f)
+                    result = codec.load(f)
                 self.results.append((k, result))
             else:
                 yield k, v

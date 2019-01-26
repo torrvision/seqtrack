@@ -32,11 +32,24 @@ from seqtrack import geom
 from seqtrack import geom_np
 
 
-Codec = collections.namedtuple('Codec', ['module', 'ext', 'binary'])
+Codec = collections.namedtuple('Codec', ['dump', 'load', 'ext', 'binary'])
 
 CODECS = {
-    'json': Codec(module=json, ext='.json', binary=False),
-    'msgpack': Codec(module=msgpack, ext='.msgpack', binary=True),
+    'json': Codec(
+        dump=functools.partial(json.dump, sort_keys=True),
+        load=json.load,
+        ext='.json',
+        binary=False,
+    ),
+    'msgpack': Codec(
+        dump=msgpack.dump,
+        # https://stackoverflow.com/questions/48319949/msgpack-unserialising-dict-key-strings-to-bytes
+        # https://github.com/msgpack/msgpack-python#deprecating-encoding-option
+        # https://stackoverflow.com/questions/54161523/msgpack-gets-string-data-back-as-binary
+        load=functools.partial(msgpack.load, raw=False),
+        ext='.msgpack',
+        binary=True,
+    ),
 }
 
 

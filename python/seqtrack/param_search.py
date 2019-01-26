@@ -111,7 +111,7 @@ def dump_dict_stream(items, dir, codec_name):
     for key, value in items:
         fname = os.path.join(dir, key + codec.ext)
         with helpers.open_atomic_write(fname, 'wb' if codec.binary else 'w') as f:
-            codec.module.dump(value, f)
+            codec.dump(value, f)
         yield key, value
 
 
@@ -126,7 +126,7 @@ def discover_dict(dir, codec_name):
     for name in names:
         key = name[:-len(codec.ext)]
         with open(os.path.join(dir, name), 'rb' if codec.binary else 'r') as f:
-            value = codec.module.load(f)
+            value = codec.load(f)
         x[key] = value
     return x
 
