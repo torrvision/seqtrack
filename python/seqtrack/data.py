@@ -30,7 +30,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import msgpack
 import numpy as np
 import os
 import subprocess
@@ -44,7 +43,7 @@ logger = logging.getLogger(__name__)
 from seqtrack import helpers
 import trackdat
 
-CACHE_CODEC = msgpack
+CACHE_CODEC = 'msgpack'
 CACHE_EXT = '.msgpack'
 
 
@@ -101,6 +100,15 @@ def load(data_dir, preproc, subset_name, cache=False, cache_dir=None):
     return DatasetInstance(dataset_dir, metadata)
 
 
+def _load_metadata_no_cache(data_dir, subset_name):
+    logger.info('load metadata: "%s"', subset_name)
+    subset = SUBSETS[subset_name]
+    start = time.time()
+    metadata = subset.load_func(os.path.join(data_dir, 'original', subset.dataset))
+    logger.info('time to load metadata: %.3g sec "%s"', time.time() - start, subset_name)
+    return metadata
+
+
 def load_metadata(data_dir, subset_name, cache=False, cache_dir=None):
     '''Loads metadata from {data_dir}/original/{subset}.
 
@@ -109,16 +117,14 @@ def load_metadata(data_dir, subset_name, cache=False, cache_dir=None):
     and pre-processed versions have different image sizes.
     '''
     if cache:
-        return helpers.cache(trackdat.dataset.Serializer(CACHE_CODEC),
-                             _cache_file(cache_dir, subset_name),
-                             lambda: load_metadata(data_dir, subset_name),
-                             makedir=True)
-
-    logger.info('load metadata: "%s"', subset_name)
-    subset = SUBSETS[subset_name]
-    start = time.time()
-    metadata = subset.load_func(os.path.join(data_dir, 'original', subset.dataset))
-    logger.info('time to load metadata: %.3g sec "%s"', time.time() - start, subset_name)
+        metadata_dict = helpers.cache(
+            CACHE_CODEC,
+            _cache_file(cache_dir, subset_name),
+            lambda: trackdat.dataset.to_dict(_load_metadata_no_cache(data_dir, subset_name)),
+            makedir=True)
+        metadata = trackdat.dataset.from_dict(metadata_dict)
+    else:
+        metadata = _load_metadata_no_cache(data_dir, subset_name)
     return metadata
 
 
@@ -165,7 +171,7 @@ def _get_datasets(subset_names):
 
 
 def _cache_file(cache_dir, subset_name):
-    return os.path.join(cache_dir, 'dataset_{}{}'.format(subset_name, CACHE_EXT))
+    return os.path.join(cache_dir, 'dataset_{}'.format(subset_name) + CACHE_EXT)
 
 
 def _untar(tar_dir, data_dir, preproc, names):

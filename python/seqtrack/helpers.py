@@ -3,6 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 import collections
+import contextlib
 import csv
 import datetime
 import errno
@@ -16,7 +17,6 @@ import sys
 import tempfile
 import tensorflow as tf
 import time
-from contextlib import contextmanager
 
 nest = tf.contrib.framework.nest
 from tensorflow.contrib.layers.python.layers import utils as layer_utils
@@ -42,10 +42,15 @@ CODECS = {
         binary=False,
     ),
     'msgpack': Codec(
-        dump=msgpack.dump,
-        # https://stackoverflow.com/questions/48319949/msgpack-unserialising-dict-key-strings-to-bytes
-        # https://github.com/msgpack/msgpack-python#deprecating-encoding-option
-        # https://stackoverflow.com/questions/54161523/msgpack-gets-string-data-back-as-binary
+        # The newer version of msgpack now supports a binary type.
+        # msgpack.dump(..., use_bin_type=False) will pack {bytes, string} -> "raw".
+        # msgpack.dump(..., use_bin_type=True) will pack bytes -> "bin" and string -> "raw".
+        # msgpack.load(..., raw=True) will unpack "raw" -> bytes.
+        # msgpack.load(..., raw=False) will unpack "raw" -> string and "bin" -> bytes.
+        # Therefore, to decode strings, we need raw=False.
+        # The value of use_bin_type does not matter since we never encode bytes.
+        # However, it's probably best to use use_bin_type=True with raw=False.
+        dump=functools.partial(msgpack.dump, use_bin_type=True),
         load=functools.partial(msgpack.load, raw=False),
         ext='.msgpack',
         binary=True,
@@ -85,18 +90,19 @@ def pad_to(x, n, axis=0, mode='constant'):
     return np.pad(x, width, mode=mode)
 
 
-def cache(codec_module, filename, func, makedir=False, perm=0o644, binary=False):
+def cache(codec_name, filename, func, makedir=False):
     '''Caches the result of a function in a file.
 
     Args:
-        codec_module -- Object with methods dump() and load().
+        codec_name -- String
         func -- Function with zero arguments.
     '''
+    codec = CODECS[codec_name]
     if os.path.exists(filename):
         logger.info('load from cache file: "%s"', filename)
         start = time.clock()
-        with open(filename, 'r') as f:
-            result = codec_module.load(f)
+        with open(filename, 'rb' if codec.binary else 'r') as f:
+            result = codec.load(f)
         dur = time.clock() - start
         logger.info('time to load cache: %.3g sec "%s"', dur, filename)
     else:
@@ -111,16 +117,14 @@ def cache(codec_module, filename, func, makedir=False, perm=0o644, binary=False)
         result = func()
         # TODO: Clean up tmp file on exception.
         start = time.clock()
-        with tempfile.NamedTemporaryFile(delete=False, dir=dir, suffix=basename) as f:
-            codec_module.dump(result, f)
+        with open_atomic_write(filename, 'wb' if codec.binary else 'w') as f:
+            codec.dump(result, f)
         dur = time.clock() - start
-        os.chmod(f.name, perm)  # Default permissions are 600.
-        os.rename(f.name, filename)
         logger.info('time to dump cache: %.3g sec "%s"', dur, filename)
     return result
 
 
-cache_json = functools.partial(cache, json)
+cache_json = functools.partial(cache, 'json')
 
 
 def merge_dims(x, a, b, name='merge_dims'):
@@ -462,7 +466,7 @@ def filter_dict(func, items):
             yield k, v
 
 
-@contextmanager
+@contextlib.contextmanager
 def open_atomic_write(filename, mode='w+b', perm=0o644):
     dir, basename = os.path.split(filename)
     with tempfile.NamedTemporaryFile(mode=mode, delete=False, dir=dir, suffix=basename) as f:
@@ -480,13 +484,13 @@ def assert_partition(x, subsets):
     union = set(counts.keys())
     missing = x.difference(union)
     if len(missing) > 0:
-        raise RuntimeError('missing from partition: {}'.format(helpers.quote_list(missing)))
+        raise RuntimeError('missing from partition: {}'.format(quote_list(missing)))
     extra = union.difference(x)
     if len(extra) > 0:
-        raise RuntimeError('extra in partition: {}'.format(helpers.quote_list(extra)))
+        raise RuntimeError('extra in partition: {}'.format(quote_list(extra)))
     multiple = [elem for elem, count in counts.items() if count > 1]
     if len(multiple) > 0:
-        raise RuntimeError('repeated in partition: {}'.format(helpers.quote_list(multiple)))
+        raise RuntimeError('repeated in partition: {}'.format(quote_list(multiple)))
     # Unnecessary but just for sanity.
     assert len(x) == sum(map(len, subsets))
 
