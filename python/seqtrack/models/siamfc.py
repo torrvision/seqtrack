@@ -277,6 +277,7 @@ class SiamFC(object):
                     # TODO: Assert that current rect is valid?
                     prev_target_rect = labels['rect']
                 else:
+                    # This will be ground-truth is use_predictions is true:
                     prev_target_rect = state['rect']
 
             # How to obtain template from previous state?
@@ -484,24 +485,24 @@ def dimensions(target_size,
     return dict(template_size=template_size, search_size=search_size)
 
 
-def scale_sequence(num_scales, max_scale):
-    '''
-    >>> round(scale_sequence(3, 1.02)['scale_step'], 6)
-    1.02
-    >>> round(scale_sequence(5, 1.02)['scale_step'], 4)
-    1.01
-    '''
-    # TODO: Use log1p and exp1m? Probably not necessary.
-    if num_scales == 1:
-        # There is no scale step.
-        return dict(num_scales=1)
-    assert num_scales % 2 == 1
-    h = (num_scales - 1) // 2
-    # Scales will be:
-    #   scales = step ** [-h, ..., h]
-    #   log(scales) = log(step) * [-h, ..., h]
-    scale_step = math.exp(abs(math.log(max_scale)) / h)
-    return dict(num_scales=num_scales, scale_step=scale_step)
+# def scale_sequence(num_scales, max_scale):
+#     '''
+#     >>> round(scale_sequence(3, 1.02)['scale_step'], 6)
+#     1.02
+#     >>> round(scale_sequence(5, 1.02)['scale_step'], 4)
+#     1.01
+#     '''
+#     # TODO: Use log1p and exp1m? Probably not necessary.
+#     if num_scales == 1:
+#         # There is no scale step.
+#         return dict(num_scales=1)
+#     assert num_scales % 2 == 1
+#     h = (num_scales - 1) // 2
+#     # Scales will be:
+#     #   scales = step ** [-h, ..., h]
+#     #   log(scales) = log(step) * [-h, ..., h]
+#     scale_step = math.exp(abs(math.log(max_scale)) / h)
+#     return dict(num_scales=num_scales, scale_step=scale_step)
 
 
 # When we implement a multi-layer join,

@@ -286,6 +286,16 @@ def modify_aspect_ratio(rect, method='stretch', name='modify_aspect_ratio'):
         raise ValueError('unknown method: {}'.format(method))
 
 
+def scalar_size(size, method, axis=-1, keepdims=False, name='rect_magnitude'):
+    with tf.name_scope(name) as scope:
+        if method == 'perimeter':
+            return tf.reduce_mean(size, axis=axis, keepdims=keepdims)
+        elif method == 'area':
+            return tf.exp(tf.reduce_mean(tf.log(size), axis=axis, keepdims=keepdims))
+        else:
+            raise ValueError('unknown method: {}'.format(method))
+
+
 def get_act(act):
     if act == 'relu':
         return tf.nn.relu
