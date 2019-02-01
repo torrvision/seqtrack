@@ -181,7 +181,7 @@ class MotionRegressor(object):
             # Extract features, perform search, get receptive field of response wrt image.
             ims_preproc = self._preproc(ims)
             # ims_preproc = cnn.as_tensor(ims_preproc, add_to_set=True)
-            with tf.variable_scope('motion', reuse=False):
+            with tf.variable_scope('motion', reuse=(self._num_frames > 0)):
                 response = _motion_net(ims_preproc, run_opts['is_training'],
                                        response_size=self.response_size,
                                        num_scales=self.num_scales,
@@ -204,7 +204,7 @@ class MotionRegressor(object):
                 # scales = util.scale_range(tf.constant(self.num_scales),
                 #                           tf.to_float(self.scale_step))
                 base_target_size = self.target_size / CONTEXT_SIZE
-                translation_stride = self.response_stride / self.context_size
+                translation_stride = self.response_stride / CONTEXT_SIZE
 
                 loss_name, loss = compute_loss(
                     response,
@@ -216,42 +216,42 @@ class MotionRegressor(object):
                     gt_size,
                     **self.loss_params)
 
-                if reset_position:
-                    # TODO: Something better!
-                    losses[loss_name] = tf.zeros_like(loss)
-                else:
-                    losses[loss_name] = loss
+                # if reset_position:
+                #     # TODO: Something better!
+                #     losses[loss_name] = tf.zeros_like(loss)
+                # else:
+                #     losses[loss_name] = loss
 
-            if self.search_method == 'local':
-                # Use pyramid from loss function to obtain position.
-                # Get relative translation and scale from response.
-                # TODO: Upsample to higher resolution than original image?
-                response_resize = cnn.get_value(cnn.upsample(
-                    response, rf_response.stride, method=tf.image.ResizeMethod.BICUBIC))
-                if self.learn_motion:
-                    response_final = response_resize
-                else:
-                    response_final = apply_motion_penalty(
-                        response_resize, radius=self.window_radius * self.target_size,
-                        **self.window_params)
-                translation, scale, in_arg_max = util.find_peak_pyr(
-                    response_final, scales, eps_abs=self.arg_max_eps)
-                # Obtain translation in relative co-ordinates within search image.
-                translation = 1 / tf.to_float(CONTEXT_SIZE) * translation
-                # Get scalar representing confidence in prediction.
-                # Use raw appearance score (before motion penalty).
-                confidence = weighted_mean(response_resize, in_arg_max, axis=(-4, -3, -2))
-                # Damp the scale update towards 1 (no change).
-                # TODO: Should this be in log space?
-                scale = self.scale_update_rate * scale + (1. - self.scale_update_rate) * 1.
-                # Get rectangle in search image.
-                prev_target_in_search = geom.crop_rect(prev_target_rect, context_rect)
-                pred_in_search = _rect_translate_scale(prev_target_in_search, translation,
-                                                       tf.expand_dims(scale, -1))
-                # Move from search back to original image.
-                pred = geom.crop_rect(pred_in_search, geom.crop_inverse(context_rect))
-            else:
-                raise ValueError('unknown search method "{}"'.format(self.search_method))
+            scales = util.scale_range(tf.constant(self.num_scales), tf.to_float(self.scale_step))
+
+            # Use pyramid from loss function to obtain position.
+            # Get relative translation and scale from response.
+            # TODO: Upsample to higher resolution than original image?
+            response_resize = cnn.get_value(cnn.upsample(
+                response, self.response_stride, method=tf.image.ResizeMethod.BICUBIC))
+            response_final = response_resize
+            # if self.learn_motion:
+            #     response_final = response_resize
+            # else:
+            #     response_final = apply_motion_penalty(
+            #         response_resize, radius=self.window_radius * self.target_size,
+            #         **self.window_params)
+            translation, scale, in_arg_max = util.find_peak_pyr(
+                response_final, scales, eps_abs=self.arg_max_eps)
+            # Obtain translation in relative co-ordinates within search image.
+            translation = 1 / tf.to_float(CONTEXT_SIZE) * translation
+            # Get scalar representing confidence in prediction.
+            # Use raw appearance score (before motion penalty).
+            confidence = helpers.weighted_mean(response_resize, in_arg_max, axis=(-4, -3, -2))
+            # Damp the scale update towards 1 (no change).
+            # TODO: Should this be in log space?
+            scale = self.scale_update_rate * scale + (1. - self.scale_update_rate) * 1.
+            # Get rectangle in search image.
+            prev_target_in_search = geom.crop_rect(prev_target_rect, context_rect)
+            pred_in_search = _rect_translate_scale(prev_target_in_search, translation,
+                                                   tf.expand_dims(scale, -1))
+            # Move from search back to original image.
+            pred = geom.crop_rect(pred_in_search, geom.crop_inverse(context_rect))
 
             # Limit size of object.
             pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
@@ -268,8 +268,8 @@ class MotionRegressor(object):
             state = {
                 'run_opts': run_opts,
                 'aspect': aspect,
+                'image': im,
                 'rect': next_prev_rect,
-                'template_init': state['template_init'],
                 'mean_color': state['mean_color'],
             }
             return outputs, state, losses
@@ -367,11 +367,13 @@ def _motion_net(x, is_training, response_size, num_scales,
                         weights_regularizer=slim.l2_regularizer(weight_decay)):
         with slim.arg_scope([slim.batch_norm], is_training=is_training):
             # https://github.com/tensorflow/models/blob/master/research/slim/nets/alexnet.py
+            x, unmerge = helpers.merge_dims(x, 0, 2)  # Merge time into batch.
             # 103 = 11 + (47 - 1) * 2 or
             # 195 = 11 + (47 - 1) * 4
             x = slim.conv2d(x, 64, [11, 11], 4, padding='VALID', scope='conv1')
             # 47 = 3 + (23 - 1) * 2
             x = slim.max_pool2d(x, [3, 3], 2, scope='pool1')
+            x = unmerge(x, axis=0)  # Un-merge time from batch.
             # Concatenate the images over time.
             x = tf.concat(tf.unstack(x, axis=1), axis=-1)
             x = slim.conv2d(x, 192, [5, 5], scope='conv2')
@@ -390,7 +392,7 @@ def _motion_net(x, is_training, response_size, num_scales,
             x = slim.fully_connected(x, 4096, scope='fc7')
             # Regress to score map.
             output_shape = [num_scales, response_size, response_size, 1]
-            x = slim.fully_connected(x, np.prod(output_shape), scope='fc8',
+            x = slim.fully_connected(x, np.asscalar(np.prod(output_shape)), scope='fc8',
                                      activation_fn=None, normalizer_fn=None)
             x = helpers.split_dims(x, axis=-1, shape=output_shape)
             return x
@@ -581,10 +583,10 @@ def _multiscale_hard_binary_labels(
 def _multiscale_hard_labels(
         scores, num_scales, translation_stride, scale_step, base_target_size,
         gt_translation, gt_size,
-        translation_radius_pos,
-        translation_radius_neg,
-        scale_radius_pos,
-        scale_radius_neg):
+        translation_radius_pos=20,
+        translation_radius_neg=50,
+        scale_radius_pos=1.1,
+        scale_radius_neg=1.3):
     '''
     Args:
     '''

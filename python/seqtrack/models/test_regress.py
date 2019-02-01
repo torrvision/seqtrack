@@ -13,11 +13,40 @@ import collections
 import functools
 
 from seqtrack import cnn
-from seqtrack.models import regress
+from seqtrack import sample
+from seqtrack import train
 from seqtrack import util_test
+from seqtrack.models import regress
 
 
 class TestRegress(tf.test.TestCase):
+
+    def test_instantiate(self):
+        iter_model_fn = regress.MotionRegressor(
+            mode=tf.estimator.ModeKeys.TRAIN,
+            example_type=sample.ExampleTypeKeys.CONSECUTIVE,
+            params=dict(),
+        )
+
+        b, n, h, w = 8, 2, 480, 480
+        example = sample.ExampleSequence(
+            features_init={
+                'image': {'data': tf.placeholder(tf.float32, [b, h, w, 3])},
+                'aspect': tf.placeholder(tf.float32, [b]),
+                'rect': tf.placeholder(tf.float32, [b, 4]),
+            },
+            features={
+                'image': {'data': tf.placeholder(tf.float32, [b, n, h, w, 3])},
+            },
+            labels={
+                'valid': tf.placeholder(tf.bool, [b, n]),
+                'rect': tf.placeholder(tf.float32, [b, n, 4]),
+            },
+        )
+        run_opts = train._make_run_opts_placeholders()
+
+        with tf.variable_scope('model', reuse=False) as vs:
+            ops = iter_model_fn.train(example, run_opts=run_opts, scope=vs)
 
     def test_multiscale_error_translation(self):
         response_size = 5

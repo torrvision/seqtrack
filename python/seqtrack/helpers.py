@@ -139,7 +139,7 @@ def split_dims(v, axis, shape, name='split'):
         v_dynamic = tf.unstack(tf.shape(v))
         v_static = v.shape.as_list()
         v_shape = [v_static[i] or v_dynamic[i] for i in range(m)]
-        u_shape = v_shape[:axis] + list(shape) + v_shape[axis + 1:]
+        u_shape = v_shape[:axis] + list(shape) + v_shape[axis:][1:]
         u = tf.reshape(v, u_shape)
         return u
 

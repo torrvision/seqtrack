@@ -29,10 +29,10 @@ from seqtrack import data
 from seqtrack import track
 from seqtrack import geom
 from seqtrack import helpers
-from seqtrack import motion
+# from seqtrack import motion
 from seqtrack import sample
+from seqtrack import models
 from seqtrack.models import itermodel
-from seqtrack.models import siamfc
 
 NUM_PREFETCH = 8
 INSTANTIATE_METHOD_TRACK = 'assign'
@@ -67,6 +67,7 @@ class TrainParams(object):
 
     def __init__(self, **kwargs):
         params = dict(
+            model_name='siamfc',
             model_params=None,
             seed=0,
             # Dataset:
@@ -79,8 +80,8 @@ class TrainParams(object):
             sampler='uniform',
             sampler_params=None,
             example_type='CONSECUTIVE',
-            augment_motion=False,
-            motion_params=None,
+            # augment_motion=False,
+            # motion_params=None,
             # Evaluation:
             eval_tre_num=None,
             max_eval_videos=None,
@@ -222,7 +223,8 @@ def train(
         preproc_id=params.preproc_id,
         data_cache_dir=data_cache_dir)
 
-    create_iter_model_fn = functools.partial(siamfc.SiamFC, params=params.model_params)
+    create_iter_model_fn = functools.partial(models.BY_NAME[params.model_name],
+                                             params=params.model_params)
     # model_properties = iter_model_fn.derived_properties()
 
     TRAIN_VAL = ('train', 'val')
