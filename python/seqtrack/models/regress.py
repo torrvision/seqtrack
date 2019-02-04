@@ -438,13 +438,17 @@ def compute_loss(scores, num_scales, translation_stride, scale_step, base_target
                  method='sigmoid', params=None):
     '''
     Args:
-        scores: [b, h, w, 1]
+        scores: [b, s, h, w, 1]
         See `multiscale_error`.
+
+    Returns:
+        name: String
+        loss: Tensor of shape [b]
     '''
     params = params or {}
     try:
         loss_fn = {
-            'sigmoid': _multiscale_sigmoid_cross_entropy_loss,
+            'sigmoid': multiscale_sigmoid_cross_entropy_loss,
             # 'max_margin': _multiscale_max_margin_loss,
             # 'softmax': _multiscale_softmax_cross_entropy_loss,
         }[method]
@@ -504,7 +508,7 @@ def multiscale_error(response_size, num_scales,
     return err_translation, err_log_scale
 
 
-def _multiscale_sigmoid_cross_entropy_loss(
+def multiscale_sigmoid_cross_entropy_loss(
         scores, num_scales, translation_stride, scale_step, base_target_size,
         gt_translation, gt_size,
         pos_weight=1,
@@ -521,20 +525,17 @@ def _multiscale_sigmoid_cross_entropy_loss(
     label_params = label_params or {}
 
     try:
-        label_fn = {
-            'hard': _multiscale_hard_labels,
-            # 'gaussian': _wrap_with_spatial_weight(_multiscale_gaussian_labels),
-            'hard_binary': _wrap_with_spatial_weight(_multiscale_hard_binary_labels),
-        }[label_method]
+        label_fn = LABEL_FNS[label_method]
     except KeyError as ex:
         raise ValueError('unknown label shape: "{}"'.format(label_method))
 
+    response_size = helpers.known_spatial_dim(scores)
     label_name, labels, weights = label_fn(
-        scores, num_scales, translation_stride, scale_step, base_target_size,
+        response_size, num_scales, translation_stride, scale_step, base_target_size,
         gt_translation, gt_size, **label_params)
     loss = lossfunc.normalized_sigmoid_cross_entropy_with_logits(
         logits=scores, targets=tf.broadcast_to(labels, tf.shape(scores)),
-        weights=weights, axis=(-3, -2),
+        weights=weights, axis=(-4, -3, -2),
         pos_weight=pos_weight, balanced=balanced)
     # Remove singleton channels dimension.
     loss = tf.squeeze(loss, -1)
@@ -548,32 +549,34 @@ def _multiscale_sigmoid_cross_entropy_loss(
     return loss_name, loss
 
 
-def _multiscale_hard_binary_labels(
-        scores, num_scales, translation_stride, scale_step, base_target_size,
+def multiscale_hard_binary_labels(
+        response_size, num_scales, translation_stride, scale_step, base_target_size,
         gt_translation, gt_size,
-        translation_radius,
-        scale_radius):
+        translation_radius=0.2,
+        scale_radius=1.03):
     '''
     Does not support un-labelled examples.
     More suitable for use with softmax.
     '''
-    response_size = helpers.known_spatial_dim(scores)
     err_translation, err_log_scale = multiscale_error(
         response_size, num_scales, translation_stride, scale_step, base_target_size,
         gt_translation, gt_size)
     # err_translation: [..., s, h, w, 2]
     # err_log_scale: [..., s]
     err_log_scale = helpers.expand_dims_n(err_log_scale, -1, 3)
+    abs_translation_radius = translation_radius * base_target_size
+    log_scale_radius = tf.log(tf.to_float(scale_radius))
 
-    r2 = (
-        tf.reduce_sum(
-            tf.square(1 / (translation_radius * base_target_size) * err_translation),
-            axis=-1, keepdims=True) +
-        tf.square(1 / tf.log(scale_radius) * err_log_scale))
+    r2_translation = tf.reduce_sum(tf.square(1 / abs_translation_radius * err_translation),
+                                   axis=-1, keepdims=True)
+    r2_scale = tf.square(1 / log_scale_radius * err_log_scale)
+    r2 = (r2_translation + r2_scale)
     is_pos = (r2 <= 1)
     label = tf.to_float(is_pos)
+
     name = 'hard_binary_translation_{}_scale_{}'.format(translation_radius, scale_radius)
-    return name, label
+    weights = tf.ones_like(label)
+    return name, label, weights
 
 
 # MultiscaleScoreDims = collections.namedtuple('MultiScaleScore', [
@@ -584,17 +587,16 @@ def _multiscale_hard_binary_labels(
 # ])
 
 
-def _multiscale_hard_labels(
-        scores, num_scales, translation_stride, scale_step, base_target_size,
+def multiscale_hard_labels(
+        response_size, num_scales, translation_stride, scale_step, base_target_size,
         gt_translation, gt_size,
-        translation_radius_pos,
-        translation_radius_neg,
-        scale_radius_pos,
-        scale_radius_neg):
+        translation_radius_pos=0.2,
+        translation_radius_neg=0.5,
+        scale_radius_pos=1.03,
+        scale_radius_neg=1.1):
     '''
     Args:
     '''
-    response_size = helpers.known_spatial_dim(scores)
     err_translation, err_log_scale = multiscale_error(
         response_size, num_scales, translation_stride, scale_step, base_target_size,
         gt_translation, gt_size)
@@ -623,16 +625,6 @@ def _multiscale_hard_labels(
     name = 'hard_translation_{}_{}_scale_{}_{}'.format(
         translation_radius_pos, translation_radius_neg, scale_radius_pos, scale_radius_neg)
     return name, label, spatial_weight
-
-
-def _wrap_with_spatial_weight(fn):
-    return functools.partial(_add_spatial_weight, fn)
-
-
-def _add_spatial_weight(fn, *args, **kwargs):
-    '''Calls fn() and additionally returns uniform spatial weights.'''
-    name, label = fn(*args, **kwargs)
-    return name, label, tf.ones_like(label)
 
 
 def _rect_translate_scale(rect, translate, scale, name='rect_translate_scale'):
@@ -676,3 +668,10 @@ def _image_pyramid_summary(im, axis, name='pyramid', **kwargs):
         with tf.name_scope('scales'):
             for i in range(len(labels)):
                 tf.summary.image(str(i), labels[i], **kwargs)
+
+
+LABEL_FNS = {
+    'hard': multiscale_hard_labels,
+    # 'gaussian': multiscale_gaussian_labels,
+    'hard_binary': multiscale_hard_binary_labels,
+}

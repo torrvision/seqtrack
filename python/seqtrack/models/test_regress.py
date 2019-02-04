@@ -118,31 +118,78 @@ class TestRegress(tf.test.TestCase):
 
         gt_translation = [-20, -40]
         gt_size = 60
-
         scores = tf.random.normal(scores_shape, dtype=tf.float32)
 
         losses = {
             'sigmoid_hard': dict(
                 method='sigmoid',
-                params=dict(label_method='hard',
-                            label_params=dict(translation_radius_pos=15,
-                                              translation_radius_neg=30,
+                params=dict(balanced=True,
+                            label_method='hard',
+                            label_params=dict(translation_radius_pos=0.2,
+                                              translation_radius_neg=0.5,
                                               scale_radius_pos=1.1,
                                               scale_radius_neg=1.3))),
             'sigmoid_hard_binary': dict(
                 method='sigmoid',
-                params=dict(label_method='hard_binary',
-                            label_params=dict(translation_radius=20,
+                params=dict(balanced=True,
+                            label_method='hard_binary',
+                            label_params=dict(translation_radius=0.2,
                                               scale_radius=1.2))),
         }
 
         for loss_name, loss_kwargs in losses.items():
             with util_test.try_sub_test(self, loss=loss_name):
-                regress.compute_loss(
+                _, loss = regress.compute_loss(
                     scores, num_scales, translation_stride, scale_step, base_target_size,
                     _make_constant_batch(gt_translation),
                     _make_constant_batch(gt_size),
                     **loss_kwargs)
+                self.assertEqual(len(loss.shape), 1)
+                with self.test_session():
+                    self.assertTrue(np.all(np.isfinite(loss.eval())))
+
+
+    def test_label_fns(self):
+        response_size = 7
+        num_scales = 3
+        translation_stride = 10
+        scale_step = 2
+        base_target_size = 30
+        scores_shape = (1, num_scales) + n_positive_integers(2, response_size) + (1,)
+
+        gt_translation = [-20, -40]
+        gt_size = 60
+
+        label_fns = {
+            'hard': dict(
+                translation_radius_pos=0.2,
+                translation_radius_neg=0.5,
+                scale_radius_pos=1.1,
+                scale_radius_neg=1.3,
+            ),
+            'hard_binary': dict(
+                translation_radius=0.2,
+                scale_radius=1.2,
+            ),
+        }
+
+        for name, kwargs in label_fns.items():
+            with util_test.try_sub_test(self, label_fn=name):
+                with self.test_session():
+                    label_fn = regress.LABEL_FNS[name]
+                    _, labels, weights = label_fn(
+                        response_size, num_scales, translation_stride, scale_step, base_target_size,
+                        _make_constant_batch(gt_translation),
+                        _make_constant_batch(gt_size),
+                        **kwargs)
+
+                    # labels: [b, s, h, w, c]
+                    assert(len(labels.shape) == 5)
+                    self.assertAllGreaterEqual(weights, 0)
+                    sum_positive = tf.reduce_sum(weights * labels, axis=(-4, -3, -2, -1))
+                    sum_negative = tf.reduce_sum(weights * (1 - labels), axis=(-4, -3, -2, -1))
+                    self.assertAllGreater(sum_positive, 0)
+                    self.assertAllGreater(sum_negative, 0)
 
 
 def _make_constant_batch(x):
