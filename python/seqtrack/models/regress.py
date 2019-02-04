@@ -36,6 +36,7 @@ CONTEXT_SIZE = 195
 def default_params():
     return dict(
         target_size=64,
+        # image_size=640,
         aspect_method='perimeter',  # TODO: Equivalent to SiamFC?
         pad_with_mean=True,  # Use mean of first image for padding.
         feather=False,
@@ -138,6 +139,7 @@ class MotionRegressor(object):
             mean_color = tf.reduce_mean(im, axis=(-3, -2), keepdims=True)
 
             state = {
+                # 'image': tf.image.resize_images(im, [self.image_size, self.image_size]),
                 'image': im,
                 'run_opts': run_opts,
                 'aspect': aspect,
@@ -187,6 +189,7 @@ class MotionRegressor(object):
                                        num_scales=self.num_scales,
                                        weight_decay=self.wd)
             # response = cnn.get_value(response)
+            response = tf.verify_tensor_all_finite(response, 'response is not finite')
 
             # mid_scale = (self.num_scales - 1) // 2
             # self._info.setdefault('response', []).append(
@@ -221,6 +224,7 @@ class MotionRegressor(object):
                 #     losses[loss_name] = tf.zeros_like(loss)
                 # else:
                 #     losses[loss_name] = loss
+                losses[loss_name] = loss
 
             scales = util.scale_range(tf.constant(self.num_scales), tf.to_float(self.scale_step))
 
@@ -268,6 +272,7 @@ class MotionRegressor(object):
             state = {
                 'run_opts': run_opts,
                 'aspect': aspect,
+                # 'image': tf.image.resize_images(im, [self.image_size, self.image_size]),
                 'image': im,
                 'rect': next_prev_rect,
                 'mean_color': state['mean_color'],
@@ -442,7 +447,6 @@ def compute_loss(scores, num_scales, translation_stride, scale_step, base_target
         See `multiscale_error`.
     '''
     params = params or {}
-
     try:
         loss_fn = {
             'sigmoid': _multiscale_sigmoid_cross_entropy_loss,
@@ -451,9 +455,10 @@ def compute_loss(scores, num_scales, translation_stride, scale_step, base_target
         }[method]
     except KeyError as ex:
         raise ValueError('unknown loss method: "{}"'.format(method))
+    scores = tf.verify_tensor_all_finite(scores, 'scores are not finite')
     name, loss = loss_fn(scores, num_scales, translation_stride, scale_step, base_target_size,
                          gt_translation, gt_size, **params)
-
+    loss = tf.verify_tensor_all_finite(loss, 'scores are finite but loss is not')
     return name, loss
 
 
@@ -583,10 +588,10 @@ def _multiscale_hard_binary_labels(
 def _multiscale_hard_labels(
         scores, num_scales, translation_stride, scale_step, base_target_size,
         gt_translation, gt_size,
-        translation_radius_pos=20,
-        translation_radius_neg=50,
-        scale_radius_pos=1.1,
-        scale_radius_neg=1.3):
+        translation_radius_pos,
+        translation_radius_neg,
+        scale_radius_pos,
+        scale_radius_neg):
     '''
     Args:
     '''

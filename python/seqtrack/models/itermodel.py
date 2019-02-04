@@ -104,6 +104,8 @@ def _get_local_variable_like(x):
     '''
     Shape of `x` must be known!
     '''
+    if any(d is None for d in x.shape.as_list()):
+        raise RuntimeError('shape not static: variable {} has shape {}'.format(x, x.shape))
     return tf.get_local_variable(_escape(x.name),
                                  initializer=tf.zeros(shape=x.shape, dtype=x.dtype))
 

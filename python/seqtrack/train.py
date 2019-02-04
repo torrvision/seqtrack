@@ -35,7 +35,7 @@ from seqtrack import models
 from seqtrack.models import itermodel
 
 NUM_PREFETCH = 8
-INSTANTIATE_METHOD_TRACK = 'assign'
+INSTANTIATE_METHOD_TRACK = 'feed'  # 'assign' or 'feed'
 
 
 # Pickling a function in one module to load in another module does not work if
@@ -573,13 +573,15 @@ def train_model_data(
                 itermodel.instantiate_iter_assign(model_fn_track, example_track,
                                                   run_opts=_make_run_opts_tracking(),
                                                   local_scope=local_scope, scope=scope))
-    else:
+    elif INSTANTIATE_METHOD_TRACK == 'feed':
         with tf.variable_scope('model', reuse=True) as scope:
             model_inst_track = itermodel.TrackerFeed(
                 example_track_with_files,
                 itermodel.instantiate_iter_feed(model_fn_track, example_track,
                                                 run_opts=_make_run_opts_tracking(),
                                                 scope=scope))
+    else:
+        raise ValueError('unknown instantiate method: {}'.format(INSTANTIATE_METHOD_TRACK))
 
     init_op = [
         tf.initializers.global_variables(),

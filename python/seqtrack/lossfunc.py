@@ -120,7 +120,12 @@ def normalized_sigmoid_cross_entropy_with_logits(
         sum_p = tf.reduce_sum(weights * targets, axis=axis, keepdims=True)
         sum_not_p = tf.reduce_sum(weights * (1 - targets), axis=axis, keepdims=True)
         if balanced:
-            gamma_base = sum_not_p / sum_p
+            assert_p = tf.Assert(
+                tf.reduce_all(sum_p > 0), [sum_p], summarize=10, name='assert_p')
+            assert_not_p = tf.Assert(
+                tf.reduce_all(sum_not_p > 0), [sum_not_p], summarize=10, name='assert_not_p')
+            with tf.control_dependencies([assert_p, assert_not_p]):
+                gamma_base = sum_not_p / sum_p
         else:
             gamma_base = 1
         gamma = pos_weight * gamma_base
