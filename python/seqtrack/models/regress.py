@@ -118,13 +118,6 @@ class MotionRegressor(object):
             feather=self.feather,
             feather_margin=self.feather_margin)
 
-    def _crop_pyr(self, image, rect, size, scales, mean_color):
-        return util.crop_pyr(
-            image, rect, size, scales,
-            pad_value=mean_color if self.pad_with_mean else 0.5,
-            feather=self.feather,
-            feather_margin=self.feather_margin)
-
     def _preproc(self, im):
         return _preproc(
             im,
@@ -175,10 +168,12 @@ class MotionRegressor(object):
             # Coerce the aspect ratio of the rectangle to construct the context area.
             context_rect = self._context_rect(prev_target_rect, aspect, self.context_scale)
             # Extract same rectangle in past and current images and feed into conv-net.
-            ims = tf.stack([
-                self._crop(im, context_rect, CONTEXT_SIZE, mean_color),
-                self._crop(prev_im, context_rect, CONTEXT_SIZE, mean_color),
-            ], axis=1)
+            context_curr = self._crop(im, context_rect, CONTEXT_SIZE, mean_color)
+            context_prev = self._crop(prev_im, context_rect, CONTEXT_SIZE, mean_color)
+            with tf.name_scope('summary_context'):
+                tf.summary.image('curr', context_curr)
+                tf.summary.image('prev', context_curr)
+            ims = tf.stack([context_curr, context_prev], axis=1)
 
             # Extract features, perform search, get receptive field of response wrt image.
             ims_preproc = self._preproc(ims)
@@ -544,6 +539,8 @@ def _multiscale_sigmoid_cross_entropy_loss(
     # Remove singleton channels dimension.
     loss = tf.squeeze(loss, -1)
 
+    _image_pyramid_summary(labels, axis=1, name='summary_labels')
+
     # Reflect all parameters that affect magnitude of loss.
     # (Losses with same name are comparable.)
     loss_name = 'sigmoid_labels_{}_balanced_{}_pos_weight_{}'.format(
@@ -568,9 +565,11 @@ def _multiscale_hard_binary_labels(
     # err_log_scale: [..., s]
     err_log_scale = helpers.expand_dims_n(err_log_scale, -1, 3)
 
-    r2 = (tf.reduce_sum(tf.square(1 / translation_radius * err_translation),
-                        axis=-1, keepdims=True) +
-          tf.square(1 / tf.log(scale_radius) * err_log_scale))
+    r2 = (
+        tf.reduce_sum(
+            tf.square(1 / (translation_radius * base_target_size) * err_translation),
+            axis=-1, keepdims=True) +
+        tf.square(1 / tf.log(scale_radius) * err_log_scale))
     is_pos = (r2 <= 1)
     label = tf.to_float(is_pos)
     name = 'hard_binary_translation_{}_scale_{}'.format(translation_radius, scale_radius)
@@ -602,12 +601,16 @@ def _multiscale_hard_labels(
     # err_translation: [..., s, h, w, 2]
     # err_log_scale: [..., s]
     err_log_scale = helpers.expand_dims_n(err_log_scale, -1, 3)
-    r2_pos = (tf.reduce_sum(tf.square(1 / translation_radius_pos * err_translation),
-                            axis=-1, keepdims=True) +
-              tf.square(1 / tf.log(scale_radius_pos) * err_log_scale))
-    r2_neg = (tf.reduce_sum(tf.square(1 / translation_radius_neg * err_translation),
-                            axis=-1, keepdims=True) +
-              tf.square(1 / tf.log(scale_radius_neg) * err_log_scale))
+    r2_pos = (
+        tf.reduce_sum(
+            tf.square(1 / (translation_radius_pos * base_target_size) * err_translation),
+            axis=-1, keepdims=True) +
+        tf.square(1 / tf.log(scale_radius_pos) * err_log_scale))
+    r2_neg = (
+        tf.reduce_sum(
+            tf.square(1 / (translation_radius_neg * base_target_size) * err_translation),
+            axis=-1, keepdims=True) +
+        tf.square(1 / tf.log(scale_radius_neg) * err_log_scale))
 
     is_pos = (r2_pos <= 1)
     # TODO: Could force the minimum distance to be a positive?
@@ -665,3 +668,11 @@ def _clip_rect_size(rect, min_size=None, max_size=None, name='clip_rect_size'):
         if min_size is not None:
             size = tf.maximum(size, min_size)
         return geom.make_rect_center_size(center, size)
+
+
+def _image_pyramid_summary(im, axis, name='pyramid', **kwargs):
+    with tf.name_scope(name):
+        labels = tf.unstack(im, axis=axis)
+        with tf.name_scope('scales'):
+            for i in range(len(labels)):
+                tf.summary.image(str(i), labels[i], **kwargs)
