@@ -32,11 +32,18 @@ from seqtrack import geom
 from seqtrack import geom_np
 
 
+def json_default(x):
+    if isinstance(x, np.generic):
+        return x.tolist()
+    else:
+        return x
+
+
 Codec = collections.namedtuple('Codec', ['dump', 'load', 'ext', 'binary'])
 
 CODECS = {
     'json': Codec(
-        dump=functools.partial(json.dump, sort_keys=True),
+        dump=functools.partial(json.dump, sort_keys=True, default=json_default),
         load=json.load,
         ext='.json',
         binary=False,

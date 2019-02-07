@@ -107,6 +107,7 @@ class SiamFC(object):
         self.loss_params = self.loss_params or {}
         # Ensure types are correct.
         self.scale_update_rate = float(self.scale_update_rate)
+        self.num_scales = int(self.num_scales)
 
         self._num_frames = 0
         # For summaries in end():

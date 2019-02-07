@@ -6,7 +6,6 @@ import collections
 import csv
 import functools
 import itertools
-import json
 import math
 import numpy as np
 import time
@@ -14,6 +13,7 @@ import os
 import pprint
 import random
 import re
+import shutil
 import six
 import subprocess
 import sys
@@ -190,9 +190,17 @@ def train(
     assert params_dict is not None
     params = TrainParams(**params_dict)
 
+    # Wipe directory if it exists.
+    if dir is None:
+        raise ValueError('dir not specified')
+    # if not resume:
+    #     _make_empty_dir(dir)
+    _make_empty_dir(dir)
+
     helpers.mkdir_p(os.path.join(dir, 'output'))
+    json_codec = helpers.CODECS['json']
     with open(os.path.join(dir, 'output', 'model_params.json'), 'w') as f:
-        json.dump(params.model_params, f)
+        json_codec.dump(params.model_params, f)
 
     tf.reset_default_graph()
     _set_global_seed(params.seed)  # Caution: Global side effects!
@@ -1268,3 +1276,9 @@ def _flatten_dicts(series):
 
 def _identity(x):
     return x
+
+
+def _make_empty_dir(path):
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+    helpers.mkdir_p(path)

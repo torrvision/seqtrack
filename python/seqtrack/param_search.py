@@ -154,5 +154,5 @@ def write_summary(f, inputs, outputs):
 
 
 def hash(obj):
-    s = json.dumps(obj, sort_keys=True)
+    s = json.dumps(obj, sort_keys=True, default=helpers.json_default)
     return hashlib.sha1(s.encode('utf-8')).hexdigest()[:8]
