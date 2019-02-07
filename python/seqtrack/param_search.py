@@ -26,18 +26,14 @@ from seqtrack import mapdict
 from seqtrack import slurm
 
 
-def main(func, input_stream, postproc_fn=None,
-         use_existing_inputs=True, max_num_configs=None, report_only=False,
-         cache_dir='cache', input_codec='json', kwargs_codec='json', output_codec='json',
-         use_slurm=True, slurm_kwargs=None):
-         # slurm_group_size=None):
+def search(func, input_stream,
+           use_existing_inputs=True, max_num_configs=None, report_only=False,
+           cache_dir='cache', input_codec='json', kwargs_codec='json', output_codec='json',
+           use_slurm=True, slurm_kwargs=None):
     '''Evaluates an expensive function on named inputs and saves the outputs.
 
     Args:
         func: Function that maps (context, kwargs) to output.
-        postproc_fn: Maps result of func() to flat dict of scalar values.
-            If none then identity function is used.
-            The result of func() is cached but not the result of postproc_fn().
         input_stream: Collection of dicts with fields 'vector', 'args', 'kwargs'.
         report_only: Report existing results, do not perform any more function evaluations.
     '''
@@ -86,6 +82,20 @@ def main(func, input_stream, postproc_fn=None,
                                                codec_name=output_codec, mapper=func_mapper)
         output_stream = func_mapper(func, input_stream)
 
+    return output_stream
+
+
+def main(func, input_stream, postproc_fn=None, **kwargs):
+    '''Writes table to report.csv.
+
+    Provided for backwards compatibility.
+
+    Args:
+        postproc_fn: Maps result of func() to flat dict of scalar values.
+            If none then identity function is used.
+            The result of func() is cached but not the result of postproc_fn().
+    '''
+    output_stream = search(func, input_stream, **kwargs)
     if postproc_fn:
         output_stream = ((k, postproc_fn(v)) for k, v in output_stream)
     # Construct dictionary from stream.
