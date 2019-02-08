@@ -108,7 +108,7 @@ class TestRegress(tf.test.TestCase):
         self.assertAllClose(translation_want, translation_actual)
         self.assertAllClose(scale_want, scale_actual)
 
-    def test_losses(self):
+    def test_compute_loss_map(self):
         response_size = 7
         num_scales = 3
         translation_stride = 10
@@ -139,7 +139,7 @@ class TestRegress(tf.test.TestCase):
 
         for loss_name, loss_kwargs in losses.items():
             with util_test.try_sub_test(self, loss=loss_name):
-                _, loss = regress.compute_loss(
+                _, loss = regress.compute_loss_discrete(
                     scores, num_scales, translation_stride, scale_step, base_target_size,
                     _make_constant_batch(gt_translation),
                     _make_constant_batch(gt_size),

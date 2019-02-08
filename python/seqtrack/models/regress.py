@@ -27,7 +27,6 @@ from . import util
 from . import feature_nets
 from . import join_nets
 
-IMAGE_SUMMARIES_COLLECTIONS = ['image_summaries']
 MODE_KEYS_SUPERVISED = [tf.estimator.ModeKeys.TRAIN, tf.estimator.ModeKeys.EVAL]
 
 CONTEXT_SIZE = 195
@@ -43,16 +42,17 @@ def default_params():
         feather_margin=0.1,
         center_input_range=True,  # Make range [-0.5, 0.5] instead of [0, 1].
         keep_uint8_range=False,  # Use input range of 255 instead of 1.
-        response_stride=8,
-        response_size=17,
-        num_scales=5,
-        scale_step=1.02,
+        output_form='discrete',  # 'vector', 'discrete'
+        response_stride=8,  # if output_form == 'discrete'
+        response_size=17,  # if output_form == 'discrete'
+        num_scales=5,  # if output_form == 'discrete'
+        scale_step=1.02,  # if output_form == 'discrete'
         use_predictions=True,  # Use predictions for previous positions?
         scale_update_rate=1,
         arg_max_eps=0.0,
         # Loss parameters:
         wd=0.0,
-        loss_params=None,  # kwargs for compute_loss()
+        loss_params=None,  # kwargs for compute_loss_xxx()
     )
 
 
@@ -86,7 +86,7 @@ class MotionRegressor(object):
 
         self._num_frames = 0
         # For summaries in end():
-        self._info = {}
+        # self._info = {}
 
     def train(self, example, run_opts, scope='model'):
         '''
@@ -175,44 +175,58 @@ class MotionRegressor(object):
                 tf.summary.image('prev', context_curr)
             ims = tf.stack([context_curr, context_prev], axis=1)
 
+            if self.output_form == 'discrete':
+                output_shapes = {
+                    'response': [self.num_scales, self.response_size, self.response_size, 1]}
+            elif self.output_form == 'vector':
+                output_shapes = {'translation': [2], 'log_scale': [1]}
+            else:
+                raise ValueError('unknown output form: "{}"'.format(output_form))
+
             # Extract features, perform search, get receptive field of response wrt image.
             ims_preproc = self._preproc(ims)
-            # ims_preproc = cnn.as_tensor(ims_preproc, add_to_set=True)
             with tf.variable_scope('motion', reuse=(self._num_frames > 0)):
-                response = _motion_net(ims_preproc, run_opts['is_training'],
-                                       response_size=self.response_size,
-                                       num_scales=self.num_scales,
-                                       weight_decay=self.wd)
-            # response = cnn.get_value(response)
-            response = tf.verify_tensor_all_finite(response, 'response is not finite')
-
-            # mid_scale = (self.num_scales - 1) // 2
-            # self._info.setdefault('response', []).append(
-            #     _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
+                outputs = _motion_net(ims_preproc, output_shapes, run_opts['is_training'],
+                                      response_size=self.response_size,
+                                      num_scales=self.num_scales,
+                                      weight_decay=self.wd)
+            outputs = {k: tf.verify_tensor_all_finite(v, 'output "{}" not finite'.format(k))
+                       for k, v in outputs.items()}
 
             losses = {}
             if self.mode in MODE_KEYS_SUPERVISED:
                 # Get ground-truth translation and scale relative to context window.
                 gt_rect_in_context = geom.crop_rect(gt_rect, context_rect)
-                gt_translation, gt_rect_size = geom.rect_center_size(gt_rect_in_context)
+                gt_position, gt_rect_size = geom.rect_center_size(gt_rect_in_context)
+                gt_translation = gt_position - 0.5  # Displacement relative to center.
                 gt_size = helpers.scalar_size(gt_rect_size, self.aspect_method)
+                # Scale is size relative to target_size.
+                gt_scale = gt_size / (self.target_size / CONTEXT_SIZE)
+                gt_log_scale = tf.log(gt_scale)
 
-                # base_translations = ((self.response_stride / self.context_size) *
-                #                      util.displacement_from_center(self.response_size))
-                # scales = util.scale_range(tf.constant(self.num_scales),
-                #                           tf.to_float(self.scale_step))
-                base_target_size = self.target_size / CONTEXT_SIZE
-                translation_stride = self.response_stride / CONTEXT_SIZE
-
-                loss_name, loss = compute_loss(
-                    response,
-                    self.num_scales,
-                    translation_stride,
-                    self.scale_step,
-                    base_target_size,
-                    gt_translation,
-                    gt_size,
-                    **self.loss_params)
+                if self.output_form == 'discrete':
+                    # base_translations = ((self.response_stride / self.context_size) *
+                    #                      util.displacement_from_center(self.response_size))
+                    # scales = util.scale_range(tf.constant(self.num_scales),
+                    #                           tf.to_float(self.scale_step))
+                    base_target_size = self.target_size / CONTEXT_SIZE
+                    translation_stride = self.response_stride / CONTEXT_SIZE
+                    loss_name, loss = compute_loss_discrete(
+                        outputs['response'],
+                        self.num_scales,
+                        translation_stride,
+                        self.scale_step,
+                        base_target_size,
+                        gt_translation,
+                        gt_size,
+                        **self.loss_params)
+                else:
+                    loss_name, loss = compute_loss_vector(
+                        outputs['translation'],
+                        outputs['log_scale'],
+                        gt_translation,
+                        gt_log_scale,
+                        **self.loss_params)
 
                 # if reset_position:
                 #     # TODO: Something better!
@@ -221,36 +235,41 @@ class MotionRegressor(object):
                 #     losses[loss_name] = loss
                 losses[loss_name] = loss
 
-            scales = util.scale_range(tf.constant(self.num_scales), tf.to_float(self.scale_step))
+            if self.output_form == 'discrete':
+                response = outputs['response']
+                scales = util.scale_range(tf.constant(self.num_scales), tf.to_float(self.scale_step))
+                # Use pyramid from loss function to obtain position.
+                # Get relative translation and scale from response.
+                # TODO: Upsample to higher resolution than original image?
+                response_resize = cnn.get_value(cnn.upsample(
+                    response, self.response_stride, method=tf.image.ResizeMethod.BICUBIC))
+                response_final = response_resize
+                # if self.learn_motion:
+                #     response_final = response_resize
+                # else:
+                #     response_final = apply_motion_penalty(
+                #         response_resize, radius=self.window_radius * self.target_size,
+                #         **self.window_params)
+                translation, scale, in_arg_max = util.find_peak_pyr(
+                    response_final, scales, eps_abs=self.arg_max_eps)
+                scale = tf.expand_dims(scale, -1)  # [b, 1]
+                # Obtain translation in relative co-ordinates within search image.
+                translation = 1 / tf.to_float(CONTEXT_SIZE) * translation
+                # Get scalar representing confidence in prediction.
+                # Use raw appearance score (before motion penalty).
+                confidence = helpers.weighted_mean(response_resize, in_arg_max, axis=(-4, -3, -2))
+            else:
+                translation = outputs['translation']  # [b, 2]
+                scale = tf.exp(outputs['log_scale'])  # [b, 1]
 
-            # Use pyramid from loss function to obtain position.
-            # Get relative translation and scale from response.
-            # TODO: Upsample to higher resolution than original image?
-            response_resize = cnn.get_value(cnn.upsample(
-                response, self.response_stride, method=tf.image.ResizeMethod.BICUBIC))
-            response_final = response_resize
-            # if self.learn_motion:
-            #     response_final = response_resize
-            # else:
-            #     response_final = apply_motion_penalty(
-            #         response_resize, radius=self.window_radius * self.target_size,
-            #         **self.window_params)
-            translation, scale, in_arg_max = util.find_peak_pyr(
-                response_final, scales, eps_abs=self.arg_max_eps)
-            # Obtain translation in relative co-ordinates within search image.
-            translation = 1 / tf.to_float(CONTEXT_SIZE) * translation
-            # Get scalar representing confidence in prediction.
-            # Use raw appearance score (before motion penalty).
-            confidence = helpers.weighted_mean(response_resize, in_arg_max, axis=(-4, -3, -2))
             # Damp the scale update towards 1 (no change).
             # TODO: Should this be in log space?
             scale = self.scale_update_rate * scale + (1. - self.scale_update_rate) * 1.
             # Get rectangle in search image.
-            prev_target_in_search = geom.crop_rect(prev_target_rect, context_rect)
-            pred_in_search = _rect_translate_scale(prev_target_in_search, translation,
-                                                   tf.expand_dims(scale, -1))
+            prev_target_in_context = geom.crop_rect(prev_target_rect, context_rect)
+            pred_in_context = _rect_translate_scale(prev_target_in_context, translation, scale)
             # Move from search back to original image.
-            pred = geom.crop_rect(pred_in_search, geom.crop_inverse(context_rect))
+            pred = geom.crop_rect(pred_in_context, geom.crop_inverse(context_rect))
 
             # Limit size of object.
             pred = _clip_rect_size(pred, min_size=0.001, max_size=10.0)
@@ -263,7 +282,8 @@ class MotionRegressor(object):
                 next_prev_rect = gt_rect
 
             self._num_frames += 1
-            outputs = {'rect': pred, 'score': confidence}
+            # outputs = {'rect': pred, 'score': confidence}
+            predictions = {'rect': pred}
             state = {
                 'run_opts': run_opts,
                 'aspect': aspect,
@@ -272,14 +292,13 @@ class MotionRegressor(object):
                 'rect': next_prev_rect,
                 'mean_color': state['mean_color'],
             }
-            return outputs, state, losses
+            return predictions, state, losses
 
     def end(self):
         losses = {}
-        with tf.name_scope('summary'):
-            for key in self._info:
-                _image_sequence_summary(key, tf.stack(self._info[key], axis=1),
-                                        collections=IMAGE_SUMMARIES_COLLECTIONS)
+        # with tf.name_scope('summary'):
+        #     for key in self._info:
+        #         _image_sequence_summary(key, tf.stack(self._info[key], axis=1), axis=1)
         return losses
 
     # def init(self, sess):
@@ -351,14 +370,17 @@ def scale_sequence(num_scales, max_scale):
     return dict(num_scales=num_scales, scale_step=scale_step)
 
 
-def _motion_net(x, is_training, response_size, num_scales,
+def _motion_net(x, output_shapes, is_training, response_size, num_scales,
                 weight_decay=0):
     '''
     Args:
         x: [b, t, h, w, c]
+        output_shapes: Dict that maps string to iterable of ints.
+            e.g. {'response': [5, 17, 17, 1]} for a score-map
+            e.g. {'translation': [2]} for translation regression
 
     Returns:
-        [b, s, hr, wr, 1]
+        Dictionary of outputs with shape [b] + output_shape.
     '''
     assert len(x.shape) == 5
     with slim.arg_scope([slim.conv2d, slim.fully_connected],
@@ -391,11 +413,17 @@ def _motion_net(x, is_training, response_size, num_scales,
             x = tf.squeeze(x, axis=(-3, -2))
             x = slim.fully_connected(x, 4096, scope='fc7')
             # Regress to score map.
-            output_shape = [num_scales, response_size, response_size, 1]
-            x = slim.fully_connected(x, np.asscalar(np.prod(output_shape)), scope='fc8',
-                                     activation_fn=None, normalizer_fn=None)
-            x = helpers.split_dims(x, axis=-1, shape=output_shape)
-            return x
+            y = {}
+            for k in output_shapes.keys():
+                with tf.variable_scope('head_{}'.format(k)):
+                    y[k] = x
+                    output_dim = np.asscalar(np.prod(output_shapes[k]))
+                    y[k] = slim.fully_connected(y[k], output_dim, scope='fc8',
+                                                activation_fn=None, normalizer_fn=None)
+                    if len(output_shapes[k]) > 1:
+                        y[k] = helpers.split_dims(y[k], axis=-1, shape=output_shapes[k])
+
+            return y
 
 
 def _to_uint8(x):
@@ -417,25 +445,34 @@ def _get_context_rect(rect, context_amount, aspect, aspect_method):
     return context, square
 
 
-def _add_learnable_motion_prior(response, name='motion_prior'):
-    with tf.name_scope(name) as scope:
-        response_shape = response.shape[-3:].as_list()
-        assert response_shape[-1] == 1
-        prior = slim.model_variable('prior', shape=response_shape, dtype=tf.float32,
-                                    initializer=tf.zeros_initializer(dtype=tf.float32))
-        # self._info.setdefault('response_appearance', []).append(
-        #     _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
-        # if self._num_frames == 0:
-        #     tf.summary.image(
-        #         'motion_prior', max_outputs=1,
-        #         tensor=_to_uint8(util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
-        #         collections=IMAGE_SUMMARIES_COLLECTIONS)
-        return response + prior
+def compute_loss_vector(translation, log_scale, gt_translation, gt_log_scale,
+                        translation_radius=1.0,
+                        log_scale_radius=1.0):
+    '''
+    Args:
+        translation: [b, 2]
+        log_scale: [b, 1]
+        gt_translation: [b, 2]
+        gt_log_scale: [b, 1]
+
+    Returns:
+        name: String
+        loss: Tensor of shape [b]
+    '''
+    tf.summary.histogram('translation', translation)
+    tf.summary.histogram('log_scale', log_scale)
+    tf.summary.histogram('gt_translation', gt_translation)
+    tf.summary.histogram('gt_log_scale', gt_log_scale)
+    err_translation = (1 / translation_radius) * (translation - gt_translation)
+    err_log_scale = (1 / log_scale_radius) * (log_scale - gt_log_scale)
+    loss = tf.norm(err_translation, axis=-1) + tf.norm(err_log_scale, axis=-1)
+    loss_name = 'norm_translation_{}_log_scale_{}'.format(translation_radius, log_scale_radius)
+    return loss_name, loss
 
 
-def compute_loss(scores, num_scales, translation_stride, scale_step, base_target_size,
-                 gt_translation, gt_size,
-                 method='sigmoid', params=None):
+def compute_loss_discrete(scores, num_scales, translation_stride, scale_step, base_target_size,
+                          gt_translation, gt_size,
+                          method='sigmoid', params=None):
     '''
     Args:
         scores: [b, s, h, w, 1]
@@ -540,7 +577,8 @@ def multiscale_sigmoid_cross_entropy_loss(
     # Remove singleton channels dimension.
     loss = tf.squeeze(loss, -1)
 
-    _image_pyramid_summary(labels, axis=1, name='summary_labels')
+    _image_sequence_summary('scores_pyramid', scores, axis=1)
+    _image_sequence_summary('labels_pyramid', labels, axis=1)
 
     # Reflect all parameters that affect magnitude of loss.
     # (Losses with same name are comparable.)
@@ -635,21 +673,8 @@ def _rect_translate_scale(rect, translate, scale, name='rect_translate_scale'):
         scale: [..., 1]
     '''
     with tf.name_scope(name) as scope:
-        min_pt, max_pt = geom.rect_min_max(rect)
-        center, size = 0.5 * (min_pt + max_pt), max_pt - min_pt
-        center += translate
-        size *= scale
-        return geom.make_rect(center - 0.5 * size, center + 0.5 * size)
-
-
-def _image_sequence_summary(name, tensor, **kwargs):
-    '''
-    Args:
-        tensor: [b, t, h, w, c]
-    '''
-    ntimesteps = tensor.shape.as_list()[-4]
-    assert ntimesteps is not None
-    tf.summary.image(name, tensor[0], max_outputs=ntimesteps, **kwargs)
+        center, size = geom.rect_center_size(rect)
+        return geom.make_rect_center_size(center + translate, size * scale)
 
 
 def _clip_rect_size(rect, min_size=None, max_size=None, name='clip_rect_size'):
@@ -662,12 +687,12 @@ def _clip_rect_size(rect, min_size=None, max_size=None, name='clip_rect_size'):
         return geom.make_rect_center_size(center, size)
 
 
-def _image_pyramid_summary(im, axis, name='pyramid', **kwargs):
-    with tf.name_scope(name):
-        labels = tf.unstack(im, axis=axis)
-        with tf.name_scope('scales'):
-            for i in range(len(labels)):
-                tf.summary.image(str(i), labels[i], **kwargs)
+def _image_sequence_summary(name, sequence, axis=1, **kwargs):
+    with tf.name_scope(name) as scope:
+        elems = tf.unstack(sequence, axis=axis)
+        with tf.name_scope('elems'):
+            for i in range(len(elems)):
+                tf.summary.image(str(i), elems[i], **kwargs)
 
 
 LABEL_FNS = {

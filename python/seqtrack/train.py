@@ -501,11 +501,10 @@ def train_model_data(
     with tf.variable_scope('model', reuse=False) as vs:
         ops = iter_model_fn.train(example, run_opts=run_opts, scope=vs)
         # outputs, losses, init_state, final_state = model_fn.instantiate(
-        #     example_input, run_opts, enable_loss=True,
-        #     image_summaries_collections=['IMAGE_SUMMARIES'])
+        #     example_input, run_opts, enable_loss=True)
     metric_vars.update(ops.losses)
     _loss_summary(ops.losses)
-    # _image_summary(example, outputs)
+    _image_summary(example, ops)
     # loss_var = _add_losses(losses, args.loss_coeffs)
     loss_var = _add_losses(ops.losses, {})
 
@@ -532,7 +531,7 @@ def train_model_data(
 
     lr = make_learning_rate(global_step_var, params.num_steps, params.lr_init,
                             schedule=params.lr_schedule, schedule_params=params.lr_params)
-    tf.summary.scalar('lr', lr, collections=['summaries_train'])
+    tf.summary.scalar('lr', lr)
     optimizer_obj = make_optimizer(lr, params.optimizer, **(params.optimizer_params or {}))
     grads_and_vars = optimizer_obj.compute_gradients(loss_var)
     if params.grad_clip:
@@ -541,21 +540,9 @@ def train_model_data(
     with tf.control_dependencies(update_ops):
         optimize_op = optimizer_obj.apply_gradients(grads_and_vars, global_step=global_step_var)
 
-    summary_vars = {}
-    summary_vars_with_preview = {}
-    global_summaries = tf.get_collection(tf.GraphKeys.SUMMARIES)
-    with tf.name_scope('summary'):
-        image_summaries = tf.get_collection('IMAGE_SUMMARIES')
-        for mode in modes:
-            with tf.name_scope(mode):
-                # Merge summaries with any that are specific to the mode.
-                summaries = (global_summaries + tf.get_collection('summaries_' + mode))
-                summary_vars[mode] = tf.summary.merge(summaries)
-                summaries.extend(image_summaries)
-                # Assume that model summaries could contain images.
-                # TODO: Separate model summaries into image and non-image.
-                summaries.extend(tf.get_collection('summaries_model'))
-                summary_vars_with_preview[mode] = tf.summary.merge(summaries)
+    # Get summaries for train/val instance (before instantiating test instance).
+    # TODO: Better that the model returns its summaries?
+    summary_var = tf.summary.merge(tf.get_collection(tf.GraphKeys.SUMMARIES))
 
     model_fn_track = create_iter_model_fn(mode=tf.estimator.ModeKeys.PREDICT)
     # TODO: Ensure that the `track` instance does not include ops such as bnorm and summaries.
@@ -703,9 +690,6 @@ def train_model_data(
                          run_opts['gt_ratio']: gt_ratio,
                          switch_handle: iterator_handles['train']}
             if global_step % period_summary == 0:
-                summary_var = (summary_vars_with_preview['train']
-                               if global_step % period_preview == 0
-                               else summary_vars['train'])
                 _, loss, train_metrics, summary = sess.run(
                     [optimize_op, loss_var, metric_vars, summary_var], feed_dict=feed_dict)
                 dur = time.time() - start
@@ -727,9 +711,6 @@ def train_model_data(
                              run_opts['is_tracking']: False,
                              run_opts['gt_ratio']: gt_ratio,  # Match training.
                              switch_handle: iterator_handles['val']}
-                summary_var = (summary_vars_with_preview['val']
-                               if global_step % period_preview == 0
-                               else summary_vars['val'])
                 # For now assume that val_metrics variables are same as train_metrics.
                 loss_val, val_metrics, summary = sess.run(
                     [loss_var, metric_vars, summary_var], feed_dict=feed_dict)
@@ -859,31 +840,81 @@ def _loss_summary(losses, name='loss_summary'):
             tf.summary.scalar(key, loss)
 
 
-def _image_summary(example, outputs, name='image_summary'):
+def _image_summary(example, ops, name='image_summary'):
     with tf.name_scope(name) as scope:
-        ntimesteps = example['x'].shape.as_list()[1]
-        assert ntimesteps is not None
-        tf.summary.image(
-            'image_0', max_outputs=1, collections=['IMAGE_SUMMARIES'],
-            tensor=_draw_rectangles([example['x0'][0]], gt=[example['y0'][0]]))
-        tf.summary.image(
-            'image_1_to_n', max_outputs=ntimesteps, collections=['IMAGE_SUMMARIES'],
-            tensor=_draw_rectangles(example['x'][0], gt=example['y'][0], pred=outputs['y'][0],
-                                    gt_is_valid=example['y_is_valid'][0]))
+        first = _draw_rectangles(
+            example.features_init['image']['data'],
+            gt=example.features_init['rect'])
+        rest = _draw_rectangles(
+            example.features['image']['data'],
+            gt=example.labels['rect'],
+            gt_is_valid=example.labels['valid'],
+            pred=ops.predictions['rect'])
+        # tf.summary.image('image_0', first)
+        # _image_sequence_summary('image_1_to_n', rest)
+        sequence = tf.concat([tf.expand_dims(first, axis=1), rest], axis=1)
+        _image_sequence_summary('image', sequence)
+
+        # Create a blend of each two adjacent images.
+        consecutive = _blend(sequence[:, :-1], sequence[:, 1:], 0.7)
+        _image_sequence_summary('consecutive', consecutive)
 
 
-def _draw_rectangles(im, gt, gt_is_valid=None, pred=None):
-    im = tf.convert_to_tensor(im)
-    if im.dtype != tf.float32:
-        im = tf.image.convert_image_dtype(im, tf.float32)
-    if gt_is_valid is not None:
-        gt = tf.where(gt_is_valid, gt, tf.zeros_like(gt) + geom.unit_rect())
-    boxes = [gt]
-    if pred is not None:
-        boxes.append(pred)
-    boxes = list(map(geom.rect_to_tf_box, boxes))
-    im = tf.image.draw_bounding_boxes(im, tf.stack(boxes, axis=1))
-    return tf.image.convert_image_dtype(im, tf.uint8, saturate=True)
+def _blend(a, b, alpha=0.5):
+    result = ((1 - alpha) * tf.image.convert_image_dtype(a, tf.float32) +
+              alpha * tf.image.convert_image_dtype(b, tf.float32))
+    return tf.image.convert_image_dtype(result, tf.uint8, saturate=True)
+
+
+def _image_sequence_summary(name, sequence, axis=1, **kwargs):
+    with tf.name_scope(name) as scope:
+        elems = tf.unstack(sequence, axis=axis)
+        with tf.name_scope('elems'):
+            for i in range(len(elems)):
+                tf.summary.image(str(i), elems[i], **kwargs)
+
+
+def _draw_rectangles(im, gt, gt_is_valid=None, pred=None, name='draw_rectangles'):
+    '''
+    Args:
+        im: Tensor [..., h, w, c]
+        gt: Tensor [..., 4]
+        gt_is_valid: Tensor [...] or None
+        pred: Tensor [..., 4] or None
+    '''
+    with tf.name_scope(name) as scope:
+        im = tf.convert_to_tensor(im)
+        num_batch_dims = len(im.shape) - 3
+        assert len(gt.shape) == num_batch_dims + 1
+        print('im.shape', im.shape, file=sys.stderr)
+        print('gt.shape', gt.shape, file=sys.stderr)
+        if gt_is_valid is not None:
+            assert len(gt_is_valid.shape) == num_batch_dims
+        if pred is not None:
+            print('pred.shape', pred.shape, file=sys.stderr)
+            assert len(pred.shape) == num_batch_dims + 1
+
+        if im.dtype != tf.float32:
+            im = tf.image.convert_image_dtype(im, tf.float32)
+        if gt_is_valid is not None:
+            gt = tf.where(tf.broadcast_to(tf.expand_dims(gt_is_valid, -1), gt.shape),
+                          gt,
+                          tf.broadcast_to(geom.unit_rect(), gt.shape))
+        rects = [gt]
+        if pred is not None:
+            rects.append(pred)
+        rects = tf.stack(rects, axis=-2)  # [..., num_rects, 4]
+
+        # Flatten batch to draw boxes.
+        if num_batch_dims > 1:
+            im, restore_im = helpers.merge_dims(im, 0, num_batch_dims)
+            rects, _ = helpers.merge_dims(rects, 0, num_batch_dims)
+        im = tf.image.draw_bounding_boxes(im, geom.rect_to_tf_box(rects))
+        if num_batch_dims > 1:
+            im = restore_im(im, axis=0)
+
+        im = tf.image.convert_image_dtype(im, tf.uint8, saturate=True)
+        return im
 
 
 def _evaluate_at_existing_checkpoints(saver, eval_sets, sess, model_inst,
