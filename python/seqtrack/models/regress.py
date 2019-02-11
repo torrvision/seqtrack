@@ -36,7 +36,7 @@ def default_params():
     return dict(
         target_size=64,
         # image_size=640,
-        aspect_method='perimeter',  # TODO: Equivalent to SiamFC?
+        aspect_method='perimeter',
         pad_with_mean=True,  # Use mean of first image for padding.
         feather=False,
         feather_margin=0.1,
@@ -50,6 +50,7 @@ def default_params():
         use_predictions=True,  # Use predictions for previous positions?
         scale_update_rate=1,
         arg_max_eps=0.0,
+        stateless=False,  # Ignore previous image.
         # Loss parameters:
         wd=0.0,
         loss_params=None,  # kwargs for compute_loss_xxx()
@@ -162,7 +163,7 @@ class MotionRegressor(object):
             else:
                 gt_rect = None
             # Use the previous rectangle.
-            # This will be the ground-truth rect during training if `use_predictions` is true.
+            # This will be the ground-truth rect during training if `use_predictions` is false.
             prev_target_rect = state['rect']
 
             # Coerce the aspect ratio of the rectangle to construct the context area.
@@ -173,7 +174,8 @@ class MotionRegressor(object):
             with tf.name_scope('summary_context'):
                 tf.summary.image('curr', context_curr)
                 tf.summary.image('prev', context_curr)
-            ims = tf.stack([context_curr, context_prev], axis=1)
+            ims = [context_curr] if self.stateless else [context_curr, context_prev]
+            ims = tf.stack(ims, axis=1)
 
             if self.output_form == 'discrete':
                 output_shapes = {
