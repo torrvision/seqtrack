@@ -51,7 +51,7 @@ def instantiate_unroll(iter_model_fn, example, run_opts, scope='model'):
         state_final = state
 
         extra_losses = iter_model_fn.end()
-        _assert_no_keys_in_common(losses, extra_losses)
+        helpers.assert_no_keys_in_common(losses, extra_losses)
         losses.update(extra_losses)
         return OperationsUnroll(
             predictions=predictions,
@@ -59,12 +59,6 @@ def instantiate_unroll(iter_model_fn, example, run_opts, scope='model'):
             state_init=state_init,
             state_final=state_final,
         )
-
-
-def _assert_no_keys_in_common(a, b):
-    intersection = set(a.keys()).intersection(set(b.keys()))
-    if intersection:
-        raise ValueError('keys in common: {}'.format(str(intersection)))
 
 
 OperationsIterAssign = collections.namedtuple('OperationsIterAssign', [
@@ -110,6 +104,8 @@ def _get_local_variable_like(x):
     '''
     Shape of `x` must be known!
     '''
+    if any(d is None for d in x.shape.as_list()):
+        raise RuntimeError('shape not static: variable {} has shape {}'.format(x, x.shape))
     return tf.get_local_variable(_escape(x.name),
                                  initializer=tf.zeros(shape=x.shape, dtype=x.dtype))
 
