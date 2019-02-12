@@ -152,6 +152,7 @@ def train(
         dir=None,
         tmp_dir=None,
         # only_evaluate_existing=False,
+        # override_ckpt_dir=None,
         data_dir=None,
         use_tmp_data_dir=False,
         untar=False,
@@ -190,25 +191,8 @@ def train(
     assert params_dict is not None
     params = TrainParams(**params_dict)
 
-    # Wipe directory if it exists.
-    if dir is None:
-        raise ValueError('dir not specified')
-    # if not resume:
-    #     _make_empty_dir(dir)
-    _make_empty_dir(dir)
-
-    helpers.mkdir_p(os.path.join(dir, 'output'))
-    json_codec = helpers.CODECS['json']
-    with open(os.path.join(dir, 'output', 'model_params.json'), 'w') as f:
-        json_codec.dump(params.model_params, f)
-
     tf.reset_default_graph()
     _set_global_seed(params.seed)  # Caution: Global side effects!
-
-    # # TODO: Move? Modifying params is ugly?
-    # if only_evaluate_existing:
-    #     params.train_dataset = None
-    #     params.val_dataset = None
 
     if use_tmp_data_dir:
         untar = True
@@ -250,8 +234,15 @@ def train(
 
     train_series, track_series = train_model_data(
         params, dir, create_iter_model_fn, example_streams, eval_sample_fns,
-        # only_evaluate_existing=only_evaluate_existing,
         **kwargs)
+
+    # Dump time-series for training and tracking for each seed.
+    if train_series:
+        with open(os.path.join(dir, 'output', 'train_series.csv'), 'w') as f:
+            helpers.dump_csv(f, _flatten_dicts(train_series))
+    if track_series:
+        with open(os.path.join(dir, 'output', 'track_series.csv'), 'w') as f:
+            helpers.dump_csv(f, _flatten_dicts(track_series))
 
     result = make_train_result(
         model_properties={},
@@ -259,13 +250,6 @@ def train(
         train_series=train_series,
         track_series=track_series,
     )
-
-    # Dump time-series for training and tracking for each seed.
-    with open(os.path.join(dir, 'output', 'train_series.csv'), 'w') as f:
-        helpers.dump_csv(f, _flatten_dicts(result['train_series']))
-    with open(os.path.join(dir, 'output', 'track_series.csv'), 'w') as f:
-        helpers.dump_csv(f, _flatten_dicts(result['track_series']))
-
     return result
 
 
@@ -398,8 +382,8 @@ def _make_video_sampler(names, datasets, seed, repeat):
 def train_model_data(
         params,
         dir, create_iter_model_fn, sequences, eval_sets,
-        # override_ckpt_dir=None,
-        # only_evaluate_existing=False,
+        only_evaluate_existing=False,
+        override_ckpt_dir=None,  # Use with `only_evaluate_existing`.
         resume=False,
         tfdb=False,
         use_queues=True,
@@ -450,16 +434,26 @@ def train_model_data(
     '''
     session_config_kwargs = session_config_kwargs or {}
 
-    if not os.path.exists(dir):
-        os.makedirs(dir, 0o755)
-    # path_ckpt = override_ckpt_dir or os.path.join(dir, 'ckpt')
-    path_ckpt = os.path.join(dir, 'ckpt')
+    if not dir:
+        raise ValueError('dir not specified')
+    # If this is a fresh start, wipe the entire train dir.
+    if not (resume or only_evaluate_existing):
+        helpers.rmtree_f(dir)
+    # Ensure that the train dir exists.
+    helpers.mkdir_p(dir)
+
+    path_ckpt = override_ckpt_dir or os.path.join(dir, 'ckpt')
     path_output = os.path.join(dir, 'output')
     if summary_dir:
         assert summary_name is not None
         path_summary = os.path.join(summary_dir, summary_name)
     else:
         path_summary = os.path.join(dir, 'summary')
+    helpers.mkdir_p(path_output)
+
+    json_codec = helpers.CODECS['json']
+    with open(os.path.join(dir, 'output', 'model_params.json'), 'w') as f:
+        json_codec.dump(params.model_params, f)
 
     # How should we compute training and validation error with pipelines?
     # Option 1 is to have multiple copies of the network with shared parameters.
@@ -610,18 +604,18 @@ def train_model_data(
 
         iterator_handles = {mode: sess.run(iterators[mode].string_handle()) for mode in modes}
 
-        # if only_evaluate_existing:
-        #     return _evaluate_at_existing_checkpoints(
-        #         saver, eval_sets, sess, model_inst,
-        #         path_ckpt=path_ckpt,
-        #         period_skip=period_skip,
-        #         period_assess=period_assess,
-        #         extra_assess=extra_assess,
-        #         # For _evaluate():
-        #         eval_tre_num=eval_tre_num,
-        #         path_output=path_output,
-        #         visualize=visualize,
-        #         keep_frames=keep_frames)
+        if only_evaluate_existing:
+            return _evaluate_at_existing_checkpoints(
+                saver, eval_sets, sess, model_inst_track,
+                path_ckpt=path_ckpt,
+                period_skip=params.period_skip,
+                period_assess=params.period_assess,
+                extra_assess=params.extra_assess,
+                # For _evaluate():
+                eval_tre_num=params.eval_tre_num,
+                path_output=path_output,
+                visualize=visualize,
+                keep_frames=keep_frames)
 
         # 1. resume (full restore), 2. initialize from scratch, 3. curriculume learning (partial restore)
         prev_ckpt = 0
@@ -896,7 +890,8 @@ def _evaluate_at_existing_checkpoints(saver, eval_sets, sess, model_inst,
     '''
     # TODO: Add option to raise exception if not all requested checkpoints exist.
 
-    metrics = {}
+    train_series = {}
+    track_series = {}
     # Identify which checkpoints are available.
     state = tf.train.get_checkpoint_state(path_ckpt)
     logger.debug('model files: %s', state.all_model_checkpoint_paths)
@@ -904,8 +899,7 @@ def _evaluate_at_existing_checkpoints(saver, eval_sets, sess, model_inst,
                    for s in state.all_model_checkpoint_paths}
     # Identify which of these satisfy conditions.
     subset = sorted([index for index in model_files
-                     if (index in extra_assess or
-                         (index >= period_skip and index % period_assess == 0))])
+                     if _to_assess_step(index, period_assess, period_skip, extra_assess)])
     logger.debug('global steps to assess: %s', subset)
     # Evaluate each (with cache).
     for global_step in subset:
@@ -913,8 +907,9 @@ def _evaluate_at_existing_checkpoints(saver, eval_sets, sess, model_inst,
         for eval_id, sampler in eval_sets.items():
             eval_sequences = sampler()
             result = _evaluate(global_step, eval_id, sess, model_inst, eval_sequences, **kwargs)
-            metrics.setdefault(global_step, {})[eval_id] = result
-    return metrics
+            track_series.setdefault(global_step, {})[eval_id] = result
+
+    return train_series, track_series
 
 
 def _index_from_checkpoint(s):
@@ -1276,9 +1271,3 @@ def _flatten_dicts(series):
 
 def _identity(x):
     return x
-
-
-def _make_empty_dir(path):
-    if os.path.isdir(path):
-        shutil.rmtree(path)
-    helpers.mkdir_p(path)

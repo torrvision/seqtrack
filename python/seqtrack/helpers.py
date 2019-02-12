@@ -461,6 +461,7 @@ def default_print_func(i, n, time_elapsed):
             str(datetime.timedelta(seconds=round(time_rem))),
             str(datetime.timedelta(seconds=round(time_total))))
     print(progress_str, file=sys.stderr)
+    sys.stderr.flush()
 
 
 def map_dict_list(func, items):
@@ -664,6 +665,11 @@ def dump_csv(f, series, sort_keys=True, sort_fields=True):
         assert 'key' not in row
         row['key'] = key
         writer.writerow(row)
+
+
+def rmtree_f(path):
+    if os.path.exists(path):
+        shutil.rmtree(path)
 
 
 def mkdir_p(*args, **kwargs):

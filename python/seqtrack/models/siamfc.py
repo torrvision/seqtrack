@@ -74,6 +74,8 @@ def default_params():
         scale_step=1.03,
         scale_update_rate=1,
         report_square=False,
+        normalize_method='mean',
+        window_enable=False,
         window_params=None,
         window_radius=1.0,
         arg_max_eps=0.0,
@@ -248,7 +250,10 @@ class SiamFC(object):
             else:
                 num_scales = 1
             mid_scale = (num_scales - 1) // 2
-            scales = util.scale_range(tf.constant(num_scales), tf.to_float(self.scale_step))
+            if self.num_scales == 1:
+                scales = tf.constant([1.0], dtype=tf.float32)
+            else:
+                scales = util.scale_range(tf.constant(num_scales), tf.to_float(self.scale_step))
             search_ims, search_rects = self._crop_pyr(
                 im, search_rect, self.search_size, scales, mean_color)
 
@@ -311,18 +316,21 @@ class SiamFC(object):
                 # Use pyramid from loss function to obtain position.
                 # Get relative translation and scale from response.
                 # TODO: Upsample to higher resolution than original image?
-                response_resize = cnn.get_value(cnn.upsample(
+                response = cnn.get_value(cnn.upsample(
                     response, rf_response.stride, method=tf.image.ResizeMethod.BICUBIC))
-                response_final = apply_motion_penalty(
-                    response_resize, radius=self.window_radius * self.target_size,
-                    **self.window_params)
+                response_appearance = response
+                response = normalize_scores(response, self.normalize_method)
+                if self.window_enable:
+                    response = apply_motion_penalty(
+                        response, radius=self.window_radius * self.target_size,
+                        **self.window_params)
                 translation, scale, in_arg_max = util.find_peak_pyr(
-                    response_final, scales, eps_abs=self.arg_max_eps)
+                    response, scales, eps_abs=self.arg_max_eps)
                 # Obtain translation in relative co-ordinates within search image.
                 translation = 1 / tf.to_float(self.search_size) * translation
                 # Get scalar representing confidence in prediction.
                 # Use raw appearance score (before motion penalty).
-                confidence = weighted_mean(response_resize, in_arg_max, axis=(-4, -3, -2))
+                confidence = weighted_mean(response_appearance, in_arg_max, axis=(-4, -3, -2))
                 # Damp the scale update towards 1 (no change).
                 # TODO: Should this be in log space?
                 scale = self.scale_update_rate * scale + (1. - self.scale_update_rate) * 1.
@@ -548,7 +556,6 @@ def _branch_net_receptive_field(arch='alexnet',
 
 
 def apply_motion_penalty(scores, radius,
-                         normalize_method='mean',
                          window_profile='hann',
                          window_mode='radial',
                          combine_method='mul',
@@ -558,8 +565,6 @@ def apply_motion_penalty(scores, radius,
         scores: [n, s, h, w, c]
     '''
     assert len(scores.shape) == 5
-    scores = _normalize_scores(scores, normalize_method)
-
     score_size = scores.shape[-3:-1].as_list()
     window = _make_window(score_size, window_profile, radius=radius, mode=window_mode)
     window = tf.expand_dims(window, -1)
@@ -573,7 +578,7 @@ def apply_motion_penalty(scores, radius,
     return scores
 
 
-def _normalize_scores(scores, method, eps=1e-3):
+def normalize_scores(scores, method, eps=1e-3):
     '''
     Args:
         method: 'none', 'mean', 'sigmoid'
@@ -612,7 +617,7 @@ def _make_window(size, profile, radius, mode='radial', name='make_window'):
 
         if mode == 'radial':
             w = window_fn(tf.sqrt(tf.reduce_sum(tf.square(u), axis=-1)))
-        elif mode == 'cartesian':
+        elif mode == 'cartesian' or mode == 'cartesian_mul':
             w = tf.reduce_prod(window_fn(u), axis=-1)
         else:
             raise ValueError('unknown mode: "{}"'.format(mode))
