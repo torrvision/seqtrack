@@ -189,6 +189,38 @@ def _rect_from_label(label):
     return geom_np.make_rect(min_pt, max_pt)
 
 
+class ExampleTypeKeys(object):
+    '''Types of example for training.
+
+    Different examples may have different `features` and `labels`.
+
+    CONSECUTIVE:
+    The frames represent consecutive frames of video.
+    features:
+        image_init: [b, h, w, c]
+        rect_init: [b, 4]
+        images:
+            data: [b, t, h, w, c]
+    labels:
+        valid: [b, t]
+        rects: [b, t, 4]
+
+    UNORDERED:
+    The images have no temporal relation.
+    The `features` and `labels` are the same as CONSECUTIVE.
+
+    SEPARATE_INIT:
+    The initial frame defines the appearance model.
+    But then this model should be used from the position in the next frame.
+    The `features` and `labels` are the same as CONSECUTIVE.
+    The first label should be valid.
+    '''
+
+    CONSECUTIVE = 'consecutive'
+    UNORDERED = 'unordered'
+    SEPARATE_INIT = 'separate_init'
+
+
 ExampleSequence = collections.namedtuple('ExampleSequence', [
     'features_init',
     'features',
@@ -261,7 +293,7 @@ def times_uniform(rand, seq_len, valid_set, ntimesteps):
     return times
 
 
-def times_regular(rand, seq_len, valid_set, freq):
+def times_regular(rand, seq_len, valid_set, ntimesteps, freq):
     '''Samples a sub-sequence with a fixed frequency.
 
     May choose a sub-sequence with no valid frames except the first.
@@ -269,10 +301,10 @@ def times_regular(rand, seq_len, valid_set, freq):
     # Sample frames with `freq`, regardless of label
     # (only the first frame need to have label).
     # Note also that the returned frames can have length < ntimesteps+1.
-    a = rand.choice(sorted(seq.valid_set))
+    a = rand.choice(sorted(valid_set))
     times = [int(round(a + freq * i)) for i in range(ntimesteps + 1)]
-    times = [t for t in times if t < len(seq)]
-    return sequence_to_example(select_frames(seq, times))
+    times = [t for t in times if t < seq_len]
+    return times
 
 
 def times_freq_range(rand, seq_len, valid_set, ntimesteps, min_freq, max_freq, use_log):

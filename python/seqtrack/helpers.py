@@ -155,7 +155,7 @@ def merge_dims(x, a, b, name='merge_dims'):
         return y, restore_fn
 
 
-def split_dims(v, axis, shape, name='restore'):
+def split_dims(v, axis, shape, name='split'):
     '''Split single dimension `axis` into `shape`.'''
     with tf.name_scope(name) as scope:
         m = len(v.shape)
@@ -163,7 +163,7 @@ def split_dims(v, axis, shape, name='restore'):
         v_dynamic = tf.unstack(tf.shape(v))
         v_static = v.shape.as_list()
         v_shape = [v_static[i] or v_dynamic[i] for i in range(m)]
-        u_shape = v_shape[:axis] + list(shape) + v_shape[axis + 1:]
+        u_shape = v_shape[:axis] + list(shape) + v_shape[axis:][1:]
         u = tf.reshape(v, u_shape)
         return u
 
@@ -308,6 +308,16 @@ def modify_aspect_ratio(rect, method='stretch', name='modify_aspect_ratio'):
                                           keepdims=True))
             return geom.make_rect(center - 0.5 * width, center + 0.5 * width)
         raise ValueError('unknown method: {}'.format(method))
+
+
+def scalar_size(size, method, axis=-1, keepdims=False, name='rect_magnitude'):
+    with tf.name_scope(name) as scope:
+        if method == 'perimeter':
+            return tf.reduce_mean(size, axis=axis, keepdims=keepdims)
+        elif method == 'area':
+            return tf.exp(tf.reduce_mean(tf.log(size), axis=axis, keepdims=keepdims))
+        else:
+            raise ValueError('unknown method: {}'.format(method))
 
 
 def get_act(act):
@@ -711,3 +721,9 @@ def get_unique_value(elems):
     values = set(iterator)
     value, = values
     return value
+
+
+def assert_no_keys_in_common(a, b):
+    intersection = set(a.keys()).intersection(set(b.keys()))
+    if intersection:
+        raise ValueError('keys in common: {}'.format(str(intersection)))

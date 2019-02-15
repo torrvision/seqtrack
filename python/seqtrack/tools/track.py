@@ -20,8 +20,8 @@ from seqtrack import track
 from seqtrack import train
 from seqtrack import geom_np
 from seqtrack import data
+from seqtrack import models
 from seqtrack.models import itermodel
-from seqtrack.models import siamfc
 import trackdat
 
 
@@ -41,7 +41,8 @@ def main():
     elif args.model_params:
         model_params = args.model_params
 
-    model_fn = siamfc.SiamFC(mode=tf.estimator.ModeKeys.PREDICT, **model_params)
+    create_model_fn = models.BY_NAME[args.model_name]
+    model_fn = create_model_fn(mode=tf.estimator.ModeKeys.PREDICT, **model_params)
     # TODO: Ensure that the `track` instance does not include ops such as bnorm and summaries.
     # Feed image files here:
     example_with_files = train._make_iter_placeholders(batch_size=1)
@@ -138,6 +139,7 @@ def parse_arguments():
     app.add_instance_arguments(parser)
 
     # TODO: Move to app?
+    parser.add_argument('--model_name', default='siamfc', help='String to identify model type')
     parser.add_argument('--model_params', type=json.loads, help='JSON string')
     parser.add_argument('--model_params_file', type=str, help='JSON file')
 
