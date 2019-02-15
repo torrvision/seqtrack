@@ -471,6 +471,7 @@ def default_print_func(i, n, time_elapsed):
             str(datetime.timedelta(seconds=round(time_rem))),
             str(datetime.timedelta(seconds=round(time_total))))
     print(progress_str, file=sys.stderr)
+    sys.stderr.flush()
 
 
 def map_dict_list(func, items):
@@ -650,7 +651,7 @@ def flatten_items(items):
 
     This is useful for constructing a `feed_dict` when the key is a dictionary of tensors.
 
-    >>> flatten_items([(1, 2), ([3, 4], [5, 6]), ({'a': 7, 'b': 8}, {'a': 9, 'b': 10})])
+    >>> dict(flatten_items([(1, 2), ([3, 4], [5, 6]), ({'a': 7, 'b': 8}, {'a': 9, 'b': 10})]))
     {1: 2, 3: 5, 4: 6, 7: 9, 8: 10}
     '''
     for k, v in items:
@@ -674,6 +675,11 @@ def dump_csv(f, series, sort_keys=True, sort_fields=True):
         assert 'key' not in row
         row['key'] = key
         writer.writerow(row)
+
+
+def rmtree_f(path):
+    if os.path.exists(path):
+        shutil.rmtree(path)
 
 
 def mkdir_p(*args, **kwargs):

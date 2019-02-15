@@ -57,6 +57,7 @@ def default_params():
         join_params=None,
         multi_join_layers=None,
         feature_model_file='',
+        learn_appearance=True,
         use_predictions=True,  # Use predictions for previous positions?
         # Tracking parameters:
         num_scales=5,
@@ -278,7 +279,6 @@ class SiamFlow(object):
                 # Regress response to translation and log(scale).
                 output_shapes = {'translation': [2], 'log_scale': [1]}
                 outputs = _output_net(response, output_shapes, run_opts['is_training'],
-                                      num_scales=self.num_scales,
                                       weight_decay=self.wd)
 
             _image_sequence_summary('response',
@@ -340,7 +340,8 @@ class SiamFlow(object):
                 next_prev_rect = pred
 
             self._num_frames += 1
-            outputs = {'rect': pred, 'score': confidence}
+            # outputs = {'rect': pred, 'score': confidence}
+            outputs = {'rect': pred}
             state = {
                 'run_opts': run_opts,
                 'aspect': aspect,
@@ -612,6 +613,8 @@ def _output_net(x, output_shapes, is_training, weight_decay=0):
                         normalizer_fn=slim.batch_norm,
                         weights_regularizer=slim.l2_regularizer(weight_decay)):
         with slim.arg_scope([slim.batch_norm], is_training=is_training):
+            # Perform same operation on each scale.
+            x, unmerge = helpers.merge_dims(x, 0, 2)  # Merge scale into batch.
             # Spatial dim 17
             x = slim.conv2d(x, 32, 3, padding='SAME', scope='conv1')
             x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
@@ -619,6 +622,8 @@ def _output_net(x, output_shapes, is_training, weight_decay=0):
             x = slim.conv2d(x, 64, 3, padding='SAME', scope='conv2')
             x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
             # Spatial dim 5
+            x = unmerge(x, axis=0) # Unmerge scale from batch.
+            x = tf.concat(tf.unstack(x, axis=1), axis=-1)  # Concatenate channels of all scales.
             x = slim.conv2d(x, 512, 5, padding='VALID', scope='fc3')
             # Spatial dim 1
             x = tf.squeeze(x, axis=(-2, -3))
