@@ -21,14 +21,10 @@ from seqtrack import receptive_field
 from seqtrack import sample
 from seqtrack.models import itermodel
 
-from . import util
+from . import util as model_util
 from . import feature_nets
 from . import join_nets
 
-from seqtrack.helpers import merge_dims
-from seqtrack.helpers import expand_dims_n
-from seqtrack.helpers import weighted_mean
-from seqtrack.helpers import normalize_prob
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
 _COLORMAP = 'viridis'
@@ -132,38 +128,11 @@ class SiamFC(object):
         if self.example_type in [sample.ExampleTypeKeys.CONSECUTIVE,
                                  sample.ExampleTypeKeys.UNORDERED]:
             # Use the default `instantiate_unroll` method.
-            return itermodel.instantiate_unroll(self, example, run_opts=run_opts, scope=scope)
+            return itermodel.instantiate_unroll(self, example, run_opts, scope=scope)
         elif self.example_type == sample.ExampleTypeKeys.SEPARATE_INIT:
-            # Obtain the appearance model from the first frame,
-            # then start tracking from the position in the second frame.
-            # The following code is copied and modified from `itermodel.instantiate_unroll`.
-            with tf.variable_scope(scope):
-                state_init = self.start(example.features_init, run_opts)
-                features = helpers.unstack_structure(example.features, axis=1)
-                labels = helpers.unstack_structure(example.labels, axis=1)
-                ntimesteps = len(features)
-                predictions = [None for _ in range(ntimesteps)]
-                losses = [None for _ in range(ntimesteps)]
-                state = state_init
-                for i in range(ntimesteps):
-                    # Reset the position in the first step!
-                    predictions[i], state, losses[i] = self.next(features[i], labels[i], state,
-                                                                 reset_position=(i == 0))
-                predictions = helpers.stack_structure(predictions, axis=1)
-                losses = helpers.stack_structure(losses, axis=0)
-                # Compute mean over frames.
-                losses = {k: tf.reduce_mean(v) for k, v in losses.items()}
-                state_final = state
-
-                extra_losses = self.end()
-                helpers.assert_no_keys_in_common(losses, extra_losses)
-                losses.update(extra_losses)
-                return itermodel.OperationsUnroll(
-                    predictions=predictions,
-                    losses=losses,
-                    state_init=state_init,
-                    state_final=state_final,
-                )
+            return _instantiate_separate_init(self, example, run_opts, scope=scope)
+        else:
+            raise ValueError('unknown example type: "{}"'.format(self.example_type))
 
     def _context_rect(self, rect, aspect, amount):
         template_rect, _ = _get_context_rect(
@@ -174,14 +143,14 @@ class SiamFC(object):
         return template_rect
 
     def _crop(self, image, rect, size, mean_color):
-        return util.crop(
+        return model_util.crop(
             image, rect, size,
             pad_value=mean_color if self.pad_with_mean else 0.5,
             feather=self.feather,
             feather_margin=self.feather_margin)
 
     def _crop_pyr(self, image, rect, size, scales, mean_color):
-        return util.crop_pyr(
+        return model_util.crop_pyr(
             image, rect, size, scales,
             pad_value=mean_color if self.pad_with_mean else 0.5,
             feather=self.feather,
@@ -306,7 +275,7 @@ class SiamFC(object):
             else:
                 num_scales = 1
             mid_scale = (num_scales - 1) // 2
-            scales = util.scale_range(tf.constant(num_scales), tf.to_float(self.scale_step))
+            scales = model_util.scale_range(tf.constant(num_scales), tf.to_float(self.scale_step))
             search_ims, search_rects = self._crop_pyr(
                 im, search_rect, self.search_size, scales, mean_color)
 
@@ -338,7 +307,6 @@ class SiamFC(object):
             response = cnn.get_value(response)
             response_size = response.shape[-3:-1].as_list()
             receptive_field.assert_center_alignment(self.search_size, response_size, rf_response)
-
             response = tf.verify_tensor_all_finite(response, 'output of xcorr is not finite')
 
             # Post-process scores.
@@ -351,7 +319,7 @@ class SiamFC(object):
                     response = _add_learnable_motion_prior(response)
 
             self._info.setdefault('response', []).append(
-                _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
+                _to_uint8(model_util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
 
             losses = {}
             if self.mode in MODE_KEYS_SUPERVISED:
@@ -375,13 +343,13 @@ class SiamFC(object):
                     response_final = apply_motion_penalty(
                         response_resize, radius=self.window_radius * self.target_size,
                         **self.window_params)
-                translation, scale, in_arg_max = util.find_peak_pyr(
+                translation, scale, in_arg_max = model_util.find_peak_pyr(
                     response_final, scales, eps_abs=self.arg_max_eps)
                 # Obtain translation in relative co-ordinates within search image.
                 translation = 1 / tf.to_float(self.search_size) * translation
                 # Get scalar representing confidence in prediction.
                 # Use raw appearance score (before motion penalty).
-                confidence = weighted_mean(response_resize, in_arg_max, axis=(-4, -3, -2))
+                confidence = helpers.weighted_mean(response_resize, in_arg_max, axis=(-4, -3, -2))
                 # Damp the scale update towards 1 (no change).
                 # TODO: Should this be in log space?
                 scale = self.scale_update_rate * scale + (1. - self.scale_update_rate) * 1.
@@ -399,7 +367,7 @@ class SiamFC(object):
 
             # Rectangle to use in next frame for search area.
             # If using gt and rect not valid, use previous.
-            if tf.estimator.ModeKeys.PREDICT or self.use_predictions:
+            if self.mode == tf.estimator.ModeKeys.PREDICT or self.use_predictions:
                 next_prev_rect = pred
             else:
                 next_prev_rect = last_valid_gt_rect
@@ -731,7 +699,7 @@ def _paste_image_at_rect(target, overlay, rect, alpha=1, name='paste_image_at_re
     with tf.name_scope(name) as scope:
         overlay = _ensure_rgba(overlay)
         target_size = target.shape.as_list()[-3:-1]
-        overlay = util.crop(overlay, geom.crop_inverse(rect), target_size)
+        overlay = model_util.crop(overlay, geom.crop_inverse(rect), target_size)
         return _paste_image(target, overlay, alpha=alpha)
 
 
@@ -778,7 +746,7 @@ def _preproc(im, center_input_range, keep_uint8_range, name='preproc'):
 
 
 def _get_context_rect(rect, context_amount, aspect, aspect_method):
-    square = util.coerce_aspect(rect, im_aspect=aspect, aspect_method=aspect_method)
+    square = model_util.coerce_aspect(rect, im_aspect=aspect, aspect_method=aspect_method)
     context = geom.grow_rect(context_amount, square)
     return context, square
 
@@ -790,11 +758,11 @@ def _add_learnable_motion_prior(response, name='motion_prior'):
         prior = slim.model_variable('prior', shape=response_shape, dtype=tf.float32,
                                     initializer=tf.zeros_initializer(dtype=tf.float32))
         # self._info.setdefault('response_appearance', []).append(
-        #     _to_uint8(util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
+        #     _to_uint8(model_util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
         # if self._num_frames == 0:
         #     tf.summary.image(
         #         'motion_prior', max_outputs=1,
-        #         tensor=_to_uint8(util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
+        #         tensor=_to_uint8(model_util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
         #         collections=IMAGE_SUMMARIES_COLLECTIONS)
         return response + prior
 
@@ -842,7 +810,7 @@ def _sigmoid_cross_entropy_loss(scores, target_size,
     score_size = helpers.known_spatial_dim(scores)
     # Obtain displacement from center of search image.
     # Center pixel has zero displacement.
-    disp = util.displacement_from_center(score_size)
+    disp = model_util.displacement_from_center(score_size)
     disp = (1 / tf.to_float(target_size)) * tf.to_float(disp)
     distance = tf.norm(disp, axis=-1, keepdims=True)
 
@@ -925,7 +893,7 @@ def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_p
     score_size = helpers.known_spatial_dim(scores)
     # Obtain displacement from center of search image.
     # Center pixel has zero displacement.
-    pixel_disp = util.displacement_from_center(score_size)
+    pixel_disp = model_util.displacement_from_center(score_size)
     disp = (1 / tf.to_float(target_size)) * tf.to_float(pixel_disp)
     distance = tf.norm(disp, axis=-1, keepdims=True)
 
@@ -933,7 +901,7 @@ def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_p
     is_center = tf.reduce_all(tf.abs(pixel_disp) <= 0, axis=-1, keepdims=True)
     # Force cost of center label to be zero.
     costs = tf.where(is_center, tf.zeros_like(costs), costs)
-    correct_score = weighted_mean(scores, is_center, axis=(-3, -2), keepdims=False)
+    correct_score = helpers.weighted_mean(scores, is_center, axis=(-3, -2), keepdims=False)
     # We want to achieve a margin:
     #   correct_score >= scores + costs
     #   costs + scores - correct_score <= 0
@@ -944,8 +912,8 @@ def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_p
     loss = tf.maximum(float(0), loss)
     # If we instead use cost to get `correct_score`:
     # is_best = tf.to_float(cost <= tf.reduce_min(cost, axis=axis, keepdims=True))
-    # cost_best = weighted_mean(cost, is_best, axis=axis, keepdims=True)
-    # score_best = weighted_mean(score, is_best, axis=axis, keepdims=True)
+    # cost_best = helpers.weighted_mean(cost, is_best, axis=axis, keepdims=True)
+    # score_best = helpers.weighted_mean(score, is_best, axis=axis, keepdims=True)
     # violation = tf.maximum(0., (cost - cost_best) - (score_best - score))
     loss = tf.squeeze(loss, -1)
 
@@ -985,7 +953,7 @@ def _softmax_cross_entropy_loss(scores, target_size,
     score_size = helpers.known_spatial_dim(scores)
     # Obtain displacement from center of search image.
     # Center pixel has zero displacement.
-    disp = util.displacement_from_center(score_size)
+    disp = model_util.displacement_from_center(score_size)
     disp = (1 / tf.to_float(target_size)) * tf.to_float(disp)
     distance = tf.norm(disp, axis=-1, keepdims=True)
 
@@ -1016,7 +984,7 @@ def _visualize_response(
         rf_centers = _find_rf_centers(search_size, response_size, response_rf)
 
         # response is logits
-        response_cmap = util.colormap(tf.sigmoid(response), _COLORMAP)
+        response_cmap = model_util.colormap(tf.sigmoid(response), _COLORMAP)
         # self._info.setdefault('response', []).append(_to_uint8(response_cmap))
         # Draw coarse response over search image.
         response_in_search = _align_corner_centers(rf_centers, response_size)
@@ -1024,7 +992,7 @@ def _visualize_response(
         #     search_im, response_cmap, response_in_search, alpha=0.5)))
 
         # response_final is probability
-        response_final_cmap = util.colormap(response_final, _COLORMAP)
+        response_final_cmap = model_util.colormap(response_final, _COLORMAP)
         # self._info.setdefault('response_final', []).append(_to_uint8(response_final_cmap))
         # Draw upsample, regularized response over original image.
         upsample_response_size = response_final.shape.as_list()[-3:-1]
@@ -1046,11 +1014,8 @@ def _rect_translate_scale(rect, translate, scale, name='rect_translate_scale'):
         scale: [..., 1]
     '''
     with tf.name_scope(name) as scope:
-        min_pt, max_pt = geom.rect_min_max(rect)
-        center, size = 0.5 * (min_pt + max_pt), max_pt - min_pt
-        center += translate
-        size *= scale
-        return geom.make_rect(center - 0.5 * size, center + 0.5 * size)
+        center, size = geom.rect_center_size(rect)
+        return geom.make_rect_center_size(center + translate, size * scale)
 
 
 def _image_sequence_summary(name, tensor, **kwargs):
@@ -1101,7 +1066,7 @@ def _position_grid(size):
 
 
 def _merge_dims_and_concat(xs, a, b):
-    pairs = list(map(lambda x: merge_dims(x, a, b), xs))
+    pairs = list(map(lambda x: helpers.merge_dims(x, a, b), xs))
     xs, restores = zip(*pairs)  # Inverse of zip is zip-star.
     ns = [x.shape.as_list()[a] for x in xs]
     xs = tf.concat(xs, axis=a)
@@ -1129,3 +1094,37 @@ def _remove_prefix(prefix, x):
     if not x.startswith(prefix):
         raise ValueError('does not have prefix "{}": "{}"'.format(prefix, x))
     return x[len(prefix):]
+
+
+def _instantiate_separate_init(iter_model_fn, example, run_opts, scope='model'):
+    # Obtain the appearance model from the first frame,
+    # then start tracking from the position in the second frame.
+    # The following code is copied and modified from `itermodel.instantiate_unroll`.
+    with tf.variable_scope(scope):
+        state_init = iter_model_fn.start(example.features_init, run_opts)
+        features = helpers.unstack_structure(example.features, axis=1)
+        labels = helpers.unstack_structure(example.labels, axis=1)
+        ntimesteps = len(features)
+        predictions = [None for _ in range(ntimesteps)]
+        losses = [None for _ in range(ntimesteps)]
+        state = state_init
+        for i in range(ntimesteps):
+            # Reset the position in the first step!
+            predictions[i], state, losses[i] = iter_model_fn.next(
+                features[i], labels[i], state,
+                reset_position=(i == 0))
+        predictions = helpers.stack_structure(predictions, axis=1)
+        losses = helpers.stack_structure(losses, axis=0)
+        # Compute mean over frames.
+        losses = {k: tf.reduce_mean(v) for k, v in losses.items()}
+        state_final = state
+
+        extra_losses = iter_model_fn.end()
+        helpers.assert_no_keys_in_common(losses, extra_losses)
+        losses.update(extra_losses)
+        return itermodel.OperationsUnroll(
+            predictions=predictions,
+            losses=losses,
+            state_init=state_init,
+            state_final=state_final,
+        )

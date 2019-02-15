@@ -189,8 +189,6 @@ class MotionRegressor(object):
             ims_preproc = self._preproc(ims)
             with tf.variable_scope('motion', reuse=(self._num_frames > 0)):
                 outputs = _motion_net(ims_preproc, output_shapes, run_opts['is_training'],
-                                      response_size=self.response_size,
-                                      num_scales=self.num_scales,
                                       weight_decay=self.wd)
             outputs = {k: tf.verify_tensor_all_finite(v, 'output "{}" not finite'.format(k))
                        for k, v in outputs.items()}
@@ -278,10 +276,10 @@ class MotionRegressor(object):
 
             # Rectangle to use in next frame for search area.
             # If using gt and rect not valid, use previous.
-            if tf.estimator.ModeKeys.PREDICT or self.use_predictions:
-                next_prev_rect = pred
+            if self.mode in MODE_KEYS_SUPERVISED:
+                next_prev_rect = pred if self.use_predictions else gt_rect
             else:
-                next_prev_rect = gt_rect
+                next_prev_rect = pred
 
             self._num_frames += 1
             # outputs = {'rect': pred, 'score': confidence}
@@ -372,8 +370,7 @@ def scale_sequence(num_scales, max_scale):
     return dict(num_scales=num_scales, scale_step=scale_step)
 
 
-def _motion_net(x, output_shapes, is_training, response_size, num_scales,
-                weight_decay=0):
+def _motion_net(x, output_shapes, is_training, weight_decay=0):
     '''
     Args:
         x: [b, t, h, w, c]
