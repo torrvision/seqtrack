@@ -1,5 +1,4 @@
 numpy
-tensorflow-gpu
 Pillow
 matplotlib
 xmltodict
