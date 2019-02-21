@@ -15,15 +15,15 @@ import functools
 from seqtrack import cnn
 from seqtrack import sample
 from seqtrack import train
-from seqtrack import util_test
 from seqtrack import models
+from seqtrack.helpers import trySubTest
 
 
 class TestModels(tf.test.TestCase):
 
     def test_instantiate(self):
         for model_name, create_iter_model_fn in models.BY_NAME.items():
-            with util_test.try_sub_test(self, model=model_name):
+            with trySubTest(self, model=model_name):
                 tf.reset_default_graph()
                 iter_model_fn = create_iter_model_fn(
                     mode=tf.estimator.ModeKeys.TRAIN,

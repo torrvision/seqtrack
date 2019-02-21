@@ -7,11 +7,12 @@ import unittest
 import numpy as np
 import os
 
-from seqtrack import geom_np
 from seqtrack import assess
+from seqtrack import geom_np
+from seqtrack import sample
 
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_DIR = os.path.abspath(os.path.join(FILE_DIR, '..'))
+PROJECT_DIR = os.path.abspath(os.path.join(FILE_DIR, '..', '..'))
 OTB_DATA_DIR = os.path.join(PROJECT_DIR, 'aux', 'otb', 'test_data')
 OTB_TRACKERS = [('KCF', 0.477), ('Staple', 0.581), ('CCOT', 0.671)]
 
@@ -24,8 +25,8 @@ class TestAssess(unittest.TestCase):
         metrics = assess.assess_frames(seq, pred)
         self.assertIn('iou', metrics.keys())
         self.assertEqual(len(metrics['iou']), num_frames - 1)
-        assert all(0 <= iou <= 1 or not is_valid
-                   for is_valid, iou in zip(seq['label_is_valid'][1:], metrics['iou']))
+        assert all(0 <= metrics['iou'][t - 1] <= 1
+                   for t in range(1, len(seq)) if t in seq.valid_set)
 
     def test_assess_sequence(self):
         num_frames = 200
@@ -74,14 +75,15 @@ def _load_otb_sequences():
         rects = np.loadtxt(fname, delimiter=',')
         seq_len = len(rects)
         is_valid = np.all(rects > 0, axis=-1)
+        valid_set = set(i for i in range(seq_len) if is_valid[i])
         rects = _convert_from_otb(rects)
-        seqs[name] = {
-            'image_files': [None for t in range(seq_len)],
-            'labels': rects,
-            'label_is_valid': is_valid,
-            'aspect': [None for t in range(seq_len)],
-            'video_name': name,
-        }
+        seqs[name] = sample.Sequence(
+            image_files=[None for t in range(seq_len)],
+            valid_set=valid_set,
+            rects=rects,
+            aspect=1.0,
+            name=name,
+        )
     return seqs
 
 
@@ -115,22 +117,30 @@ def random_sequence_and_predictions(rand, num_frames, min_size=0.1, max_size=0.5
                                     center_error=0.5, size_error=0.5, prob_valid=0.8):
     size = rand.uniform(min_size, max_size, size=(num_frames, 2))
     center = rand.uniform(max_size / 2, 1 - max_size / 2, size=(num_frames, 2))
-    labels = geom_np.make_rect_center_size(center, size)
+    rects = geom_np.make_rect_center_size(center, size)
     # Perturb ground-truth to obtain prediction.
     pred_center = center + rand.uniform(-1, 1, size=(num_frames, 2)) * center_error * size
     pred_size = size + rand.uniform(-1, 1, size=(num_frames, 2)) * size_error * size
     preds = geom_np.make_rect_center_size(pred_center[1:], pred_size[1:])
-    labels, is_valid = make_invalid(rand, labels, prob_valid=prob_valid)
-    sequence = {'labels': labels, 'label_is_valid': is_valid}
+    rects, is_valid = make_invalid(rand, rects, prob_valid=prob_valid)
+    valid_set = set(i for i in range(num_frames) if is_valid[i])
+    image_files = ['{}.jpeg'.format(i) for i in range(num_frames)]
+    sequence = sample.Sequence(
+        image_files=image_files,
+        valid_set=valid_set,
+        rects=rects,
+        aspect=1.0,
+        name='random_sequence',
+    )
     return sequence, preds
 
 
-def make_invalid(rand, labels, prob_valid):
-    num_frames, _ = labels.shape
+def make_invalid(rand, rects, prob_valid):
+    num_frames, _ = rects.shape
     is_valid = rand.binomial(n=1, p=prob_valid, size=num_frames).astype(bool)
     is_valid[0] = True
-    labels[np.logical_not(is_valid)] = float('nan')
-    return labels, is_valid
+    rects[np.logical_not(is_valid)] = float('nan')
+    return rects, is_valid
 
 
 def random_dataset_and_predictions(rand, num_seqs, min_len=200, max_len=400, **kwargs):

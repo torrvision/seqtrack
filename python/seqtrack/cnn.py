@@ -309,7 +309,7 @@ def merge_batch_dims(x):
     '''
     x = as_tensor(x)
     ndim = len(x.value.shape)
-    assert ndim > 4
+    assert ndim >= 4
     # Merge all dimensions except last three.
     value, restore_fn = helpers.merge_dims(x.value, None, -3)
     y = Tensor(value, x.fields)

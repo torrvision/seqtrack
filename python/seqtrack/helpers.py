@@ -640,23 +640,21 @@ def merge_dicts(*args):
 
 
 def flatten_dict(keys, values):
-    # return flatten_items(zip(keys, values))
-    nest.assert_shallow_structure(keys, values)
-    return dict(zip(nest.flatten(keys),
-                    nest.flatten_up_to(keys, values)))
-
-
-def flatten_items(items):
-    '''Maps list of (key, value) pairs to list of flattened (key, value) pairs.
+    '''Takes nested keys and values and creates a flat dict.
 
     This is useful for constructing a `feed_dict` when the key is a dictionary of tensors.
 
-    >>> dict(flatten_items([(1, 2), ([3, 4], [5, 6]), ({'a': 7, 'b': 8}, {'a': 9, 'b': 10})]))
+    >>> flatten_dict(1, 2)
+    {1: 2}
+    >>> flatten_dict([3, 4], [5, 6])
+    {3: 5, 4: 6}
+    >>> flatten_dict({'a': 7, 'b': 8}, {'a': 9, 'b': 10})
+    {7: 9, 8: 10}
+    >>> flatten_dict([1, [3, 4], {'a': 7, 'b': 8}], [2, [5, 6], {'a': 9, 'b': 10}])
     {1: 2, 3: 5, 4: 6, 7: 9, 8: 10}
     '''
-    for k, v in items:
-        nest.assert_shallow_structure(k, v)
-        yield (nest.flatten(k), nest.flatten_up_to(k, v))
+    nest.assert_shallow_structure(keys, values)
+    return dict(zip(nest.flatten(keys), nest.flatten_up_to(keys, values)))
 
 
 def dump_csv(f, series, sort_keys=True, sort_fields=True):
@@ -727,3 +725,16 @@ def assert_no_keys_in_common(a, b):
     intersection = set(a.keys()).intersection(set(b.keys()))
     if intersection:
         raise ValueError('keys in common: {}'.format(str(intersection)))
+
+
+def trySubTest(test_case, **kwargs):
+    try:
+        context = test_case.subTest(**kwargs)
+    except AttributeError:
+        context = null_context()
+    return context
+
+
+@contextlib.contextmanager
+def null_context():
+    yield

@@ -15,8 +15,8 @@ import functools
 from seqtrack import cnn
 from seqtrack import sample
 from seqtrack import train
-from seqtrack import util_test
 from seqtrack.models import regress
+from seqtrack.helpers import trySubTest
 
 
 class TestRegress(tf.test.TestCase):
@@ -138,7 +138,7 @@ class TestRegress(tf.test.TestCase):
         }
 
         for loss_name, loss_kwargs in losses.items():
-            with util_test.try_sub_test(self, loss=loss_name):
+            with trySubTest(self, loss=loss_name):
                 _, loss = regress.compute_loss_discrete(
                     scores, num_scales, translation_stride, scale_step, base_target_size,
                     _make_constant_batch(gt_translation),
@@ -174,7 +174,7 @@ class TestRegress(tf.test.TestCase):
         }
 
         for name, kwargs in label_fns.items():
-            with util_test.try_sub_test(self, label_fn=name):
+            with trySubTest(self, label_fn=name):
                 with self.test_session():
                     label_fn = regress.LABEL_FNS[name]
                     _, labels, weights = label_fn(

@@ -13,7 +13,7 @@ import functools
 from seqtrack import cnn
 from seqtrack import receptive_field
 from seqtrack.models import feature_nets
-from seqtrack.util_test import try_sub_test
+from seqtrack.helpers import trySubTest
 
 
 BATCH_LEN = 2
@@ -24,7 +24,7 @@ class TestFeatureNets(tf.test.TestCase):
     def test_unknown_size(self):
         '''Instantiates the network with unknown spatial dimensions.'''
         for feature_arch in feature_nets.NAMES:
-            sub_test = try_sub_test(self, feature_arch=feature_arch)
+            sub_test = trySubTest(self, feature_arch=feature_arch)
             with sub_test:
                 feature_fn = feature_nets.BY_NAME[feature_arch]
                 with tf.Graph().as_default():
@@ -35,7 +35,7 @@ class TestFeatureNets(tf.test.TestCase):
     def test_desired_output_size_from_receptive_field(self):
         '''Uses the receptive field to get the input size for desired output size.'''
         for feature_arch in feature_nets.NAMES:
-            sub_test = try_sub_test(self, feature_arch=feature_arch)
+            sub_test = trySubTest(self, feature_arch=feature_arch)
             with sub_test, tf.Graph().as_default():
                 feature_fn = feature_nets.BY_NAME[feature_arch]
                 field = feature_nets.get_receptive_field(feature_fn)
@@ -53,7 +53,7 @@ class TestFeatureNets(tf.test.TestCase):
     def test_same_variables(self):
         '''Instantiates feature net using same scope as original function.'''
         for feature_arch in SLIM_ARCH_NAMES:
-            sub_test = try_sub_test(self, feature_arch=feature_arch)
+            sub_test = trySubTest(self, feature_arch=feature_arch)
             with sub_test, tf.Graph().as_default():
                 original_fn = globals()[feature_arch]
                 feature_fn = feature_nets.BY_NAME[feature_arch]
@@ -67,7 +67,7 @@ class TestFeatureNets(tf.test.TestCase):
     def test_no_padding_by_default(self):
         '''Tests that feature functions with default options have zero padding.'''
         for feature_arch in feature_nets.NAMES:
-            sub_test = try_sub_test(self, feature_arch=feature_arch)
+            sub_test = trySubTest(self, feature_arch=feature_arch)
             with sub_test, tf.Graph().as_default():
                 feature_fn = feature_nets.BY_NAME[feature_arch]
                 image = tf.placeholder(tf.float32, (None, None, None, 3), name='image')
@@ -111,7 +111,7 @@ class TestFeatureNets(tf.test.TestCase):
 
         for feature_arch, test_case in cases.items():
             graph = tf.Graph()
-            sub_test = try_sub_test(self, feature_arch=feature_arch)
+            sub_test = trySubTest(self, feature_arch=feature_arch)
             with sub_test, graph.as_default():
                 original_fn = globals()[feature_arch]
                 feature_fn = functools.partial(feature_nets.BY_NAME[feature_arch],

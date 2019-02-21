@@ -3,18 +3,12 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
-import os
-from PIL import Image, ImageDraw, ImageColor
-import shutil
-import subprocess
-import tempfile
 import matplotlib.cm as cm
+
+from PIL import Image, ImageDraw, ImageColor
 
 import logging
 logger = logging.getLogger(__name__)
-
-from seqtrack import geom_np
-from seqtrack.helpers import load_image, escape_filename
 
 
 COLOR_PRED = ImageColor.getrgb('yellow')
