@@ -5,7 +5,6 @@ cache: pip
 install:
   - pip install -r requirements.txt
   - pip install tensorflow
-  - pip install nose
+  - pip install pytest
 script:
-  - source pythonpath.sh
-  - nosetests -v --with-doctest --nologcapture seqtrack
+  - pytest -v --doctest-modules python/seqtrack/

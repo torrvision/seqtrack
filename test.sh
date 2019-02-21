@@ -8,4 +8,5 @@ elif [ ! -z "${CUDA_VISIBLE_DEVICES}" ]; then
     echo "WARNING: CUDA_VISIBLE_DEVICES is non-empty: \"${CUDA_VISIBLE_DEVICES}\""
 fi
 
-nosetests -v --with-doctest --nologcapture seqtrack
+# nosetests -v --with-doctest --nologcapture seqtrack
+pytest -v --doctest-modules python/seqtrack/
