@@ -64,14 +64,16 @@ def assess_frames(sequence, pred_rects):
     label_present = np.array(is_valid[1:])
     label_rects = np.array(sequence.rects[1:])
 
-    iou = geom_np.rect_iou(label_rects, pred_rects)
+    with np.errstate(invalid='ignore'):
+        iou = geom_np.rect_iou(label_rects, pred_rects)
     # Compute distance between centers of rectangles.
     label_center, label_size = geom_np.rect_center_size(label_rects)
     pred_center, _ = geom_np.rect_center_size(pred_rects)
     center_dist = np.linalg.norm(pred_center - label_center, axis=-1)
     # Compute IOU using ground-truth size.
     oracle_size_rect = geom_np.make_rect_center_size(pred_center, label_size)
-    oracle_size_iou = geom_np.rect_iou(label_rects, oracle_size_rect)
+    with np.errstate(invalid='ignore'):
+        oracle_size_iou = geom_np.rect_iou(label_rects, oracle_size_rect)
 
     # Set metrics to nan when object is not present.
     iou = np.where(label_present, iou, np.nan)
