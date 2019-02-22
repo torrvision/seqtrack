@@ -7,4 +7,5 @@ install:
   - pip install tensorflow
   - pip install pytest
 script:
+  - source pythonpath.sh
   - pytest -v --doctest-modules python/seqtrack/
