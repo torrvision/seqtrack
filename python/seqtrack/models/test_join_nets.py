@@ -22,7 +22,7 @@ class TestFeatureNets(tf.test.TestCase):
         '''Instantiates the join functions.'''
         for join_arch in join_nets.SINGLE_JOIN_FNS:
             for num_batch_dims in [1, 2]:
-                with self.subTest(join_arch=join_arch, num_batch_dims=num_batch_dims):
+                with trySubTest(self, join_arch=join_arch, num_batch_dims=num_batch_dims):
                     with tf.Graph().as_default():
                         join_fn = join_nets.BY_NAME[join_arch]
                         if join_arch in join_nets.FULLY_CONNECTED_FNS:
