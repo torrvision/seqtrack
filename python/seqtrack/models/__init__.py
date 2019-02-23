@@ -5,10 +5,12 @@ from __future__ import print_function
 from . import siamfc
 from . import regress
 from . import siamflow
+from . import null
 
 
 BY_NAME = {
     'siamfc': siamfc.SiamFC,
     'regress': regress.MotionRegressor,
     'siamflow': siamflow.SiamFlow,
+    'null': null.NullTracker,
 }
