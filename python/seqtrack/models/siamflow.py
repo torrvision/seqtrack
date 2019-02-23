@@ -70,7 +70,7 @@ def default_params():
         # Loss parameters:
         wd=0.0,
         loss_params=None,
-        enable_appearance_loss=False,
+        appearance_loss=False,
         appearance_loss_params=None,  # kwargs for compute_appearance_loss()
     )
 
@@ -298,7 +298,7 @@ class SiamFlow(object):
                 gt_scale = gt_size / target_size_in_search
                 gt_log_scale = tf.log(gt_scale)
 
-                if self.enable_appearance_loss:
+                if self.appearance_loss:
                     target_size_in_response = self.target_size / rf_response.stride
                     loss_name, loss = siamfc.compute_loss(response[:, mid_scale],
                                                           target_size_in_response,

@@ -13,6 +13,7 @@ import json
 import msgpack
 import numpy as np
 import os
+import shutil
 import sys
 import tempfile
 import tensorflow as tf
