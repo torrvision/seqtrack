@@ -106,8 +106,8 @@ class TrainParams(object):
             optimizer_params=None,
             grad_clip=False,
             grad_clip_params=None,
-            siamese_pretrain=None,
-            siamese_model_file=None,
+            # siamese_pretrain=None,
+            # siamese_model_file=None,
             use_gt_train=True,
             gt_decay_rate=1,
             min_gt_ratio=0,
@@ -501,7 +501,7 @@ def train_model_data(
         mode=tf.estimator.ModeKeys.TRAIN,
         example_type=getattr(sample.ExampleTypeKeys, params.example_type))
     with tf.variable_scope('model', reuse=False) as vs:
-        ops = iter_model_fn.train(example, run_opts=run_opts, scope=vs)
+        ops, init_fn = iter_model_fn.train(example, run_opts=run_opts, scope=vs)
         # outputs, losses, init_state, final_state = model_fn.instantiate(
         #     example_input, run_opts, enable_loss=True)
     metric_vars.update(ops.losses)
@@ -623,7 +623,8 @@ def train_model_data(
             prev_ckpt = np.asscalar(global_step_var.eval())
         else:
             sess.run(init_op)
-            # TODO: This method should belong to the instance?
+            init_fn(sess)
+            # sess.run(ops.init)
             # model_fn.init(sess)  # Loads pre-trained features if applicable.
 
             # if args.siamese_pretrain:

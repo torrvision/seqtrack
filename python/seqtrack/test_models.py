@@ -52,3 +52,6 @@ class TestModels(tf.test.TestCase):
 
                 with tf.variable_scope('model', reuse=False) as vs:
                     ops = iter_model_fn.train(example, run_opts, scope=vs)
+
+                with self.test_session() as sess:
+                    iter_model_fn.init(sess)

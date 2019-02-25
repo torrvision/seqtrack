@@ -56,7 +56,10 @@ def default_params():
         join_arch='xcorr',
         join_params=None,
         multi_join_layers=None,
-        feature_model_file='',
+        # feature_model_file='',
+        appearance_model_file='',
+        appearance_scope_dst='',  # e.g. 'model/appearance/',
+        appearance_scope_src='',  # e.g. 'model/',
         learn_appearance=True,
         use_predictions=True,  # Use predictions for previous positions?
         # Tracking parameters:
@@ -109,8 +112,8 @@ class SiamFlow(object):
         self.scale_update_rate = float(self.scale_update_rate)
         self.num_scales = int(self.num_scales)
 
-        self._num_frames = 0
-
+        self._num_frames = 0  # Not including start frame.
+        self._appearance_saver = None
         # self._feature_saver = None
 
     def train(self, example, run_opts, scope='model'):
@@ -176,19 +179,20 @@ class SiamFlow(object):
             target_rect = features_init['rect']
             mean_color = tf.reduce_mean(im, axis=(-3, -2), keepdims=True)
 
-            template_rect = self._context_rect(target_rect, aspect, self.template_scale)
-            template_im = self._crop(im, template_rect, self.template_size, mean_color)
-            template_input = self._preproc(template_im)
-            template_input = cnn.as_tensor(template_input, add_to_set=True)
-            with tf.variable_scope('embed', reuse=False):
-                template_feat, template_layers, feature_scope = self._embed_net(
-                    template_input, run_opts['is_training'])
-                # Get names relative to this scope for loading pre-trained.
-                self._feature_vars = _global_variables_relative_to_scope(feature_scope)
-            rf_template = template_feat.fields[template_input.value]
-            template_feat = cnn.get_value(template_feat)
-            feat_size = template_feat.shape[-3:-1].as_list()
-            receptive_field.assert_center_alignment(self.template_size, feat_size, rf_template)
+            with tf.variable_scope('appearance', reuse=False):
+                template_rect = self._context_rect(target_rect, aspect, self.template_scale)
+                template_im = self._crop(im, template_rect, self.template_size, mean_color)
+                template_input = self._preproc(template_im)
+                template_input = cnn.as_tensor(template_input, add_to_set=True)
+                with tf.variable_scope('embed', reuse=False):
+                    template_feat, template_layers, feature_scope = self._embed_net(
+                        template_input, run_opts['is_training'])
+                    # Get names relative to this scope for loading pre-trained.
+                    # self._feature_vars = _global_variables_relative_to_scope(feature_scope)
+                rf_template = template_feat.fields[template_input.value]
+                template_feat = cnn.get_value(template_feat)
+                feat_size = template_feat.shape[-3:-1].as_list()
+                receptive_field.assert_center_alignment(self.template_size, feat_size, rf_template)
 
             # self._feature_saver = tf.train.Saver(self._feature_vars)
 
@@ -241,33 +245,49 @@ class SiamFlow(object):
             with tf.name_scope('summary'):
                 _image_sequence_summary('search', search_ims)
 
-            # Extract features, perform search, get receptive field of response wrt image.
-            search_input = self._preproc(search_ims)
-            search_input = cnn.as_tensor(search_input, add_to_set=True)
-            with tf.variable_scope('embed', reuse=True):
-                search_feat, search_layers, _ = self._embed_net(
-                    search_input, run_opts['is_training'])
-            rf_search = search_feat.fields[search_input.value]
-            search_feat_size = search_feat.value.shape[-3:-1].as_list()
-            receptive_field.assert_center_alignment(self.search_size, search_feat_size, rf_search)
+            with tf.variable_scope('appearance', reuse=False) as appearance_scope:
+                # Extract features, perform search, get receptive field of response wrt image.
+                search_input = self._preproc(search_ims)
+                search_input = cnn.as_tensor(search_input, add_to_set=True)
+                with tf.variable_scope('embed', reuse=True):
+                    search_feat, search_layers, _ = self._embed_net(
+                        search_input, run_opts['is_training'])
+                rf_search = search_feat.fields[search_input.value]
+                search_feat_size = search_feat.value.shape[-3:-1].as_list()
+                receptive_field.assert_center_alignment(self.search_size, search_feat_size, rf_search)
 
-            with tf.variable_scope('join', reuse=(self._num_frames >= 1)):
-                join_fn = join_nets.BY_NAME[self.join_arch]
-                if self.join_type == 'single':
-                    response = join_fn(template_feat, search_feat, run_opts['is_training'],
-                                       **self.join_params)
-                elif self.join_type == 'multi':
-                    response = join_fn(template_feat, search_feat, run_opts['is_training'],
-                                       self.multi_join_layers,
-                                       template_layers, search_layers, search_input,
-                                       **self.join_params)
-                else:
-                    raise ValueError('unknown join type: "{}"'.format(self.join_type))
-            rf_response = response.fields[search_input.value]
-            response = cnn.get_value(response)
-            response_size = response.shape[-3:-1].as_list()
-            receptive_field.assert_center_alignment(self.search_size, response_size, rf_response)
-            response = tf.verify_tensor_all_finite(response, 'output of xcorr is not finite')
+                with tf.variable_scope('join', reuse=(self._num_frames >= 1)):
+                    join_fn = join_nets.BY_NAME[self.join_arch]
+                    if self.join_type == 'single':
+                        response = join_fn(template_feat, search_feat, run_opts['is_training'],
+                                           **self.join_params)
+                    elif self.join_type == 'multi':
+                        response = join_fn(template_feat, search_feat, run_opts['is_training'],
+                                           self.multi_join_layers,
+                                           template_layers, search_layers, search_input,
+                                           **self.join_params)
+                    else:
+                        raise ValueError('unknown join type: "{}"'.format(self.join_type))
+                rf_response = response.fields[search_input.value]
+                response = cnn.get_value(response)
+                response_size = response.shape[-3:-1].as_list()
+                receptive_field.assert_center_alignment(self.search_size, response_size, rf_response)
+                response = tf.verify_tensor_all_finite(response, 'output of xcorr is not finite')
+
+            if self._num_frames == 0:
+                # Define appearance model saver.
+                if self.appearance_model_file:
+                    # Create the graph ops for the saver.
+                    var_list = appearance_scope.global_variables()
+                    var_list = {var.op.name: var for var in var_list}
+                    if self.appearance_scope_dst or self.appearance_scope_src:
+                        # Replace 'dst' with 'src'.
+                        # Caution: This string replacement is a little dangerous.
+                        var_list = {
+                            k.replace(self.appearance_scope_dst, self.appearance_scope_src, 1): v
+                            for k, v in var_list.items()
+                        }
+                    self._appearance_saver = tf.train.Saver(var_list)
 
             # Post-process scores.
             with tf.variable_scope('output', reuse=(self._num_frames > 0)):
@@ -339,7 +359,6 @@ class SiamFlow(object):
             else:
                 next_prev_rect = pred
 
-            self._num_frames += 1
             # outputs = {'rect': pred, 'score': confidence}
             outputs = {'rect': pred}
             state = {
@@ -349,25 +368,17 @@ class SiamFlow(object):
                 'template_init': state['template_init'],
                 'mean_color': state['mean_color'],
             }
+            self._num_frames += 1
             return outputs, state, losses
 
     def end(self):
         losses = {}
+
         return losses
 
-    # def init(self, sess):
-    #     if self.feature_model_file:
-    #         # TODO: Confirm that all variables were loaded?
-    #         try:
-    #             self._feature_saver.restore(sess, self.feature_model_file)
-    #         except tf.errors.NotFoundError as ex:
-    #             pprint.pprint(tf.contrib.framework.list_variables(self.feature_model_file))
-    #             raise
-    #         # # initialize uninitialized variables
-    #         # vars_uninit = sess.run(tf.report_uninitialized_variables())
-    #         # sess.run(tf.variables_initializer([v for v in tf.global_variables()
-    #         #                                    if v.name.split(':')[0] in vars_uninit]))
-    #         # assert len(sess.run(tf.report_uninitialized_variables())) == 0
+    def init(self, sess):
+        if self.appearance_model_file:
+            self._appearance_saver.restore(sess, self.appearance_model_file)
 
 
 def dimensions(target_size,
@@ -545,21 +556,21 @@ def _clip_rect_size(rect, min_size=None, max_size=None, name='clip_rect_size'):
         return geom.make_rect_center_size(center, size)
 
 
-def _global_variables_relative_to_scope(scope):
-    '''
-    Args:
-        scope: VariableScope
-    '''
-    prefix = scope.name + '/'
-    # tf.Saver uses var.op.name to get variable name.
-    # https://stackoverflow.com/a/36156697/1136018
-    return {_remove_prefix(prefix, v.op.name): v for v in scope.global_variables()}
+# def _global_variables_relative_to_scope(scope):
+#     '''
+#     Args:
+#         scope: VariableScope
+#     '''
+#     prefix = scope.name + '/'
+#     # tf.Saver uses var.op.name to get variable name.
+#     # https://stackoverflow.com/a/36156697/1136018
+#     return {_remove_prefix(prefix, v.op.name): v for v in scope.global_variables()}
 
 
-def _remove_prefix(prefix, x):
-    if not x.startswith(prefix):
-        raise ValueError('does not have prefix "{}": "{}"'.format(prefix, x))
-    return x[len(prefix):]
+# def _remove_prefix(prefix, x):
+#     if not x.startswith(prefix):
+#         raise ValueError('does not have prefix "{}": "{}"'.format(prefix, x))
+#     return x[len(prefix):]
 
 
 def _instantiate_separate_init(iter_model_fn, example, run_opts, scope='model'):

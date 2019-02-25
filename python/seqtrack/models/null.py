@@ -48,3 +48,6 @@ class NullTracker(object):
     def end(self):
         losses = {}
         return losses
+
+    def init(self, sess):
+        pass

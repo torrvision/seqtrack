@@ -118,7 +118,7 @@ class SiamFC(object):
         # For summaries in end():
         self._info = {}
 
-        # self._feature_saver = None
+        self._feature_saver = None
 
     def train(self, example, run_opts, scope='model'):
         '''
@@ -196,7 +196,7 @@ class SiamFC(object):
             feat_size = template_feat.shape[-3:-1].as_list()
             receptive_field.assert_center_alignment(self.template_size, feat_size, rf_template)
 
-            # self._feature_saver = tf.train.Saver(self._feature_vars)
+            self._feature_saver = tf.train.Saver(self._feature_vars)
 
             with tf.name_scope('summary'):
                 tf.summary.image('template', _to_uint8(template_im[0:1]),
@@ -413,19 +413,19 @@ class SiamFC(object):
                                         collections=IMAGE_SUMMARIES_COLLECTIONS)
         return losses
 
-    # def init(self, sess):
-    #     if self.feature_model_file:
-    #         # TODO: Confirm that all variables were loaded?
-    #         try:
-    #             self._feature_saver.restore(sess, self.feature_model_file)
-    #         except tf.errors.NotFoundError as ex:
-    #             pprint.pprint(tf.contrib.framework.list_variables(self.feature_model_file))
-    #             raise
-    #         # # initialize uninitialized variables
-    #         # vars_uninit = sess.run(tf.report_uninitialized_variables())
-    #         # sess.run(tf.variables_initializer([v for v in tf.global_variables()
-    #         #                                    if v.name.split(':')[0] in vars_uninit]))
-    #         # assert len(sess.run(tf.report_uninitialized_variables())) == 0
+    def init(self, sess):
+        if self.feature_model_file:
+            # TODO: Confirm that all variables were loaded?
+            try:
+                self._feature_saver.restore(sess, self.feature_model_file)
+            except tf.errors.NotFoundError as ex:
+                pprint.pprint(tf.contrib.framework.list_variables(self.feature_model_file))
+                raise
+            # # initialize uninitialized variables
+            # vars_uninit = sess.run(tf.report_uninitialized_variables())
+            # sess.run(tf.variables_initializer([v for v in tf.global_variables()
+            #                                    if v.name.split(':')[0] in vars_uninit]))
+            # assert len(sess.run(tf.report_uninitialized_variables())) == 0
 
 
 def dimensions(target_size,
