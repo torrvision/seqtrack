@@ -21,8 +21,8 @@ class NullTracker(object):
         self.mode = mode
         self.example_type = example_type
 
-    def train(self, example, run_opts, scope='model'):
-        raise RuntimeError('not trainable')
+    # def train(self, example, run_opts, scope='model'):
+    #     raise RuntimeError('not trainable')
 
     def start(self, features_init, run_opts, name='start'):
         with tf.name_scope(name) as scope:

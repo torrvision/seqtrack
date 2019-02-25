@@ -23,6 +23,9 @@ class TestModels(tf.test.TestCase):
 
     def test_instantiate(self):
         for model_name, create_iter_model_fn in models.BY_NAME.items():
+            if model_name == 'null':
+                continue
+
             with trySubTest(self, model=model_name):
                 tf.reset_default_graph()
                 iter_model_fn = create_iter_model_fn(
