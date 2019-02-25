@@ -645,14 +645,14 @@ def flatten_dict(keys, values):
 
     This is useful for constructing a `feed_dict` when the key is a dictionary of tensors.
 
-    >>> flatten_dict(1, 2)
-    {1: 2}
-    >>> flatten_dict([3, 4], [5, 6])
-    {3: 5, 4: 6}
-    >>> flatten_dict({'a': 7, 'b': 8}, {'a': 9, 'b': 10})
-    {7: 9, 8: 10}
-    >>> flatten_dict([1, [3, 4], {'a': 7, 'b': 8}], [2, [5, 6], {'a': 9, 'b': 10}])
-    {1: 2, 3: 5, 4: 6, 7: 9, 8: 10}
+    >>> sorted(flatten_dict(1, 2).items())
+    [(1, 2)]
+    >>> sorted(flatten_dict([3, 4], [5, 6]).items())
+    [(3, 5), (4, 6)]
+    >>> sorted(flatten_dict({'a': 7, 'b': 8}, {'a': 9, 'b': 10}).items())
+    [(7, 9), (8, 10)]
+    >>> sorted(flatten_dict([1, [3, 4], {'a': 7, 'b': 8}], [2, [5, 6], {'a': 9, 'b': 10}]).items())
+    [(1, 2), (3, 5), (4, 6), (7, 9), (8, 10)]
     '''
     nest.assert_shallow_structure(keys, values)
     return dict(zip(nest.flatten(keys), nest.flatten_up_to(keys, values)))
