@@ -242,7 +242,7 @@ class SiamFlow(object):
             if self.num_scales == 1:
                 scales = tf.constant([1.0], dtype=tf.float32)
             else:
-                scales = model_util.scale_range(tf.constant(num_scales),
+                scales = model_util.scale_range(tf.constant(self.num_scales),
                                                 tf.to_float(self.scale_step))
             search_ims, search_rects = self._crop_pyr(
                 im, search_rect, self.search_size, scales, mean_color)
