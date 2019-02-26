@@ -497,11 +497,35 @@ def times_disjoint(rand, seq_len, valid_set, ntimesteps):
     return [t] + subseq
 
 
+def times_disjoint_freq_range(rand, seq_len, valid_set, ntimesteps, min_freq, max_freq):
+    '''Samples an initial frame and a consecutive sequence with regular frequency.
+    The initial frame will not occur within the consecutive sequence.
+    The first frame of the sequence must be valid, and it should contain another valid frame.
+
+    >>> sorted(times_disjoint_freq_range(np.random, 10, set([0, 3, 6, 9]), 3, 3, 3))
+    [0, 3, 6, 9]
+    '''
+    assert ntimesteps >= 2
+    subseq = times_freq_range(rand, seq_len, valid_set,
+                              ntimesteps=ntimesteps - 1,
+                              min_freq=min_freq,
+                              max_freq=max_freq,
+                              use_log=False)
+    min_time = min(subseq)
+    max_time = max(subseq)
+    others = [t for t in sorted(valid_set) if not (min_time <= t <= max_time)]
+    if len(others) == 0:
+        raise RuntimeError('no remaining frames for init')
+    t = rand.choice(others)
+    return [t] + subseq
+
+
 uniform = _example_fn_from_times_fn(times_uniform)
 regular = _example_fn_from_times_fn(times_regular)
 freq_range = _example_fn_from_times_fn(times_freq_range)
 pair_range = _example_fn_from_times_fn(times_pair_range)
 disjoint = _example_fn_from_times_fn(times_disjoint)
+disjoint_freq_range = _example_fn_from_times_fn(times_disjoint_freq_range)
 
 EXAMPLE_FNS = {name: globals()[name] for name in  [
     'uniform',
@@ -509,4 +533,5 @@ EXAMPLE_FNS = {name: globals()[name] for name in  [
     'freq_range',
     'pair_range',
     'disjoint',
+    'disjoint_freq_range',
 ]}
