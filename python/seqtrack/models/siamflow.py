@@ -113,6 +113,7 @@ class SiamFlow(object):
         self.num_scales = int(self.num_scales)
 
         self._num_frames = 0  # Not including start frame.
+        self._appearance_var_list = None  # For debug purposes.
         self._appearance_saver = None
         # self._feature_saver = None
 
@@ -238,7 +239,11 @@ class SiamFlow(object):
             search_rect = self._context_rect(prev_target_rect, aspect, self.search_scale)
             # Extract an image pyramid (use 1 scale when not in tracking mode).
             mid_scale = (self.num_scales - 1) // 2
-            scales = model_util.scale_range(tf.constant(self.num_scales), tf.to_float(self.scale_step))
+            if self.num_scales == 1:
+                scales = tf.constant([1.0], dtype=tf.float32)
+            else:
+                scales = model_util.scale_range(tf.constant(num_scales),
+                                                tf.to_float(self.scale_step))
             search_ims, search_rects = self._crop_pyr(
                 im, search_rect, self.search_size, scales, mean_color)
 
@@ -287,6 +292,7 @@ class SiamFlow(object):
                             k.replace(self.appearance_scope_dst, self.appearance_scope_src, 1): v
                             for k, v in var_list.items()
                         }
+                    self._appearance_var_list = var_list
                     self._appearance_saver = tf.train.Saver(var_list)
 
             # Post-process scores.
@@ -378,7 +384,15 @@ class SiamFlow(object):
 
     def init(self, sess):
         if self.appearance_model_file:
-            self._appearance_saver.restore(sess, self.appearance_model_file)
+            try:
+                self._appearance_saver.restore(sess, self.appearance_model_file)
+            except tf.errors.NotFoundError as ex:
+                command = ('python -m tensorflow.python.tools.inspect_checkpoint'
+                           ' --file_name ' + self.appearance_model_file)
+                raise RuntimeError('\n\n'.join([
+                    'could not load appearance model: {}'.format(str(ex)),
+                    'tried to load variables:\n{}'.format(pprint.pformat(self._appearance_var_list)),
+                    'use this command to inspect checkpoint:\n' + command]))
 
 
 def dimensions(target_size,

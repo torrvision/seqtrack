@@ -215,9 +215,9 @@ def train(
         preproc_id=params.preproc_id,
         data_cache_dir=data_cache_dir)
 
-    create_iter_model_fn = functools.partial(models.BY_NAME[params.model_name],
+    make_instantiator_fn = functools.partial(models.BY_NAME[params.model_name],
                                              params=params.model_params)
-    # model_properties = iter_model_fn.derived_properties()
+    # model_properties = instantiator.derived_properties()
 
     TRAIN_VAL = ('train', 'val')
     video_sampler_specs = {'train': params.train_dataset, 'val': params.val_dataset}
@@ -236,7 +236,7 @@ def train(
         for dataset_name in params.eval_datasets}
 
     train_series, track_series = train_model_data(
-        params, dir, create_iter_model_fn, example_streams, eval_sample_fns,
+        params, dir, make_instantiator_fn, example_streams, eval_sample_fns,
         **kwargs)
 
     # Dump time-series for training and tracking for each seed.
@@ -384,7 +384,7 @@ def _make_video_sampler(names, datasets, seed, repeat):
 
 def train_model_data(
         params,
-        dir, create_iter_model_fn, sequences, eval_sets,
+        dir, make_instantiator_fn, sequences, eval_sets,
         only_evaluate_existing=False,
         override_ckpt_dir=None,  # Use with `only_evaluate_existing`.
         resume=False,
@@ -404,7 +404,7 @@ def train_model_data(
     '''Trains a network.
 
     Args:
-        create_iter_model_fn: (models.interface.IterModel) Maps example to outputs.
+        make_instantiator_fn: (models.interface.IterModel) Maps example to outputs.
         datasets: Dictionary of datasets with keys 'train' and 'val'.
         eval_sets: A dictionary of sampling functions which return collections
             of sequences on which to evaluate the tracker.
@@ -497,11 +497,11 @@ def train_model_data(
     # example = _perform_color_augmentation(example, args)
     metric_vars = {}
 
-    iter_model_fn = create_iter_model_fn(
+    instantiator = make_instantiator_fn(
         mode=tf.estimator.ModeKeys.TRAIN,
         example_type=getattr(sample.ExampleTypeKeys, params.example_type))
     with tf.variable_scope('model', reuse=False) as vs:
-        ops, init_fn = iter_model_fn.train(example, run_opts=run_opts, scope=vs)
+        ops = instantiator.train(example, run_opts=run_opts, scope=vs)
         # outputs, losses, init_state, final_state = model_fn.instantiate(
         #     example_input, run_opts, enable_loss=True)
     metric_vars.update(ops.losses)
@@ -546,7 +546,7 @@ def train_model_data(
     # TODO: Better that the model returns its summaries?
     summary_var = tf.summary.merge(tf.get_collection(tf.GraphKeys.SUMMARIES))
 
-    model_fn_track = create_iter_model_fn(mode=tf.estimator.ModeKeys.PREDICT)
+    instantiator_track = make_instantiator_fn(mode=tf.estimator.ModeKeys.PREDICT)
     # TODO: Ensure that the `track` instance does not include ops such as bnorm and summaries.
     # Feed image files here:
     example_track_with_files = _make_iter_placeholders(batch_size=1)
@@ -559,14 +559,14 @@ def train_model_data(
         with tf.variable_scope('model', reuse=True) as scope:
             model_inst_track = itermodel.TrackerAssign(
                 example_track_with_files,
-                itermodel.instantiate_iter_assign(model_fn_track, example_track,
+                itermodel.instantiate_iter_assign(instantiator_track, example_track,
                                                   run_opts=_make_run_opts_tracking(),
                                                   local_scope=local_scope, scope=scope))
     elif INSTANTIATE_METHOD_TRACK == 'feed':
         with tf.variable_scope('model', reuse=True) as scope:
             model_inst_track = itermodel.TrackerFeed(
                 example_track_with_files,
-                itermodel.instantiate_iter_feed(model_fn_track, example_track,
+                itermodel.instantiate_iter_feed(instantiator_track, example_track,
                                                 run_opts=_make_run_opts_tracking(),
                                                 scope=scope))
     else:
@@ -623,7 +623,7 @@ def train_model_data(
             prev_ckpt = np.asscalar(global_step_var.eval())
         else:
             sess.run(init_op)
-            init_fn(sess)
+            instantiator.init(sess)
             # sess.run(ops.init)
             # model_fn.init(sess)  # Loads pre-trained features if applicable.
 
