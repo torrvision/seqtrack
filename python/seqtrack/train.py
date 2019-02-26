@@ -765,7 +765,7 @@ def _learning_rate_exponential(t, n, init, **kwargs):
     return tf.train.exponential_decay(init, t, **kwargs)
 
 
-def _learning_rate_remain(t, n, init, decay_rate=0.1, remain_rate=0.5, max_power=None):
+def _learning_rate_remain(t, n, init, decay_rate=0.1, remain_rate=0.5, max_power=3):
     frac_rem = tf.to_float(n - t) / n
     k = tf.floor(tf.log(frac_rem) / tf.log(remain_rate))
     if max_power is not None:

@@ -173,8 +173,8 @@ class SiamFlow(object):
             extra_conv_enable=self.feature_extra_conv_enable,
             extra_conv_params=self.feature_extra_conv_params)
 
-    def start(self, features_init, run_opts, name='start'):
-        with tf.name_scope(name) as scope:
+    def start(self, features_init, run_opts, name=None):
+        with tf.name_scope(name, 'start') as scope:
             im = features_init['image']['data']
             aspect = features_init['aspect']
             target_rect = features_init['rect']
@@ -210,13 +210,13 @@ class SiamFlow(object):
             }
             return state
 
-    def next(self, features, labels, state, name='timestep', reset_position=False):
+    def next(self, features, labels, state, name=None, reset_position=False):
         '''
         Args:
             reset_position: Keep the appearance model but reset the position.
                 If this is true, then features['rect'] must be present.
         '''
-        with tf.name_scope(name) as scope:
+        with tf.name_scope(name, 'next_{}'.format(self._num_frames)) as scope:
             im = features['image']['data']
             run_opts = state['run_opts']
             aspect = state['aspect']
