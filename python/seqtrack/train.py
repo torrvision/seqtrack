@@ -889,12 +889,9 @@ def _draw_rectangles(im, gt, gt_is_valid=None, pred=None, name='draw_rectangles'
         im = tf.convert_to_tensor(im)
         num_batch_dims = len(im.shape) - 3
         assert len(gt.shape) == num_batch_dims + 1
-        print('im.shape', im.shape, file=sys.stderr)
-        print('gt.shape', gt.shape, file=sys.stderr)
         if gt_is_valid is not None:
             assert len(gt_is_valid.shape) == num_batch_dims
         if pred is not None:
-            print('pred.shape', pred.shape, file=sys.stderr)
             assert len(pred.shape) == num_batch_dims + 1
 
         if im.dtype != tf.float32:

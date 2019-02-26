@@ -187,7 +187,8 @@ class SiamFlow(object):
                 template_input = cnn.as_tensor(template_input, add_to_set=True)
                 with tf.variable_scope('embed', reuse=False):
                     template_feat, template_layers, feature_scope = self._embed_net(
-                        template_input, run_opts['is_training'])
+                        template_input,
+                        (False if not self.learn_appearance else run_opts['is_training']))
                     # Get names relative to this scope for loading pre-trained.
                     # self._feature_vars = _global_variables_relative_to_scope(feature_scope)
                 rf_template = template_feat.fields[template_input.value]
@@ -242,7 +243,7 @@ class SiamFlow(object):
             if self.num_scales == 1:
                 scales = tf.constant([1.0], dtype=tf.float32)
             else:
-                scales = model_util.scale_range(tf.constant(num_scales),
+                scales = model_util.scale_range(tf.constant(self.num_scales),
                                                 tf.to_float(self.scale_step))
             search_ims, search_rects = self._crop_pyr(
                 im, search_rect, self.search_size, scales, mean_color)
@@ -256,7 +257,8 @@ class SiamFlow(object):
                 search_input = cnn.as_tensor(search_input, add_to_set=True)
                 with tf.variable_scope('embed', reuse=True):
                     search_feat, search_layers, _ = self._embed_net(
-                        search_input, run_opts['is_training'])
+                        search_input,
+                        (False if not self.learn_appearance else run_opts['is_training']))
                 rf_search = search_feat.fields[search_input.value]
                 search_feat_size = search_feat.value.shape[-3:-1].as_list()
                 receptive_field.assert_center_alignment(self.search_size, search_feat_size, rf_search)
@@ -264,12 +266,17 @@ class SiamFlow(object):
                 with tf.variable_scope('join', reuse=(self._num_frames >= 1)):
                     join_fn = join_nets.BY_NAME[self.join_arch]
                     if self.join_type == 'single':
-                        response = join_fn(template_feat, search_feat, run_opts['is_training'],
+                        response = join_fn(template_feat, search_feat,
+                                           is_training=(False if not self.learn_appearance else
+                                                        run_opts['is_training']),
+                                           trainable=self.learn_appearance,
                                            **self.join_params)
                     elif self.join_type == 'multi':
-                        response = join_fn(template_feat, search_feat, run_opts['is_training'],
-                                           self.multi_join_layers,
+                        response = join_fn(template_feat, search_feat, self.multi_join_layers,
                                            template_layers, search_layers, search_input,
+                                           is_training=(False if not self.learn_appearance else
+                                                        run_opts['is_training']),
+                                           trainable=self.learn_appearance,
                                            **self.join_params)
                     else:
                         raise ValueError('unknown join type: "{}"'.format(self.join_type))

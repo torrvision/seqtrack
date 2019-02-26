@@ -11,6 +11,7 @@ from seqtrack import helpers
 
 
 def xcorr(template, search, is_training,
+          trainable=True,
           enable_pre_conv=False,
           pre_conv_params=None,
           learn_spatial_weight=False,
@@ -29,6 +30,7 @@ def xcorr(template, search, is_training,
     '''
     return _xcorr_general(
         template, search, is_training,
+        trainable=trainable,
         enable_pre_conv=enable_pre_conv,
         pre_conv_params=pre_conv_params,
         learn_spatial_weight=learn_spatial_weight,
@@ -42,6 +44,7 @@ def xcorr(template, search, is_training,
 
 
 def _xcorr_general(template, search, is_training,
+                   trainable=True,
                    enable_pre_conv=False,
                    pre_conv_params=None,
                    learn_spatial_weight=False,
@@ -71,8 +74,10 @@ def _xcorr_general(template, search, is_training,
         pre_conv_params = pre_conv_params or {}
 
         if enable_pre_conv:
-            template = _pre_conv(template, is_training, scope='pre', reuse=False, **pre_conv_params)
-            search = _pre_conv(search, is_training, scope='pre', reuse=True, **pre_conv_params)
+            template = _pre_conv(template, is_training, trainable=trainable,
+                                 scope='pre', reuse=False, **pre_conv_params)
+            search = _pre_conv(search, is_training, trainable=trainable,
+                               scope='pre', reuse=True, **pre_conv_params)
         # Discard receptive field of template and get underlying tf.Tensor.
         template = cnn.get_value(template)
         template_size = template.shape[-3:-1].as_list()
@@ -101,13 +106,15 @@ def _xcorr_general(template, search, is_training,
             # Initialize with spatial normalizer.
             spatial_weight = tf.get_variable(
                 'spatial_weight', template_size, tf.float32,
-                initializer=tf.constant_initializer(weight_init))
+                initializer=tf.constant_initializer(weight_init),
+                trainable=trainable)
             template *= tf.expand_dims(spatial_weight, -1)
         dot = cnn.diag_xcorr(search, template)
         dot = cnn.pixelwise(lambda dot: normalize_factor * dot, dot)
         if reduce_channels:
             dot = cnn.channel_mean(dot) if use_mean else cnn.channel_sum(dot)
-        return _calibrate(dot, use_batch_norm, learn_gain, gain_init)
+        return _calibrate(dot, is_training, use_batch_norm, learn_gain, gain_init,
+                          trainable=trainable)
 
 
 def _pre_conv(x, is_training,
@@ -116,6 +123,7 @@ def _pre_conv(x, is_training,
               stride=1,
               padding='VALID',
               activation='linear',
+              trainable=True,
               scope='preconv',
               reuse=None):
     '''
@@ -131,11 +139,13 @@ def _pre_conv(x, is_training,
                            padding=padding,
                            activation_fn=helpers.get_act(activation),
                            normalizer_fn=None,  # No batch-norm.
+                           trainable=trainable,
                            scope=scope,
                            reuse=reuse)
 
 
 def cosine(template, search, is_training,
+           trainable=True,
            use_batch_norm=False,
            gain_init=1,
            eps=1e-3,
@@ -159,10 +169,14 @@ def cosine(template, search, is_training,
         similarity = cnn.pixelwise_binary(
             lambda dot_xy, denom: dot_xy / (denom + eps), dot_xy, denom)
         # Gain is necessary here because similarity is always in [-1, 1].
-        return _calibrate(similarity, use_batch_norm, learn_gain=True, gain_init=gain_init)
+        return _calibrate(similarity, is_training, use_batch_norm,
+                          learn_gain=True,
+                          gain_init=gain_init,
+                          trainable=trainable)
 
 
 def distance(template, search, is_training,
+             trainable=True,
              use_mean=False,
              use_batch_norm=False,
              learn_gain=False,
@@ -193,10 +207,12 @@ def distance(template, search, is_training,
             num_elems = np.prod(template.shape[-3:].as_list())
             sq_dist = cnn.pixelwise(lambda sq_dist: (1 / tf.to_float(num_elems)) * sq_dist, sq_dist)
         dist = cnn.pixelwise(tf.sqrt, sq_dist)
-        return _calibrate(dist, use_batch_norm, learn_gain, gain_init)
+        return _calibrate(dist, is_training, use_batch_norm, learn_gain, gain_init,
+                          trainable=trainable)
 
 
 def depthwise_xcorr(template, search, is_training,
+                    trainable=True,
                     learn_spatial_weight=False,
                     use_mean=False,
                     use_batch_norm=False,
@@ -206,6 +222,7 @@ def depthwise_xcorr(template, search, is_training,
     '''Computes the cross-correlation of each channel independently.'''
     return _xcorr_general(
         template, search, is_training,
+        trainable=trainable,
         enable_pre_conv=False,
         learn_spatial_weight=learn_spatial_weight,
         reduce_channels=False,
@@ -217,6 +234,7 @@ def depthwise_xcorr(template, search, is_training,
 
 
 def all_pixel_pairs(template, search, is_training,
+                    trainable=True,
                     operation='mul',
                     reduce_channels=True,
                     use_mean=True,
@@ -264,7 +282,8 @@ def all_pixel_pairs(template, search, is_training,
         normalizer = 1 / (np.prod(template_size) ** 2 * num_channels) if use_mean else 1
         weights_shape = template_size + [np.prod(template_size) * num_channels, 1]
         weights = tf.get_variable('weights', weights_shape, tf.float32,
-                                  initializer=tf.constant_initializer(normalizer))
+                                  initializer=tf.constant_initializer(normalizer),
+                                  trainable=trainable)
         # TODO: Support depthwise_conv2d (keep channels).
         pairs, restore = cnn.merge_batch_dims(pairs)
         response = cnn.nn_conv2d(pairs, weights, strides=[1, 1, 1, 1], padding='VALID')
@@ -273,6 +292,7 @@ def all_pixel_pairs(template, search, is_training,
 
 
 def abs_diff(template, search, is_training,
+             trainable=True,
              reduce_channels=True,
              use_mean=False,
              use_batch_norm=False,
@@ -293,44 +313,55 @@ def abs_diff(template, search, is_training,
                 num_channels = template.shape[-1].value
                 delta = cnn.pixelwise(lambda x: (1 / tf.to_float(num_channels)) * x, delta)
         # TODO: No bias if attaching more layers?
-        return _calibrate(delta, use_batch_norm, learn_gain=False, gain_init=1)
+        return _calibrate(delta, is_training, use_batch_norm, learn_gain=False, gain_init=1,
+                          trainable=trainable)
 
 
-def _calibrate(response, use_batch_norm, learn_gain, gain_init):
+def _calibrate(response, is_training, use_batch_norm, learn_gain, gain_init, trainable=True):
     '''
     Either adds batch_norm (with center and scale) or a scalar bias with optional gain.
     '''
     if use_batch_norm:
-        output = cnn.pixelwise(slim.batch_norm, response, center=True, scale=True)
+        output = cnn.pixelwise(slim.batch_norm, response, center=True, scale=True,
+                               is_training=is_training, trainable=trainable)
     else:
         # Add bias (cannot be represented by dot product) and optional gain.
-        bias = tf.get_variable('bias', [], tf.float32, initializer=tf.zeros_initializer())
+        bias = tf.get_variable('bias', [], tf.float32,
+                               initializer=tf.zeros_initializer(),
+                               trainable=trainable)
         if learn_gain:
             gain = tf.get_variable('gain', [], tf.float32,
-                                   initializer=tf.constant_initializer(gain_init))
+                                   initializer=tf.constant_initializer(gain_init),
+                                   trainable=trainable)
             output = cnn.pixelwise(lambda x: gain * x + bias, response)
         else:
             output = cnn.pixelwise(lambda x: x + bias, response)
     return output
 
 
-def mlp(template, search, is_training,
-        num_layers,
-        num_hidden,
+def mlp(template, search, is_training, num_layers, num_hidden,
+        trainable=True,
         join_name='depthwise_xcorr',
         join_params=None,
         scope='mlp_join'):
+    '''Applies an MLP after another join function.'''
     with tf.variable_scope(scope, 'mlp_join'):
         join_params = join_params or {}
         join_fn = BY_NAME[join_name]
-        similarity = join_fn(template, search, **join_params)
-        response = cnn.mlp(similarity, num_layers=num_layers,
-                           num_hidden=num_hidden, num_outputs=1)
+        similarity = join_fn(template, search,
+                             is_training=is_training,
+                             trainable=trainable,
+                             **join_params)
+        response = cnn.mlp(similarity, num_layers,
+                           num_hidden=num_hidden, num_outputs=1,
+                           is_training=is_training, trainable=trainable)
         return response
 
 
-def multi_xcorr(template, search, is_training,
+def multi_xcorr(template, search,
                 layer_names, template_layers, search_layers, search_image,
+                is_training,
+                trainable=True,
                 enable_final_conv=False,
                 final_conv_params=None,
                 hidden_conv_num_outputs=None,
@@ -351,6 +382,7 @@ def multi_xcorr(template, search, is_training,
 
         scores = {}
         scores['final'] = _xcorr_general(template, search, is_training,
+                                         trainable=trainable,
                                          enable_pre_conv=enable_final_conv,
                                          pre_conv_params=final_conv_params,
                                          use_mean=use_mean,
@@ -363,6 +395,7 @@ def multi_xcorr(template, search, is_training,
             # TODO: Add batch-norm to each cross-correlation?
             # Must be a 1x1 convolution to ensure that receptive fields of different layers align.
             scores[name] = _xcorr_general(template_layers[name], search_layers[name], is_training,
+                                          trainable=trainable,
                                           enable_pre_conv=True,
                                           pre_conv_params=dict(
                                               num_outputs=hidden_conv_num_outputs,

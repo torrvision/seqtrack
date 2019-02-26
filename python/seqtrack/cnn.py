@@ -283,21 +283,30 @@ def _assert_equal_spatial_dim(x, y):
 
 @partial_pixelwise
 def mlp(net, num_layers, num_hidden, num_outputs,
-        normalizer_fn=slim.batch_norm,
+        is_training=True,
+        trainable=True,
+        batch_norm=True,
         activation_fn=tf.nn.relu,
-        output_normalizer_fn=None,
+        output_batch_norm=False,
         output_activation_fn=None,
         scope='mlp'):
+    # Could allow caller to specify `activation_fn` directly.
+    # However, then they are also responsible for passing `is_training` to `batch_norm`.
     with tf.variable_scope(scope, 'mlp'):
-        for i in range(num_layers - 1):
-            net = slim.conv2d(net, num_hidden, kernel_size=1, stride=1, padding='VALID',
-                              normalizer_fn=normalizer_fn,
-                              activation_fn=activation_fn,
-                              scope='fc{}'.format(i + 1))
-        net = slim.conv2d(net, num_outputs, kernel_size=1, stride=1, padding='VALID',
-                          normalizer_fn=output_normalizer_fn,
-                          activation_fn=output_activation_fn,
-                          scope='fc{}'.format(num_layers))
+        with slim.arg_scope([slim.batch_norm],
+                            is_training=is_training,
+                            trainable=trainable):
+            for i in range(num_layers - 1):
+                net = slim.conv2d(net, num_hidden, kernel_size=1, stride=1, padding='VALID',
+                                  normalizer_fn=(slim.batch_norm if batch_norm else None),
+                                  activation_fn=activation_fn,
+                                  trainable=trainable,
+                                  scope='fc{}'.format(i + 1))
+            net = slim.conv2d(net, num_outputs, kernel_size=1, stride=1, padding='VALID',
+                              normalizer_fn=(slim.batch_norm if output_batch_norm else None),
+                              activation_fn=output_activation_fn,
+                              trainable=trainable,
+                              scope='fc{}'.format(num_layers))
         return net
 
 
