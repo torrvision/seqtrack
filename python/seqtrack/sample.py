@@ -515,7 +515,7 @@ def times_disjoint_freq_range(rand, seq_len, valid_set, ntimesteps, min_freq, ma
     max_time = max(subseq)
     others = [t for t in sorted(valid_set) if not (min_time <= t <= max_time)]
     if len(others) == 0:
-        raise RuntimeError('no remaining frames for init')
+        raise InvalidExampleException('no remaining frames for init')
     t = rand.choice(others)
     return [t] + subseq
 
