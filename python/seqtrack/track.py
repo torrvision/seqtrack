@@ -19,7 +19,7 @@ from seqtrack import assess
 from seqtrack import data
 from seqtrack import geom_np
 from seqtrack import helpers
-# from seqtrack import visualize as visualize_pkg
+from seqtrack import visualize as vis
 
 FRAME_PATTERN = '%06d.jpeg'
 
@@ -31,8 +31,24 @@ def track(sess, tracker, sequence,
           vis_dir=None,
           keep_frames=False):
     '''Run an instantiated tracker on a sequence.'''
-
     assert 0 in sequence.valid_set
+
+    if visualize:
+        assert bool(vis_dir)
+        assert bool(sequence.name)
+        helpers.mkdir_p(vis_dir, 0755)
+        # if not keep_frames:
+        #     frame_dir = tempfile.mkdtemp()
+        #     logger.debug('write frames to tmp dir: %s', frame_dir)
+        # else:
+        #     frame_dir = os.path.join(vis_dir, sequence.name)
+        #     helpers.mkdir_p(frame_dir)
+        frame_dir = os.path.join(vis_dir, sequence.name)
+        helpers.mkdir_p(frame_dir)
+		_visualize_frame(os.path.join(frame_dir, FRAME_PATTERN % 0),
+                         sequence.image_files[0],
+                         rect_gt=sequence.rects[0])
+
     tracker.start(sess, {
         'image': {'file': [sequence.image_files[0]]},
         'rect': [sequence.rects[0]],
@@ -55,14 +71,39 @@ def track(sess, tracker, sequence,
         duration_with_load += time.time() - start_curr
         # Unpack from batch.
         predictions.append(curr['rect'][0])
+        if visualize:
+            _visualize_frame(os.path.join(frame_dir, FRAME_PATTERN % t),
+                             sequence.image_files[t],
+                             rect_gt=(sequence.rects[t] if t in sequence.valid_set else None),
+                             rect_pred=predictions[t - 1])
+
     duration_real = time.time() - start
+
+    if visualize:
+        args = [
+            'ffmpeg',
+            '-loglevel', 'error',
+            '-y',  # Overwrite without asking.
+            '-nostdin',  # No interaction with user.
+            '-i', FRAME_PATTERN,
+            '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+            os.path.join(os.path.abspath(vis_dir), sequence.name + '.mp4'),  # Output file.
+        ]
+        try:
+            p = subprocess.Popen(args, cwd=frame_dir)
+            p.wait()
+        except Exception as inst:
+            print 'error:', inst
+        else:
+            # If there is no exception, consider removing the frames.
+            if not keep_frames:
+                shutil.rmtree(frame_dir)
 
     predictions = np.array(predictions)
     timing = {
         'speed_with_load': (sequence_len - 1) / duration_with_load,
         'speed_real': sequence_len / duration_real,
     }
-
     return predictions, timing
 
 
@@ -183,3 +224,11 @@ def _extract_interval(seq, start, stop):
     subseq.update({k: seq[k][start:stop] for k in KEYS_SEQ})
     subseq.update({k: seq[k] for k in KEYS_NON_SEQ})
     return subseq
+
+
+def _visualize_frame(dst_file, src_file, **kwargs):
+    im = Image.open(src_file)
+    if im.mode != 'RGB':
+        im = im.convert('RGB')
+    im = vis.draw_output(im, **kwargs)
+    im.save(dst_file)
