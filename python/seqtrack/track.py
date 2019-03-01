@@ -36,16 +36,17 @@ def track(sess, tracker, sequence,
     if visualize:
         assert bool(vis_dir)
         assert bool(sequence.name)
-        helpers.mkdir_p(vis_dir, 0755)
+        filename = helpers.escape_filename(sequence.name)
+        helpers.mkdir_p(vis_dir, 0o755)
         # if not keep_frames:
         #     frame_dir = tempfile.mkdtemp()
         #     logger.debug('write frames to tmp dir: %s', frame_dir)
         # else:
-        #     frame_dir = os.path.join(vis_dir, sequence.name)
+        #     frame_dir = os.path.join(vis_dir, filename)
         #     helpers.mkdir_p(frame_dir)
-        frame_dir = os.path.join(vis_dir, sequence.name)
+        frame_dir = os.path.join(vis_dir, filename)
         helpers.mkdir_p(frame_dir)
-		_visualize_frame(os.path.join(frame_dir, FRAME_PATTERN % 0),
+        _visualize_frame(os.path.join(frame_dir, FRAME_PATTERN % 0),
                          sequence.image_files[0],
                          rect_gt=sequence.rects[0])
 
@@ -87,13 +88,13 @@ def track(sess, tracker, sequence,
             '-nostdin',  # No interaction with user.
             '-i', FRAME_PATTERN,
             '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-            os.path.join(os.path.abspath(vis_dir), sequence.name + '.mp4'),  # Output file.
+            os.path.join(os.path.abspath(vis_dir), filename + '.mp4'),  # Output file.
         ]
         try:
             p = subprocess.Popen(args, cwd=frame_dir)
             p.wait()
-        except Exception as inst:
-            print 'error:', inst
+        except Exception as ex:
+            logger.warning('error when calling ffmpeg: %s', str(ex))
         else:
             # If there is no exception, consider removing the frames.
             if not keep_frames:

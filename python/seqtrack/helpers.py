@@ -242,7 +242,7 @@ def diag_xcorr(x, f, stride=1, padding='VALID', name='diag_xcorr', **kwargs):
 
 
 def escape_filename(s):
-    return s.replace('/', '_')
+    return s.replace('/', '_').replace(':', '_')
 
 
 class LazyDict:
