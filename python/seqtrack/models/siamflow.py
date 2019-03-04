@@ -32,9 +32,10 @@ from . import join_nets
 
 from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 
-_COLORMAP = 'viridis'
 
 MODE_KEYS_SUPERVISED = [tf.estimator.ModeKeys.TRAIN, tf.estimator.ModeKeys.EVAL]
+
+_COLORMAP = 'viridis'
 
 
 def default_params():
@@ -62,8 +63,13 @@ def default_params():
         appearance_scope_src='',  # e.g. 'model/',
         learn_appearance=True,
         use_predictions=True,  # Use predictions for previous positions?
+        # Options for motion:
+        context_size=195,
+        stateless=False,
+        output_use_response=True,
+        output_use_images=True,
         # Tracking parameters:
-        num_scales=5,
+        num_scales=1,
         scale_step=1.03,
         scale_update_rate=1,
         report_square=False,
@@ -102,6 +108,7 @@ class SiamFlow(object):
         # Size of search area relative to object.
         self.template_scale = float(self.template_size) / self.target_size
         self.search_scale = float(self.search_size) / self.target_size
+        self.context_scale = float(self.context_size) / self.target_size
         # Defaults instead of None.
         self.join_params = self.join_params or {}
         self.multi_join_layers = self.multi_join_layers or []
@@ -204,6 +211,7 @@ class SiamFlow(object):
             state = {
                 'run_opts': run_opts,
                 'aspect': aspect,
+                'image': im,
                 'rect': tf.identity(target_rect),
                 'template_init': tf.identity(template_feat),
                 'mean_color': tf.identity(mean_color),
@@ -220,6 +228,7 @@ class SiamFlow(object):
             im = features['image']['data']
             run_opts = state['run_opts']
             aspect = state['aspect']
+            prev_im = state['image']
             mean_color = state['mean_color']
 
             # If the label is not valid, there will be no loss for this frame.
@@ -232,6 +241,17 @@ class SiamFlow(object):
             # Use the previous rectangle.
             # This will be the ground-truth rect during training if `use_predictions` is false.
             prev_target_rect = state['rect']
+
+            # Coerce the aspect ratio of the rectangle to construct the context area.
+            context_rect = self._context_rect(prev_target_rect, aspect, self.context_scale)
+            # Extract same rectangle in past and current images and feed into conv-net.
+            context_curr = self._crop(im, context_rect, self.context_size, mean_color)
+            context_prev = self._crop(prev_im, context_rect, self.context_size, mean_color)
+            with tf.name_scope('summary_context'):
+                tf.summary.image('curr', context_curr)
+                tf.summary.image('prev', context_curr)
+            motion = [context_curr] if self.stateless else [context_curr, context_prev]
+            motion = tf.stack(motion, axis=1)
 
             # How to obtain template from previous state?
             template_feat = state['template_init']
@@ -311,8 +331,10 @@ class SiamFlow(object):
 
                 # Regress response to translation and log(scale).
                 output_shapes = {'translation': [2], 'log_scale': [1]}
-                outputs = _output_net(response, output_shapes, run_opts['is_training'],
-                                      weight_decay=self.wd)
+                outputs = _output_net(response, motion, output_shapes, run_opts['is_training'],
+                                      weight_decay=self.wd,
+                                      use_response=self.output_use_response,
+                                      use_images=self.output_use_images)
 
             _image_sequence_summary('response',
                                     model_util.colormap(tf.sigmoid(response), _COLORMAP))
@@ -377,6 +399,7 @@ class SiamFlow(object):
             state = {
                 'run_opts': run_opts,
                 'aspect': aspect,
+                'image': im,
                 'rect': next_prev_rect,
                 'template_init': state['template_init'],
                 'mean_color': state['mean_color'],
@@ -628,10 +651,60 @@ def _instantiate_separate_init(iter_model_fn, example, run_opts, scope='model'):
         )
 
 
-def _output_net(x, output_shapes, is_training, weight_decay=0):
+# def _output_net(x, output_shapes, is_training, weight_decay=0):
+#     '''
+#     Args:
+#         x: [b, s, h, w, c]
+#         output_shapes: Dict that maps string to iterable of ints.
+#             e.g. {'response': [5, 17, 17, 1]} for a score-map
+#             e.g. {'translation': [2], 'scale': [1]} for translation regression
+#
+#     Returns:
+#         Dictionary of outputs with shape [b] + output_shape.
+#     '''
+#     assert len(x.shape) == 5
+#     with slim.arg_scope([slim.conv2d, slim.fully_connected],
+#                         activation_fn=tf.nn.relu,
+#                         normalizer_fn=slim.batch_norm,
+#                         weights_regularizer=slim.l2_regularizer(weight_decay)):
+#         with slim.arg_scope([slim.batch_norm], is_training=is_training):
+#             # Perform same operation on each scale.
+#             x, unmerge = helpers.merge_dims(x, 0, 2)  # Merge scale into batch.
+#             # Spatial dim 17
+#             x = slim.conv2d(x, 32, 3, padding='SAME', scope='conv1')
+#             x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
+#             # Spatial dim 9
+#             x = slim.conv2d(x, 64, 3, padding='SAME', scope='conv2')
+#             x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
+#             # Spatial dim 5
+#             x = unmerge(x, axis=0)  # Unmerge scale from batch.
+#             x = tf.concat(tf.unstack(x, axis=1), axis=-1)  # Concatenate channels of all scales.
+#             x = slim.conv2d(x, 512, 5, padding='VALID', scope='fc3')
+#             # Spatial dim 1
+#             x = tf.squeeze(x, axis=(-2, -3))
+#             x = slim.fully_connected(x, 512, scope='fc4')
+#
+#             # Regress to each output.
+#             y = {}
+#             for k in output_shapes.keys():
+#                 with tf.variable_scope('head_{}'.format(k)):
+#                     y[k] = x
+#                     output_dim = np.asscalar(np.prod(output_shapes[k]))
+#                     y[k] = slim.fully_connected(y[k], output_dim, scope='fc5',
+#                                                 activation_fn=None, normalizer_fn=None)
+#                     if len(output_shapes[k]) > 1:
+#                         y[k] = helpers.split_dims(y[k], axis=-1, shape=output_shapes[k])
+#             return y
+
+
+def _output_net(r, v, output_shapes, is_training,
+                weight_decay=0,
+                use_response=True,
+                use_images=True):
     '''
     Args:
-        x: [b, s, h, w, c]
+        r: Response. [b, s, hr, wr, c]
+        v: Motion. [b, t, hv, wv, c]
         output_shapes: Dict that maps string to iterable of ints.
             e.g. {'response': [5, 17, 17, 1]} for a score-map
             e.g. {'translation': [2], 'scale': [1]} for translation regression
@@ -639,27 +712,64 @@ def _output_net(x, output_shapes, is_training, weight_decay=0):
     Returns:
         Dictionary of outputs with shape [b] + output_shape.
     '''
-    assert len(x.shape) == 5
+    assert len(r.shape) == 5
     with slim.arg_scope([slim.conv2d, slim.fully_connected],
                         activation_fn=tf.nn.relu,
                         normalizer_fn=slim.batch_norm,
                         weights_regularizer=slim.l2_regularizer(weight_decay)):
         with slim.arg_scope([slim.batch_norm], is_training=is_training):
-            # Perform same operation on each scale.
-            x, unmerge = helpers.merge_dims(x, 0, 2)  # Merge scale into batch.
-            # Spatial dim 17
-            x = slim.conv2d(x, 32, 3, padding='SAME', scope='conv1')
-            x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool1')
-            # Spatial dim 9
-            x = slim.conv2d(x, 64, 3, padding='SAME', scope='conv2')
-            x = slim.max_pool2d(x, 3, stride=2, padding='SAME', scope='pool2')
-            # Spatial dim 5
-            x = unmerge(x, axis=0) # Unmerge scale from batch.
-            x = tf.concat(tf.unstack(x, axis=1), axis=-1)  # Concatenate channels of all scales.
-            x = slim.conv2d(x, 512, 5, padding='VALID', scope='fc3')
-            # Spatial dim 1
-            x = tf.squeeze(x, axis=(-2, -3))
-            x = slim.fully_connected(x, 512, scope='fc4')
+            x = []
+
+            if use_response:
+                with tf.variable_scope('preproc_response'):
+                    # Perform same operation on each scale.
+                    r, unmerge = helpers.merge_dims(r, 0, 2)  # Merge scale into batch.
+                    # Spatial dim 17
+                    r = slim.conv2d(r, 32, 3, padding='SAME', scope='conv1')
+                    r = slim.max_pool2d(r, 3, stride=2, padding='SAME', scope='pool1')
+                    # Spatial dim 9
+                    r = slim.conv2d(r, 64, 3, padding='SAME', scope='conv2')
+                    r = slim.max_pool2d(r, 3, stride=2, padding='SAME', scope='pool2')
+                    # Spatial dim 5
+                    r = unmerge(r, axis=0)  # Unmerge scale from batch.
+                    r = tf.squeeze(r, axis=1)  # Ensure that there is just 1 scale.
+                    x.append(r)
+
+            if use_images:
+                with tf.variable_scope('preproc_motion'):
+                    # https://github.com/tensorflow/models/blob/master/research/slim/nets/alexnet.py
+                    v, unmerge = helpers.merge_dims(v, 0, 2)  # Merge time into batch.
+                    # To determine size, work backwards from output.
+                    # Input size must be
+                    # 103 = 11 + (47 - 1) * 2 (for stride 2) or
+                    # 195 = 11 + (47 - 1) * 4 (for stride 4)
+                    v = slim.conv2d(v, 32, [11, 11], 4, padding='VALID', scope='conv1')  # was 64
+                    # Must be 47 = 3 + (23 - 1) * 2
+                    v = slim.max_pool2d(v, [3, 3], 2, padding='VALID', scope='pool1')
+                    v = unmerge(v, axis=0)  # Un-merge time from batch.
+                    # Concatenate the images over time.
+                    v = tf.concat(tf.unstack(v, axis=1), axis=-1)
+                    v = slim.conv2d(v, 48, [5, 5], padding='SAME', scope='conv2')  # was 192
+                    # Must be 23 = 3 + (11 - 1) * 2
+                    v = slim.max_pool2d(v, [3, 3], 2, padding='VALID', scope='pool2')
+                    # TODO: Use residual connections here? Be careful with relu and bnorm.
+                    v = slim.conv2d(v, 96, [3, 3], padding='SAME', scope='conv3')  # was 384
+                    v = slim.conv2d(v, 96, [3, 3], padding='SAME', scope='conv4')  # was 384
+                    v = slim.conv2d(v, 64, [3, 3], padding='SAME', scope='conv5')  # was 256
+                    # Must be 11 = 3 + (5 - 1) * 2
+                    v = slim.max_pool2d(v, [3, 3], 2, padding='VALID', scope='pool5')
+                    # Spatial dim 5
+                    x.append(v)
+
+            # Concatenate appearance response and/or motion description.
+            x = tf.concat(x, axis=-1)
+
+            with tf.variable_scope('output'):
+                x = slim.conv2d(x, 64, [3, 3], padding='SAME', scope='conv1')
+                x = slim.conv2d(x, 64, [5, 5], padding='VALID', scope='fc2')
+                # Spatial dim 1
+                x = tf.squeeze(x, axis=(-2, -3))
+                x = slim.fully_connected(x, 512, scope='fc3')
 
             # Regress to each output.
             y = {}
@@ -667,7 +777,7 @@ def _output_net(x, output_shapes, is_training, weight_decay=0):
                 with tf.variable_scope('head_{}'.format(k)):
                     y[k] = x
                     output_dim = np.asscalar(np.prod(output_shapes[k]))
-                    y[k] = slim.fully_connected(y[k], output_dim, scope='fc5',
+                    y[k] = slim.fully_connected(y[k], output_dim, scope='fc1',
                                                 activation_fn=None, normalizer_fn=None)
                     if len(output_shapes[k]) > 1:
                         y[k] = helpers.split_dims(y[k], axis=-1, shape=output_shapes[k])
