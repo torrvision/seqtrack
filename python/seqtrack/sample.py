@@ -94,7 +94,7 @@ class MixtureSampler(object):
         '''
         self._rand = rand
         self._samplers = samplers
-        self._p = None if not p else (np.asfarray(p) / np.sum(p))
+        self._p = p
         # Construct concatenation of datasets.
         datasets = {sampler_id: sampler.dataset() for sampler_id, sampler in samplers.items()}
         self._dataset = data.Concat(datasets)
@@ -103,11 +103,15 @@ class MixtureSampler(object):
         return self._dataset
 
     def sample(self):
+        def normalize(p):
+            return np.asfarray(p) / np.sum(p)
+
         sampler_ids = sorted(self._samplers.keys())
+        p = None if self._p is None else normalize([self._p[name] for name in sampler_ids])
         # Start a stream for all constituent samplers.
         streams = {sampler_id: self._samplers[sampler_id].sample() for sampler_id in sampler_ids}
         while True:
-            sampler_id = self._rand.choice(sampler_ids, p=self._p)
+            sampler_id = self._rand.choice(sampler_ids, p=p)
             # If the components are not infinite, this may raise StopIteration.
             track_id = next(streams[sampler_id])
             # Get track_id in Concat dataset.
