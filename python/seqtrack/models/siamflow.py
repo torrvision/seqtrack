@@ -62,7 +62,7 @@ def default_params():
         appearance_scope_dst='',  # e.g. 'model/appearance/',
         appearance_scope_src='',  # e.g. 'model/',
         learn_appearance=True,
-        use_predictions=True,  # Use predictions for previous positions?
+        use_predictions=False,  # Use predictions for previous positions?
         # Options for motion:
         context_size=195,
         stateless=False,
@@ -70,7 +70,7 @@ def default_params():
         output_use_images=True,
         # Tracking parameters:
         num_scales=1,
-        scale_step=1.03,
+        log_scale_step=0.03,
         scale_update_rate=1,
         report_square=False,
         window_params=None,
@@ -264,7 +264,7 @@ class SiamFlow(object):
                 scales = tf.constant([1.0], dtype=tf.float32)
             else:
                 scales = model_util.scale_range(tf.constant(self.num_scales),
-                                                tf.to_float(self.scale_step))
+                                                tf.to_float(self.log_scale_step))
             search_ims, search_rects = self._crop_pyr(
                 im, search_rect, self.search_size, scales, mean_color)
 
@@ -732,7 +732,8 @@ def _output_net(r, v, output_shapes, is_training,
                     r = slim.max_pool2d(r, 3, stride=2, padding='SAME', scope='pool2')
                     # Spatial dim 5
                     r = unmerge(r, axis=0)  # Unmerge scale from batch.
-                    r = tf.squeeze(r, axis=1)  # Ensure that there is just 1 scale.
+                    # Concatenate channels of all scales.
+                    r = tf.concat(tf.unstack(r, axis=1), axis=-1)
                     x.append(r)
 
             if use_images:
