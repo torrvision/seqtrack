@@ -52,7 +52,7 @@ class TestRegress(tf.test.TestCase):
         response_size = 5
         num_scales = 1
         translation_stride = 10
-        scale_step = 2
+        log_scale_step = np.log(2.0)
         base_target_size = 30
 
         gt_translation = [-10, -20]
@@ -74,7 +74,7 @@ class TestRegress(tf.test.TestCase):
         scale_want = _make_constant_batch(scale_want)
 
         translation_actual, scale_actual = regress.multiscale_error(
-            response_size, num_scales, translation_stride, scale_step, base_target_size,
+            response_size, num_scales, translation_stride, log_scale_step, base_target_size,
             gt_translation, gt_size)
 
         self.assertAllClose(translation_want, translation_actual)
@@ -84,7 +84,7 @@ class TestRegress(tf.test.TestCase):
         response_size = 1
         num_scales = 5
         translation_stride = 10
-        scale_step = 2
+        log_scale_step = np.log(2.0)
         base_target_size = 30
 
         gt_translation = [0, 0]
@@ -102,7 +102,7 @@ class TestRegress(tf.test.TestCase):
         scale_want = _make_constant_batch(scale_want)
 
         translation_actual, scale_actual = regress.multiscale_error(
-            response_size, num_scales, translation_stride, scale_step, base_target_size,
+            response_size, num_scales, translation_stride, log_scale_step, base_target_size,
             gt_translation, gt_size)
 
         self.assertAllClose(translation_want, translation_actual)
@@ -112,7 +112,7 @@ class TestRegress(tf.test.TestCase):
         response_size = 7
         num_scales = 3
         translation_stride = 10
-        scale_step = 2
+        log_scale_step = np.log(2.0)
         base_target_size = 30
         scores_shape = (1, num_scales) + n_positive_integers(2, response_size) + (1,)
 
@@ -140,7 +140,7 @@ class TestRegress(tf.test.TestCase):
         for loss_name, loss_kwargs in losses.items():
             with trySubTest(self, loss=loss_name):
                 _, loss = regress.compute_loss_discrete(
-                    scores, num_scales, translation_stride, scale_step, base_target_size,
+                    scores, num_scales, translation_stride, log_scale_step, base_target_size,
                     _make_constant_batch(gt_translation),
                     _make_constant_batch(gt_size),
                     **loss_kwargs)
@@ -153,7 +153,7 @@ class TestRegress(tf.test.TestCase):
         response_size = 7
         num_scales = 3
         translation_stride = 10
-        scale_step = 2
+        log_scale_step = np.log(2)
         base_target_size = 30
         scores_shape = (1, num_scales) + n_positive_integers(2, response_size) + (1,)
 
@@ -178,7 +178,8 @@ class TestRegress(tf.test.TestCase):
                 with self.test_session():
                     label_fn = regress.LABEL_FNS[name]
                     _, labels, weights = label_fn(
-                        response_size, num_scales, translation_stride, scale_step, base_target_size,
+                        response_size, num_scales, translation_stride, log_scale_step,
+                        base_target_size,
                         _make_constant_batch(gt_translation),
                         _make_constant_batch(gt_size),
                         **kwargs)
