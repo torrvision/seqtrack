@@ -733,7 +733,8 @@ def _output_net(r, v, output_shapes, is_training,
                 r = slim.max_pool2d(r, 3, stride=2, padding='SAME', scope='pool2')
                 # Spatial dim 5
                 r = unmerge(r, axis=0)  # Unmerge scale from batch.
-                r = tf.squeeze(r, axis=1)  # Ensure that there is just 1 scale.
+                # Concatenate channels of all scales.
+                r = tf.concat(tf.unstack(r, axis=1), axis=-1)
                 x.append(r)
 
         if use_images:
