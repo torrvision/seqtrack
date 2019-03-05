@@ -46,8 +46,8 @@ def default_params():
         response_stride=8,  # if output_form == 'discrete'
         response_size=17,  # if output_form == 'discrete'
         num_scales=5,  # if output_form == 'discrete'
-        scale_step=1.02,  # if output_form == 'discrete'
-        use_predictions=True,  # Use predictions for previous positions?
+        log_scale_step=0.02,  # if output_form == 'discrete'
+        use_predictions=False,  # Use predictions for previous positions?
         scale_update_rate=1,
         arg_max_eps=0.0,
         stateless=False,  # Ignore previous image.
@@ -208,14 +208,14 @@ class MotionRegressor(object):
                     # base_translations = ((self.response_stride / self.context_size) *
                     #                      util.displacement_from_center(self.response_size))
                     # scales = util.scale_range(tf.constant(self.num_scales),
-                    #                           tf.to_float(self.scale_step))
+                    #                           tf.to_float(self.log_scale_step))
                     base_target_size = self.target_size / CONTEXT_SIZE
                     translation_stride = self.response_stride / CONTEXT_SIZE
                     loss_name, loss = compute_loss_discrete(
                         outputs['response'],
                         self.num_scales,
                         translation_stride,
-                        self.scale_step,
+                        self.log_scale_step,
                         base_target_size,
                         gt_translation,
                         gt_size,
@@ -237,7 +237,8 @@ class MotionRegressor(object):
 
             if self.output_form == 'discrete':
                 response = outputs['response']
-                scales = util.scale_range(tf.constant(self.num_scales), tf.to_float(self.scale_step))
+                scales = util.scale_range(tf.constant(self.num_scales),
+                                          tf.to_float(self.log_scale_step))
                 # Use pyramid from loss function to obtain position.
                 # Get relative translation and scale from response.
                 # TODO: Upsample to higher resolution than original image?
@@ -339,26 +340,6 @@ def dimensions(target_size,
     return dict(template_size=template_size, search_size=search_size)
 
 
-def scale_sequence(num_scales, max_scale):
-    '''
-    >>> round(scale_sequence(3, 1.02)['scale_step'], 6)
-    1.02
-    >>> round(scale_sequence(5, 1.02)['scale_step'], 4)
-    1.01
-    '''
-    # TODO: Use log1p and exp1m? Probably not necessary.
-    if num_scales == 1:
-        # There is no scale step.
-        return dict(num_scales=1)
-    assert num_scales % 2 == 1
-    h = (num_scales - 1) // 2
-    # Scales will be:
-    #   scales = step ** [-h, ..., h]
-    #   log(scales) = log(step) * [-h, ..., h]
-    scale_step = math.exp(abs(math.log(max_scale)) / h)
-    return dict(num_scales=num_scales, scale_step=scale_step)
-
-
 def _motion_net(x, output_shapes, is_training, weight_decay=0):
     '''
     Args:
@@ -458,7 +439,7 @@ def compute_loss_vector(translation, log_scale, gt_translation, gt_log_scale,
     return loss_name, loss
 
 
-def compute_loss_discrete(scores, num_scales, translation_stride, scale_step, base_target_size,
+def compute_loss_discrete(scores, num_scales, translation_stride, log_scale_step, base_target_size,
                           gt_translation, gt_size,
                           method='sigmoid', params=None):
     '''
@@ -480,14 +461,14 @@ def compute_loss_discrete(scores, num_scales, translation_stride, scale_step, ba
     except KeyError as ex:
         raise ValueError('unknown loss method: "{}"'.format(method))
     scores = tf.verify_tensor_all_finite(scores, 'scores are not finite')
-    name, loss = loss_fn(scores, num_scales, translation_stride, scale_step, base_target_size,
+    name, loss = loss_fn(scores, num_scales, translation_stride, log_scale_step, base_target_size,
                          gt_translation, gt_size, **params)
     loss = tf.verify_tensor_all_finite(loss, 'scores are finite but loss is not')
     return name, loss
 
 
 def multiscale_error(response_size, num_scales,
-                     translation_stride, scale_step, base_target_size,
+                     translation_stride, log_scale_step, base_target_size,
                      gt_translation, gt_size):
     '''Computes error for each element of multi-scale response.
 
@@ -497,7 +478,7 @@ def multiscale_error(response_size, num_scales,
         response_size: Integer or 2-tuple of integers
         num_scales: Integer
         translation_stride: Float
-        scale_step: Float
+        log_scale_step: Float
         base_target_size: Float or tensor with shape [b]
         gt_translation: [b, 2]
         gt_size: [b]
@@ -508,14 +489,14 @@ def multiscale_error(response_size, num_scales,
     '''
     response_size = n_positive_integers(2, response_size)
     translation_stride = float(translation_stride)
-    scale_step = float(scale_step)
+    log_scale_step = float(log_scale_step)
 
     # TODO: Check if ground-truth is within range!
 
     base_translations = (
         translation_stride *
         tf.to_float(util.displacement_from_center(response_size)))
-    scales = util.scale_range(tf.constant(num_scales), tf.to_float(scale_step))
+    scales = util.scale_range(tf.constant(num_scales), tf.to_float(log_scale_step))
 
     gt_scale = gt_size / base_target_size
     # err_log_scale: [b, s]
@@ -534,7 +515,7 @@ def multiscale_error(response_size, num_scales,
 
 
 def multiscale_sigmoid_cross_entropy_loss(
-        scores, num_scales, translation_stride, scale_step, base_target_size,
+        scores, num_scales, translation_stride, log_scale_step, base_target_size,
         gt_translation, gt_size,
         pos_weight=1,
         balanced=False,
@@ -556,7 +537,7 @@ def multiscale_sigmoid_cross_entropy_loss(
 
     response_size = helpers.known_spatial_dim(scores)
     label_name, labels, weights = label_fn(
-        response_size, num_scales, translation_stride, scale_step, base_target_size,
+        response_size, num_scales, translation_stride, log_scale_step, base_target_size,
         gt_translation, gt_size, **label_params)
     loss = lossfunc.normalized_sigmoid_cross_entropy_with_logits(
         logits=scores, targets=tf.broadcast_to(labels, tf.shape(scores)),
@@ -576,7 +557,7 @@ def multiscale_sigmoid_cross_entropy_loss(
 
 
 def multiscale_hard_binary_labels(
-        response_size, num_scales, translation_stride, scale_step, base_target_size,
+        response_size, num_scales, translation_stride, log_scale_step, base_target_size,
         gt_translation, gt_size,
         translation_radius=0.2,
         scale_radius=1.03):
@@ -585,7 +566,7 @@ def multiscale_hard_binary_labels(
     More suitable for use with softmax.
     '''
     err_translation, err_log_scale = multiscale_error(
-        response_size, num_scales, translation_stride, scale_step, base_target_size,
+        response_size, num_scales, translation_stride, log_scale_step, base_target_size,
         gt_translation, gt_size)
     # err_translation: [..., s, h, w, 2]
     # err_log_scale: [..., s]
@@ -609,12 +590,12 @@ def multiscale_hard_binary_labels(
 #     'response_size',  # Integer or 2-tuple of integers
 #     'num_scales',  # Integer
 #     'translation_stride',  # Float
-#     'scale_step',  # Float
+#     'log_scale_step',  # Float
 # ])
 
 
 def multiscale_hard_labels(
-        response_size, num_scales, translation_stride, scale_step, base_target_size,
+        response_size, num_scales, translation_stride, log_scale_step, base_target_size,
         gt_translation, gt_size,
         translation_radius_pos=0.2,
         translation_radius_neg=0.5,
@@ -624,7 +605,7 @@ def multiscale_hard_labels(
     Args:
     '''
     err_translation, err_log_scale = multiscale_error(
-        response_size, num_scales, translation_stride, scale_step, base_target_size,
+        response_size, num_scales, translation_stride, log_scale_step, base_target_size,
         gt_translation, gt_size)
     # err_translation: [..., s, h, w, 2]
     # err_log_scale: [..., s]

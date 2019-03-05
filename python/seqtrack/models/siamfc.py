@@ -59,7 +59,7 @@ def default_params():
         # template_mask_kind='none',  # none, static, dynamic
         learn_appearance=True,
         learn_motion=False,
-        use_predictions=True,  # Use predictions for previous positions?
+        use_predictions=False,  # Use predictions for previous positions?
         train_multiscale=False,
         # Tracking parameters:
         search_method='local',
@@ -67,7 +67,7 @@ def default_params():
         # global_search_max_resolution=512,
         # global_search_num_scales=4,  # 64, 128, 256, 512
         num_scales=5,
-        scale_step=1.03,
+        log_scale_step=0.03,
         scale_update_rate=1,
         report_square=False,
         normalize_method='mean',
@@ -281,7 +281,7 @@ class SiamFC(object):
                 scales = tf.constant([1.0], dtype=tf.float32)
             else:
                 scales = model_util.scale_range(tf.constant(num_scales),
-                                                tf.to_float(self.scale_step))
+                                                tf.to_float(self.log_scale_step))
             search_ims, search_rects = self._crop_pyr(
                 im, search_rect, self.search_size, scales, mean_color)
 
@@ -460,26 +460,6 @@ def dimensions(target_size,
                  template_size, search_size, template_scale, desired_template_scale)
     # return template_size, search_size, template_scale
     return dict(template_size=template_size, search_size=search_size)
-
-
-# def scale_sequence(num_scales, max_scale):
-#     '''
-#     >>> round(scale_sequence(3, 1.02)['scale_step'], 6)
-#     1.02
-#     >>> round(scale_sequence(5, 1.02)['scale_step'], 4)
-#     1.01
-#     '''
-#     # TODO: Use log1p and exp1m? Probably not necessary.
-#     if num_scales == 1:
-#         # There is no scale step.
-#         return dict(num_scales=1)
-#     assert num_scales % 2 == 1
-#     h = (num_scales - 1) // 2
-#     # Scales will be:
-#     #   scales = step ** [-h, ..., h]
-#     #   log(scales) = log(step) * [-h, ..., h]
-#     scale_step = math.exp(abs(math.log(max_scale)) / h)
-#     return dict(num_scales=num_scales, scale_step=scale_step)
 
 
 # When we implement a multi-layer join,
