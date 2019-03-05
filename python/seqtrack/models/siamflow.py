@@ -713,75 +713,79 @@ def _output_net(r, v, output_shapes, is_training,
         Dictionary of outputs with shape [b] + output_shape.
     '''
     assert len(r.shape) == 5
+    # with slim.arg_scope([slim.conv2d, slim.fully_connected, _res_conv2d, _res_fc],
     with slim.arg_scope([slim.conv2d, slim.fully_connected],
                         activation_fn=tf.nn.relu,
                         normalizer_fn=slim.batch_norm,
+                        normalizer_params=dict(is_training=is_training),
                         weights_regularizer=slim.l2_regularizer(weight_decay)):
-        with slim.arg_scope([slim.batch_norm], is_training=is_training):
-            x = []
+        x = []
 
-            if use_response:
-                with tf.variable_scope('preproc_response'):
-                    # Perform same operation on each scale.
-                    r, unmerge = helpers.merge_dims(r, 0, 2)  # Merge scale into batch.
-                    # Spatial dim 17
-                    r = slim.conv2d(r, 32, 3, padding='SAME', scope='conv1')
-                    r = slim.max_pool2d(r, 3, stride=2, padding='SAME', scope='pool1')
-                    # Spatial dim 9
-                    r = slim.conv2d(r, 64, 3, padding='SAME', scope='conv2')
-                    r = slim.max_pool2d(r, 3, stride=2, padding='SAME', scope='pool2')
-                    # Spatial dim 5
-                    r = unmerge(r, axis=0)  # Unmerge scale from batch.
-                    r = tf.squeeze(r, axis=1)  # Ensure that there is just 1 scale.
-                    x.append(r)
+        if use_response:
+            with tf.variable_scope('preproc_response'):
+                # Perform same operation on each scale.
+                r, unmerge = helpers.merge_dims(r, 0, 2)  # Merge scale into batch.
+                # Spatial dim 17
+                r = slim.conv2d(r, 32, 3, padding='SAME', scope='conv1')
+                r = slim.max_pool2d(r, 3, stride=2, padding='SAME', scope='pool1')
+                # Spatial dim 9
+                r = slim.conv2d(r, 64, 3, padding='SAME', scope='conv2')
+                r = slim.max_pool2d(r, 3, stride=2, padding='SAME', scope='pool2')
+                # Spatial dim 5
+                r = unmerge(r, axis=0)  # Unmerge scale from batch.
+                r = tf.squeeze(r, axis=1)  # Ensure that there is just 1 scale.
+                x.append(r)
 
-            if use_images:
-                with tf.variable_scope('preproc_motion'):
-                    # https://github.com/tensorflow/models/blob/master/research/slim/nets/alexnet.py
-                    v, unmerge = helpers.merge_dims(v, 0, 2)  # Merge time into batch.
-                    # To determine size, work backwards from output.
-                    # Input size must be
-                    # 103 = 11 + (47 - 1) * 2 (for stride 2) or
-                    # 195 = 11 + (47 - 1) * 4 (for stride 4)
-                    v = slim.conv2d(v, 32, [11, 11], 4, padding='VALID', scope='conv1')  # was 64
-                    # Must be 47 = 3 + (23 - 1) * 2
-                    v = slim.max_pool2d(v, [3, 3], 2, padding='VALID', scope='pool1')
-                    v = unmerge(v, axis=0)  # Un-merge time from batch.
-                    # Concatenate the images over time.
-                    v = tf.concat(tf.unstack(v, axis=1), axis=-1)
-                    v = slim.conv2d(v, 48, [5, 5], padding='SAME', scope='conv2')  # was 192
-                    # Must be 23 = 3 + (11 - 1) * 2
-                    v = slim.max_pool2d(v, [3, 3], 2, padding='VALID', scope='pool2')
-                    # TODO: Use residual connections here? Be careful with relu and bnorm.
-                    v = slim.conv2d(v, 96, [3, 3], padding='SAME', scope='conv3')  # was 384
-                    v = slim.conv2d(v, 96, [3, 3], padding='SAME', scope='conv4')  # was 384
-                    v = slim.conv2d(v, 64, [3, 3], padding='SAME', scope='conv5')  # was 256
-                    # Must be 11 = 3 + (5 - 1) * 2
-                    v = slim.max_pool2d(v, [3, 3], 2, padding='VALID', scope='pool5')
-                    # Spatial dim 5
-                    x.append(v)
+        if use_images:
+            with tf.variable_scope('preproc_motion'):
+                # https://github.com/tensorflow/models/blob/master/research/slim/nets/alexnet.py
+                v, unmerge = helpers.merge_dims(v, 0, 2)  # Merge time into batch.
+                # To determine size, work backwards from output.
+                # Input size must be
+                # 103 = 11 + (47 - 1) * 2 (for stride 2) or
+                # 195 = 11 + (47 - 1) * 4 (for stride 4)
+                v = slim.conv2d(v, 32, [11, 11], 4, padding='VALID', scope='conv1')  # was 64
+                # Must be 47 = 3 + (23 - 1) * 2
+                v = slim.max_pool2d(v, [3, 3], 2, padding='VALID', scope='pool1')
+                v = unmerge(v, axis=0)  # Un-merge time from batch.
+                # Concatenate the images over time.
+                v = tf.concat(tf.unstack(v, axis=1), axis=-1)
+                v = slim.conv2d(v, 48, [5, 5], padding='SAME', scope='conv2')  # was 192
+                # Must be 23 = 3 + (11 - 1) * 2
+                v = slim.max_pool2d(v, [3, 3], 2, padding='VALID', scope='pool2')
+                # TODO: Use residual connections here? Be careful with relu and bnorm.
+                v = slim.conv2d(v, 64, [3, 3], padding='SAME', scope='conv3')  # was 384
+                # v = _res_conv2d(v, [3, 3], scope='conv4')  # was 384
+                # v = _res_conv2d(v, [3, 3], scope='conv5')  # was 256
+                v = slim.conv2d(v, 64, [3, 3], scope='conv4')  # was 384
+                v = slim.conv2d(v, 64, [3, 3], scope='conv5')  # was 256
+                # Must be 11 = 3 + (5 - 1) * 2
+                v = slim.max_pool2d(v, [3, 3], 2, padding='VALID', scope='pool5')
+                # Spatial dim 5
+                x.append(v)
 
-            # Concatenate appearance response and/or motion description.
-            x = tf.concat(x, axis=-1)
+        # Concatenate appearance response and/or motion description.
+        x = tf.concat(x, axis=-1)
 
-            with tf.variable_scope('output'):
-                x = slim.conv2d(x, 64, [3, 3], padding='SAME', scope='conv1')
-                x = slim.conv2d(x, 64, [5, 5], padding='VALID', scope='fc2')
-                # Spatial dim 1
-                x = tf.squeeze(x, axis=(-2, -3))
-                x = slim.fully_connected(x, 512, scope='fc3')
+        with tf.variable_scope('output'):
+            x = slim.conv2d(x, 512, [5, 5], padding='VALID', scope='fc1')
+            # Spatial dim 1
+            x = tf.squeeze(x, axis=(-2, -3))
+            # x = _res_fc(x, scope='fc2')
+            # x = _res_fc(x, scope='fc3')
+            x = slim.fully_connected(x, 512, scope='fc2')
 
-            # Regress to each output.
-            y = {}
-            for k in output_shapes.keys():
-                with tf.variable_scope('head_{}'.format(k)):
-                    y[k] = x
-                    output_dim = np.asscalar(np.prod(output_shapes[k]))
-                    y[k] = slim.fully_connected(y[k], output_dim, scope='fc1',
-                                                activation_fn=None, normalizer_fn=None)
-                    if len(output_shapes[k]) > 1:
-                        y[k] = helpers.split_dims(y[k], axis=-1, shape=output_shapes[k])
-            return y
+        # Regress to each output.
+        y = {}
+        for k in output_shapes.keys():
+            with tf.variable_scope('head_{}'.format(k)):
+                y[k] = x
+                output_dim = np.asscalar(np.prod(output_shapes[k]))
+                y[k] = slim.fully_connected(y[k], output_dim, scope='fc1',
+                                            activation_fn=None, normalizer_fn=None)
+                if len(output_shapes[k]) > 1:
+                    y[k] = helpers.split_dims(y[k], axis=-1, shape=output_shapes[k])
+        return y
 
 
 def _image_sequence_summary(name, sequence, axis=1, **kwargs):
@@ -790,3 +794,55 @@ def _image_sequence_summary(name, sequence, axis=1, **kwargs):
         with tf.name_scope('elems'):
             for i in range(len(elems)):
                 tf.summary.image(str(i), elems[i], **kwargs)
+
+
+# @slim.add_arg_scope
+# def _res_conv2d(inputs, kernel_size,
+#                 activation_fn=tf.nn.relu,
+#                 scope=None,
+#                 **kwargs):
+#     with tf.variable_scope(scope, 'res_conv2d'):
+#         output_dim = inputs.shape[-1].value
+#         delta = inputs
+#         delta = slim.conv2d(
+#             delta, output_dim, kernel_size,
+#             stride=1,
+#             padding='SAME',
+#             activation_fn=activation_fn,
+#             scope='conv1',
+#             **kwargs)
+#         delta = slim.conv2d(
+#             delta, output_dim, kernel_size,
+#             stride=1,
+#             padding='SAME',
+#             activation_fn=None,
+#             scope='conv2',
+#             **kwargs)
+#         outputs = inputs + delta
+#         if activation_fn is not None:
+#             outputs = activation_fn(outputs)
+#         return outputs
+#
+#
+# @slim.add_arg_scope
+# def _res_fc(inputs,
+#             activation_fn=tf.nn.relu,
+#             scope=None,
+#             **kwargs):
+#     with tf.variable_scope(scope, 'res_fc'):
+#         output_dim = inputs.shape[-1].value
+#         delta = inputs
+#         delta = slim.fully_connected(
+#             delta, output_dim,
+#             activation_fn=activation_fn,
+#             scope='fc1',
+#             **kwargs)
+#         delta = slim.fully_connected(
+#             delta, output_dim,
+#             activation_fn=None,
+#             scope='fc2',
+#             **kwargs)
+#         outputs = inputs + delta
+#         if activation_fn is not None:
+#             outputs = activation_fn(outputs)
+#         return outputs
