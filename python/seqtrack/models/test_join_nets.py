@@ -21,7 +21,6 @@ class TestFeatureNets(tf.test.TestCase):
     def test_instantiate(self):
         '''Instantiates the join functions.'''
         for join_arch in join_nets.SINGLE_JOIN_FNS:
-        # for join_arch in ['distance']:
             with trySubTest(self, join_arch=join_arch):
                 with tf.Graph().as_default():
                     join_fn = join_nets.BY_NAME[join_arch]
