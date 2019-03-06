@@ -40,8 +40,7 @@ class TestFeatureNets(tf.test.TestCase):
                     output_size = output.shape[-3:-1].as_list()
                     self.assertAllEqual(output_size, search_size - template_size + 1)
 
-                    init_op = [tf.global_variables_initializer(),
-                               tf.local_variables_initializer()]
+                    init_op = tf.global_variables_initializer()
                     # with self.test_session() as sess:
                     with tf.Session() as sess:
                         sess.run(init_op)
