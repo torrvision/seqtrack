@@ -58,8 +58,8 @@ def _xcorr_general(template, search, is_training,
     '''Convolves template with search.
 
     Args:
-        template: [b,    h, w, c]
-        search:   [b, s, h, w, c]
+        template: [b, h, w, c]
+        search: [b, s, h, w, c]
 
     If use_batch_norm is true, then an output gain will always be incorporated.
     Otherwise, it will only be incorporated if learn_gain is true.
@@ -150,21 +150,34 @@ def cosine(template, search, is_training,
            gain_init=1,
            eps=1e-3,
            scope='cosine'):
+    '''
+    Args:
+        template: [b, h, w, c]
+        search: [b, s, h, w, c]
+    '''
+    search = cnn.as_tensor(search)
+    num_search_dims = len(search.value.shape)
+    if num_search_dims != 5:
+        raise ValueError('search should have 5 dims: {}'.format(num_search_dims))
+
     with tf.variable_scope(scope, 'cosine'):
         # Discard receptive field of template and get underlying tf.Tensor.
         template = cnn.get_value(template)
 
-        num_channels = template.shape[-1].value
-        template_size = template.shape[-3:-1].as_list()
-        ones = tf.ones(template_size + [num_channels, 1], tf.float32)
-
         dot_xy = cnn.channel_sum(cnn.diag_xcorr(search, template, padding='VALID'))
         dot_xx = tf.reduce_sum(tf.square(template), axis=(-3, -2, -1), keepdims=True)
         sq_search = cnn.pixelwise(tf.square, search)
-        sq_search, restore = cnn.merge_batch_dims(sq_search)
-        dot_yy = cnn.nn_conv2d(sq_search, ones, strides=[1, 1, 1, 1], padding='VALID')
-        dot_yy = restore(dot_yy)
 
+        ones = tf.ones_like(template)  # TODO: Faster and less memory to use sum.
+        dot_yy = cnn.channel_sum(cnn.diag_xcorr(search, ones, padding='VALID'))
+        # num_channels = template.shape[-1].value
+        # template_size = template.shape[-3:-1].as_list()
+        # ones = tf.ones(template_size + [num_channels, 1], tf.float32)
+        # sq_search, restore = cnn.merge_batch_dims(sq_search)
+        # dot_yy = cnn.nn_conv2d(sq_search, ones, strides=[1, 1, 1, 1], padding='VALID')
+        # dot_yy = restore(dot_yy)
+
+        dot_xx = tf.expand_dims(dot_xx, 1)
         denom = cnn.pixelwise(lambda dot_yy: tf.sqrt(dot_xx * dot_yy), dot_yy)
         similarity = cnn.pixelwise_binary(
             lambda dot_xy, denom: dot_xy / (denom + eps), dot_xy, denom)
@@ -182,7 +195,18 @@ def distance(template, search, is_training,
              learn_gain=False,
              gain_init=1,
              scope='distance'):
+    '''
+    Args:
+        template: [b, h, w, c]
+        search: [b, s, h, w, c]
+    '''
+    search = cnn.as_tensor(search)
+    num_search_dims = len(search.value.shape)
+    if num_search_dims != 5:
+        raise ValueError('search should have 5 dims: {}'.format(num_search_dims))
+
     with tf.variable_scope(scope, 'distance'):
+        search = cnn.as_tensor(search)
         # Discard receptive field of template and get underlying tf.Tensor.
         template = cnn.get_value(template)
 
@@ -192,6 +216,8 @@ def distance(template, search, is_training,
 
         dot_xy = cnn.diag_xcorr(search, template)
         dot_xx = tf.reduce_sum(tf.square(template), axis=(-3, -2, -1), keepdims=True)
+        if len(search.value.shape) == 5:
+            dot_xx = tf.expand_dims(dot_xx, 1)
         sq_search = cnn.pixelwise(tf.square, search)
         sq_search, restore = cnn.merge_batch_dims(sq_search)
         dot_yy = cnn.nn_conv2d(sq_search, ones, strides=[1, 1, 1, 1], padding='VALID')
@@ -242,7 +268,7 @@ def all_pixel_pairs(template, search, is_training,
     '''
     Args:
         template: cnn.Tensor with shape [n, h_t, w_t, c]
-        search: cnn.Tensor with shape [n, h_s, w_s, c]
+        search: cnn.Tensor with shape [n, s, h_s, w_s, c]
 
     Returns:
         cnn.Tensor with shape [n, h_s, w_s, h_t * w_t]
@@ -257,8 +283,9 @@ def all_pixel_pairs(template, search, is_training,
         # Then "convolve" (multiply) each with the search image.
         t = template.value
         s = search.value
-        # template becomes: [n, ...,   1,   1, h_t, w_t, c]
-        # search becomes:   [n, ..., h_s, w_s,   1,   1, c]
+        # template becomes: [n, 1, ...,   1,   1, h_t, w_t, c]
+        # search becomes:   [n, s, ..., h_s, w_s,   1,   1, c]
+        t = tf.expand_dims(t, 1)
         t = helpers.expand_dims_n(t, -4, 2)
         s = helpers.expand_dims_n(s, -2, 2)
         if operation == 'mul':
@@ -299,6 +326,10 @@ def abs_diff(template, search, is_training,
              scope='abs_diff'):
     '''
     Requires that template is 1x1.
+
+    Args:
+        template: [b, 1, 1, c]
+        search: [b, s, 1, 1, c]
     '''
     with tf.variable_scope(scope, 'abs_diff'):
         template = cnn.get_value(template)
@@ -306,6 +337,7 @@ def abs_diff(template, search, is_training,
         if template_size != [1, 1]:
             raise ValueError('template shape is not [1, 1]: {}'.format(template_size))
         # Use broadcasting to perform element-wise operation.
+        template = tf.expand_dims(template, 1)
         delta = cnn.pixelwise(lambda x: tf.abs(x - template), search)
         if reduce_channels:
             delta = cnn.channel_sum(delta)
