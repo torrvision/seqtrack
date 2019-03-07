@@ -61,9 +61,9 @@ def default_params():
         learn_motion=False,
         use_predictions=False,  # Use predictions for previous positions?
         train_multiscale=False,
-        # Tracking parameters:
         use_perturb=False,  # Training only (mode is TRAIN and is_training is true).
         perturb_params=None,
+        # Tracking parameters:
         search_method='local',
         # global_search_min_resolution=64,
         # global_search_max_resolution=512,
@@ -1129,8 +1129,8 @@ def _instantiate_separate_init(iter_model_fn, example, run_opts, scope='model'):
 def perturb(rect, sigma_translate=0.0, sigma_log_scale=0.0, name='perturb'):
     with tf.name_scope(name):
         dims = tf.shape(rect)[:-1]
-        translate = tf.random.normal(tf.concat((dims, [2])), 0.0, sigma_translate)
-        log_scale = tf.random.normal(tf.concat((dims, [1])), 0.0, sigma_log_scale)
+        translate = tf.random_normal(tf.concat((dims, [2]), axis=0), 0.0, sigma_translate)
+        log_scale = tf.random_normal(tf.concat((dims, [1]), axis=0), 0.0, sigma_log_scale)
         scale = tf.exp(log_scale)
         center, size = geom.rect_center_size(rect)
         size = scale * size
