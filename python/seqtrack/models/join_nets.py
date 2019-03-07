@@ -6,8 +6,60 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 
+import functools
+partial = functools.partial
+
 from seqtrack import cnn
 from seqtrack import helpers
+
+
+def concat_fc(template, search, is_training,
+              is_trainable=True,
+              join_dim=128,
+              mlp_num_outputs=1,
+              mlp_num_layers=2,
+              mlp_num_hidden=128,
+              mlp_kwargs=None,
+              scope=None):
+    '''
+    Args:
+        template: [b, h, w, c]
+        search: [b, s, h, w, c]
+    '''
+    with tf.variable_scope(scope, 'concat_fc'):
+        template = cnn.as_tensor(template)
+        search = cnn.as_tensor(search)
+
+        # Instead of sliding-window concat, we do separate conv and sum the results.
+        # Disable activation and normalizer. Perform these after the sum.
+        kernel_size = template.value.shape[-3:-1].as_list()
+        conv_kwargs = dict(
+            padding='VALID',
+            activation_fn=None,
+            normalizer_fn=None,
+            biases_initializer=None,  # Disable bias because bnorm is performed later.
+        )
+        with tf.variable_scope('template'):
+            template = cnn.slim_conv2d(template, join_dim, kernel_size,
+                                       scope='fc', **conv_kwargs)
+        with tf.variable_scope('search'):
+            search, restore = cnn.merge_batch_dims(search)
+            search = cnn.slim_conv2d(search, join_dim, kernel_size,
+                                     scope='fc', **conv_kwargs)
+            search = restore(search)
+
+        template = cnn.get_value(template)
+        template = tf.expand_dims(template, 1)
+        # This is a broadcasting addition. Receptive field in template not tracked.
+        output = cnn.pixelwise(lambda search: search + template, search)
+        output = cnn.pixelwise(partial(slim.batch_norm, is_training=is_training), output)
+        output = cnn.pixelwise(tf.nn.relu, output)
+
+        mlp_kwargs = mlp_kwargs or {}
+        output, restore = cnn.merge_batch_dims(output)
+        output = cnn.mlp(output, mlp_num_layers, mlp_num_hidden, mlp_num_outputs, **mlp_kwargs)
+        output = restore(output)
+        return output
 
 
 def xcorr(template, search, is_training,
@@ -477,6 +529,7 @@ def _unique(elems):
 '''Functions that take two inputs.
 '''
 SINGLE_JOIN_FNS = [
+    'concat_fc',
     'xcorr',
     'distance',
     'cosine',
