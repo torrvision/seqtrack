@@ -218,10 +218,10 @@ def cosine(template, search, is_training,
 
         dot_xy = cnn.channel_sum(cnn.diag_xcorr(search, template, padding='VALID'))
         dot_xx = tf.reduce_sum(tf.square(template), axis=(-3, -2, -1), keepdims=True)
-        sq_search = cnn.pixelwise(tf.square, search)
 
+        sq_search = cnn.pixelwise(tf.square, search)
         ones = tf.ones_like(template)  # TODO: Faster and less memory to use sum.
-        dot_yy = cnn.channel_sum(cnn.diag_xcorr(search, ones, padding='VALID'))
+        dot_yy = cnn.channel_sum(cnn.diag_xcorr(sq_search, ones, padding='VALID'))
         # num_channels = template.shape[-1].value
         # template_size = template.shape[-3:-1].as_list()
         # ones = tf.ones(template_size + [num_channels, 1], tf.float32)
@@ -230,7 +230,10 @@ def cosine(template, search, is_training,
         # dot_yy = restore(dot_yy)
 
         dot_xx = tf.expand_dims(dot_xx, 1)
-        denom = cnn.pixelwise(lambda dot_yy: tf.sqrt(dot_xx * dot_yy), dot_yy)
+        assert_ops = [tf.assert_non_negative(dot_xx, message='assert dot_xx non negative'),
+                      tf.assert_non_negative(dot_yy.value, message='assert dot_yy non negative')]
+        with tf.control_dependencies(assert_ops):
+            denom = cnn.pixelwise(lambda dot_yy: tf.sqrt(dot_xx * dot_yy), dot_yy)
         similarity = cnn.pixelwise_binary(
             lambda dot_xy, denom: dot_xy / (denom + eps), dot_xy, denom)
         # Gain is necessary here because similarity is always in [-1, 1].
