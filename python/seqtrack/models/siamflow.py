@@ -63,6 +63,8 @@ def default_params():
         appearance_scope_src='',  # e.g. 'model/',
         learn_appearance=True,
         use_predictions=False,  # Use predictions for previous positions?
+        use_perturb=False,  # Training only (mode is TRAIN and is_training is true).
+        perturb_params=None,
         # Options for motion:
         context_size=195,
         stateless=False,
@@ -242,8 +244,20 @@ class SiamFlow(object):
             # This will be the ground-truth rect during training if `use_predictions` is false.
             prev_target_rect = state['rect']
 
+            # Coerce the aspect ratio of the rectangle to construct the search area.
+            # search_rect = self._context_rect(prev_target_rect, aspect, self.search_scale)
+            base_rect = model_util.coerce_aspect(prev_target_rect, aspect,
+                                                 aspect_method=self.aspect_method)
+            # Apply perturbation to aspect-coerced "previous" rect (may be current gt).
+            if self.use_perturb and self.mode == tf.estimator.ModeKeys.TRAIN:
+                base_rect = tf.cond(run_opts['is_training'],
+                                    lambda: siamfc.perturb(base_rect, **self.perturb_params),
+                                    lambda: base_rect)
+            search_rect = geom.grow_rect(self.search_scale, base_rect)
+
             # Coerce the aspect ratio of the rectangle to construct the context area.
-            context_rect = self._context_rect(prev_target_rect, aspect, self.context_scale)
+            # context_rect = self._context_rect(prev_target_rect, aspect, self.context_scale)
+            context_rect = geom.grow_rect(self.context_scale, base_rect)
             # Extract same rectangle in past and current images and feed into conv-net.
             context_curr = self._crop(im, context_rect, self.context_size, mean_color)
             context_prev = self._crop(prev_im, context_rect, self.context_size, mean_color)
@@ -256,8 +270,6 @@ class SiamFlow(object):
             # How to obtain template from previous state?
             template_feat = state['template_init']
 
-            # Coerce the aspect ratio of the rectangle to construct the search area.
-            search_rect = self._context_rect(prev_target_rect, aspect, self.search_scale)
             # Extract an image pyramid (use 1 scale when not in tracking mode).
             mid_scale = (self.num_scales - 1) // 2
             if self.num_scales == 1:

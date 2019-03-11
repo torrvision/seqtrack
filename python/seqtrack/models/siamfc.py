@@ -61,6 +61,8 @@ def default_params():
         learn_motion=False,
         use_predictions=False,  # Use predictions for previous positions?
         train_multiscale=False,
+        use_perturb=False,  # Training only (mode is TRAIN and is_training is true).
+        perturb_params=None,
         # Tracking parameters:
         search_method='local',
         # global_search_min_resolution=64,
@@ -108,6 +110,7 @@ class SiamFC(object):
         # Defaults instead of None.
         self.join_params = self.join_params or {}
         self.multi_join_layers = self.multi_join_layers or []
+        self.perturb_params = self.perturb_params or {}
         self.window_params = self.window_params or {}
         self.loss_params = self.loss_params or {}
         # Ensure types are correct.
@@ -269,8 +272,16 @@ class SiamFC(object):
             else:
                 raise ValueError('unknown template method: "{}"'.format(self.template_method))
 
-            # Coerce the aspect ratio of the rectangle to construct the search area.
-            search_rect = self._context_rect(prev_target_rect, aspect, self.search_scale)
+            # search_rect = self._context_rect(prev_target_rect, aspect, self.search_scale)
+            base_rect = model_util.coerce_aspect(prev_target_rect, aspect,
+                                                 aspect_method=self.aspect_method)
+            # Apply perturbation to aspect-coerced "previous" rect (may be current gt).
+            if self.use_perturb and self.mode == tf.estimator.ModeKeys.TRAIN:
+                base_rect = tf.cond(run_opts['is_training'],
+                                    lambda: perturb(base_rect, **self.perturb_params),
+                                    lambda: base_rect)
+            search_rect = geom.grow_rect(self.search_scale, base_rect)
+
             # Extract an image pyramid (use 1 scale when not in tracking mode).
             if self.train_multiscale or self.mode == tf.estimator.ModeKeys.PREDICT:
                 num_scales = self.num_scales
@@ -1113,3 +1124,16 @@ def _instantiate_separate_init(iter_model_fn, example, run_opts, scope='model'):
             state_init=state_init,
             state_final=state_final,
         )
+
+
+def perturb(rect, sigma_translate=0.0, sigma_log_scale=0.0, name='perturb'):
+    with tf.name_scope(name):
+        dims = tf.shape(rect)[:-1]
+        translate = tf.random_normal(tf.concat((dims, [2]), axis=0), 0.0, sigma_translate)
+        log_scale = tf.random_normal(tf.concat((dims, [1]), axis=0), 0.0, sigma_log_scale)
+        scale = tf.exp(log_scale)
+        center, size = geom.rect_center_size(rect)
+        size = scale * size
+        # Translation perturbation relative to new size.
+        center = center + size * translate
+        return geom.make_rect_center_size(center, size)

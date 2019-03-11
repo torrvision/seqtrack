@@ -289,29 +289,19 @@ def map_nested(f, xs):
     return f(xs)
 
 
-def modify_aspect_ratio(rect, method='stretch', name='modify_aspect_ratio'):
+def modify_aspect_ratio(rect, method='stretch', axis=-1, eps=1e-3, name='modify_aspect_ratio'):
     if method == 'stretch':
         return rect  # No change.
     with tf.name_scope(name) as scope:
-        EPSILON = 1e-3
-        min_pt, max_pt = geom.rect_min_max(rect)
-        center, size = 0.5 * (min_pt + max_pt), max_pt - min_pt
-        with tf.control_dependencies([tf.assert_greater_equal(size, 0.0)]):
+        center, size = geom.rect_center_size(rect)
+        with tf.control_dependencies([tf.assert_non_negative(size)]):
             size = tf.identity(size)
-        if method == 'perimeter':
-            # Average of dimensions.
-            width = tf.reduce_mean(size, axis=-1, keepdims=True)
-            return geom.make_rect(center - 0.5 * width, center + 0.5 * width)
-        if method == 'area':
-            # Geometric average of dimensions.
-            width = tf.exp(tf.reduce_mean(tf.log(tf.maximum(size, EPSILON)),
-                                          axis=-1,
-                                          keepdims=True))
-            return geom.make_rect(center - 0.5 * width, center + 0.5 * width)
-        raise ValueError('unknown method: {}'.format(method))
+        size = tf.maximum(size, eps)
+        width = scalar_size(size, method, axis=axis, keepdims=True)
+        return geom.make_rect_center_size(center, width)
 
 
-def scalar_size(size, method, axis=-1, keepdims=False, name='rect_magnitude'):
+def scalar_size(size, method, axis=-1, keepdims=False, name='scalar_size'):
     with tf.name_scope(name) as scope:
         if method == 'perimeter':
             return tf.reduce_mean(size, axis=axis, keepdims=keepdims)
