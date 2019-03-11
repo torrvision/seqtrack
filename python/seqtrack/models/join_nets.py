@@ -64,7 +64,7 @@ def concat_fc(template, search, is_training,
 
 def xcorr(template, search, is_training,
           trainable=True,
-          enable_pre_conv=False,
+          use_pre_conv=False,
           pre_conv_params=None,
           learn_spatial_weight=False,
           weight_init_method='ones',
@@ -83,7 +83,7 @@ def xcorr(template, search, is_training,
     return _xcorr_general(
         template, search, is_training,
         trainable=trainable,
-        enable_pre_conv=enable_pre_conv,
+        use_pre_conv=use_pre_conv,
         pre_conv_params=pre_conv_params,
         learn_spatial_weight=learn_spatial_weight,
         weight_init_method=weight_init_method,
@@ -97,7 +97,7 @@ def xcorr(template, search, is_training,
 
 def _xcorr_general(template, search, is_training,
                    trainable=True,
-                   enable_pre_conv=False,
+                   use_pre_conv=False,
                    pre_conv_params=None,
                    learn_spatial_weight=False,
                    weight_init_method='ones',
@@ -125,7 +125,7 @@ def _xcorr_general(template, search, is_training,
     with tf.variable_scope(scope, 'xcorr'):
         pre_conv_params = pre_conv_params or {}
 
-        if enable_pre_conv:
+        if use_pre_conv:
             template = _pre_conv(template, is_training, trainable=trainable,
                                  scope='pre', reuse=False, **pre_conv_params)
             search = _pre_conv(search, is_training, trainable=trainable,
@@ -304,7 +304,7 @@ def depthwise_xcorr(template, search, is_training,
     return _xcorr_general(
         template, search, is_training,
         trainable=trainable,
-        enable_pre_conv=False,
+        use_pre_conv=False,
         learn_spatial_weight=learn_spatial_weight,
         reduce_channels=False,
         use_mean=use_mean,
@@ -319,6 +319,9 @@ def all_pixel_pairs(template, search, is_training,
                     operation='mul',
                     reduce_channels=True,
                     use_mean=True,
+                    use_batch_norm=False,
+                    learn_gain=False,
+                    gain_init=1,
                     scope='all_pixel_pairs'):
     '''
     Args:
@@ -370,11 +373,15 @@ def all_pixel_pairs(template, search, is_training,
         pairs, restore = cnn.merge_batch_dims(pairs)
         response = cnn.nn_conv2d(pairs, weights, strides=[1, 1, 1, 1], padding='VALID')
         response = restore(response)
-        return response
+
+        return _calibrate(response, is_training, use_batch_norm, learn_gain, gain_init,
+                          trainable=trainable)
 
 
 def abs_diff(template, search, is_training,
              trainable=True,
+             use_pre_conv=True,
+             pre_conv_output_dim=256,
              reduce_channels=True,
              use_mean=False,
              use_batch_norm=False,
@@ -383,10 +390,36 @@ def abs_diff(template, search, is_training,
     Requires that template is 1x1.
 
     Args:
-        template: [b, 1, 1, c]
-        search: [b, s, 1, 1, c]
+        template: [b, ht, wt, c]
+        search: [b, s, hs, ws, c]
     '''
     with tf.variable_scope(scope, 'abs_diff'):
+        template = cnn.as_tensor(template)
+        search = cnn.as_tensor(search)
+
+        if use_pre_conv:
+            # Reduce template to 1x1.
+            kernel_size = template.value.shape[-3:-1].as_list()
+
+            def pre_conv(x):
+                x = cnn.pixelwise(partial(slim.batch_norm, is_training=is_training), x)
+                x = cnn.pixelwise(tf.nn.relu, x)
+                x, restore = cnn.merge_batch_dims(x)
+                x = cnn.slim_conv2d(x, pre_conv_output_dim, kernel_size,
+                                    padding='VALID',
+                                    activation_fn=None,
+                                    normalizer_fn=slim.batch_norm,
+                                    normalizer_params=dict(is_training=is_training),
+                                    scope='conv')
+                x = restore(x)
+                return x
+
+            # Perform pre-activation because the output layer did not have activations.
+            with tf.variable_scope('pre_conv', reuse=False):
+                template = pre_conv(template)
+            with tf.variable_scope('pre_conv', reuse=True):
+                search = pre_conv(search)
+
         template = cnn.get_value(template)
         template_size = template.shape[-3:-1].as_list()
         if template_size != [1, 1]:
@@ -426,30 +459,42 @@ def _calibrate(response, is_training, use_batch_norm, learn_gain, gain_init, tra
     return output
 
 
-def mlp(template, search, is_training, num_layers, num_hidden,
+def mlp(template, search, is_training,
         trainable=True,
-        join_name='depthwise_xcorr',
+        num_layers=2,
+        num_hidden=128,
+        join_arch='depthwise_xcorr',
         join_params=None,
         scope='mlp_join'):
-    '''Applies an MLP after another join function.'''
+    '''Applies an MLP after another join function.
+
+    Args:
+        template: [b, ht, wt, c]
+        search: [b, s, hs, ws, c]
+    '''
     with tf.variable_scope(scope, 'mlp_join'):
         join_params = join_params or {}
-        join_fn = BY_NAME[join_name]
+        join_fn = BY_NAME[join_arch]
         similarity = join_fn(template, search,
                              is_training=is_training,
                              trainable=trainable,
                              **join_params)
-        response = cnn.mlp(similarity, num_layers,
-                           num_hidden=num_hidden, num_outputs=1,
-                           is_training=is_training, trainable=trainable)
-        return response
+        # similarity: [b, s, h, w, c]
+        similarity, restore = cnn.merge_batch_dims(similarity)
+        response = cnn.mlp(similarity,
+                           num_layers=num_layers,
+                           num_hidden=num_hidden,
+                           num_outputs=1,
+                           is_training=is_training,
+                           trainable=trainable)
+        return restore(response)
 
 
 def multi_xcorr(template, search,
                 layer_names, template_layers, search_layers, search_image,
                 is_training,
                 trainable=True,
-                enable_final_conv=False,
+                use_final_conv=False,
                 final_conv_params=None,
                 hidden_conv_num_outputs=None,
                 hidden_conv_activation='linear',
@@ -470,7 +515,7 @@ def multi_xcorr(template, search,
         scores = {}
         scores['final'] = _xcorr_general(template, search, is_training,
                                          trainable=trainable,
-                                         enable_pre_conv=enable_final_conv,
+                                         use_pre_conv=use_final_conv,
                                          pre_conv_params=final_conv_params,
                                          use_mean=use_mean,
                                          use_batch_norm=use_batch_norm,
@@ -483,7 +528,7 @@ def multi_xcorr(template, search,
             # Must be a 1x1 convolution to ensure that receptive fields of different layers align.
             scores[name] = _xcorr_general(template_layers[name], search_layers[name], is_training,
                                           trainable=trainable,
-                                          enable_pre_conv=True,
+                                          use_pre_conv=True,
                                           pre_conv_params=dict(
                                               num_outputs=hidden_conv_num_outputs,
                                               kernel_size=1,
@@ -539,13 +584,12 @@ SINGLE_JOIN_FNS = [
     'abs_diff',
     'depthwise_xcorr',
     'all_pixel_pairs',
-    'abs_diff',
+    'mlp',
 ]
 
 '''Functions that require 1x1 template.
 '''
 FULLY_CONNECTED_FNS = [
-    'abs_diff',
 ]
 
 '''Functions that use features from multiple layers.
