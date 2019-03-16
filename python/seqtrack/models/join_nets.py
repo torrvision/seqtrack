@@ -14,7 +14,7 @@ from seqtrack import helpers
 
 
 def concat_fc(template, search, is_training,
-              is_trainable=True,
+              trainable=True,
               join_dim=128,
               mlp_num_outputs=1,
               mlp_num_layers=2,
@@ -57,7 +57,11 @@ def concat_fc(template, search, is_training,
 
         mlp_kwargs = mlp_kwargs or {}
         output, restore = cnn.merge_batch_dims(output)
-        output = cnn.mlp(output, mlp_num_layers, mlp_num_hidden, mlp_num_outputs, **mlp_kwargs)
+        output = cnn.mlp(output,
+                         num_layers=mlp_num_layers,
+                         num_hidden=mlp_num_hidden,
+                         num_outputs=mlp_num_outputs,
+                         trainable=trainable, **mlp_kwargs)
         output = restore(output)
         return output
 

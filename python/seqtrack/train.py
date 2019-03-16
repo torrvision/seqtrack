@@ -12,7 +12,6 @@ import time
 import os
 import pprint
 import random
-import re
 import shutil
 import six
 import subprocess

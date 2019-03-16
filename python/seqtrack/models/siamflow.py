@@ -281,7 +281,7 @@ class SiamFlow(object):
                 im, search_rect, self.search_size, scales, mean_color)
 
             with tf.name_scope('summary'):
-                _image_sequence_summary('search', search_ims)
+                _image_sequence_summary('search', search_ims, elem_name='scale')
 
             with tf.variable_scope('appearance', reuse=False) as appearance_scope:
                 # Extract features, perform search, get receptive field of response wrt image.
@@ -349,7 +349,8 @@ class SiamFlow(object):
                                       use_images=self.output_use_images)
 
             _image_sequence_summary('response',
-                                    model_util.colormap(tf.sigmoid(response), _COLORMAP))
+                                    model_util.colormap(tf.sigmoid(response), _COLORMAP),
+                                    elem_name='scale')
 
             losses = {}
             if self.mode in MODE_KEYS_SUPERVISED:
@@ -801,10 +802,10 @@ def _output_net(r, v, output_shapes, is_training,
         return y
 
 
-def _image_sequence_summary(name, sequence, axis=1, **kwargs):
+def _image_sequence_summary(name, sequence, axis=1, elem_name=None, **kwargs):
     with tf.name_scope(name) as scope:
         elems = tf.unstack(sequence, axis=axis)
-        with tf.name_scope('elems'):
+        with tf.name_scope(elem_name, 'elem'):
             for i in range(len(elems)):
                 tf.summary.image(str(i), elems[i], **kwargs)
 

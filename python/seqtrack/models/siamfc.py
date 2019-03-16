@@ -30,7 +30,6 @@ from tensorflow.contrib.layers.python.layers.utils import n_positive_integers
 _COLORMAP = 'viridis'
 
 
-IMAGE_SUMMARIES_COLLECTIONS = ['image_summaries']
 MODE_KEYS_SUPERVISED = [tf.estimator.ModeKeys.TRAIN, tf.estimator.ModeKeys.EVAL]
 
 
@@ -118,9 +117,6 @@ class SiamFC(object):
         self.num_scales = int(self.num_scales)
 
         self._num_frames = 0
-        # For summaries in end():
-        self._info = {}
-
         self._feature_saver = None
 
     def train(self, example, run_opts, scope='model'):
@@ -202,9 +198,7 @@ class SiamFC(object):
             self._feature_saver = tf.train.Saver(self._feature_vars)
 
             with tf.name_scope('summary'):
-                tf.summary.image('template', _to_uint8(template_im[0:1]),
-                                 max_outputs=1,
-                                 collections=IMAGE_SUMMARIES_COLLECTIONS)
+                tf.summary.image('template', _to_uint8(template_im))
 
             state = {
                 'run_opts': run_opts,
@@ -296,7 +290,8 @@ class SiamFC(object):
             search_ims, search_rects = self._crop_pyr(
                 im, search_rect, self.search_size, scales, mean_color)
 
-            self._info.setdefault('search', []).append(_to_uint8(search_ims[:, mid_scale]))
+            with tf.name_scope('summary'):
+                _image_sequence_summary('search', _to_uint8(search_ims), elem_name='scale')
 
             # Extract features, perform search, get receptive field of response wrt image.
             search_input = self._preproc(search_ims)
@@ -335,8 +330,10 @@ class SiamFC(object):
                 if self.learn_motion:
                     response = _add_learnable_motion_prior(response)
 
-            self._info.setdefault('response', []).append(
-                _to_uint8(model_util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
+            with tf.name_scope('summary'):
+                _image_sequence_summary(
+                    'response', _to_uint8(model_util.colormap(tf.sigmoid(response), _COLORMAP)),
+                    elem_name='scale')
 
             losses = {}
             if self.mode in MODE_KEYS_SUPERVISED:
@@ -418,10 +415,6 @@ class SiamFC(object):
 
     def end(self):
         losses = {}
-        with tf.name_scope('summary'):
-            for key in self._info:
-                _image_sequence_summary(key, tf.stack(self._info[key], axis=1),
-                                        collections=IMAGE_SUMMARIES_COLLECTIONS)
         return losses
 
     def init(self, sess):
@@ -753,13 +746,6 @@ def _add_learnable_motion_prior(response, name='motion_prior'):
         assert response_shape[-1] == 1
         prior = slim.model_variable('prior', shape=response_shape, dtype=tf.float32,
                                     initializer=tf.zeros_initializer(dtype=tf.float32))
-        # self._info.setdefault('response_appearance', []).append(
-        #     _to_uint8(model_util.colormap(tf.sigmoid(response[:, mid_scale]), _COLORMAP)))
-        # if self._num_frames == 0:
-        #     tf.summary.image(
-        #         'motion_prior', max_outputs=1,
-        #         tensor=_to_uint8(model_util.colormap(tf.sigmoid([motion_prior]), _COLORMAP)),
-        #         collections=IMAGE_SUMMARIES_COLLECTIONS)
         return response + prior
 
 
@@ -768,7 +754,7 @@ def compute_loss(scores, target_size, method='sigmoid', params=None):
     try:
         loss_fn = {
             'sigmoid': _sigmoid_cross_entropy_loss,
-            'max_margin': _max_margin_loss,
+            'margin': _margin_loss,
             'softmax': _softmax_cross_entropy_loss,
         }[method]
     except KeyError as ex:
@@ -865,7 +851,18 @@ def _gaussian_labels(r, sigma):
     return name, label
 
 
-def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_params=None):
+# class ResponseDimension(object):
+#
+#     def __init__(self, score_size, score_stride, target_size):
+#         self.score_size = score_size
+#         self.score_stride = score_stride
+#         self.target_size = target_size
+
+
+def _margin_loss(scores, target_size,
+                 reduce_method='max',
+                 cost_method='distance_greater',
+                 cost_params=None):
     '''
     Args:
         scores: Tensor with shape [b, 1, h, w, 1]
@@ -882,8 +879,7 @@ def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_p
     except KeyError as ex:
         raise ValueError('unknown cost method: "{}"'.format(cost_method))
 
-    # TODO: Avoid copying this block?
-    # Remove the scales dimension.
+    # This is a translation loss. Remove the scale dimension.
     # Note: This squeeze will fail if there is an image pyramid (is_tracking is true).
     scores = tf.squeeze(scores, 1)
     score_size = helpers.known_spatial_dim(scores)
@@ -891,36 +887,85 @@ def _max_margin_loss(scores, target_size, cost_method='distance_greater', cost_p
     # Center pixel has zero displacement.
     pixel_disp = model_util.displacement_from_center(score_size)
     disp = (1 / tf.to_float(target_size)) * tf.to_float(pixel_disp)
-    distance = tf.norm(disp, axis=-1, keepdims=True)
 
-    cost_name, costs = cost_fn(distance, **cost_params)
-    is_center = tf.reduce_all(tf.abs(pixel_disp) <= 0, axis=-1, keepdims=True)
-    # Force cost of center label to be zero.
-    costs = tf.where(is_center, tf.zeros_like(costs), costs)
-    correct_score = helpers.weighted_mean(scores, is_center, axis=(-3, -2), keepdims=False)
+    cost_name, costs = cost_fn(disp, **cost_params)
+    with tf.name_scope('summary'):
+        tf.summary.image('costs', _to_uint8(tf.expand_dims(costs, 0)), max_outputs=1)
+
+    is_correct = tf.reduce_all(tf.equal(pixel_disp, 0), axis=-1, keepdims=True)
+    # Assert that correct exists and is unique.
+    num_correct = tf.reduce_sum(tf.cast(is_correct, tf.int32), axis=(-3, -2))
+    with tf.control_dependencies([tf.assert_equal(num_correct, 1)]):
+        is_correct = tf.identity(is_correct)
+
+    # Assert that min cost is at correct.
+    correct_cost = helpers.weighted_mean(costs, is_correct, axis=(-3, -2))
+    min_cost = tf.reduce_min(costs, axis=(-3, -2))
+    with tf.control_dependencies([tf.assert_equal(correct_cost, min_cost)]):
+        is_correct = tf.identity(is_correct)
+
+    # If we instead use cost to get `correct_score`:
+    # is_best = tf.to_float(cost <= tf.reduce_min(cost, axis=axis, keepdims=True))
+    # cost_best = helpers.weighted_mean(cost, is_best, axis=axis, keepdims=True)
+    # score_best = helpers.weighted_mean(score, is_best, axis=axis, keepdims=True)
+    # violation = tf.maximum(0., (cost - cost_best) - (score_best - score))
+
+    # Force cost of correct label to be zero.
+    # costs = tf.where(is_correct, tf.zeros_like(costs), costs)
+
     # We want to achieve a margin:
     #   correct_score >= scores + costs
     #   costs + scores - correct_score <= 0
     #   costs - (correct_score - scores) <= 0
     # Therefore penalize max(0, this expr).
     # max_u (costs[u] + scores[u]) - correct_score
-    loss = tf.reduce_max(costs + scores, axis=(-3, -2), keepdims=False) - correct_score
-    loss = tf.maximum(float(0), loss)
-    # If we instead use cost to get `correct_score`:
-    # is_best = tf.to_float(cost <= tf.reduce_min(cost, axis=axis, keepdims=True))
-    # cost_best = helpers.weighted_mean(cost, is_best, axis=axis, keepdims=True)
-    # score_best = helpers.weighted_mean(score, is_best, axis=axis, keepdims=True)
-    # violation = tf.maximum(0., (cost - cost_best) - (score_best - score))
-    loss = tf.squeeze(loss, -1)
 
-    loss_name = 'max_margin_cost_{}'.format(cost_name)
+    # correct_score = helpers.weighted_mean(scores, is_correct, axis=(-3, -2), keepdims=False)
+    # loss = tf.reduce_max(costs + scores, axis=(-3, -2), keepdims=False) - correct_score
+    # loss = tf.maximum(float(0), loss)
+    correct_score = helpers.weighted_mean(scores, is_correct, axis=(-3, -2), keepdims=True)
+    margin = tf.maximum(float(0), costs + scores - correct_score)
+    with tf.name_scope('summary'):
+        tf.summary.image('margin', _to_uint8(margin))
+        tf.summary.histogram('hist_scores', scores)
+        tf.summary.histogram('hist_margin', margin)
+        tf.summary.histogram('hist_cost', costs)
+
+    try:
+        reduce_fn = {
+            'max': tf.reduce_max,
+            'mean': tf.reduce_mean,
+        }[reduce_method]
+    except KeyError:
+        raise ValueError('unknown reduce method: "{}"'.format(reduce_method))
+    loss = reduce_fn(margin, axis=(-3, -2), keepdims=False)
+
+    loss = tf.squeeze(loss, -1)
+    loss_name = '{}_margin_cost_{}'.format(reduce_method, cost_name)
     return loss_name, loss
 
 
-def _cost_distance_greater(r, threshold):
-    is_neg = (r >= threshold)
-    cost_name = 'distance_greater_{}'.format(str(threshold))
-    return cost_name, tf.to_float(is_neg)
+def _cost_distance_greater(disp, threshold, name=None):
+    '''
+    Args:
+        disp: [n, h, w, 2]
+    '''
+    with tf.name_scope(name, 'cost_distance_greater'):
+        r = tf.norm(disp, axis=-1, keepdims=True)
+        min_r = tf.reduce_min(r, axis=(-3, -2), keepdims=True)
+        is_correct = tf.logical_or(tf.equal(r, min_r), tf.less_equal(r, threshold))
+        is_incorrect = tf.logical_not(is_correct)
+        cost = tf.to_float(is_incorrect)
+
+        # Ensure there are some correct and some incorrect displacements.
+        num_correct = tf.reduce_sum(tf.cast(is_correct, tf.int32), axis=(-3, -2))
+        num_incorrect = tf.reduce_sum(tf.cast(is_incorrect, tf.int32), axis=(-3, -2))
+        with tf.control_dependencies([tf.assert_positive(num_correct),
+                                      tf.assert_positive(num_incorrect)]):
+            cost = tf.identity(cost)
+
+        cost_name = 'distance_greater_{}'.format(str(threshold))
+        return cost_name, cost
 
 
 def _softmax_cross_entropy_loss(scores, target_size,
@@ -975,21 +1020,22 @@ def _visualize_response(
         response, response_final, search_im, response_rf, im, search_rect,
         name='visualize_response'):
     with tf.name_scope(name) as scope:
+        result = {}
         response_size = response.shape.as_list()[-3:-1]
         search_size = search_im.shape.as_list()[-3:-1]
         rf_centers = _find_rf_centers(search_size, response_size, response_rf)
 
         # response is logits
         response_cmap = model_util.colormap(tf.sigmoid(response), _COLORMAP)
-        # self._info.setdefault('response', []).append(_to_uint8(response_cmap))
+        result['response'] = _to_uint8(response_cmap)
         # Draw coarse response over search image.
         response_in_search = _align_corner_centers(rf_centers, response_size)
-        # self._info.setdefault('response_in_search', []).append(_to_uint8(_paste_image_at_rect(
-        #     search_im, response_cmap, response_in_search, alpha=0.5)))
+        result['response_in_search'] = _to_uint8(_paste_image_at_rect(
+            search_im, response_cmap, response_in_search, alpha=0.5))
 
         # response_final is probability
         response_final_cmap = model_util.colormap(response_final, _COLORMAP)
-        # self._info.setdefault('response_final', []).append(_to_uint8(response_final_cmap))
+        result['response_final'] = _to_uint8(response_final_cmap)
         # Draw upsample, regularized response over original image.
         upsample_response_size = response_final.shape.as_list()[-3:-1]
         response_final_in_search = _align_corner_centers(rf_centers, upsample_response_size)
@@ -997,9 +1043,10 @@ def _visualize_response(
         # TODO: How to visualize multi-scale responses?
         response_final_in_image = _paste_image_at_rect(
             im, response_final_cmap, response_final_in_image, alpha=0.5)
-        # self._info.setdefault('response_final_in_image', []).append(_to_uint8(response_final_in_image))
+        result['response_final_in_image'] = _to_uint8(response_final_in_image)
 
         return response_final_in_image
+        # return result
 
 
 def _rect_translate_scale(rect, translate, scale, name='rect_translate_scale'):
@@ -1014,14 +1061,12 @@ def _rect_translate_scale(rect, translate, scale, name='rect_translate_scale'):
         return geom.make_rect_center_size(center + translate, size * scale)
 
 
-def _image_sequence_summary(name, tensor, **kwargs):
-    '''
-    Args:
-        tensor: [b, t, h, w, c]
-    '''
-    ntimesteps = tensor.shape.as_list()[-4]
-    assert ntimesteps is not None
-    tf.summary.image(name, tensor[0], max_outputs=ntimesteps, **kwargs)
+def _image_sequence_summary(name, sequence, axis=1, elem_name=None, **kwargs):
+    with tf.name_scope(name) as scope:
+        elems = tf.unstack(sequence, axis=axis)
+        with tf.name_scope(elem_name, 'elem'):
+            for i in range(len(elems)):
+                tf.summary.image(str(i), elems[i], **kwargs)
 
 
 def _clip_rect_size(rect, min_size=None, max_size=None, name='clip_rect_size'):
