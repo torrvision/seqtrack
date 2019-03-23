@@ -90,6 +90,8 @@ SUBSETS = {
     'vot2018_longterm': Subset('vot2018_longterm', trackdat.load_vot),
     'ytbb_train': Subset('ytbb', partial(trackdat.load_ytbb_sec, subset='train')),
     'ytbb_val': Subset('ytbb', partial(trackdat.load_ytbb_sec, subset='validation')),
+    'trackingnet_train': Subset('trackingnet_10',
+                                partial(trackdat.load_trackingnet, subset='train', rate=10)),
 }
 
 
